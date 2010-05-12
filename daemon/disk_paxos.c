@@ -19,8 +19,6 @@
  * largely copied from vdsm.git/sync_manager/
  */
 
-#define LEASE_TIMEOUT_SEC 60
-
 #define LEASE_FREE 0
 
 #define BLOCK_SIZE 512
@@ -29,8 +27,9 @@
 
 #define NO_VAL 0
 
-uint64_t our_host_id;
-uint64_t num_hosts;
+extern uint64_t our_host_id;
+extern uint64_t num_hosts;
+extern lease_timeout_seconds;
 
 int majority_disks(struct token *token, int num)
 {
@@ -686,9 +685,9 @@ int get_prev_leader(struct token *token, int force,
 	 * check if current leader fails to update lease
 	 */
 
-	log_debug("wait %u sec for lease timeout...", LEASE_TIMEOUT_SEC);
+	log_debug("wait %u sec for lease timeout...", lease_timeout_seconds);
 
-	sleep(LEASE_TIMEOUT_SEC);
+	sleep(lease_timeout_seconds);
 
 	num_timeout = 0;
 
@@ -727,7 +726,7 @@ int get_prev_leader(struct token *token, int force,
  * ref: obtain()
  */
 
-int disk_paxos_acquire(struct token *token, int force, int wait_timeout,
+int disk_paxos_acquire(struct token *token, int force,
 		       struct leader_record *leader_ret)
 {
 	struct leader_record prev_leader;
@@ -735,30 +734,17 @@ int disk_paxos_acquire(struct token *token, int force, int wait_timeout,
 	struct paxos_dblock dblock;
 	int num_disks = token->num_disks;
 	int rv, d, num_writes;
-	time_t start = time(NULL);
+	int error = DP_ERROR;
 
 	/*
 	 * find a valid current/previous leader on which to base
 	 * the new leader
 	 */
 
-	while (1) {
-		rv = get_prev_leader(token, force, &prev_leader);
-		if (!rv)
-			break;
-
-		if (wait_timeout == -1)
-			continue;
-
-		if (!wait_timeout) {
-			log_error("no leader found");
-			goto fail;
-		}
-
-		if ((time(NULL) - start) < (wait_timeout - LEASE_TIMEOUT_SEC)) {
-			log_error("time out finding leader");
-			goto fail;
-		}
+	rv = get_prev_leader(token, force, &prev_leader);
+	if (rv < 0) {
+		log_error("get_prev_leader failed %d", rv);
+		goto fail;
 	}
 
 	/*
@@ -820,9 +806,10 @@ int disk_paxos_acquire(struct token *token, int force, int wait_timeout,
 		  new_leader.token_type, new_leader.token_name);
 
 	memcpy(leader_out, &new_leader, sizeof(struct leader_record));
-	return 0;
+	return DP_OK;
  fail:
-	return -1;
+	/* TODO: use more helpful error values for different conditions */
+	return error;
 }
 
 int disk_paxos_release(struct token *token, struct leader_record *leader_ret)
@@ -952,159 +939,5 @@ void token_init(struct token *token)
 		write_leader(&token->disks[d], &leader);
 		write_dblock(&token->disks[d], our_host_id, &dblock);
 	}
-}
-
-void print_usage(void)
-{
-	printf("disk_lease -n <name> -i <host_id> -h <num_hosts> /path/disk1 /path/disk2 ...\n");
-	printf("-n <name>            name of object being leased\n");
-	printf("-i <host_id>         local host id (1-254)\n");
-	printf("-h <num_hosts>       number of hosts (1-254)\n");
-	printf("optional:\n");
-	printf("-o <bytes>           offset on disks (default 0)\n");
-	printf("-f                   force\n");
-	printf("-S                   show status only\n");
-	printf("-I                   initialize disks, host id as leader\n");
-}
-
-/* TODO
-   renew the lease (just update timestamp?)
-   release the lease (just set LEASE_FREE timestamp?)
-   give the lease to another node (set owner to their id?)
-*/
-
-
-int main(int argc, char *argv[])
-{
-	struct token *token;
-	struct paxos_disk *disks, *disk;
-	char name[TOKEN_NAME_SIZE];
-	int timeout = 0;
-	int force = 0;
-	int offset = 0;
-	int num_disks;
-	int num_opened;
-	int do_status = 0;
-	int do_init = 0;
-	int cont = 1;
-	int optchar;
-	int rv;
-
-	if (argc < 2) {
-		print_usage();
-		return -1;
-	}
-
-	memset(name, 0, sizeof(name));
-
-	while (cont) {
-		optchar = getopt(argc, argv, "n:i:h:o:fSI");
-
-		switch (optchar) {
-		case 'n':
-			snprintf(name, TOKEN_NAME_SIZE, "%s", optarg);
-			break;
-		case 'i':
-			our_host_id = atoi(optarg);
-			break;
-		case 'h':
-			num_hosts = atoi(optarg);
-			break;
-		case 'o':
-			offset = atoi(optarg);
-			break;
-		case 'f':
-			force = 1;
-			break;
-		case 'S':
-			do_status = 1;
-			break;
-		case 'I':
-			do_init = 1;
-			break;
-		case EOF:
-			cont = 0;
-			break;
-		};
-	}
-
-	if (!name[0]) {
-		log_error("name required");
-		print_usage();
-		return -1;
-	}
-
-	if (!our_host_id) {
-		log_error("host id required");
-		print_usage();
-		return -1;
-	}
-
-	num_disks = argc - optind;
-	if (!num_disks || num_disks > MAX_DISKS) {
-		log_error("num_disks %d min 1 max %d", num_disks, MAX_DISKS);
-		print_usage();
-		return -1;
-	}
-
-	disks = malloc(num_disks * sizeof(struct paxos_disk));
-	if (!disks)
-		return -1;
-	memset(disks, 0, num_disks * sizeof(struct paxos_disk));
-
-	log_debug("num_disks %d", num_disks);
-
-	disk = disks;
-	while (optind < argc) {
-		strncpy(disk->path, argv[optind], MAX_PATH_LEN);
-		disk->offset = offset;
-		log_debug("disk %s", disk->path);
-		optind++;
-		disk++;
-	}
-
-	token = malloc(sizeof(struct token));
-	if (!token) {
-		free(disks);
-		return -1;
-	}
-
-	strncpy(token->name, name, TOKEN_NAME_SIZE);
-	token->type = 0;
-	token->disks = disks;
-	token->num_disks = num_disks;
-
-	num_opened = open_disks(token, offset);
-	if (!majority_disks(token, num_opened)) {
-		log_error("cannot open majority of disks");
-		rv = -1;
-		goto out;
-	}
-
-	if (do_status) {
-		token_status(token);
-		goto out_close;
-	}
-
-	if (do_init) {
-		token_init(token);
-		goto out_close;
-	}
-
-	/* default is to try to acquire the lease */
-
-	rv = token_lease(token, force, timeout);
-
-	/* TODO: add option for a renewal loop here ?
-	   I believe we just rewrite the last leader block with
-	   fresh timestamp every N seconds.  Second option to
-	   watch for requests and release lease when we see one? */
-
- out_close:
-	close_disks(token);
- out:
-	free(disks);
-	free(token);
-	return rv;
 }
 

@@ -6,6 +6,13 @@
 
 #define TOKEN_NAME_SIZE 32
 
+/* TODO: add useful error codes to return from disk paxos code */
+enum {
+	DP_ERROR = -1,
+	DP_NONE = 0,	/* unused */
+	DP_OK = 1,
+};
+
 /* paxos_disk + offset:
    points to 1 leader_record + 1 request_record + MAX_HOSTS paxos_dblock's =
    256 blocks = 128KB, ref: lease_item_record */
@@ -57,7 +64,7 @@ struct paxos_dblock {
 
 
 int majority_disks(struct token *token, int num);
-int disk_paxos_acquire(struct token *token, int force, int wait_timeout,
+int disk_paxos_acquire(struct token *token, int force, 
 		       struct leader_record *leader_ret);
 int disk_paxos_renew(struct token *token, struct leader_record *leader_ret);
 int disk_paxos_release(struct token *token, struct leader_record *leader_ret);

@@ -25,12 +25,13 @@ static struct pollfd *pollfd = NULL;
 char opt_command[COMMAND_MAX];
 char opt_killscript[COMMAND_MAX];
 char resource_id[PATH_MAX];
-extern uint64_t our_host_id;
-extern uint64_t num_hosts;
+uint64_t our_host_id;
+uint64_t num_hosts;
 
 char lockfile_path[PATH_MAX];
 int supervise_pid;
 int killscript_pid;
+int supervise_pid_exit_status;
 int starting_lease_thread;
 int stopping_lease_threads;
 int killing_supervise_pid;
@@ -47,29 +48,55 @@ int wd_touch;
 int wd_unlink;
 int wd_fd;
 char wd_path[PATH_MAX];
-time_t wd_touch_time;
+time_t wd_touch_time; /* timestamp of last wd touch */
 
-int watchdog_touch_seconds;
-int lease_renewal_seconds;
-int pid_check_seconds;
-int paxos_wait_seconds;
-int paxos_timeout_seconds;
-int renewal_fail_seconds;
-int touch_fail_seconds;
-int script_shutdown_seconds;
-int sigterm_shutdown_seconds;
-time_t oldest_renewal_time; /* timestamp of lease we renewed longest ago */
+/* sm starts recovery if one of its leases hasn't renewed in this time */
+int lease_renewal_fail_seconds = 30;
+
+/* sm tries to renew a lease this often */
+int lease_renewal_seconds = 10;
+
+/* sm touches a watchdog file this often */
+int wd_touch_seconds = 4;
+
+/* wd daemon reboots if it finds a wd file older than this (unused?) */
+int wd_reboot_seconds = 10;
+
+/* disk paxos takes over lease if it's not been renewed for this long */
+int lease_timeout_seconds = 60;
+
+/* use killscript if this many seconds remain (or >) until lease can be taken */
+int script_shutdown_seconds = 20;
+
+/* use SIGTERM if this many seconds remain (or >) until lease can be taken */
+int sigterm_shutdown_seconds = 20;
+
+/* check pid and lease status this often when things appear to be stable */
+
+int stable_poll_ms = 2000;
+
+/* check pid and lease status this often when things are changing */
+
+int unstable_poll_ms = 500;
+
+/* renewal timestamp of lease we renewed longest ago */
+time_t oldest_renewal_time;
 
 struct lease_status {
-	int acquire_status;
-	int renewal_status;
-	int release_status;
-	uint64_t acquire_time;
-	uint64_t renewal_time;
-	uint64_t release_time;
+	int acquire_last_result;
+	int renewal_last_result;
+	int release_last_result;
+	uint64_t acquire_last_time;
+	uint64_t acquire_good_time;
+	uint64_t renewal_last_time;
+	uint64_t renewal_good_time;
+	uint64_t release_last_time;
+	uint64_t release_good_time;
 
 	int stop_thread;
 	int thread_running;
+	uint32_t token_type;
+	char token_name[TOKEN_NAME_SIZE];
 };
 
 struct client {
@@ -235,6 +262,7 @@ int check_supervise_pid(void)
 		return rv;
 
 	if (WIFEXITED(status)) {
+		supervise_pid_exit_status = WEXITSTATUS(status);
 		check_killscript_pid();
 		supervise_pid = 0;
 		return 0;
@@ -279,13 +307,17 @@ int run_command(char *command)
 
 void kill_supervise_pid(void)
 {
-	uint64_t expire_time, remain_time;
+	uint64_t expire_time, remaining_seconds;
 
 	if (!supervise_pid)
 		return 0;
 
-	expire_seconds = oldest_renewal_time + lease_timeout;
-	remain_seconds = expire_time - time(NULL);
+	expire_time = oldest_renewal_time + lease_timeout_seconds;
+
+	if (time(NULL) >= expire_time)
+		goto do_kill:
+
+	remaining_seconds = expire_time - time(NULL);
 
 	if (!killscript_command[0])
 		goto do_term;
@@ -293,22 +325,30 @@ void kill_supervise_pid(void)
 	/* While we have more than script_shutdown_seconds until our
 	   lease expires, we can try using killscript. */
 
-	if (remain_seconds >= script_shutdown_seconds) {
+	if (killing_supervise_pid > 2)
+		goto do_term;
+
+	if (remaining_seconds >= script_shutdown_seconds) {
+		killing_supervise_pid = 2;
 		run_killscript();
 		return;
 	}
 
 	/* While we have more than sigterm_shutdown_seconds until our
 	   lease expires, we can try using kill(SIGTERM). */
-
  do_term:
-	if (remain_seconds >= sigterm_shutdown_seconds) {
+	if (killing_supervise_pid > 3)
+		goto do_kill;
+
+	if (remaining_seconds >= sigterm_shutdown_seconds) {
+		killing_supervise_pid = 3;
 		kill(supervise_pid, SIGTERM);
 		return;
 	}
 
-	/* No time left for any kill of friendly shutdown. */
-
+	/* No time left for any kind of friendly shutdown. */
+ do_kill:
+	killing_supervise_pid = 4;
 	kill(supervise_pid, SIGKILL);
 }
 
@@ -356,7 +396,7 @@ void *watchdog_thread(void *arg)
 			pthread_mutex_unlock(&watchdog_mutex);
 		}
 
-		sleep(watchdog_touch_seconds);
+		sleep(wd_touch_seconds);
 	}
 	return NULL;
 }
@@ -471,31 +511,45 @@ int renew_lease(struct token *token, uint64_t *timestamp)
 	return 1;
 }
 
-void set_lease_status(int num, int op, int s, uint64_t t)
+void set_lease_status(int num, int op, int r, uint64_t t)
 {
 	pthread_mutex_lock(&lease_status_mutex);
-	if (op == OP_ACQUIRE) {
-		lease_status[num].acquire_status = s;
-		lease_status[num].acquire_time = t;
-	} else if (op == OP_RENEWAL) {
-		lease_status[num].renewal_status = s;
-		lease_status[num].renewal_time = t;
-	} else if (op == OP_RELEASE) {
-		lease_status[num].release_status = s;
-		lease_status[num].release_time = t;
-	}
+	switch (op) {
+	case OP_ACQUIRE:
+		lease_status[num].acquire_last_result = r;
+		lease_status[num].acquire_last_time = t;
+		if (r == DP_OK)
+			lease_status[num].acquire_good_time = t;
+		/* fall through, acquire works as renewal */
+
+	case OP_RENEWAL:
+		lease_status[num].renewal_last_result = r;
+		lease_status[num].renewal_last_time = t;
+		if (r == DP_OK)
+			lease_status[num].renewal_good_time = t;
+		break;
+
+	case OP_RELEASE:
+		lease_status[num].release_last_result = r;
+		lease_status[num].release_last_time = t;
+		if (r == DP_OK)
+			lease_status[num].release_good_time = t;
+		break;
+	default:
+		/* log error */
+	};
 	pthread_mutex_unlock(&lease_status_mutex);
 }
 
-void get_lease_status(int num, int op, int *s)
+void get_lease_status(int num, int op, int *r)
 {
 	pthread_mutex_lock(&lease_status_mutex);
 	if (op == OP_ACQUIRE) {
-		*s = lease_status[num].acquire_status;
+		*r = lease_status[num].acquire_last_result;
 	} else if (op == OP_RENEWAL) {
-		*s = lease_status[num].renewal_status;
+		*r = lease_status[num].renewal_last_result;
 	} else if (op == OP_RELEASE) {
-		*s = lease_status[num].release_status;
+		*r = lease_status[num].release_last_result;
 	}
 	pthread_mutex_unlock(&lease_status_mutex);
 }
@@ -511,19 +565,19 @@ int check_leases_renewed(void)
 		if (!lease_status[i].thread_running)
 			continue;
 
-		/* TODO: what about threads being stopped (stop_thread == 1)
-		 * when individual leases are released while continuing to run
-		 * with others? */
-
-		if (lease_status[i].renewal_status < 0) {
-			fail_count++;
+		/* this lease has not been acquired */
+		if (!lease_status[i].renewal_good_time)
 			continue;
-		}
 
-		if (!oldest || (oldest < lease_status[i].renewal_time))
-			oldest = lease_status[i].renewal_time;
+		/* TODO: what about threads being stopped (stop_thread == 1)
+		   when individual leases are released while continuing to run
+		   with others? */
 
-		if (time(NULL) - lease_status[i].renewal_time >= renewal_fail_seconds) {
+		if (!oldest || (oldest < lease_status[i].renewal_good_time))
+			oldest = lease_status[i].renewal_good_time;
+
+		if (time(NULL) - lease_status[i].renewal_good_time >=
+		    lease_renewal_fail_seconds) {
 			fail_count++;
 			continue;
 		}
@@ -741,22 +795,13 @@ void del_lease_thread(int num)
  * so it should be safe to unlink the watchdog files.
  */
 
-/* FIXME: sync_manager should exit with error if there's a failure;
-   what's a normal/clean shutdown look like?  supervise_pid exit status
-   of zero?  Does sync_manager pass back the exit status of supervised pid?
-   What if pid exits with 0, but sync_manager has an error cleaning up
-   after it (e.g. releasing lease), does sync_manager exit with 0 or an
-   error? */
-
 int main_loop(void)
 {
-	int i, s, rv, pid_status, wd_status, poll_timeout;
+	int i, r, rv, pid_status, wd_status, poll_timeout;
+	int poll_timeout = unstable_check_ms;
 	int error = 0;
 
 	while (1) {
-		/* FIXME */
-		poll_timeout = 1000;
-
 		rv = poll(pollfd, client_maxi + 1, poll_timeout);
 		if (rv == -1 && errno == EINTR) {
 			continue;
@@ -789,14 +834,14 @@ int main_loop(void)
 		 */
 
 		if (starting_lease_thread) {
-			get_lease_status(0, OP_ACQUIRE, &s);
-			if (s < 0) {
+			get_lease_status(0, OP_ACQUIRE, &r);
+			if (r < 0) {
 				/* lease_thread 0 failed to acquire lease */
 				starting_lease_thread = 0;
 				stopping_lease_threads = 1;
-				error = s;
+				error = r;
 
-			} else if (s > 0) {
+			} else if (r > 0) {
 				/* lease_thread 0 has acquired lease */
 				starting_lease_thread = 0;
 
@@ -826,6 +871,8 @@ int main_loop(void)
 			rv = count_running_lease_threads();
 			if (!rv) {
 				cleanup_lease_threads();
+				if (!error)
+					error = supervise_pid_exit_status;
 				break;
 			}
 
@@ -895,11 +942,24 @@ int main_loop(void)
 				notouch_watchdog();
 			}
 		}
+
+		/* Don't check on pid and leases as often when things are in
+		   a stable state: pid running and leases being updated in
+		   timely fashion. */
+
+		if ((pid_status > 0) && !killing_supervise_pid &&
+		    (time(NULL) - oldest_renewal_time < lease_renewal_seconds))
+			poll_timeout = stable_check_ms;
+		else
+			poll_timeout = unstable_check_ms;
 	}
 
+	/*
+	 * TODO: what should the exit status of sync_manager be?
+	 * Should it always be the exit status of the supervise_pid?
+	 * Even if sync_manager kills the supervise_pid?
+	 */
 	if (killing_supervise_pid) {
-		/* do we return -EXXX here if pid exited with 0?
-		   if pid exited with -EYYY do we return -EYYY here? */
 	}
 
 	return error;
