@@ -315,17 +315,12 @@ int run_disk_paxos(uint64_t host_id, uint64_t inp, struct token *token,
 
 	if (!host_id) {
 		log_error("invalid host_id");
-		return -1;
+		return DP_INVAL;
 	}
 
 	if (!inp) {
 		log_error("invalid inp");
-		return -1;
-	}
-
-	if (!token) {
-		log_error("no token");
-		return -1;
+		return DP_INVAL;
 	}
 
 	/* read one of our own dblock's to get initial dblock values */
@@ -342,7 +337,7 @@ int run_disk_paxos(uint64_t host_id, uint64_t inp, struct token *token,
 
 	if (rv < 0) {
 		log_error("no initial dblock found");
-		return -1;
+		return DP_OWN_DBLOCK;
 	}
 
 	log_debug("initial dblock %u mbal %llu bal %llu inp %llu lver %llu", d,
@@ -386,7 +381,7 @@ int run_disk_paxos(uint64_t host_id, uint64_t inp, struct token *token,
 
 	if (!majority_disks(token, num_writes)) {
 		log_error("cannot write dblock to majority of disks");
-		return -1;
+		return DP_WRITE1_DBLOCKS;
 	}
 
 	num_reads = 0;
@@ -406,7 +401,7 @@ int run_disk_paxos(uint64_t host_id, uint64_t inp, struct token *token,
 					  d, q,
 					  (unsigned long long)bk[q].lver,
 					  (unsigned long long)dblock.lver);
-				return -1;
+				return DP_READ1_LVER;
 			}
 
 			/* see "It aborts the ballot" in comment above */
@@ -416,7 +411,7 @@ int run_disk_paxos(uint64_t host_id, uint64_t inp, struct token *token,
 					  d, q,
 					  (unsigned long long)bk[q].mbal,
 					  (unsigned long long)dblock.mbal);
-				return -1;
+				return DP_READ1_MBAL;
 			}
 
 			/* see choosing inp for phase 2 in comment below */
@@ -431,7 +426,7 @@ int run_disk_paxos(uint64_t host_id, uint64_t inp, struct token *token,
 
 	if (!majority_disks(token, num_reads)) {
 		log_error("cannot read dblocks on majority of disks");
-		return -1;
+		return DP_READ1_DBLOCKS;
 	}
 
 	/*
@@ -473,7 +468,7 @@ int run_disk_paxos(uint64_t host_id, uint64_t inp, struct token *token,
 
 	if (!majority_disks(token, num_writes)) {
 		log_error("cannot write dblock to majority of disks 2");
-		return -1;
+		return DP_WRITE2_DBLOCKS;
 	}
 
 	num_reads = 0;
@@ -493,7 +488,7 @@ int run_disk_paxos(uint64_t host_id, uint64_t inp, struct token *token,
 					  d, q,
 					  (unsigned long long)bk[q].lver,
 					  (unsigned long long)dblock.lver);
-				return -1;
+				return DP_READ2_LVER;
 			}
 
 			/* see "It aborts the ballot" in comment above */
@@ -503,21 +498,21 @@ int run_disk_paxos(uint64_t host_id, uint64_t inp, struct token *token,
 					  d, q,
 					  (unsigned long long)bk[q].mbal,
 					  (unsigned long long)dblock.mbal);
-				return -1;
+				return DP_READ2_MBAL;
 			}
 		}
 	}
 
 	if (!majority_disks(token, num_reads)) {
 		log_error("cannot read dblocks from majority of disks 2");
-		return -1;
+		return DP_READ2_DBLOCKS;
 	}
 
 	/* "When it completes phase 2, p has committed dblock[p].inp." */
 
 	memcpy(dblock_out, &dblock, sizeof(struct paxos_dblock));
 
-	return 0;
+	return DP_OK;
 }
 
 int leaders_match(struct leader_record *a, struct leader_record *b)
@@ -539,18 +534,19 @@ int get_prev_leader(struct token *token, int force,
 	int num_reads, num_writes, num_free, num_timeout;
 	int num_disks = token->num_disks;
 	int rv, d, i, found;
+	int error;
 
 	leaders_len = num_disks * sizeof(struct leader_record);
 	leader_reps_len = num_disks * sizeof(int);
 
 	leaders = malloc(leaders_len);
 	if (!leaders)
-		return -1;
+		return DP_NO_MEM;
 
 	leader_reps = malloc(leader_reps_len);
 	if (!leader_reps) {
 		free(leaders);
-		return -1;
+		return DP_NO_MEM;
 	}
 
 	/*
@@ -585,6 +581,7 @@ int get_prev_leader(struct token *token, int force,
 
 	if (!majority_disks(token, num_reads)) {
 		log_error("cannot read leader from majority of disks");
+		error = DP_READ_LEADERS;
 		goto fail;
 	}
 
@@ -606,6 +603,7 @@ int get_prev_leader(struct token *token, int force,
 
 	if (!found) {
 		log_error("cannot find majority leader");
+		error = DP_DIFF_LEADERS;
 		goto fail;
 	}
 
@@ -625,11 +623,13 @@ int get_prev_leader(struct token *token, int force,
 	if (token->type != prev_leader.token_type ||
 	    strcmp(token->name, prev_leader.token_name)) {
 		log_error("leader has wrong token name");
+		error = DP_BAD_NAME;
 		goto fail;
 	}
 
 	if (prev_leader.num_hosts < our_host_id) {
 		log_error("leader num_hosts too small");
+		error = DP_BAD_NUMHOSTS;
 		goto fail;
 	}
 
@@ -657,6 +657,7 @@ int get_prev_leader(struct token *token, int force,
 
 	if (!num_writes) {
 		log_error("cannot write request to any disk");
+		error = DP_WRITE_REQUESTS;
 		goto fail;
 	}
 
@@ -696,6 +697,8 @@ int get_prev_leader(struct token *token, int force,
 		if (rv < 0)
 			continue;
 
+		/* looks for different timestamp */
+
 		if (!memcmp(&leaders[d], &tmp_leader,
 			    sizeof(struct leader_record)))
 			num_timeout++;
@@ -703,6 +706,7 @@ int get_prev_leader(struct token *token, int force,
 
 	if (!majority_disks(token, num_timeout)) {
 		log_error("no lease timeout on majority of disks");
+		error = DP_LIVE_LEADER;
 		goto fail;
 	}
 
@@ -710,15 +714,34 @@ int get_prev_leader(struct token *token, int force,
 
  out:
 	memcpy(leader_out, &prev_leader, sizeof(struct leader_record));
-	return 0;
+	return DP_OK;
 
  fail:
-	/* TODO: are there some errors where we don't want the
-	   caller to retry? */
-
 	free(leaders);
 	free(leader_reps);
-	return -1;
+	return error;
+}
+
+int write_new_leader(struct token *token, struct leader_record *nl)
+{
+	int num_disks = token->num_disks;
+	int num_writes = 0;
+	int error = DP_OK;
+	int rv, d;
+
+	for (d = 0; d < num_disks; d++) {
+		rv = write_leader(&token->disks[d], nl);
+		if (rv < 0)
+			continue;
+		num_writes++;
+	}
+
+	if (!majority_disks(token, num_writes)) {
+		log_error("cannot write leader to majority of disks");
+		error = DP_WRITE_NEW_LEADERS;
+	}
+
+	return error;
 }
 
 /*
@@ -733,18 +756,18 @@ int disk_paxos_acquire(struct token *token, int force,
 	struct leader_record new_leader;
 	struct paxos_dblock dblock;
 	int num_disks = token->num_disks;
-	int rv, d, num_writes;
-	int error = DP_ERROR;
+	int d, num_writes;
+	int error;
 
 	/*
 	 * find a valid current/previous leader on which to base
 	 * the new leader
 	 */
 
-	rv = get_prev_leader(token, force, &prev_leader);
-	if (rv < 0) {
-		log_error("get_prev_leader failed %d", rv);
-		goto fail;
+	error = get_prev_leader(token, force, &prev_leader);
+	if (error < 0) {
+		log_error("get_prev_leader failed %d", error);
+		goto out;
 	}
 
 	/*
@@ -758,11 +781,11 @@ int disk_paxos_acquire(struct token *token, int force,
 	new_leader.num_hosts = prev_leader.num_hosts;
 	new_leader.num_alloc_slots = prev_leader.num_alloc_slots; /* ? */
 
-	rv = run_disk_paxos(our_host_id, our_host_id, token,
-			    new_leader.num_hosts, new_leader.lver, &dblock);
-	if (rv) {
+	error = run_disk_paxos(our_host_id, our_host_id, token,
+			       new_leader.num_hosts, new_leader.lver, &dblock);
+	if (error < 0) {
 		log_error("run_disk_paxos error");
-		goto fail;
+		goto out;
 	}
 
 	log_debug("paxos result dblock mbal %llu bal %llu inp %llu lver %llu",
@@ -777,27 +800,11 @@ int disk_paxos_acquire(struct token *token, int force,
 	new_leader.lver = dblock.lver;
 	new_leader.timestamp = time(NULL);
 
-	/*
-	 * write new leader to disks
-	 */
+	error = write_new_leader(token, &new_leader);
+	if (error < 0)
+		goto out;
 
-	num_writes = 0;
-
-	for (d = 0; d < num_disks; d++) {
-		rv = write_leader(&token->disks[d], &new_leader);
-		if (rv < 0)
-			continue;
-		num_writes++;
-	}
-
-	if (!majority_disks(token, num_writes)) {
-		log_error("cannot write leader to majority of disks");
-		goto fail;
-	}
-
-	/* got the lease */
-
-	log_debug("new_leader owner %llu lver %llu hosts %llu time %llu "
+	log_debug("dp_acquire new_leader owner %llu lver %llu hosts %llu time %llu "
 		  "token %u %s",
 		  (unsigned long long)new_leader.owner_id,
 		  (unsigned long long)new_leader.lver,
@@ -805,24 +812,71 @@ int disk_paxos_acquire(struct token *token, int force,
 		  (unsigned long long)new_leader.timestamp,
 		  new_leader.token_type, new_leader.token_name);
 
-	memcpy(leader_out, &new_leader, sizeof(struct leader_record));
-	return DP_OK;
- fail:
-	/* TODO: use more helpful error values for different conditions */
+	memcpy(leader_ret, &new_leader, sizeof(struct leader_record));
+ out:
 	return error;
 }
 
-int disk_paxos_release(struct token *token, struct leader_record *leader_ret)
+int disk_paxos_renew(struct token *token,
+		     struct leader_record *leader_last,
+		     struct leader_record *leader_ret)
 {
+	struct leader_record new_leader;
+	int error;
+
+	memcpy(&new_leader, leader_last, sizeof(struct leader_record));
+	new_leader.timestamp = time(NULL);
+
+	error = write_new_leader(token, &new_leader);
+	if (error < 0)
+		goto out;
+
+	log_debug("dp_renew new_leader owner %llu lver %llu hosts %llu time %llu "
+		  "token %u %s",
+		  (unsigned long long)new_leader.owner_id,
+		  (unsigned long long)new_leader.lver,
+		  (unsigned long long)new_leader.num_hosts,
+		  (unsigned long long)new_leader.timestamp,
+		  new_leader.token_type, new_leader.token_name);
+
+	memcpy(leader_ret, &new_leader, sizeof(struct leader_record));
+ out:
+	return error;
 }
 
-int disk_paxos_renew(struct token *token, struct leader_record *leader_ret)
+int disk_paxos_release(struct token *token,
+		       struct leader_record *leader_last,
+		       struct leader_record *leader_ret)
 {
+	struct leader_record new_leader;
+	int error;
+
+	memcpy(&new_leader, leader_last, sizeof(struct leader_record));
+	new_leader.timestamp = LEASE_FREE;
+
+	error = write_new_leader(token, &new_leader);
+	if (error < 0)
+		goto out;
+
+	log_debug("dp_release new_leader owner %llu lver %llu hosts %llu time %llu "
+		  "token %u %s",
+		  (unsigned long long)new_leader.owner_id,
+		  (unsigned long long)new_leader.lver,
+		  (unsigned long long)new_leader.num_hosts,
+		  (unsigned long long)new_leader.timestamp,
+		  new_leader.token_type, new_leader.token_name);
+
+	memcpy(leader_ret, &new_leader, sizeof(struct leader_record));
+ out:
+	return error;
 }
 
 int disk_paxos_transfer(struct token *token, uint64_t hostid,
+			struct leader_record *leader_last,
 			struct leader_record *leader_ret)
 {
+	/* what to change for a transfer?  new hostid in leader blocks,
+	   new dblocks?  new lver in leader and dblocks? */
 }
 
 void token_status(struct token *token)

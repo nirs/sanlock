@@ -48,7 +48,11 @@ int wd_touch;
 int wd_unlink;
 int wd_fd;
 char wd_path[PATH_MAX];
-time_t wd_touch_time; /* timestamp of last wd touch */
+int wd_create_result;
+int wd_touch_last_result;
+time_t wd_create_time;
+time_t wd_touch_last_time;
+time_t wd_touch_good_time;
 
 /* sm starts recovery if one of its leases hasn't renewed in this time */
 int lease_renewal_fail_seconds = 30;
@@ -61,6 +65,9 @@ int wd_touch_seconds = 4;
 
 /* wd daemon reboots if it finds a wd file older than this (unused?) */
 int wd_reboot_seconds = 10;
+
+/* sm starts recovery if the wd thread hasn't touched wd file in this time */
+int wd_touch_fail_seconds = 8;
 
 /* disk paxos takes over lease if it's not been renewed for this long */
 int lease_timeout_seconds = 60;
@@ -244,13 +251,16 @@ int check_killscript_pid(void)
 /*
  * return values:
  * 1 if pid is running (or pid has not been set yet)
- * 0 is pid is not running
+ * 0 is pid is not running (or no pid was started and main loop is killing)
  * < 0 on a waitpid error, don't know what these conditions are
  */
 
 int check_supervise_pid(void)
 {
 	int rv, status, kill_status;
+
+	if (!supervise_pid && killing_supervise_pid)
+		return 0;
 
 	if (!supervise_pid)
 		return 1;
@@ -354,10 +364,12 @@ void kill_supervise_pid(void)
 
 void *watchdog_thread(void *arg)
 {
-	int rv, fd, touch, unlink;
+	int rv, fd, touch, unlink, create;
 	time_t t;
 
 	while (1) {
+		create = 0;
+
 		pthread_mutex_lock(&watchdog_mutex);
 		touch = wd_touch; 
 		unlink = wd_unlink;
@@ -371,65 +383,38 @@ void *watchdog_thread(void *arg)
 		if (!touch)
 			continue;
 
-		t = 0;
-
 		if (!wd_fd) {
-			fd = open(wd_path, O_WRONLY|O_CREAT|O_NONBLOCK, 0666);
+			fd = open(wd_path, O_WRONLY|O_CREAT|O_EXCL|O_NONBLOCK,
+				  0666);
 			if (fd < 0) {
-				/* log error */
+				rv = fd;
 			} else {
+				rv = 0;
 				wd_fd = fd;
-				t = time(NULL);
 			}
+			create = 1;
 		} else {
 			rv = futimes(wd_fd, NULL);
-			if (rv < 0) {
-				/* log error */
-			} else {
-				t = time(NULL);
-			}
 		}
+		t = time(NULL);
 
-		if (t) {
-			pthread_mutex_lock(&watchdog_mutex);
-			wd_touch_time = t;
-			pthread_mutex_unlock(&watchdog_mutex);
+		pthread_mutex_lock(&watchdog_mutex);
+		if (create) {
+			wd_create_result = fd;
+			wd_create_time = t;
 		}
+		wd_touch_last_result = rv;
+		wd_touch_last_time = t;
+		if (!rv)
+			wd_touch_good_time = t;
+		pthread_mutex_unlock(&watchdog_mutex);
+
+		/* TODO: use a pthread_cond_timedwait() here so
+		   unlink_watchdog can be quicker? */
 
 		sleep(wd_touch_seconds);
 	}
 	return NULL;
-}
-
-int touch_watchdog(void)
-{
-	int rv;
-
-	if (wd_thread)
-		return 0;
-
-	wd_touch_time = 0;
-	wd_touch = 1;
-	wd_fd = 0;
-	wd_unlink = 0;
-
-	snprintf(wd_path, PATH_MAX, "/var/run/sync_manager/watchdog/%s",
-		 resource_id);
-
-	rv = pthread_create(&wd_thread, &attr, watchdog_thread, NULL);
-	if (rv < 0)
-		return rv;
-
-	/* TODO: wait loop here looking for wd_path to exist */
-
-	return 0;
-}
-
-void notouch_watchdog(void)
-{
-	pthread_mutex_lock(&wd_mutex);
-	wd_touch = 0;
-	pthread_mutex_unlock(&wd_mutex);
 }
 
 void unlink_watchdog(void)
@@ -444,21 +429,84 @@ void unlink_watchdog(void)
 		return;
 
 	pthread_join(wd_thread, &ret);
+	wd_thread = NULL;
+}
+
+int touch_watchdog(void)
+{
+	time_t t, start;
+	int rv;
+
+	if (wd_thread)
+		return 0;
+
+	wd_touch_time = 0;
+	wd_touch = 1;
+	wd_fd = 0;
+	wd_unlink = 0;
+	wd_create_result = 0;
+	wd_create_time = 0;
+	wd_touch_last_result = 0;
+	wd_touch_last_time = 0;
+
+	snprintf(wd_path, PATH_MAX, "/var/run/sync_manager/watchdog/%s",
+		 resource_id);
+
+	rv = pthread_create(&wd_thread, &attr, watchdog_thread, NULL);
+	if (rv < 0)
+		return rv;
+
+	start = time(NULL);
+
+	while (1) {
+		pthread_mutex_lock(&wd_mutex);
+		rv = wd_create_result;
+		t = wd_create_time;
+		pthread_mutex_unlock(&wd_mutex);
+
+		if (t)
+			break;
+
+		if (time(NULL) - start > wd_touch_fail_seconds) {
+			rv = -1;
+			break;
+		}
+
+		usleep(10000);
+	}
+
+	if (rv < 0)
+		unlink_watchdog();
+	else
+		rv = 0;
+
+	return rv;
+}
+
+void notouch_watchdog(void)
+{
+	pthread_mutex_lock(&wd_mutex);
+	wd_touch = 0;
+	pthread_mutex_unlock(&wd_mutex);
 }
 
 int check_watchdog_thread(void)
 {
+	int touch, rv;
 	time_t t;
 
-	pthread_mutex_lock(&wd_mutex);
-	if (!wd_touch) {
-		pthread_mutex_unlock(&wd_mutex);
+	if (!wd_thread)
 		return 0;
-	}
-	t = wd_touch_time;
+
+	pthread_mutex_lock(&wd_mutex);
+	touch = wd_touch;
+	t = wd_touch_good_time;
 	pthread_mutex_unlock(&wd_mutex);
 
-	if (time(NULL) - t > touch_fail_seconds)
+	if (!touch)
+		return 0;
+
+	if (time(NULL) - t > wd_touch_fail_seconds)
 		return -1;
 	return 0;
 }
@@ -772,7 +820,7 @@ void del_lease_thread(int num)
 
 	/* TODO: don't block main loop waiting for the thread to quit;
 	   have main loop check for stopped threads that are ready to be
-	   cleaned up. */
+	   cleaned up.  If last lease was removed, unlink watchdog. */
 }
 
 /*
@@ -980,9 +1028,10 @@ void process_listener(int ci)
 	/*
 	 * read requests to:
 	 * set supervise_pid (if no command was provided when daemon was started)
-	 * kill supervised_pid (and release tokens when it's gone)
-	 * add_lease_thread
-	 * del_lease_thread
+	 * stop: kill supervised_pid and release tokens when it's gone
+	 * (can also be used to stop sm if there's no supervise_pid)
+	 * add_lease_thread (touch_watchdog if it's the first lease)
+	 * del_lease_thread (unlink_watchdog if it's the last)
 	 * transfer a token (reassign to another host when releasing it?)
 	 * list leases and their status
 	 * change num_hosts (is this really needed?)
@@ -1077,11 +1126,11 @@ int main(int argc, char *argv[])
 	if (rv < 0)
 		goto out_lockfile;
 
-	rv = touch_watchdog();
-	if (rv < 0)
-		goto out_lockfile;
-
 	if (opt_token_name[0]) {
+		rv = touch_watchdog();
+		if (rv < 0)
+			goto out_lockfile;
+
 		rv = add_lease_thread(opt_token_name, opt_token_type,
 				      opt_num_disks, opt_disks, &num);
 		if (rv < 0)
