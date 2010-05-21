@@ -1,10 +1,10 @@
 #define MAX_DISKS 128
 
-#define MAX_PATH_LEN 1024
+#define DISK_PATH_LEN 1024 /* includes terminating null byte */
 
 #define MAX_HOSTS 254 /* host id's 1-254 */
 
-#define TOKEN_NAME_SIZE 32
+#define NAME_ID_SIZE 32 /* does not include terminating null byte */
 
 /* TODO: add useful error codes to return from disk paxos code */
 enum {
@@ -20,13 +20,18 @@ enum {
 struct paxos_disk {
 	int fd;
 	uint64_t offset;
-	char path[MAX_PATH_LEN];
+	char path[DISK_PATH_LEN];
 };
 
+/* Once token and token->disks are initialized by the main loop, the only
+   fields that are modified are disk fd's by open_disks() in the lease
+   threads. */
+
 struct token {
-	char name[TOKEN_NAME_SIZE];
-	uint32_t type;
+	int num;
 	int num_disks;
+	uint32_t type;
+	char name[NAME_ID_SIZE];
 	struct paxos_disk *disks;
 };
 
@@ -43,7 +48,7 @@ struct leader_record {
 	uint32_t version; /* what's this? */
 	uint32_t pad1;
 	uint32_t token_type;
-	char token_name[TOKEN_NAME_SIZE]; /* object being locked */
+	char token_name[NAME_ID_SIZE]; /* object being locked */
 	uint64_t timestamp;
 	uint32_t checksum; /* TODO */
 	uint32_t pad2;

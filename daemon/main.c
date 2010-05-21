@@ -21,13 +21,18 @@ static int client_size = 0;
 static struct client *client = NULL;
 static struct pollfd *pollfd = NULL;
 
-#define COMMAND_MAX 4096
-char opt_command[COMMAND_MAX];
-char opt_killscript[COMMAND_MAX];
-char resource_id[PATH_MAX];
+#define COMMAND_MAX 1024
+char command[COMMAND_MAX];
+char killscript[COMMAND_MAX];
+char resource_id[NAME_ID_SIZE + 1];
 uint64_t our_host_id;
 uint64_t num_hosts;
+struct paxos_disk tmp_disks[MAX_DISKS];
+int cmd_argc;
+char **cmd_argv;
 
+int opt_watchdog = 1;
+int opt_debug;
 char lockfile_path[PATH_MAX];
 int supervise_pid;
 int killscript_pid;
@@ -35,12 +40,15 @@ int supervise_pid_exit_status;
 int starting_lease_thread;
 int stopping_lease_threads;
 int killing_supervise_pid;
+int external_shutdown;
 
 #define MAX_LEASES 64
 pthread_t lease_threads[MAX_LEASES];
 pthread_mutex_t lease_status_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t lease_status_cond = PTHREAD_COND_INITIALIZER;
 struct lease_status lease_status[MAX_LEASES];
+struct token *tokens[MAX_LEASES];
+time_t oldest_renewal_time; /* timestamp of oldest lease renewal */
 
 pthread_t wd_thread;
 pthread_mutex_t wd_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -54,40 +62,52 @@ time_t wd_create_time;
 time_t wd_touch_last_time;
 time_t wd_touch_good_time;
 
-/* sm starts recovery if one of its leases hasn't renewed in this time */
-int lease_renewal_fail_seconds = 30;
+/*
+ * lease_timeout_seconds
+ * disk paxos takes over lease if it's not been renewed for this long
+ *
+ * lease_renewal_fail_seconds
+ * sm starts recovery if one of its leases hasn't renewed in this time
+ *
+ * lease_renewal_seconds
+ * sm tries to renew a lease this often
+ *
+ * wd_touch_seconds
+ * sm touches a watchdog file this often
+ *
+ * wd_reboot_seconds
+ * wd daemon reboots if it finds a wd file older than this (unused?)
+ *
+ * wd_touch_fail_seconds
+ * sm starts recovery if the wd thread hasn't touched wd file in this time
+ *
+ * script_shutdown_seconds
+ * use killscript if this many seconds remain (or >) until lease can be taken
+ *
+ * sigterm_shutdown_seconds
+ * use SIGTERM if this many seconds remain (or >) until lease can be taken
+ *
+ * stable_poll_ms
+ * check pid and lease status this often when things appear to be stable
+ *
+ * unstable_poll_ms
+ * check pid and lease status this often when things are changing
+ */
 
-/* sm tries to renew a lease this often */
-int lease_renewal_seconds = 10;
+struct sm_timeouts {
+	int lease_timeout_seconds;
+	int lease_renewal_fail_seconds;
+	int lease_renewal_seconds;
+	int wd_touch_seconds;
+	int wd_reboot_seconds;
+	int wd_touch_fail_seconds;
+	int script_shutdown_seconds;
+	int sigterm_shutdown_seconds;
+	int stable_poll_ms;
+	int unstable_poll_ms;
+};
 
-/* sm touches a watchdog file this often */
-int wd_touch_seconds = 4;
-
-/* wd daemon reboots if it finds a wd file older than this (unused?) */
-int wd_reboot_seconds = 10;
-
-/* sm starts recovery if the wd thread hasn't touched wd file in this time */
-int wd_touch_fail_seconds = 8;
-
-/* disk paxos takes over lease if it's not been renewed for this long */
-int lease_timeout_seconds = 60;
-
-/* use killscript if this many seconds remain (or >) until lease can be taken */
-int script_shutdown_seconds = 20;
-
-/* use SIGTERM if this many seconds remain (or >) until lease can be taken */
-int sigterm_shutdown_seconds = 20;
-
-/* check pid and lease status this often when things appear to be stable */
-
-int stable_poll_ms = 2000;
-
-/* check pid and lease status this often when things are changing */
-
-int unstable_poll_ms = 500;
-
-/* renewal timestamp of lease we renewed longest ago */
-time_t oldest_renewal_time;
+struct sm_timeouts to;
 
 struct lease_status {
 	int acquire_last_result;
@@ -102,8 +122,8 @@ struct lease_status {
 
 	int stop_thread;
 	int thread_running;
-	uint32_t token_type;
-	char token_name[TOKEN_NAME_SIZE];
+
+	char token_name[NAME_ID_SIZE + 1];
 };
 
 struct client {
@@ -111,23 +131,6 @@ struct client {
 	void *workfn;
 	void *deadfn;
 };
-
-int do_read(int fd, void *buf, size_t count)
-{
-	int rv, off = 0;
-
-	while (off < count) {
-		rv = read(fd, (char *)buf + off, count - off);
-		if (rv == 0)
-			return -1;
-		if (rv == -1 && errno == EINTR)
-			continue;
-		if (rv == -1)
-			return -1;
-		off += rv;
-	}
-	return 0;
-}
 
 #define CLIENT_NALLOC 2
 
@@ -227,12 +230,6 @@ void close_disks(struct token *token)
 	}
 }
 
-void free_token(struct token *token)
-{
-	free(token->disks);
-	free(token);
-}
-
 int check_killscript_pid(void)
 {
 	int rv, status;
@@ -293,7 +290,7 @@ int run_killscript(void)
 		killscript_pid = pid;
 		return 0;
 	} else {
-		execl(opt_killscript, NULL);
+		execl(killscript, NULL);
 		return -1;
 	}
 }
@@ -310,19 +307,25 @@ int run_command(char *command)
 		supervise_pid = pid;
 		return 0;
 	} else {
-		execl(command, NULL);
+		execv(command, cmd_argv);
 		return -1;
 	}
 }
+
+/* TODO: limit repeated calls to killscript/kill() when this function
+   is called repeatedly */
 
 void kill_supervise_pid(void)
 {
 	uint64_t expire_time, remaining_seconds;
 
+	if (!killing_supervise_pid)
+		killing_supervise_pid = 1;
+
 	if (!supervise_pid)
 		return 0;
 
-	expire_time = oldest_renewal_time + lease_timeout_seconds;
+	expire_time = oldest_renewal_time + to.lease_timeout_seconds;
 
 	if (time(NULL) >= expire_time)
 		goto do_kill:
@@ -338,7 +341,7 @@ void kill_supervise_pid(void)
 	if (killing_supervise_pid > 2)
 		goto do_term;
 
-	if (remaining_seconds >= script_shutdown_seconds) {
+	if (remaining_seconds >= to.script_shutdown_seconds) {
 		killing_supervise_pid = 2;
 		run_killscript();
 		return;
@@ -350,7 +353,7 @@ void kill_supervise_pid(void)
 	if (killing_supervise_pid > 3)
 		goto do_kill;
 
-	if (remaining_seconds >= sigterm_shutdown_seconds) {
+	if (remaining_seconds >= to.sigterm_shutdown_seconds) {
 		killing_supervise_pid = 3;
 		kill(supervise_pid, SIGTERM);
 		return;
@@ -412,7 +415,7 @@ void *watchdog_thread(void *arg)
 		/* TODO: use a pthread_cond_timedwait() here so
 		   unlink_watchdog can be quicker? */
 
-		sleep(wd_touch_seconds);
+		sleep(to.wd_touch_seconds);
 	}
 	return NULL;
 }
@@ -420,6 +423,9 @@ void *watchdog_thread(void *arg)
 void unlink_watchdog(void)
 {
 	void *ret;
+
+	if (!opt_watchdog)
+		return 0;
 
 	pthread_mutex_lock(&wd_mutex);
 	wd_unlink = 1;
@@ -437,6 +443,9 @@ int touch_watchdog(void)
 	time_t t, start;
 	int rv;
 
+	if (!opt_watchdog)
+		return 0;
+
 	if (wd_thread)
 		return 0;
 
@@ -449,8 +458,8 @@ int touch_watchdog(void)
 	wd_touch_last_result = 0;
 	wd_touch_last_time = 0;
 
-	snprintf(wd_path, PATH_MAX, "/var/run/sync_manager/watchdog/%s",
-		 resource_id);
+	snprintf(wd_path, PATH_MAX,
+		 "/var/run/sync_manager/watchdog/%s", resource_id);
 
 	rv = pthread_create(&wd_thread, &attr, watchdog_thread, NULL);
 	if (rv < 0)
@@ -467,7 +476,7 @@ int touch_watchdog(void)
 		if (t)
 			break;
 
-		if (time(NULL) - start > wd_touch_fail_seconds) {
+		if (time(NULL) - start > to.wd_touch_fail_seconds) {
 			rv = -1;
 			break;
 		}
@@ -495,6 +504,9 @@ int check_watchdog_thread(void)
 	int touch, rv;
 	time_t t;
 
+	if (!opt_watchdog)
+		return 0;
+
 	if (!wd_thread)
 		return 0;
 
@@ -506,7 +518,7 @@ int check_watchdog_thread(void)
 	if (!touch)
 		return 0;
 
-	if (time(NULL) - t > wd_touch_fail_seconds)
+	if (time(NULL) - t > to.wd_touch_fail_seconds)
 		return -1;
 	return 0;
 }
@@ -518,7 +530,7 @@ int acquire_lease(struct token *token, uint64_t *timestamp)
 	struct leader_record leader;
 	int rv;
 
-	rv = disk_paxos_acquire(token, 0, opt_paxos_timeout, &leader);
+	rv = disk_paxos_acquire(token, 0, &leader);
 	if (rv < 0)
 		return rv;
 
@@ -613,19 +625,18 @@ int check_leases_renewed(void)
 		if (!lease_status[i].thread_running)
 			continue;
 
+		if (lease_status[i].stop_thread)
+			continue;
+
 		/* this lease has not been acquired */
 		if (!lease_status[i].renewal_good_time)
 			continue;
-
-		/* TODO: what about threads being stopped (stop_thread == 1)
-		   when individual leases are released while continuing to run
-		   with others? */
 
 		if (!oldest || (oldest < lease_status[i].renewal_good_time))
 			oldest = lease_status[i].renewal_good_time;
 
 		if (time(NULL) - lease_status[i].renewal_good_time >=
-		    lease_renewal_fail_seconds) {
+		    to.lease_renewal_fail_seconds) {
 			fail_count++;
 			continue;
 		}
@@ -655,32 +666,25 @@ void stop_lease_threads(void)
 	pthread_mutex_unlock(&lease_status_mutex);
 }
 
-/* wait for all stopped threads to be done */
-
-int count_running_lease_threads(void)
-{
-	int i, count = 0;
-
-	pthread_mutex_lock(&lease_status_mutex);
-	for (i = 0; i < MAX_LEASES; i++)
-		if (lease_status[i].thread_running)
-			count++;
-	pthread_mutex_unlock(&lease_status_mutex);
-
-	return count;
-}
-
-/* cleanup after stop_lease_threads() and !count_running_lease_threads() */
-
 void cleanup_lease_threads(void)
 {
-	void *ret;
+	struct token *token;
 	int i;
+	void *ret;
 
 	for (i = 0; i < MAX_LEASES; i++) {
 		if (lease_threads[i]) {
 			pthread_join(lease_threads[i], &ret);
 			lease_threads[i] = NULL;
+		}
+	}
+
+	for (i = 0; i < MAX_LEASES; i++) {
+		token =  tokens[i];
+		if (token) {
+			free(token->disks);
+			free(token);
+			tokens[i] = NULL;
 		}
 	}
 }
@@ -715,7 +719,7 @@ void *lease_thread(void *arg)
 
 	while (1) {
 #if 0
-		sleep(lease_renewal_seconds);
+		sleep(to.lease_renewal_seconds);
 		pthread_mutex_lock(&lease_status_mutex);
 		stop = lease_status[num].stop_thread;
 		pthread_mutex_unlock(&lease_status_mutex);
@@ -725,7 +729,7 @@ void *lease_thread(void *arg)
 
 		pthread_mutex_lock(&lease_status_mutex);
 		clock_gettime(CLOCK_REALTIME, &ts);
-		ts.tv_sec += lease_renewal_seconds;
+		ts.tv_sec += to.lease_renewal_seconds;
 		rv = 0;
 		while (!lease_status[num].stop_thread && rv == 0) {
 			rv = pthread_cond_timedwait(&lease_status_cond,
@@ -747,20 +751,39 @@ void *lease_thread(void *arg)
 	close_disks(token);
  out_running:
 	set_thread_running(num, 0);
-	free_token(token);
 	return NULL;
 }
 
-int add_lease_thread(char *name, uint32_t type, int num_disks,
-		     struct paxos_disk *disks, int *num_ret)
+/* the disk_paxos structs in global tmp_disks */
+
+int add_lease_thread(char *name, int num_disks, int *num_ret)
 {
 	struct token *token;
+	struct paxos_disk *disks;
 	pthread_attr_t attr
 	int i, rv, num, found = 0;
 
 	token = malloc(sizeof(struct token));
 	if (!token)
 		return -ENOMEM;
+	memset(token, 0, sizeof(struct token));
+
+	disks = malloc(num_disks * sizeof(struct paxos_disk));
+	if (!disks) {
+		free(token);
+		return -ENOMEM;
+	}
+
+	memcpy(disks, &tmp_disks, num_disks * sizeof(struct paxos_disk));
+	token->disks = disks;
+	token->num_disks = num_disks;
+	strncpy(token->name, name, NAME_ID_SIZE);
+
+	disks = NULL;
+	memset(&tmp_disks, 0, num_disks * sizeof(struct paxos_disk));
+
+	/* find an unused lease num, only main loop accesses lease_threads[],
+	   no locking needed */
 
 	for (i = 0; i < MAX_LEASES; i++) {
 		if (!lease_threads[i]) {
@@ -772,13 +795,24 @@ int add_lease_thread(char *name, uint32_t type, int num_disks,
 		rv = -ENOSPC;
 		goto out;
 	}
+
 	num = i;
+	token->num = i;
+
+	/* verify that the tokens slot is unused, only main loop accesses
+	   tokens[], no locking needed */
+
+	if (tokens[num]) {
+		rv = -EINVAL;
+		goto out;
+	}
+
+	/* verify that this lease_status slot is unused in lease_status[],
+	   and that that the token_name is not already used */
 
 	pthread_mutex_lock(&lease_status_mutex);
 	for (i = 0; i < MAX_LEASES; i++) {
 		if (!lease_status[i].thread_running)
-			continue;
-		if (lease_status[i].token_type != type)
 			continue;
 		if (strcmp(lease_status[i].token_name, name))
 			continue;
@@ -791,24 +825,20 @@ int add_lease_thread(char *name, uint32_t type, int num_disks,
 		rv = -EINVAL;
 		goto out;
 	}
-	strcpy(lease_status[num].token_name, name);
-	lease_status[num].token_type = type;
+	strncpy(lease_status[num].token_name, name, NAME_ID_SIZE);
 	pthread_mutex_unlock(&lease_status_mutex);
-
-	token->num = num;
-	strncpy(token->name, name, TOKEN_NAME_SIZE);
-	token->type = type;
-	token->num_disks = num_disks;
-	token->disks = disks;
 
 	pthread_attr_init(&attr);
 	rv = pthread_create(&lease_threads[num], &attr, lease_thread, token);
 	pthread_attr_destroy(&attr);
  out:
-	if (rv < 0)
+	if (rv < 0) {
+		free(token->disks);
 		free(token);
-	else
+	} else {
+		tokens[num] = token;
 		*num_ret = num;
+	}
 	return rv;
 }
 
@@ -820,7 +850,7 @@ void del_lease_thread(int num)
 
 	/* TODO: don't block main loop waiting for the thread to quit;
 	   have main loop check for stopped threads that are ready to be
-	   cleaned up.  If last lease was removed, unlink watchdog. */
+	   cleaned up. */
 }
 
 /*
@@ -846,7 +876,7 @@ void del_lease_thread(int num)
 int main_loop(void)
 {
 	int i, r, rv, pid_status, wd_status, poll_timeout;
-	int poll_timeout = unstable_check_ms;
+	int poll_timeout = to.unstable_check_ms;
 	int error = 0;
 
 	while (1) {
@@ -893,11 +923,12 @@ int main_loop(void)
 				/* lease_thread 0 has acquired lease */
 				starting_lease_thread = 0;
 
-				if (opt_command[0]) {
-					rv = run_command(opt_command);
+				if (command[0]) {
+					rv = run_command(command);
 					if (rv < 0) {
 						stopping_lease_threads = 1;
 						stop_lease_threads();
+						unlink_watchdog();
 						error = rv;
 					}
 				}
@@ -911,20 +942,24 @@ int main_loop(void)
 
 		/*
 		 * sync_manager is shutting down after the supervised pid
-		 * has stopped.  Waiting for lease threads to stop before
-		 * unlinking watchdog file and exiting.
+		 * has stopped.  pthread_join lease threads and free tokens */
 		 */
 
 		if (stopping_lease_threads) {
-			rv = count_running_lease_threads();
-			if (!rv) {
-				cleanup_lease_threads();
-				if (!error)
-					error = supervise_pid_exit_status;
-				break;
-			}
+			cleanup_lease_threads();
+			/* error may be set from initial lease acquire
+			   or run_command */
+			if (!error)
+				error = supervise_pid_exit_status;
+			break;
+		}
 
-			continue;
+		/*
+		 * someone has asked sync_manager to shut down
+		 */
+
+		if (external_shutdown) {
+			kill_supervise_pid();
 		}
 
 		/*
@@ -933,11 +968,8 @@ int main_loop(void)
 		 */
 
 		wd_status = check_watchdog_thread();
-
-		if (wd_status < 0) {
-			killing_supervise_pid = 1;
+		if (wd_status < 0)
 			kill_supervise_pid();
-		}
 
 		/*
 		 * The main running case (not stopping or starting).
@@ -959,6 +991,7 @@ int main_loop(void)
 		 	 */
 			stopping_lease_threads = 1;
 			stop_lease_threads();
+			unlink_watchdog();
 
 		} else if (pid_status < 0) {
 			/*
@@ -970,7 +1003,6 @@ int main_loop(void)
 			 * running.  Limit how long we continue touching the
 			 * watchdog, i.e. commit suicide eventually?
 			 */
-			killing_supervise_pid = 1;
 			kill_supervise_pid();
 
 			rv = check_leases_renewed();
@@ -985,7 +1017,6 @@ int main_loop(void)
 			 */
 			rv = check_leases_renewed();
 			if (rv < 0) {
-				killing_supervise_pid = 1;
 				kill_supervise_pid();
 				notouch_watchdog();
 			}
@@ -996,63 +1027,183 @@ int main_loop(void)
 		   timely fashion. */
 
 		if ((pid_status > 0) && !killing_supervise_pid &&
-		    (time(NULL) - oldest_renewal_time < lease_renewal_seconds))
-			poll_timeout = stable_check_ms;
+		    !stopping_lease_threads && !starting_lease_threads &&
+		    (time(NULL) - oldest_renewal_time < to.lease_renewal_seconds))
+			poll_timeout = to.stable_check_ms;
 		else
-			poll_timeout = unstable_check_ms;
-	}
-
-	/*
-	 * TODO: what should the exit status of sync_manager be?
-	 * Should it always be the exit status of the supervise_pid?
-	 * Even if sync_manager kills the supervise_pid?
-	 */
-	if (killing_supervise_pid) {
+			poll_timeout = to.unstable_check_ms;
 	}
 
 	return error;
 }
 
+
+struct sm_header {
+	uint32_t magic;
+	uint32_t version;
+	uint32_t cmd;
+	uint32_t length;
+	uint32_t info_len;
+	uint32_t seq;
+	uint32_t data;
+	uint32_t unused;
+	char resource_id[NAME_ID_SIZE];
+};
+
+struct sm_info {
+	char command[COMMAND_MAX];
+	char killscript[COMMAND_MAX];
+	uint64_t our_host_id;
+	uint64_t num_hosts;
+
+	int supervise_pid;
+	int supervise_pid_exit_status;
+	int starting_lease_thread;
+	int stopping_lease_threads;
+	int killing_supervise_pid;
+	int external_shutdown;
+
+	/* TODO: include wd info */
+
+	uint64_t current_time;
+	uint64_t oldest_renewal_time;
+	int oldest_renewal_num;
+
+	uint32_t lease_info_len;
+	uint32_t lease_info_count;
+};
+
+struct sm_lease_info {
+	char token_name[NAME_ID_SIZE];
+	uint32_t token_type;
+	int num;
+	int stop_thread;
+	int thread_running;
+
+	int acquire_last_result;
+	int renewal_last_result;
+	int release_last_result;
+	uint64_t acquire_last_time;
+	uint64_t acquire_good_time;
+	uint64_t renewal_last_time;
+	uint64_t renewal_good_time;
+	uint64_t release_last_time;
+	uint64_t release_good_time;
+
+	uint32_t disk_info_len;
+	uint32_t disk_info_count;
+};
+
+struct sm_disk_info {
+	uint64_t offset;
+	char path[DISK_PATH_LEN];
+};
+
+void cmd_status(int fd, struct sm_header *h_recv)
+{
+	/* no more to recv */
+
+	/* reply:
+	   struct sm_header +
+	   struct sm_info +
+	   N * (struct sm_lease_info + (M * struct sm_disk_info)) */
+}
+
 void process_listener(int ci)
 {
+	struct sm_header h;
 	int fd, rv;
 
 	fd = accept(client[ci].fd, NULL, NULL);
 	if (fd < 0)
 		return;
 
-	rv = do_read(fd, &h, sizeof(h));
+	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	if (rv != sizeof(h)) {
+	}
 
-	/* TODO: message format */
+	if (h.magic != SM_MAGIC) {
+	}
 
-	/*
-	 * read requests to:
-	 * set supervise_pid (if no command was provided when daemon was started)
-	 * stop: kill supervised_pid and release tokens when it's gone
-	 * (can also be used to stop sm if there's no supervise_pid)
-	 * add_lease_thread (touch_watchdog if it's the first lease)
-	 * del_lease_thread (unlink_watchdog if it's the last)
-	 * transfer a token (reassign to another host when releasing it?)
-	 * list leases and their status
-	 * change num_hosts (is this really needed?)
-	 */
+	if (strcmp(resource_id, h.resource_id)) {
+	}
 
-	/* What kind of results/reply does the caller want?  How does it
-	 * want to collect the reply?  Is the caller a new sync_tool utility,
-	 * or other? */
+	switch (h.cmd) {
+	case SM_CMD_GET_TIMEOUTS:
+		/* memcpy(sdata, &to, sizeof(to)); */
+		break;
+	case SM_CMD_SET_TIMEOUTS:
+		/* memcpy(&to, rdata, sizeof(to)); */
+		break;
+	case SM_CMD_SHUTDOWN:
+		external_shutdown = 1;
+		send_reply_ok(fd, &h);
+		break;
+	case SM_CMD_SUPERVISE_PID:
+		if (!supervise_pid)
+			supervise_pid = atoi(h.data);
+		send_reply_ok(fd, &h);
+		break;
+	case SM_CMD_NUM_HOSTS:
+		/* just rewrite leader block in leases? */
+		break;
+	case SM_CMD_ADD_LEASE:
+		/* add_lease_thread(), get_lease_status(OP_ACQUIRE) loop */
+		break;
+	case SM_CMD_DEL_LEASE:
+		/* del_lease_thread() */
+		break;
+	case SM_CMD_STATUS:
+		cmd_status(fd, &h);
+		break;
+	case SM_CMD_DUMP_DEBUG:
+		/* send back debug buffer */
+		break;
+	default:
+	};
 
 	close(fd);
 }
 
-/* multiplex all sync_manager requests one one socket? */
-
 int setup_listener(void)
 {
-	int fd;
+	char path[PATH_MAX];
+	struct sockaddr_un addr;
+	socklen_t addrlen;
+	int rv, s;
 
-	/* create unix socket, listen */
+	/* we listen for new client connections on socket s */
 
-	client_add(fd, process_listener, NULL);
+	s = socket(AF_LOCAL, SOCK_STREAM, 0);
+	if (s < 0) {
+		log_error("socket error %d %d", s, errno);
+		return s;
+	}
+
+	snprintf(path, PATH_MAX,
+		 "/var/run/sync_manager/sockets/%s", resource_id);
+
+	memset(&addr, 0, sizeof(addr));
+	addr.sun_family = AF_LOCAL;
+	strncpy(&addr.sun_path[1], sock_path, PATH_MAX - 1);
+	addrlen = sizeof(sa_family_t) + strlen(addr.sun_path+1) + 1;
+
+	rv = bind(s, (struct sockaddr *) &addr, addrlen);
+	if (rv < 0) {
+		log_error("bind error %d %d", rv, errno);
+		close(s);
+		return rv;
+	}
+
+	rv = listen(s, 5);
+	if (rv < 0) {
+		log_error("listen error %d %d", rv, errno);
+		close(s);
+		return rv;
+	}
+
+	client_add(s, process_listener, NULL);
+	return 0;
 }
 
 int lockfile(void)
@@ -1062,7 +1213,7 @@ int lockfile(void)
 	int fd, error;
 
 	snprintf(lockfile_path, PATH_MAX,
-		 "/var/run/sync_manager/sync_manager_%s", resource_id);
+		 "/var/run/sync_manager/lockfiles/%s", resource_id);
 
 	fd = open(lockfile_path, O_CREAT|O_WRONLY, 0666);
 	if (fd < 0) {
@@ -1100,23 +1251,218 @@ int lockfile(void)
 	return 0;
 }
 
-/*
- * resource_id, our_host_id, num_hosts, command,
- * timeouts (how many different timeouts?)
- * fill in token: name, type, num_disks, disk path(s), offset
- */ 
-
-int read_arguments(int argc, char *argv[], struct token *token)
+void print_usage(void)
 {
+	printf("Usage:\n");
+	printf("sync_manager [options] [-c <path> <args>]\n\n");
+	printf("Options:\n");
+	printf("  -D			print debug output\n");
+	printf("  -r <name>		resource id\n");
+	printf("  -i <num>		local host id\n");
+	printf("  -n <num>		number of hosts\n");
+	printf("  -t <name>		token (lease) name\n");
+	printf("  -d <path>:<offset>	disk path and offset\n");
+	printf("  -k <path>		command to stop supervised process\n");
+	printf("  -w <num>		enable (1) or disable (0) using watchdog\n");
+	printf("  -c <path> <args>	run command with args, -c must be final option\n");
+}
+
+int add_tmp_disk(int d, char *arg)
+{
+	char *p;
+	int rv;
+
+	if (d > MAX_DISKS) {
+		fprintf(stderr, "disk option (-d) limit is %d\n", MAX_DISKS);
+		return -EINVAL;
+	}
+
+	p = strstr(arg, ":");
+	if (!p) {
+		fprintf(stderr, "disk option (-d) missing :offset\n");
+		return -EINVAL;
+	}
+
+	*p = '\0';
+	p++;
+
+	strncpy(tmp_disks[d].path, arg, DISK_PATH_LEN - 1);
+
+	rv = sscanf(p, "%llu", &tmp_disks[d].offset);
+	if (rv != 1) {
+		fprintf(stderr, "disk option (-d) invalid offset\n");
+		return -EINVAL;
+	}
+}
+
+/* TODO: option to start up as the receiving side of a transfer
+   from another host.  Watch the other host's lease renewals until
+   the other host writes our hostid is written in the leader block,
+   at which point the lease is ours and we start doing the renewals.
+ 
+   TODO: option to transfer the ownership of all leases to a specified
+   hostid, then watch for pid to exit? */
+
+#define RELEASE_VERSION "0.0"
+
+int read_args(int argc, char *argv[], char *token_name, int *num_disks_out)
+{
+	char optchar;
+	char *optarg;
+	char *p;
+	char *arg1 = argv[1];
+	int optarg_used;
+	int num_disks = 0;
+	int i, j, len;
+	int begin_command = 0;
+
+	if (argc < 2 || !strcmp(arg1, "--help") || !strcmp(arg1, "-h")) {
+		print_usage();
+		exit(EXIT_SUCCESS);
+	}
+
+	if (!strcmp(arg1, "--version") || !strcmp(arg1, "-V")) {
+		printf("%s %s (built %s %s)\n",
+		       argv[0], RELEASE_VERSION, __DATE__, __TIME__);
+		exit(EXIT_SUCCESS);
+	}
+
+	if (argc < 2)
+		return;
+
+	for (i = 1; i < argc; ) {
+		p = argv[i];
+
+		if ((p[0] != '-') || (strlen(p) != 2)) {
+			fprintf(stderr, "unknown option %s\n", p);
+			print_usage();
+			exit(EXIT_FAILURE);
+		}
+
+		optchar = p[1];
+		i++;
+
+		optarg = argv[i];
+		optarg_used = 1;
+
+		switch (optchar) {
+		case 'D':
+			opt_debug = 1;
+			optarg_used = 0;
+			break;
+		case 'c':
+			begin_command = 1;
+			optarg_used = 0;
+			break;
+		case 'r':
+			strncpy(resource_id, optarg, NAME_ID_SIZE);
+			break;
+		case 'i':
+			our_host_id = atoi(optarg);
+			break;
+		case 'n':
+			num_hosts = atoi(optarg);
+			break;
+		case 't':
+			strncpy(token_name, optarg, NAME_ID_SIZE);
+			break;
+		case 'd':
+			num_disks++;
+			rv = add_tmp_disk(num_disks - 1, optarg);
+			if (rv < 0)
+				return rv;
+			break;
+		case 'k':
+			strncpy(killscript, optarg, COMMAND_MAX - 1);
+			break;
+		case 'w':
+			opt_watchdog = atoi(optarg);
+			break;
+		default:
+			fprintf(stderr, "unknown option: %c", optchar);
+			break;
+		};
+
+		if (optarg_used)
+			i++;
+
+		if (begin_command)
+			break;
+	}
+
+	/* 
+	 * the remaining args are for the command
+	 * 
+	 * sync_manager -r foo -n 2 -d bar:0 -c /bin/cmd -X -Y -Z
+	 * argc = 12
+	 * loop above breaks with i = 7, argv[7] = "-c"
+	 *
+	 * cmd_argc = 4 = argc (12) - i (7) - 1
+	 * cmd_argv[0] = "/bin/cmd"
+	 * cmd_argv[1] = "-X"
+	 * cmd_argv[2] = "-Y"
+	 * cmd_argv[3] = "-Z"
+	 * cmd_argv[4] = NULL (required by execv)
+	 */
+
+	if (begin_command) {
+		cmd_argc = argc - i - 1;
+
+		if (cmd_argc < 1) {
+			fprintf("command option (-c) requires an arg\n");
+			exit(EXIT_FAILURE);
+		}
+
+		len = (cmd_argc + 1) * sizeof(char *); /* +1 for final NULL */
+		cmd_argv = malloc(len);
+		if (!cmd_argv)
+			return -ENOMEM;
+		memset(cmd_argv, 0, len);
+
+		/* place i at arg following "-c", e.g. argv[8] "/bin/cmd" */
+		i++;
+		j = 0;
+
+		for (j = 0; j < cmd_argc; j++) {
+			cmd_argv[j] = strdup(argv[i++]);
+			if (!cmd_argv[j])
+				return -ENOMEM;
+		}
+
+		strncpy(command, cmd_argv[0], COMMAND_MAX - 1);
+	}
+
+	*num_disks_out = num_disks;
+	return 0;
+}
+
+void sigterm_handler(int sig)
+{
+	external_shutdown = 1;
 }
 
 int main(int argc, char *argv[])
 {
+	char token_name[NAME_ID_SIZE + 1];
+	int num_disks = 0;
 	int rv, num;
 
-	rv = read_arguments(argc, argv);
+	to.lease_timeout_seconds = 60;
+	to.lease_renewal_fail_seconds = 40;
+	to.lease_renewal_seconds = 10;
+	to.wd_touch_seconds = 4;
+	to.wd_reboot_seconds = 15;
+	to.wd_touch_fail_seconds = 10;
+	to.script_shutdown_seconds = 10;
+	to.sigterm_shutdown_seconds = 10;
+	to.stable_poll_ms = 2000;
+	to.unstable_poll_ms = 500;
+
+	rv = read_args(argc, argv, token_name, &num_disks);
 	if (rv < 0)
 		goto out;
+
+	signal(SIGTERM, sigterm_handler);
 
 	rv = lockfile();
 	if (rv < 0)
@@ -1126,27 +1472,26 @@ int main(int argc, char *argv[])
 	if (rv < 0)
 		goto out_lockfile;
 
-	if (opt_token_name[0]) {
+	if (num_disks) {
 		rv = touch_watchdog();
 		if (rv < 0)
 			goto out_lockfile;
 
-		rv = add_lease_thread(opt_token_name, opt_token_type,
-				      opt_num_disks, opt_disks, &num);
+		rv = add_lease_thread(token_name, num_disks, disks, &num);
 		if (rv < 0)
 			goto out_watchdog;
 
 		starting_lease_thread = 1;
 
 		/* once the lease is acquired, the main loop will run
-		   opt_command if there is one */
+		   command if there is one */
 	}
 
 	/* there was no initial lease, just a command (a lease may be
 	   added later) */
 
-	if (!starting_lease_thread && opt_command[0]) {
-		rv = run_command(opt_command);
+	if (!starting_lease_thread && command[0]) {
+		rv = run_command(command);
 		if (rv < 0)
 			goto out_watchdog;
 	}

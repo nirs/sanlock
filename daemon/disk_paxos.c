@@ -775,7 +775,7 @@ int disk_paxos_acquire(struct token *token, int force,
 	 */
 
 	memset(&new_leader, 0, sizeof(struct leader_record));
-	strncpy(new_leader.token_name, token->name, TOKEN_NAME_SIZE);
+	strncpy(new_leader.token_name, token->name, NAME_ID_SIZE);
 	new_leader.token_type = token->type;
 	new_leader.lver = prev_leader.lver + 1; /* req.lver */
 	new_leader.num_hosts = prev_leader.num_hosts;
@@ -987,7 +987,7 @@ void token_init(struct token *token)
 	leader.num_hosts = num_hosts;
 	leader.timestamp = time(NULL);
 	leader.token_type = token->type;
-	strncpy(leader.token_name, token->name, TOKEN_NAME_SIZE);
+	strncpy(leader.token_name, token->name, NAME_ID_SIZE);
 
 	for (d = 0; d < token->num_disks; d++) {
 		write_leader(&token->disks[d], &leader);
