@@ -15,6 +15,7 @@
 #include <pthread.h>
 
 #include "disk_paxos.h"
+#include "sm.h"
 
 static int client_maxi;
 static int client_size = 0;
@@ -32,7 +33,6 @@ int cmd_argc;
 char **cmd_argv;
 
 int opt_watchdog = 1;
-int opt_debug;
 char lockfile_path[PATH_MAX];
 int supervise_pid;
 int killscript_pid;
@@ -61,6 +61,18 @@ int wd_touch_last_result;
 time_t wd_create_time;
 time_t wd_touch_last_time;
 time_t wd_touch_good_time;
+
+#define LOG_STR_LEN 256
+char log_str[LOG_STR_LEN];
+#define SM_DUMP_SIZE (1024*1024)
+char log_dump[SM_DUMP_SIZE];
+int log_point;
+int log_wrap;
+int log_logfile_priority; /* syslog.h */
+int log_syslog_priority; /* syslog.h */
+int log_stderr_priority; /* syslog.h */
+char logfile_path[PATH_MAX];
+pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /*
  * lease_timeout_seconds
@@ -131,6 +143,63 @@ struct client {
 	void *workfn;
 	void *deadfn;
 };
+
+/* log_dump can be sent over unix socket */
+
+void log_save_dump(int level, char *buf, int len)
+{
+	int i;
+
+	for (i = 0; i < len; i++) {
+		log_dump[log_point++] = log_str[i];
+
+		if (log_point == SM_DUMP_SIZE) {
+			log_point = 0;
+			log_wrap = 1;
+		}
+	}
+}
+
+/* add a log entry, a thread will write log entries to logfile and/or syslog */
+
+void log_save_file(int level, char *buf, int len)
+{
+}
+
+void log_level(struct token *token, int level, char *fmt, ...)
+{
+	va_list ap;
+	int ret, pos = 0;
+	int len = LOG_STR_LEN - 2; /* leave room for \n\0 */
+
+	pthread_mutex_lock(&log_mutex);
+
+	ret = snprintf(log_str + pos, len - pos, "%s %ld %s ",
+		       resource_id, time(NULL), token ? token->name : "-");
+	pos += ret;
+
+	va_start(ap, fmt);
+	ret = vsnprintf(log_str + pos, len - pos, fmt, ap);
+	va_end(ap);
+
+	if (ret >= len - pos)
+		pos = len - 1;
+	else
+		pos += ret;
+
+	log_str[pos++] = '\n';
+	log_str[pos++] = '\0';
+
+	log_save_dump(level, log_str, pos - 1);
+
+	if (level <= log_logfile_priority || level <= log_syslog_priority)
+		log_save_file(level, log_str, pos - 1);
+
+	if (level <= log_stderr_priority)
+		fprintf(stderr, "%s", log_str);
+
+	pthread_mutex_unlock(&log_mutex);
+}
 
 #define CLIENT_NALLOC 2
 
@@ -708,14 +777,17 @@ void *lease_thread(void *arg)
 
 	num_opened = open_disks(token);
 	if (!majority_disks(token, num_opened)) {
+		log_error(token, "cannot open majority of disks");
 		set_lease_status(num, OP_ACQUIRE, -ENODEV, 0);
 		goto out_running;
 	}
 
 	rv = acquire_lease(token, &timestamp);
 	set_lease_status(num, OP_ACQUIRE, rv, timestamp);
-	if (rv < 0)
+	if (rv < 0) {
+		log_error(token, "acquire lease failed %d", rv);
 		goto out_disks;
+	}
 
 	while (1) {
 #if 0
@@ -742,6 +814,8 @@ void *lease_thread(void *arg)
 
 		rv = renew_lease(token, &timestamp);
 		set_lease_status(num, OP_RENEWAL, rv, timestamp);
+		if (rv < 0)
+			log_error(token, "renew lease failed %d", rv);
 	}
 
 	rv = release_lease(token, &timestamp);
@@ -792,6 +866,7 @@ int add_lease_thread(char *name, int num_disks, int *num_ret)
 		}
 	}
 	if (!found) {
+		log_error(token, "add lease failed, max leases in use");
 		rv = -ENOSPC;
 		goto out;
 	}
@@ -803,6 +878,7 @@ int add_lease_thread(char *name, int num_disks, int *num_ret)
 	   tokens[], no locking needed */
 
 	if (tokens[num]) {
+		log_error(token, "add lease failed, num %d is used", num);
 		rv = -EINVAL;
 		goto out;
 	}
@@ -822,6 +898,7 @@ int add_lease_thread(char *name, int num_disks, int *num_ret)
 	}
 	if (lease_status[num].thread_running) {
 		pthread_mutex_unlock(&lease_status_mutex);
+		log_error(token, "add lease failed, thread %d running", num);
 		rv = -EINVAL;
 		goto out;
 	}
@@ -833,6 +910,7 @@ int add_lease_thread(char *name, int num_disks, int *num_ret)
 	pthread_attr_destroy(&attr);
  out:
 	if (rv < 0) {
+		log_error(token, "add lease failed, thread create %d", rv);
 		free(token->disks);
 		free(token);
 	} else {
@@ -1215,7 +1293,7 @@ int lockfile(void)
 	snprintf(lockfile_path, PATH_MAX,
 		 "/var/run/sync_manager/lockfiles/%s", resource_id);
 
-	fd = open(lockfile_path, O_CREAT|O_WRONLY, 0666);
+	fd = open(lockfile_path, O_CREAT|O_WRONLY|O_CLOEXEC, 0666);
 	if (fd < 0) {
 		fprintf(stderr, "cannot open/create lock file %s\n",
 			lockfile_path);
@@ -1256,7 +1334,9 @@ void print_usage(void)
 	printf("Usage:\n");
 	printf("sync_manager [options] [-c <path> <args>]\n\n");
 	printf("Options:\n");
-	printf("  -D			print debug output\n");
+	printf("  -D			print all logging to stderr\n");
+	printf("  -L <level>		write logging at level and up to logfile (-1 none)\n");
+	printf("  -S <level>		write logging at level and up to syslog (-1 none)\n");
 	printf("  -r <name>		resource id\n");
 	printf("  -i <num>		local host id\n");
 	printf("  -n <num>		number of hosts\n");
@@ -1347,12 +1427,14 @@ int read_args(int argc, char *argv[], char *token_name, int *num_disks_out)
 
 		switch (optchar) {
 		case 'D':
-			opt_debug = 1;
+			log_stderr_priority = LOG_DEBUG;
 			optarg_used = 0;
 			break;
-		case 'c':
-			begin_command = 1;
-			optarg_used = 0;
+		case 'L':
+			log_logfile_priority = atoi(optarg);
+			break;
+		case 'S':
+			log_syslog_priority = atoi(optarg);
 			break;
 		case 'r':
 			strncpy(resource_id, optarg, NAME_ID_SIZE);
@@ -1377,6 +1459,10 @@ int read_args(int argc, char *argv[], char *token_name, int *num_disks_out)
 			break;
 		case 'w':
 			opt_watchdog = atoi(optarg);
+			break;
+		case 'c':
+			begin_command = 1;
+			optarg_used = 0;
 			break;
 		default:
 			fprintf(stderr, "unknown option: %c", optchar);
@@ -1446,6 +1532,12 @@ int main(int argc, char *argv[])
 	char token_name[NAME_ID_SIZE + 1];
 	int num_disks = 0;
 	int rv, num;
+
+	/* default logging: LOG_ERR and up to stderr, logfile and syslog */
+
+	log_stderr_priority = LOG_ERR;
+	log_logfile_priority = LOG_ERR;
+	log_syslog_priority = LOG_ERR;
 
 	to.lease_timeout_seconds = 60;
 	to.lease_renewal_fail_seconds = 40;

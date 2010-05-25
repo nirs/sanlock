@@ -14,6 +14,7 @@
 #include <time.h>
 
 #include "disk_paxos.h"
+#include "sm.h"
 
 /*
  * largely copied from vdsm.git/sync_manager/
@@ -52,14 +53,18 @@ int majority_disks(struct token *token, int num)
 	return 0;
 }
 
-int write_block(struct paxos_disk *disk, off_t offset, char *data, int len)
+int write_block(struct token *token, struct paxos_disk *disk, int offset,
+		char *data, int len, char *blktype)
 {
 	char *iobuf, **p_iobuf;
+	uint64_t off = offset + disk->offset;
 	off_t ret;
 	int rv;
 
-	ret = lseek(disk->fd, offset, SEEK_SET);
-	if (ret != offset) {
+	ret = lseek(disk->fd, off, SEEK_SET);
+	if (ret != off) {
+		log_error(token, "write_block %s lseek errno %d off %llu %s",
+			  blktype, errno, (unsigned long long)off, disk->path);
 		rv = -1;
 		goto out;
 	}
@@ -68,6 +73,8 @@ int write_block(struct paxos_disk *disk, off_t offset, char *data, int len)
 
 	rv = posix_memalign((void *)p_iobuf, getpagesize(), BLOCK_SIZE);
 	if (rv) {
+		log_error(token, "write_block %s posix_memalign rv %d %s",
+			  blktype, rv, disk->path);
 		rv = -1;
 		goto out;
 	}
@@ -77,6 +84,8 @@ int write_block(struct paxos_disk *disk, off_t offset, char *data, int len)
 
 	rv = write(disk->fd, iobuf, BLOCK_SIZE);
 	if (rv != BLOCK_SIZE) {
+		log_error(token, "write_block %s write errno %d off %llu %s",
+			  blktype, errno, (unsigned long long)off, disk->path);
 		rv = -1;
 		goto out_free;
 	}
@@ -88,7 +97,8 @@ int write_block(struct paxos_disk *disk, off_t offset, char *data, int len)
 	return rv;
 }
 
-int write_dblock(struct paxos_disk *disk, int host_id, struct paxos_dblock *pd)
+int write_dblock(struct token *token, struct paxos_disk *disk, int host_id,
+		 struct paxos_dblock *pd)
 {
 	int blocknr, rv;
 
@@ -97,52 +107,50 @@ int write_dblock(struct paxos_disk *disk, int host_id, struct paxos_dblock *pd)
 
 	blocknr = 2 + host_id - 1;
 
-	rv = write_block(disk, blocknr * BLOCK_SIZE,
-			 (char *)pd, sizeof(struct paxos_dblock));
-	if (rv < 0)
-		log_error("write_dblock error block %d %s",
-			  blocknr, disk->path);
-
+	rv = write_block(token, disk, blocknr * BLOCK_SIZE, (char *)pd,
+			 sizeof(struct paxos_dblock), "dblock");
 	return rv;
 }
 
-int write_request(struct paxos_disk *disk, struct request_record *rr)
+int write_request(struct token *token, struct paxos_disk *disk,
+		  struct request_record *rr)
 {
 	int rv;
 
-	rv = write_block(disk, BLOCK_SIZE, (char *)rr,
-			 sizeof(struct request_record));
-	if (rv < 0)
-		log_error("write_request error %s", disk->path);
-
+	rv = write_block(token, disk, BLOCK_SIZE, (char *)rr,
+			 sizeof(struct request_record), "request");
 	return rv;
 }
 
-int write_leader(struct paxos_disk *disk, struct leader_record *lr)
+int write_leader(struct token *token, struct paxos_disk *disk,
+		 struct leader_record *lr)
 {
 	int rv;
 
-	rv = write_block(disk, 0, (char *)lr, sizeof(struct leader_record));
-	if (rv < 0)
-		log_error("write_leader error %s", disk->path);
-
+	rv = write_block(token, disk, 0, (char *)lr,
+			 sizeof(struct leader_record), "leader");
 	return rv;
 }
 
-int read_dblock(struct paxos_disk *disk, int host_id, struct paxos_dblock *pd)
+int read_dblock(struct token *token, struct paxos_disk *disk, int host_id,
+		struct paxos_dblock *pd)
 {
 	char *iobuf, **p_iobuf;
-	off_t offset, ret;
-	int blocknr, len, rv;
+	uint64_t off;
+	off_t ret;
+	int offset, blocknr, len, rv;
 
 	/* 1 leader block + 1 request block; host_id N is block offset N-1 */
 
 	blocknr = 2 + host_id - 1;
 	offset = blocknr * BLOCK_SIZE;
 	len = BLOCK_SIZE;
+	off = offset + disk->offset;
 
-	ret = lseek(disk->fd, offset, SEEK_SET);
-	if (ret != offset) {
+	ret = lseek(disk->fd, off, SEEK_SET);
+	if (ret != off) {
+		log_error(token, "read_dblock lseek errno %d off %llu %s",
+			  errno, (unsigned long long)off, disk->path);
 		rv = -1;
 		goto out;
 	}
@@ -151,6 +159,8 @@ int read_dblock(struct paxos_disk *disk, int host_id, struct paxos_dblock *pd)
 
 	rv = posix_memalign((void *)p_iobuf, getpagesize(), len);
 	if (rv) {
+		log_error(token, "read_dblock posix_memalign rv %d %s",
+			  rv, disk->path);
 		rv = -1;
 		goto out;
 	}
@@ -159,6 +169,8 @@ int read_dblock(struct paxos_disk *disk, int host_id, struct paxos_dblock *pd)
 
 	rv = read(disk->fd, iobuf, len);
 	if (rv != len) {
+		log_error(token, "read_dblock read errno %d off %llu %s",
+			  errno, (unsigned long long)off, disk->path);
 		rv = -1;
 		goto out_free;
 	}
@@ -169,25 +181,28 @@ int read_dblock(struct paxos_disk *disk, int host_id, struct paxos_dblock *pd)
  out_free:
 	free(iobuf);
  out:
-	if (rv < 0)
-		log_error("read_dblock error block %d %s", blocknr, disk->path);
 	return rv;
 }
 
-int read_dblocks(struct paxos_disk *disk, int num, struct paxos_dblock *pds)
+int read_dblocks(struct token *token, struct paxos_disk *disk, int num,
+		 struct paxos_dblock *pds)
 {
 	char *iobuf, **p_iobuf;
-	off_t offset, ret;
-	int blocknr, len, rv, i;
+	uint64_t off;
+	off_t ret;
+	int offset, blocknr, len, rv, i;
 
 	/* 1 leader block + 1 request block */
 
 	blocknr = 2;
 	offset = blocknr * BLOCK_SIZE;
 	len = num * BLOCK_SIZE;
+	off = offset + disk->offset;
 
-	ret = lseek(disk->fd, offset, SEEK_SET);
-	if (ret != offset) {
+	ret = lseek(disk->fd, off, SEEK_SET);
+	if (ret != off) {
+		log_error(token, "read_dblocks lseek errno %d off %llu %s",
+			  errno, (unsigned long long)off, disk->path);
 		rv = -1;
 		goto out;
 	}
@@ -196,6 +211,8 @@ int read_dblocks(struct paxos_disk *disk, int num, struct paxos_dblock *pds)
 
 	rv = posix_memalign((void *)p_iobuf, getpagesize(), len);
 	if (rv) {
+		log_error(token, "read_dlbocks posix_memalign rv %d %s",
+			  rv, disk->path);
 		rv = -1;
 		goto out;
 	}
@@ -204,6 +221,8 @@ int read_dblocks(struct paxos_disk *disk, int num, struct paxos_dblock *pds)
 
 	rv = read(disk->fd, iobuf, len);
 	if (rv != len) {
+		log_error(token, "read_dblocks read errno %d off %llu %s",
+			  errno, (unsigned long long)off, disk->path);
 		rv = -1;
 		goto out_free;
 	}
@@ -217,19 +236,23 @@ int read_dblocks(struct paxos_disk *disk, int num, struct paxos_dblock *pds)
  out_free:
 	free(iobuf);
  out:
-	if (rv < 0)
-		log_error("read_dblocks error %s", disk->path);
 	return rv;
 }
 
-int read_leader(struct paxos_disk *disk, struct leader_record *lr)
+int read_leader(struct token *token, struct paxos_disk *disk,
+		struct leader_record *lr)
 {
 	char *iobuf, **p_iobuf;
+	uint64_t off;
 	off_t ret;
 	int rv;
 
-	ret = lseek(disk->fd, 0, SEEK_SET);
-	if (ret != 0) {
+	off = disk->offset;
+
+	ret = lseek(disk->fd, off, SEEK_SET);
+	if (ret != off) {
+		log_error(token, "read_leader lseek errno %d off %llu %s",
+			  errno, (unsigned long long)off, disk->path);
 		rv = -1;
 		goto out;
 	}
@@ -238,6 +261,8 @@ int read_leader(struct paxos_disk *disk, struct leader_record *lr)
 
 	rv = posix_memalign((void *)p_iobuf, getpagesize(), BLOCK_SIZE);
 	if (rv) {
+		log_error(token, "read_leader posix_memalign rv %d %s",
+			  rv, disk->path);
 		rv = -1;
 		goto out;
 	}
@@ -246,6 +271,8 @@ int read_leader(struct paxos_disk *disk, struct leader_record *lr)
 
 	rv = read(disk->fd, iobuf, BLOCK_SIZE);
 	if (rv != BLOCK_SIZE) {
+		log_error(token, "read_leader read errno %d off %llu %s",
+			  errno, (unsigned long long)off, disk->path);
 		rv = -1;
 		goto out_free;
 	}
@@ -256,19 +283,23 @@ int read_leader(struct paxos_disk *disk, struct leader_record *lr)
  out_free:
 	free(iobuf);
  out:
-	if (rv < 0)
-		log_error("read_leader error %s", disk->path);
 	return rv;
 }
 
-int read_request(struct paxos_disk *disk, struct request_record *rr)
+int read_request(struct token *token, struct paxos_disk *disk,
+		 struct request_record *rr)
 {
 	char *iobuf, **p_iobuf;
+	uint64_t off;
 	off_t ret;
 	int rv;
 
-	ret = lseek(disk->fd, BLOCK_SIZE, SEEK_SET);
-	if (ret != BLOCK_SIZE) {
+	off = BLOCK_SIZE + disk->offset;
+
+	ret = lseek(disk->fd, off, SEEK_SET);
+	if (ret != off) {
+		log_error(token, "read_request lseek errno %d off %llu %s",
+			  errno, (unsigned long long)off, disk->path);
 		rv = -1;
 		goto out;
 	}
@@ -277,6 +308,8 @@ int read_request(struct paxos_disk *disk, struct request_record *rr)
 
 	rv = posix_memalign((void *)p_iobuf, getpagesize(), BLOCK_SIZE);
 	if (rv) {
+		log_error(token, "read_request posix_memalign rv %d %s",
+			  rv, disk->path);
 		rv = -1;
 		goto out;
 	}
@@ -285,6 +318,8 @@ int read_request(struct paxos_disk *disk, struct request_record *rr)
 
 	rv = read(disk->fd, iobuf, BLOCK_SIZE);
 	if (rv != BLOCK_SIZE) {
+		log_error(token, "read_request read errno %d off %llu %s",
+			  errno, (unsigned long long)off, disk->path);
 		rv = -1;
 		goto out_free;
 	}
@@ -295,14 +330,12 @@ int read_request(struct paxos_disk *disk, struct request_record *rr)
  out_free:
 	free(iobuf);
  out:
-	if (rv < 0)
-		log_error("read_request error %s", disk->path);
 	return rv;
 }
 
 /* host_id and inp are both generally our_host_id */
 
-int run_disk_paxos(uint64_t host_id, uint64_t inp, struct token *token,
+int run_disk_paxos(struct token *token, uint64_t host_id, uint64_t inp,
 		   int num_hosts, uint64_t lver,
 		   struct paxos_dblock *dblock_out)
 {
@@ -314,12 +347,12 @@ int run_disk_paxos(uint64_t host_id, uint64_t inp, struct token *token,
 	int d, q, rv;
 
 	if (!host_id) {
-		log_error("invalid host_id");
+		log_error(token, "invalid host_id");
 		return DP_INVAL;
 	}
 
 	if (!inp) {
-		log_error("invalid inp");
+		log_error(token, "invalid inp");
 		return DP_INVAL;
 	}
 
@@ -328,7 +361,7 @@ int run_disk_paxos(uint64_t host_id, uint64_t inp, struct token *token,
 	memset(&dblock, 0, sizeof(struct paxos_dblock));
 
 	for (d = 0; d < num_disks; d++) {
-		rv = read_dblock(&token->disks[d], host_id, &dblock);
+		rv = read_dblock(token, &token->disks[d], host_id, &dblock);
 		if (rv < 0)
 			continue;
 		/* need only one dblock to get initial values */
@@ -336,11 +369,11 @@ int run_disk_paxos(uint64_t host_id, uint64_t inp, struct token *token,
 	}
 
 	if (rv < 0) {
-		log_error("no initial dblock found");
+		log_error(token, "no initial dblock found");
 		return DP_OWN_DBLOCK;
 	}
 
-	log_debug("initial dblock %u mbal %llu bal %llu inp %llu lver %llu", d,
+	log_debug(token, "initial dblock %u mbal %llu bal %llu inp %llu lver %llu", d,
 		  (unsigned long long)dblock.mbal,
 		  (unsigned long long)dblock.bal,
 		  (unsigned long long)dblock.inp,
@@ -373,21 +406,21 @@ int run_disk_paxos(uint64_t host_id, uint64_t inp, struct token *token,
 	num_writes = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = write_dblock(&token->disks[d], host_id, &dblock);
+		rv = write_dblock(token, &token->disks[d], host_id, &dblock);
 		if (rv < 0)
 			continue;
 		num_writes++;
 	}
 
 	if (!majority_disks(token, num_writes)) {
-		log_error("cannot write dblock to majority of disks");
+		log_error(token, "cannot write dblock to majority of disks");
 		return DP_WRITE1_DBLOCKS;
 	}
 
 	num_reads = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = read_dblocks(&token->disks[d], num_hosts, bk);
+		rv = read_dblocks(token, &token->disks[d], num_hosts, bk);
 		if (rv < 0)
 			continue;
 		num_reads++;
@@ -397,7 +430,7 @@ int run_disk_paxos(uint64_t host_id, uint64_t inp, struct token *token,
 				continue;
 
 			if (bk[q].lver > dblock.lver) {
-				log_error("bk %d %d lver %llu dblock lver %llu",
+				log_error(token, "bk %d %d lver %llu dblock lver %llu",
 					  d, q,
 					  (unsigned long long)bk[q].lver,
 					  (unsigned long long)dblock.lver);
@@ -407,7 +440,7 @@ int run_disk_paxos(uint64_t host_id, uint64_t inp, struct token *token,
 			/* see "It aborts the ballot" in comment above */
 
 			if (bk[q].mbal > dblock.mbal) {
-				log_error("bk %d %d mbal %llu dblock mbal %llu",
+				log_error(token, "bk %d %d mbal %llu dblock mbal %llu",
 					  d, q,
 					  (unsigned long long)bk[q].mbal,
 					  (unsigned long long)dblock.mbal);
@@ -425,7 +458,7 @@ int run_disk_paxos(uint64_t host_id, uint64_t inp, struct token *token,
 	}
 
 	if (!majority_disks(token, num_reads)) {
-		log_error("cannot read dblocks on majority of disks");
+		log_error(token, "cannot read dblocks on majority of disks");
 		return DP_READ1_DBLOCKS;
 	}
 
@@ -444,7 +477,7 @@ int run_disk_paxos(uint64_t host_id, uint64_t inp, struct token *token,
 	 * nonInitBlks having the largest value of bk.bal."
 	 */
 
-	log_debug("bk_max inp %llu bal %llu",
+	log_debug(token, "bk_max inp %llu bal %llu",
 		  (unsigned long long)bk_max.inp,
 		  (unsigned long long)bk_max.bal);
 
@@ -460,21 +493,21 @@ int run_disk_paxos(uint64_t host_id, uint64_t inp, struct token *token,
 	num_writes = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = write_dblock(&token->disks[d], host_id, &dblock);
+		rv = write_dblock(token, &token->disks[d], host_id, &dblock);
 		if (rv < 0)
 			continue;
 		num_writes++;
 	}
 
 	if (!majority_disks(token, num_writes)) {
-		log_error("cannot write dblock to majority of disks 2");
+		log_error(token, "cannot write dblock to majority of disks 2");
 		return DP_WRITE2_DBLOCKS;
 	}
 
 	num_reads = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = read_dblocks(&token->disks[d], num_hosts, bk);
+		rv = read_dblocks(token, &token->disks[d], num_hosts, bk);
 		if (rv < 0)
 			continue;
 		num_reads++;
@@ -484,7 +517,7 @@ int run_disk_paxos(uint64_t host_id, uint64_t inp, struct token *token,
 				continue;
 
 			if (bk[q].lver > dblock.lver) {
-				log_error("bk %d %d lver %llu dblock lver %llu",
+				log_error(token, "bk %d %d lver %llu dblock lver %llu",
 					  d, q,
 					  (unsigned long long)bk[q].lver,
 					  (unsigned long long)dblock.lver);
@@ -494,7 +527,7 @@ int run_disk_paxos(uint64_t host_id, uint64_t inp, struct token *token,
 			/* see "It aborts the ballot" in comment above */
 
 			if (bk[q].mbal > dblock.mbal) {
-				log_error("bk %d %d mbal %llu dblock mbal %llu",
+				log_error(token, "bk %d %d mbal %llu dblock mbal %llu",
 					  d, q,
 					  (unsigned long long)bk[q].mbal,
 					  (unsigned long long)dblock.mbal);
@@ -504,7 +537,7 @@ int run_disk_paxos(uint64_t host_id, uint64_t inp, struct token *token,
 	}
 
 	if (!majority_disks(token, num_reads)) {
-		log_error("cannot read dblocks from majority of disks 2");
+		log_error(token, "cannot read dblocks from majority of disks 2");
 		return DP_READ2_DBLOCKS;
 	}
 
@@ -562,7 +595,7 @@ int get_prev_leader(struct token *token, int force,
 	num_reads = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = read_leader(&token->disks[d], &leaders[d]);
+		rv = read_leader(token, &token->disks[d], &leaders[d]);
 		if (rv < 0)
 			continue;
 		num_reads++;
@@ -580,7 +613,7 @@ int get_prev_leader(struct token *token, int force,
 	}
 
 	if (!majority_disks(token, num_reads)) {
-		log_error("cannot read leader from majority of disks");
+		log_error(token, "cannot read leader from majority of disks");
 		error = DP_READ_LEADERS;
 		goto fail;
 	}
@@ -602,15 +635,15 @@ int get_prev_leader(struct token *token, int force,
 	}
 
 	if (!found) {
-		log_error("cannot find majority leader");
+		log_error(token, "cannot find majority leader");
 		error = DP_DIFF_LEADERS;
 		goto fail;
 	}
 
-	log_debug("prev_leader d %u reps %u", d, leader_reps[d]);
+	log_debug(token, "prev_leader d %u reps %u", d, leader_reps[d]);
 
-	log_debug("prev_leader owner %llu lver %llu hosts %llu time %llu "
-		  "token %u %s",
+	log_debug(token, "prev_leader owner %llu lver %llu hosts %llu "
+		  "time %llu token %u %s",
 		  (unsigned long long)prev_leader.owner_id,
 		  (unsigned long long)prev_leader.lver,
 		  (unsigned long long)prev_leader.num_hosts,
@@ -622,13 +655,13 @@ int get_prev_leader(struct token *token, int force,
 
 	if (token->type != prev_leader.token_type ||
 	    strcmp(token->name, prev_leader.token_name)) {
-		log_error("leader has wrong token name");
+		log_error(token, "leader has wrong token name");
 		error = DP_BAD_NAME;
 		goto fail;
 	}
 
 	if (prev_leader.num_hosts < our_host_id) {
-		log_error("leader num_hosts too small");
+		log_error(token, "leader num_hosts too small");
 		error = DP_BAD_NUMHOSTS;
 		goto fail;
 	}
@@ -643,20 +676,20 @@ int get_prev_leader(struct token *token, int force,
 	req.lver = prev_leader.lver + 1;
 	req.force_mode = force;
 
-	log_debug("write request lver %llu force %u",
+	log_debug(token, "write request lver %llu force %u",
 		  (unsigned long long)req.lver, req.force_mode);
 
 	num_writes = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = write_request(&token->disks[d], &req);
+		rv = write_request(token, &token->disks[d], &req);
 		if (rv < 0)
 			continue;
 		num_writes++;
 	}
 
 	if (!num_writes) {
-		log_error("cannot write request to any disk");
+		log_error(token, "cannot write request to any disk");
 		error = DP_WRITE_REQUESTS;
 		goto fail;
 	}
@@ -678,7 +711,7 @@ int get_prev_leader(struct token *token, int force,
 	}
 
 	if (majority_disks(token, num_free)) {
-		log_debug("lease free on majority %d disks", num_free);
+		log_debug(token, "lease free on majority %d disks", num_free);
 		goto out;
 	}
 
@@ -686,14 +719,14 @@ int get_prev_leader(struct token *token, int force,
 	 * check if current leader fails to update lease
 	 */
 
-	log_debug("wait %u sec for lease timeout...", lease_timeout_seconds);
+	log_debug(token, "wait lease_timeout_seconds %u", lease_timeout_seconds);
 
 	sleep(lease_timeout_seconds);
 
 	num_timeout = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = read_leader(&token->disks[d], &tmp_leader);
+		rv = read_leader(token, &token->disks[d], &tmp_leader);
 		if (rv < 0)
 			continue;
 
@@ -705,12 +738,12 @@ int get_prev_leader(struct token *token, int force,
 	}
 
 	if (!majority_disks(token, num_timeout)) {
-		log_error("no lease timeout on majority of disks");
+		log_error(token, "no lease timeout on majority of disks");
 		error = DP_LIVE_LEADER;
 		goto fail;
 	}
 
-	log_debug("lease timeout on majority %d disks", num_timeout);
+	log_debug(token, "lease timeout on majority %d disks", num_timeout);
 
  out:
 	memcpy(leader_out, &prev_leader, sizeof(struct leader_record));
@@ -730,14 +763,14 @@ int write_new_leader(struct token *token, struct leader_record *nl)
 	int rv, d;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = write_leader(&token->disks[d], nl);
+		rv = write_leader(token, &token->disks[d], nl);
 		if (rv < 0)
 			continue;
 		num_writes++;
 	}
 
 	if (!majority_disks(token, num_writes)) {
-		log_error("cannot write leader to majority of disks");
+		log_error(token, "cannot write leader to majority of disks");
 		error = DP_WRITE_NEW_LEADERS;
 	}
 
@@ -766,7 +799,7 @@ int disk_paxos_acquire(struct token *token, int force,
 
 	error = get_prev_leader(token, force, &prev_leader);
 	if (error < 0) {
-		log_error("get_prev_leader failed %d", error);
+		log_error(token, "get_prev_leader error %d", error);
 		goto out;
 	}
 
@@ -781,14 +814,14 @@ int disk_paxos_acquire(struct token *token, int force,
 	new_leader.num_hosts = prev_leader.num_hosts;
 	new_leader.num_alloc_slots = prev_leader.num_alloc_slots; /* ? */
 
-	error = run_disk_paxos(our_host_id, our_host_id, token,
+	error = run_disk_paxos(token, our_host_id, our_host_id,
 			       new_leader.num_hosts, new_leader.lver, &dblock);
 	if (error < 0) {
-		log_error("run_disk_paxos error");
+		log_error(token, "run_disk_paxos error %d", error);
 		goto out;
 	}
 
-	log_debug("paxos result dblock mbal %llu bal %llu inp %llu lver %llu",
+	log_debug(token, "paxos result dblock mbal %llu bal %llu inp %llu lver %llu",
 		  (unsigned long long)dblock.mbal,
 		  (unsigned long long)dblock.bal,
 		  (unsigned long long)dblock.inp,
@@ -803,14 +836,6 @@ int disk_paxos_acquire(struct token *token, int force,
 	error = write_new_leader(token, &new_leader);
 	if (error < 0)
 		goto out;
-
-	log_debug("dp_acquire new_leader owner %llu lver %llu hosts %llu time %llu "
-		  "token %u %s",
-		  (unsigned long long)new_leader.owner_id,
-		  (unsigned long long)new_leader.lver,
-		  (unsigned long long)new_leader.num_hosts,
-		  (unsigned long long)new_leader.timestamp,
-		  new_leader.token_type, new_leader.token_name);
 
 	memcpy(leader_ret, &new_leader, sizeof(struct leader_record));
  out:
@@ -831,14 +856,6 @@ int disk_paxos_renew(struct token *token,
 	if (error < 0)
 		goto out;
 
-	log_debug("dp_renew new_leader owner %llu lver %llu hosts %llu time %llu "
-		  "token %u %s",
-		  (unsigned long long)new_leader.owner_id,
-		  (unsigned long long)new_leader.lver,
-		  (unsigned long long)new_leader.num_hosts,
-		  (unsigned long long)new_leader.timestamp,
-		  new_leader.token_type, new_leader.token_name);
-
 	memcpy(leader_ret, &new_leader, sizeof(struct leader_record));
  out:
 	return error;
@@ -857,14 +874,6 @@ int disk_paxos_release(struct token *token,
 	error = write_new_leader(token, &new_leader);
 	if (error < 0)
 		goto out;
-
-	log_debug("dp_release new_leader owner %llu lver %llu hosts %llu time %llu "
-		  "token %u %s",
-		  (unsigned long long)new_leader.owner_id,
-		  (unsigned long long)new_leader.lver,
-		  (unsigned long long)new_leader.num_hosts,
-		  (unsigned long long)new_leader.timestamp,
-		  new_leader.token_type, new_leader.token_name);
 
 	memcpy(leader_ret, &new_leader, sizeof(struct leader_record));
  out:
@@ -895,7 +904,7 @@ void token_status(struct token *token)
 
 		memset(&leader, 0, sizeof(leader));
 
-		rv = read_leader(disk, &leader);
+		rv = read_leader(token, disk, &leader);
 		if (rv < 0)
 			continue;
 
@@ -927,7 +936,7 @@ void token_status(struct token *token)
 
 		memset(&req, 0, sizeof(req));
 
-		rv = read_request(disk, &req);
+		rv = read_request(token, disk, &req);
 		if (rv < 0)
 			continue;
 
@@ -938,7 +947,7 @@ void token_status(struct token *token)
 
 		memset(&bk, 0, sizeof(bk));
 
-		rv = read_dblocks(disk, num_hosts, bk);
+		rv = read_dblocks(token, disk, num_hosts, bk);
 		if (rv < 0)
 			continue;
 
