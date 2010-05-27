@@ -22,6 +22,11 @@ static int client_size = 0;
 static struct client *client = NULL;
 static struct pollfd *pollfd = NULL;
 
+/* priorities are LOG_* from syslog.h */
+int log_logfile_priority;
+int log_syslog_priority;
+int log_stderr_priority;
+
 #define COMMAND_MAX 1024
 char command[COMMAND_MAX];
 char killscript[COMMAND_MAX];
@@ -61,18 +66,6 @@ int wd_touch_last_result;
 time_t wd_create_time;
 time_t wd_touch_last_time;
 time_t wd_touch_good_time;
-
-#define LOG_STR_LEN 256
-char log_str[LOG_STR_LEN];
-#define SM_DUMP_SIZE (1024*1024)
-char log_dump[SM_DUMP_SIZE];
-int log_point;
-int log_wrap;
-int log_logfile_priority; /* syslog.h */
-int log_syslog_priority; /* syslog.h */
-int log_stderr_priority; /* syslog.h */
-char logfile_path[PATH_MAX];
-pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /*
  * lease_timeout_seconds
@@ -143,63 +136,6 @@ struct client {
 	void *workfn;
 	void *deadfn;
 };
-
-/* log_dump can be sent over unix socket */
-
-void log_save_dump(int level, char *buf, int len)
-{
-	int i;
-
-	for (i = 0; i < len; i++) {
-		log_dump[log_point++] = log_str[i];
-
-		if (log_point == SM_DUMP_SIZE) {
-			log_point = 0;
-			log_wrap = 1;
-		}
-	}
-}
-
-/* add a log entry, a thread will write log entries to logfile and/or syslog */
-
-void log_save_file(int level, char *buf, int len)
-{
-}
-
-void log_level(struct token *token, int level, char *fmt, ...)
-{
-	va_list ap;
-	int ret, pos = 0;
-	int len = LOG_STR_LEN - 2; /* leave room for \n\0 */
-
-	pthread_mutex_lock(&log_mutex);
-
-	ret = snprintf(log_str + pos, len - pos, "%s %ld %s ",
-		       resource_id, time(NULL), token ? token->name : "-");
-	pos += ret;
-
-	va_start(ap, fmt);
-	ret = vsnprintf(log_str + pos, len - pos, fmt, ap);
-	va_end(ap);
-
-	if (ret >= len - pos)
-		pos = len - 1;
-	else
-		pos += ret;
-
-	log_str[pos++] = '\n';
-	log_str[pos++] = '\0';
-
-	log_save_dump(level, log_str, pos - 1);
-
-	if (level <= log_logfile_priority || level <= log_syslog_priority)
-		log_save_file(level, log_str, pos - 1);
-
-	if (level <= log_stderr_priority)
-		fprintf(stderr, "%s", log_str);
-
-	pthread_mutex_unlock(&log_mutex);
-}
 
 #define CLIENT_NALLOC 2
 
@@ -958,6 +894,20 @@ int main_loop(void)
 	int error = 0;
 
 	while (1) {
+		/*
+		 * Use this main thread to write log entries to logfile
+		 * and/or syslog.  There's some risk that writing could
+		 * block for longer than we want.. could dedicate a new
+		 * thread to writing log files if needed.
+		 */
+
+		write_log_ents();
+
+		/*
+		 * Poll events arrive from external tool(s) querying
+		 * status, adding/deleting leases, etc.
+		 */
+
 		rv = poll(pollfd, client_maxi + 1, poll_timeout);
 		if (rv == -1 && errno == EINTR) {
 			continue;
@@ -1187,6 +1137,17 @@ void cmd_status(int fd, struct sm_header *h_recv)
 	   N * (struct sm_lease_info + (M * struct sm_disk_info)) */
 }
 
+void cmd_log_dump(int fd, struct sm_header *h_recv)
+{
+	struct sm_header h;
+
+	memcpy(&h, h_recv, sizeof(struct sm_header));
+
+	/* can't send header until taking log_mutex to find the length */
+
+	write_log_dump(fd, &h);
+}
+
 void process_listener(int ci)
 {
 	struct sm_header h;
@@ -1234,8 +1195,8 @@ void process_listener(int ci)
 	case SM_CMD_STATUS:
 		cmd_status(fd, &h);
 		break;
-	case SM_CMD_DUMP_DEBUG:
-		/* send back debug buffer */
+	case SM_CMD_LOG_DUMP:
+		cmd_log_dump(fd, &h);
 		break;
 	default:
 	};
@@ -1538,6 +1499,7 @@ int main(int argc, char *argv[])
 	log_stderr_priority = LOG_ERR;
 	log_logfile_priority = LOG_ERR;
 	log_syslog_priority = LOG_ERR;
+	setup_logging();
 
 	to.lease_timeout_seconds = 60;
 	to.lease_renewal_fail_seconds = 40;
