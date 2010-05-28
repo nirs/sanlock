@@ -1,5 +1,22 @@
+#include <inttypes.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <stddef.h>
+#include <fcntl.h>
+#include <string.h>
+#include <errno.h>
+#include <limits.h>
+#include <time.h>
+#include <syslog.h>
+#include <pthread.h>
+#include <sys/socket.h>
+#include <stdarg.h>
 
 #include "sm.h"
+#include "sm_msg.h"
+#include "disk_paxos.h"
 
 #define LOG_STR_LEN 256
 static char log_str[LOG_STR_LEN];
@@ -29,6 +46,7 @@ static FILE *logfile_fp;
 extern int log_logfile_priority;
 extern int log_syslog_priority;
 extern int log_stderr_priority;
+extern char *resource_id;
 
 static void _log_save_dump(int level, char *buf, int len)
 {
@@ -72,13 +90,12 @@ static void _log_save_ent(int level, char *buf, int len)
 void log_level(struct token *token, int level, char *fmt, ...)
 {
 	va_list ap;
-	char name[NAME_ID_LEN + 1];
+	char name[NAME_ID_SIZE + 1];
 	int ret, pos = 0;
 	int len = LOG_STR_LEN - 2; /* leave room for \n\0 */
-	int cond = 0;
 
 	memset(name, 0, sizeof(name));
-	snprintf(name, NAME_ID_LEN, "%s", token ? token->name : "-");
+	snprintf(name, NAME_ID_SIZE, "%s", token ? token->name : "-");
 
 	pthread_mutex_lock(&log_mutex);
 
@@ -172,11 +189,11 @@ void write_log_dump(int fd, struct sm_header *hd)
 	pthread_mutex_lock(&log_mutex);
 
 	hd->length = sizeof(struct sm_header);
-	hd->length += log_dump_wrap ? SM_LOG_DUMP_SIZE : log_point;
+	hd->length += log_wrap ? SM_LOG_DUMP_SIZE : log_point;
 
-	send(fd, hd, MSG_DONTWAIT);
+	send(fd, hd, sizeof(struct sm_header), MSG_DONTWAIT);
 
-	if (log_dump_wrap)
+	if (log_wrap)
 		send(fd, log_dump + log_point, SM_LOG_DUMP_SIZE - log_point, MSG_DONTWAIT);
 
 	log_dump[log_point] = '\0';
@@ -199,8 +216,8 @@ int setup_logging(void)
 	fd = fileno(logfile_fp);
 	fcntl(fd, F_SETFD, fcntl(fd, F_GETFD, 0) | FD_CLOEXEC);
 
-	ents = malloc(num_ents * sizeof(struct entry));
-	if (!ents) {
+	log_ents = malloc(log_num_ents * sizeof(struct entry));
+	if (!log_ents) {
 		fclose(logfile_fp);
 		logfile_fp = NULL;
 		return -1;

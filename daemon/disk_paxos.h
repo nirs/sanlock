@@ -1,16 +1,28 @@
-#define MAX_DISKS 128
+#ifndef __DISK_PAXOS_H__
+#define __DISK_PAXOS_H__
 
-#define DISK_PATH_LEN 1024 /* includes terminating null byte */
-
-#define MAX_HOSTS 254 /* host id's 1-254 */
-
-#define NAME_ID_SIZE 32 /* does not include terminating null byte */
-
-/* TODO: add useful error codes to return from disk paxos code */
 enum {
-	DP_ERROR = -1,
-	DP_NONE = 0,	/* unused */
 	DP_OK = 1,
+	DP_NONE = 0,	/* unused */
+	DP_ERROR = -1,
+	DP_INVAL = -2,
+	DP_NOMEM = -3,
+	DP_BAD_NUMHOSTS = -4,
+	DP_BAD_NAME = -5,
+	DP_LIVE_LEADER = -6,
+	DP_DIFF_LEADERS = -7,
+	DP_READ_LEADERS = -8,
+	DP_OWN_DBLOCK = -9,
+	DP_WRITE1_DBLOCKS = -10,
+	DP_WRITE2_DBLOCKS = -11,
+	DP_WRITE_REQUESTS = -12,
+	DP_WRITE_LEADERS = -13,
+	DP_READ1_MBAL = -14,
+	DP_READ1_LVER = -15,
+	DP_READ2_MBAL = -16,
+	DP_READ2_LVER = -17,
+	DP_READ1_DBLOCKS = -18,
+	DP_READ2_DBLOCKS = -19,
 };
 
 /* paxos_disk + offset:
@@ -71,8 +83,14 @@ struct paxos_dblock {
 int majority_disks(struct token *token, int num);
 int disk_paxos_acquire(struct token *token, int force, 
 		       struct leader_record *leader_ret);
-int disk_paxos_renew(struct token *token, struct leader_record *leader_ret);
-int disk_paxos_release(struct token *token, struct leader_record *leader_ret);
+int disk_paxos_renew(struct token *token,
+		     struct leader_record *leader_last,
+		     struct leader_record *leader_ret);
 int disk_paxos_transfer(struct token *token, uint64_t hostid,
+			struct leader_record *leader_last,
 			struct leader_record *leader_ret);
+int disk_paxos_release(struct token *token,
+		       struct leader_record *leader_last,
+		       struct leader_record *leader_ret);
 
+#endif

@@ -1,6 +1,3 @@
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <sys/stat.h>
 #include <inttypes.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -12,10 +9,28 @@
 #include <errno.h>
 #include <limits.h>
 #include <time.h>
+#include <syslog.h>
 #include <pthread.h>
+#include <poll.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/un.h>
 
-#include "disk_paxos.h"
 #include "sm.h"
+#include "sm_msg.h"
+#include "disk_paxos.h"
+#include "log.h"
+
+#define CLIENT_NALLOC 2
+
+struct client {
+	int fd;
+	void *workfn;
+	void *deadfn;
+};
 
 static int client_maxi;
 static int client_size = 0;
@@ -27,7 +42,6 @@ int log_logfile_priority;
 int log_syslog_priority;
 int log_stderr_priority;
 
-#define COMMAND_MAX 1024
 char command[COMMAND_MAX];
 char killscript[COMMAND_MAX];
 char resource_id[NAME_ID_SIZE + 1];
@@ -46,73 +60,11 @@ int starting_lease_thread;
 int stopping_lease_threads;
 int killing_supervise_pid;
 int external_shutdown;
-
-#define MAX_LEASES 64
-pthread_t lease_threads[MAX_LEASES];
-pthread_mutex_t lease_status_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_mutex_t lease_status_cond = PTHREAD_COND_INITIALIZER;
-struct lease_status lease_status[MAX_LEASES];
-struct token *tokens[MAX_LEASES];
-time_t oldest_renewal_time; /* timestamp of oldest lease renewal */
-
-pthread_t wd_thread;
-pthread_mutex_t wd_mutex = PTHREAD_MUTEX_INITIALIZER;
-int wd_touch;
-int wd_unlink;
-int wd_fd;
-char wd_path[PATH_MAX];
-int wd_create_result;
-int wd_touch_last_result;
-time_t wd_create_time;
-time_t wd_touch_last_time;
-time_t wd_touch_good_time;
-
-/*
- * lease_timeout_seconds
- * disk paxos takes over lease if it's not been renewed for this long
- *
- * lease_renewal_fail_seconds
- * sm starts recovery if one of its leases hasn't renewed in this time
- *
- * lease_renewal_seconds
- * sm tries to renew a lease this often
- *
- * wd_touch_seconds
- * sm touches a watchdog file this often
- *
- * wd_reboot_seconds
- * wd daemon reboots if it finds a wd file older than this (unused?)
- *
- * wd_touch_fail_seconds
- * sm starts recovery if the wd thread hasn't touched wd file in this time
- *
- * script_shutdown_seconds
- * use killscript if this many seconds remain (or >) until lease can be taken
- *
- * sigterm_shutdown_seconds
- * use SIGTERM if this many seconds remain (or >) until lease can be taken
- *
- * stable_poll_ms
- * check pid and lease status this often when things appear to be stable
- *
- * unstable_poll_ms
- * check pid and lease status this often when things are changing
- */
-
-struct sm_timeouts {
-	int lease_timeout_seconds;
-	int lease_renewal_fail_seconds;
-	int lease_renewal_seconds;
-	int wd_touch_seconds;
-	int wd_reboot_seconds;
-	int wd_touch_fail_seconds;
-	int script_shutdown_seconds;
-	int sigterm_shutdown_seconds;
-	int stable_poll_ms;
-	int unstable_poll_ms;
-};
-
 struct sm_timeouts to;
+
+#define OP_ACQUIRE 1
+#define OP_RENEWAL 2
+#define OP_RELEASE 3
 
 struct lease_status {
 	int acquire_last_result;
@@ -131,13 +83,26 @@ struct lease_status {
 	char token_name[NAME_ID_SIZE + 1];
 };
 
-struct client {
-	int fd;
-	void *workfn;
-	void *deadfn;
-};
+#define MAX_LEASES 64
+pthread_t lease_threads[MAX_LEASES];
+pthread_mutex_t lease_status_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t lease_status_cond = PTHREAD_COND_INITIALIZER;
+struct lease_status lease_status[MAX_LEASES];
+struct token *tokens[MAX_LEASES];
+time_t oldest_renewal_time; /* timestamp of oldest lease renewal */
 
-#define CLIENT_NALLOC 2
+pthread_t wd_thread;
+pthread_mutex_t wd_mutex = PTHREAD_MUTEX_INITIALIZER;
+int wd_thread_running;
+int wd_touch;
+int wd_unlink;
+int wd_fd;
+char wd_path[PATH_MAX];
+int wd_create_result;
+int wd_touch_last_result;
+time_t wd_create_time;
+time_t wd_touch_last_time;
+time_t wd_touch_good_time;
 
 static void client_alloc(void)
 {
@@ -152,10 +117,10 @@ static void client_alloc(void)
 		pollfd = realloc(pollfd, (client_size + CLIENT_NALLOC) *
 					 sizeof(struct pollfd));
 		if (!pollfd)
-			log_error("can't alloc for pollfd");
+			log_error(NULL, "can't alloc for pollfd");
 	}
 	if (!client || !pollfd)
-		log_error("can't alloc for client array");
+		log_error(NULL, "can't alloc for client array");
 
 	for (i = client_size; i < client_size + CLIENT_NALLOC; i++) {
 		client[i].workfn = NULL;
@@ -214,7 +179,7 @@ int open_disks(struct token *token)
 		disk = &token->disks[d];
 		fd = open(disk->path, O_RDWR | O_DIRECT | O_SYNC, 0);
 		if (fd < 0) {
-			log_error("open error %d %s", fd, disk->path);
+			log_error(NULL, "open error %d %s", fd, disk->path);
 			continue;
 		}
 
@@ -248,6 +213,8 @@ int check_killscript_pid(void)
 	else if (!rv) {
 		/* TODO: call again before sync_manager exit */
 	}
+
+	return 0;
 }
 
 /*
@@ -259,7 +226,7 @@ int check_killscript_pid(void)
 
 int check_supervise_pid(void)
 {
-	int rv, status, kill_status;
+	int rv, status;
 
 	if (!supervise_pid && killing_supervise_pid)
 		return 0;
@@ -270,11 +237,16 @@ int check_supervise_pid(void)
 	rv = waitpid(supervise_pid, &status, WNOHANG);
 	if (!rv)
 		return 1;
-	if (rv < 0)
+	if (rv < 0) {
+		log_error(NULL, "waitpid errno %d supervise_pid %d",
+			  errno, supervise_pid);
 		return rv;
+	}
 
 	if (WIFEXITED(status)) {
 		supervise_pid_exit_status = WEXITSTATUS(status);
+		log_debug(NULL, "supervise_pid %d exit status %d",
+			  supervise_pid, supervise_pid_exit_status);
 		check_killscript_pid();
 		supervise_pid = 0;
 		return 0;
@@ -286,6 +258,7 @@ int check_supervise_pid(void)
 int run_killscript(void)
 {
 	int pid;
+	char *av[2];
 
 	pid = fork();
 	if (pid < 0)
@@ -295,7 +268,9 @@ int run_killscript(void)
 		killscript_pid = pid;
 		return 0;
 	} else {
-		execl(killscript, NULL);
+		av[0] = strdup(killscript);
+		av[1] = NULL;
+		execv(killscript, NULL);
 		return -1;
 	}
 }
@@ -310,9 +285,12 @@ int run_command(char *command)
 
 	if (pid) {
 		supervise_pid = pid;
+		log_debug(NULL, "supervise_pid %d", pid);
 		return 0;
 	} else {
 		execv(command, cmd_argv);
+		log_error(NULL, "execv failed errno %d command %s",
+			  errno, command);
 		return -1;
 	}
 }
@@ -328,16 +306,16 @@ void kill_supervise_pid(void)
 		killing_supervise_pid = 1;
 
 	if (!supervise_pid)
-		return 0;
+		return;
 
 	expire_time = oldest_renewal_time + to.lease_timeout_seconds;
 
 	if (time(NULL) >= expire_time)
-		goto do_kill:
+		goto do_kill;
 
 	remaining_seconds = expire_time - time(NULL);
 
-	if (!killscript_command[0])
+	if (!killscript[0])
 		goto do_term;
 
 	/* While we have more than script_shutdown_seconds until our
@@ -347,6 +325,8 @@ void kill_supervise_pid(void)
 		goto do_term;
 
 	if (remaining_seconds >= to.script_shutdown_seconds) {
+		if (killing_supervise_pid < 2)
+			log_error(NULL, "kill %d killscript", supervise_pid);
 		killing_supervise_pid = 2;
 		run_killscript();
 		return;
@@ -359,6 +339,8 @@ void kill_supervise_pid(void)
 		goto do_kill;
 
 	if (remaining_seconds >= to.sigterm_shutdown_seconds) {
+		if (killing_supervise_pid < 3)
+			log_error(NULL, "kill %d sigterm", supervise_pid);
 		killing_supervise_pid = 3;
 		kill(supervise_pid, SIGTERM);
 		return;
@@ -366,29 +348,32 @@ void kill_supervise_pid(void)
 
 	/* No time left for any kind of friendly shutdown. */
  do_kill:
+	if (killing_supervise_pid < 4)
+		log_error(NULL, "kill %d sigkill", supervise_pid);
 	killing_supervise_pid = 4;
 	kill(supervise_pid, SIGKILL);
 }
 
 void *watchdog_thread(void *arg)
 {
-	int rv, fd, touch, unlink, create;
+	int rv, fd, do_touch, do_unlink, do_create;
 	time_t t;
 
 	while (1) {
-		create = 0;
+		do_create = 0;
 
-		pthread_mutex_lock(&watchdog_mutex);
-		touch = wd_touch; 
-		unlink = wd_unlink;
-		pthread_mutex_unlock(&watchdog_mutex);
+		pthread_mutex_lock(&wd_mutex);
+		do_touch = wd_touch; 
+		do_unlink = wd_unlink;
+		pthread_mutex_unlock(&wd_mutex);
 
-		if (unlink) {
+		if (do_unlink) {
 			unlink(wd_path);
+			log_debug(NULL, "unlinked watchdog file");
 			break;
 		}
 
-		if (!touch)
+		if (!do_touch)
 			continue;
 
 		if (!wd_fd) {
@@ -400,14 +385,14 @@ void *watchdog_thread(void *arg)
 				rv = 0;
 				wd_fd = fd;
 			}
-			create = 1;
+			do_create = 1;
 		} else {
 			rv = futimes(wd_fd, NULL);
 		}
 		t = time(NULL);
 
-		pthread_mutex_lock(&watchdog_mutex);
-		if (create) {
+		pthread_mutex_lock(&wd_mutex);
+		if (do_create) {
 			wd_create_result = fd;
 			wd_create_time = t;
 		}
@@ -415,7 +400,7 @@ void *watchdog_thread(void *arg)
 		wd_touch_last_time = t;
 		if (!rv)
 			wd_touch_good_time = t;
-		pthread_mutex_unlock(&watchdog_mutex);
+		pthread_mutex_unlock(&wd_mutex);
 
 		/* TODO: use a pthread_cond_timedwait() here so
 		   unlink_watchdog can be quicker? */
@@ -430,31 +415,31 @@ void unlink_watchdog(void)
 	void *ret;
 
 	if (!opt_watchdog)
-		return 0;
+		return;
 
 	pthread_mutex_lock(&wd_mutex);
 	wd_unlink = 1;
 	pthread_mutex_unlock(&wd_mutex);
 
-	if (!wd_thread)
+	if (!wd_thread_running)
 		return;
 
 	pthread_join(wd_thread, &ret);
-	wd_thread = NULL;
+	wd_thread_running = 0;
 }
 
 int touch_watchdog(void)
 {
+	pthread_attr_t attr;
 	time_t t, start;
 	int rv;
 
 	if (!opt_watchdog)
 		return 0;
 
-	if (wd_thread)
+	if (wd_thread_running)
 		return 0;
 
-	wd_touch_time = 0;
 	wd_touch = 1;
 	wd_fd = 0;
 	wd_unlink = 0;
@@ -466,9 +451,14 @@ int touch_watchdog(void)
 	snprintf(wd_path, PATH_MAX,
 		 "/var/run/sync_manager/watchdog/%s", resource_id);
 
+	pthread_attr_init(&attr);
 	rv = pthread_create(&wd_thread, &attr, watchdog_thread, NULL);
-	if (rv < 0)
+	pthread_attr_destroy(&attr);
+	if (rv < 0) {
+		log_error(NULL, "create wd_thread failed %d", rv);
 		return rv;
+	}
+	wd_thread_running = 1;
 
 	start = time(NULL);
 
@@ -489,30 +479,42 @@ int touch_watchdog(void)
 		usleep(10000);
 	}
 
-	if (rv < 0)
+	if (rv < 0) {
+		log_error(NULL, "create watchdog file failed %d", rv);
 		unlink_watchdog();
-	else
+	} else {
+		log_debug(NULL, "create watchdog file at %llu",
+			  (unsigned long long)wd_create_time);
 		rv = 0;
+	}
 
 	return rv;
 }
 
 void notouch_watchdog(void)
 {
+	time_t log_t = 0;
+
 	pthread_mutex_lock(&wd_mutex);
+	if (wd_touch)
+		log_t = wd_touch_good_time;
 	wd_touch = 0;
 	pthread_mutex_unlock(&wd_mutex);
+
+	if (log_t)
+		log_error(NULL, "touch watchdog file stopped last %llu",
+			  (unsigned long long)log_t);
 }
 
 int check_watchdog_thread(void)
 {
-	int touch, rv;
+	int touch;
 	time_t t;
 
 	if (!opt_watchdog)
 		return 0;
 
-	if (!wd_thread)
+	if (!wd_thread_running)
 		return 0;
 
 	pthread_mutex_lock(&wd_mutex);
@@ -523,56 +525,56 @@ int check_watchdog_thread(void)
 	if (!touch)
 		return 0;
 
-	if (time(NULL) - t > to.wd_touch_fail_seconds)
+	if (time(NULL) - t > to.wd_touch_fail_seconds) {
+		log_error(NULL, "touch watchdog file last %llu timeout %d",
+			  (unsigned long long)t, to.wd_touch_fail_seconds);
 		return -1;
+	}
 	return 0;
 }
 
 /* return < 0 on error, 1 on success */
 
-int acquire_lease(struct token *token, uint64_t *timestamp)
+int acquire_lease(struct token *token, struct leader_record *leader)
 {
-	struct leader_record leader;
+	struct leader_record leader_ret;
 	int rv;
 
-	rv = disk_paxos_acquire(token, 0, &leader);
+	rv = disk_paxos_acquire(token, 0, &leader_ret);
 	if (rv < 0)
 		return rv;
 
-	*timestamp = leader.timestamp;
-
+	memcpy(leader, &leader_ret, sizeof(struct leader_record));
 	return 1;
 }
 
 /* return < 0 on error, 1 on success */
 
-int release_lease(struct token *token, uint64_t *timestamp)
+int renew_lease(struct token *token, struct leader_record *leader)
 {
-	struct leader_record leader;
+	struct leader_record leader_ret;
 	int rv;
 
-	rv = disk_paxos_release(token, &leader);
+	rv = disk_paxos_renew(token, leader, &leader_ret);
 	if (rv < 0)
 		return rv;
 
-	*timestamp = leader.timestamp;
-
+	memcpy(leader, &leader_ret, sizeof(struct leader_record));
 	return 1;
 }
 
 /* return < 0 on error, 1 on success */
 
-int renew_lease(struct token *token, uint64_t *timestamp)
+int release_lease(struct token *token, struct leader_record *leader)
 {
-	struct leader_record leader;
+	struct leader_record leader_ret;
 	int rv;
 
-	rv = disk_paxos_renew(token, &leader);
+	rv = disk_paxos_release(token, leader, &leader_ret);
 	if (rv < 0)
 		return rv;
 
-	*timestamp = leader.timestamp;
-
+	memcpy(leader, &leader_ret, sizeof(struct leader_record));
 	return 1;
 }
 
@@ -601,7 +603,7 @@ void set_lease_status(int num, int op, int r, uint64_t t)
 			lease_status[num].release_good_time = t;
 		break;
 	default:
-		/* log error */
+		log_error(NULL, "invalid op %d", op);
 	};
 	pthread_mutex_unlock(&lease_status_mutex);
 }
@@ -621,7 +623,7 @@ void get_lease_status(int num, int op, int *r)
 
 int check_leases_renewed(void)
 {
-	uint64_t oldest = 0;
+	uint64_t sec, oldest = 0;
 	int fail_count = 0;
 	int i;
 
@@ -640,10 +642,21 @@ int check_leases_renewed(void)
 		if (!oldest || (oldest < lease_status[i].renewal_good_time))
 			oldest = lease_status[i].renewal_good_time;
 
-		if (time(NULL) - lease_status[i].renewal_good_time >=
-		    to.lease_renewal_fail_seconds) {
+		sec = time(NULL) - lease_status[i].renewal_good_time;
+
+		if (sec >= to.lease_renewal_fail_seconds) {
 			fail_count++;
-			continue;
+			log_error(tokens[i], "renewal fail last result %d "
+				  "at %llu good %llu",
+				  lease_status[i].renewal_last_result,
+				  (unsigned long long)lease_status[i].renewal_last_time,
+				  (unsigned long long)lease_status[i].renewal_good_time);
+		} else if (sec >= to.lease_renewal_warn_seconds) {
+			log_error(tokens[i], "renewal delay last result %d "
+				  "at %llu good %llu",
+				  lease_status[i].renewal_last_result,
+				  (unsigned long long)lease_status[i].renewal_last_time,
+				  (unsigned long long)lease_status[i].renewal_good_time);
 		}
 	}
 	pthread_mutex_unlock(&lease_status_mutex);
@@ -678,15 +691,9 @@ void cleanup_lease_threads(void)
 	void *ret;
 
 	for (i = 0; i < MAX_LEASES; i++) {
-		if (lease_threads[i]) {
-			pthread_join(lease_threads[i], &ret);
-			lease_threads[i] = NULL;
-		}
-	}
-
-	for (i = 0; i < MAX_LEASES; i++) {
 		token =  tokens[i];
 		if (token) {
+			pthread_join(lease_threads[i], &ret);
 			free(token->disks);
 			free(token);
 			tokens[i] = NULL;
@@ -704,10 +711,10 @@ void set_thread_running(int num, int val)
 void *lease_thread(void *arg)
 {
 	struct token *token = (struct token *)arg;
+	struct leader_record leader;
 	struct timespec ts;
-	uint64_t timestamp;
 	int num = token->num;
-	int rv, num_opened;
+	int rv, stop, num_opened;
 
 	set_thread_running(num, 1);
 
@@ -718,12 +725,14 @@ void *lease_thread(void *arg)
 		goto out_running;
 	}
 
-	rv = acquire_lease(token, &timestamp);
-	set_lease_status(num, OP_ACQUIRE, rv, timestamp);
+	rv = acquire_lease(token, &leader);
+	set_lease_status(num, OP_ACQUIRE, rv, leader.timestamp);
 	if (rv < 0) {
-		log_error(token, "acquire lease failed %d", rv);
+		log_error(token, "acquire failed %d", rv);
 		goto out_disks;
 	}
+	log_debug(token, "acquire at %llu",
+		  (unsigned long long)leader.timestamp);
 
 	while (1) {
 #if 0
@@ -748,14 +757,15 @@ void *lease_thread(void *arg)
 		if (stop)
 			break;
 
-		rv = renew_lease(token, &timestamp);
-		set_lease_status(num, OP_RENEWAL, rv, timestamp);
+		rv = renew_lease(token, &leader);
+		set_lease_status(num, OP_RENEWAL, rv, leader.timestamp);
 		if (rv < 0)
-			log_error(token, "renew lease failed %d", rv);
+			log_error(token, "renew failed %d", rv);
 	}
 
-	rv = release_lease(token, &timestamp);
-	set_lease_status(num, OP_RELEASE, rv, timestamp);
+	rv = release_lease(token, &leader);
+	set_lease_status(num, OP_RELEASE, rv, leader.timestamp);
+	log_debug(token, "release rv %d", rv);
 
  out_disks:
 	close_disks(token);
@@ -770,7 +780,7 @@ int add_lease_thread(char *name, int num_disks, int *num_ret)
 {
 	struct token *token;
 	struct paxos_disk *disks;
-	pthread_attr_t attr
+	pthread_attr_t attr;
 	int i, rv, num, found = 0;
 
 	token = malloc(sizeof(struct token));
@@ -792,11 +802,11 @@ int add_lease_thread(char *name, int num_disks, int *num_ret)
 	disks = NULL;
 	memset(&tmp_disks, 0, num_disks * sizeof(struct paxos_disk));
 
-	/* find an unused lease num, only main loop accesses lease_threads[],
-	   no locking needed */
+	/* find an unused lease num, only main loop accesses
+	   tokens[] and lease_threads[], no locking needed */
 
 	for (i = 0; i < MAX_LEASES; i++) {
-		if (!lease_threads[i]) {
+		if (!tokens[i]) {
 			found = 1;
 			break;
 		}
@@ -810,16 +820,7 @@ int add_lease_thread(char *name, int num_disks, int *num_ret)
 	num = i;
 	token->num = i;
 
-	/* verify that the tokens slot is unused, only main loop accesses
-	   tokens[], no locking needed */
-
-	if (tokens[num]) {
-		log_error(token, "add lease failed, num %d is used", num);
-		rv = -EINVAL;
-		goto out;
-	}
-
-	/* verify that this lease_status slot is unused in lease_status[],
+	/* verify that the token num slot is unused in lease_status[],
 	   and that that the token_name is not already used */
 
 	pthread_mutex_lock(&lease_status_mutex);
@@ -889,8 +890,10 @@ void del_lease_thread(int num)
 
 int main_loop(void)
 {
-	int i, r, rv, pid_status, wd_status, poll_timeout;
-	int poll_timeout = to.unstable_check_ms;
+	void (*workfn) (int ci);
+	void (*deadfn) (int ci);
+	int i, r, rv, pid_status, wd_status;
+	int poll_timeout = to.unstable_poll_ms;
 	int error = 0;
 
 	while (1) {
@@ -970,7 +973,7 @@ int main_loop(void)
 
 		/*
 		 * sync_manager is shutting down after the supervised pid
-		 * has stopped.  pthread_join lease threads and free tokens */
+		 * has stopped.  pthread_join lease threads and free tokens
 		 */
 
 		if (stopping_lease_threads) {
@@ -1055,77 +1058,15 @@ int main_loop(void)
 		   timely fashion. */
 
 		if ((pid_status > 0) && !killing_supervise_pid &&
-		    !stopping_lease_threads && !starting_lease_threads &&
+		    !stopping_lease_threads && !starting_lease_thread &&
 		    (time(NULL) - oldest_renewal_time < to.lease_renewal_seconds))
-			poll_timeout = to.stable_check_ms;
+			poll_timeout = to.stable_poll_ms;
 		else
-			poll_timeout = to.unstable_check_ms;
+			poll_timeout = to.unstable_poll_ms;
 	}
 
 	return error;
 }
-
-
-struct sm_header {
-	uint32_t magic;
-	uint32_t version;
-	uint32_t cmd;
-	uint32_t length;
-	uint32_t info_len;
-	uint32_t seq;
-	uint32_t data;
-	uint32_t unused;
-	char resource_id[NAME_ID_SIZE];
-};
-
-struct sm_info {
-	char command[COMMAND_MAX];
-	char killscript[COMMAND_MAX];
-	uint64_t our_host_id;
-	uint64_t num_hosts;
-
-	int supervise_pid;
-	int supervise_pid_exit_status;
-	int starting_lease_thread;
-	int stopping_lease_threads;
-	int killing_supervise_pid;
-	int external_shutdown;
-
-	/* TODO: include wd info */
-
-	uint64_t current_time;
-	uint64_t oldest_renewal_time;
-	int oldest_renewal_num;
-
-	uint32_t lease_info_len;
-	uint32_t lease_info_count;
-};
-
-struct sm_lease_info {
-	char token_name[NAME_ID_SIZE];
-	uint32_t token_type;
-	int num;
-	int stop_thread;
-	int thread_running;
-
-	int acquire_last_result;
-	int renewal_last_result;
-	int release_last_result;
-	uint64_t acquire_last_time;
-	uint64_t acquire_good_time;
-	uint64_t renewal_last_time;
-	uint64_t renewal_good_time;
-	uint64_t release_last_time;
-	uint64_t release_good_time;
-
-	uint32_t disk_info_len;
-	uint32_t disk_info_count;
-};
-
-struct sm_disk_info {
-	uint64_t offset;
-	char path[DISK_PATH_LEN];
-};
 
 void cmd_status(int fd, struct sm_header *h_recv)
 {
@@ -1176,12 +1117,10 @@ void process_listener(int ci)
 		break;
 	case SM_CMD_SHUTDOWN:
 		external_shutdown = 1;
-		send_reply_ok(fd, &h);
 		break;
 	case SM_CMD_SUPERVISE_PID:
 		if (!supervise_pid)
-			supervise_pid = atoi(h.data);
-		send_reply_ok(fd, &h);
+			supervise_pid = h.data;
 		break;
 	case SM_CMD_NUM_HOSTS:
 		/* just rewrite leader block in leases? */
@@ -1198,7 +1137,6 @@ void process_listener(int ci)
 	case SM_CMD_LOG_DUMP:
 		cmd_log_dump(fd, &h);
 		break;
-	default:
 	};
 
 	close(fd);
@@ -1215,28 +1153,28 @@ int setup_listener(void)
 
 	s = socket(AF_LOCAL, SOCK_STREAM, 0);
 	if (s < 0) {
-		log_error("socket error %d %d", s, errno);
+		log_error(NULL, "socket error %d %d", s, errno);
 		return s;
 	}
 
 	snprintf(path, PATH_MAX,
 		 "/var/run/sync_manager/sockets/%s", resource_id);
 
-	memset(&addr, 0, sizeof(addr));
+	memset(&addr, 0, sizeof(struct sockaddr_un));
 	addr.sun_family = AF_LOCAL;
-	strncpy(&addr.sun_path[1], sock_path, PATH_MAX - 1);
+	strncpy(&addr.sun_path[1], path, PATH_MAX - 1);
 	addrlen = sizeof(sa_family_t) + strlen(addr.sun_path+1) + 1;
 
 	rv = bind(s, (struct sockaddr *) &addr, addrlen);
 	if (rv < 0) {
-		log_error("bind error %d %d", rv, errno);
+		log_error(NULL, "bind error %d %d", rv, errno);
 		close(s);
 		return rv;
 	}
 
 	rv = listen(s, 5);
 	if (rv < 0) {
-		log_error("listen error %d %d", rv, errno);
+		log_error(NULL, "listen error %d %d", rv, errno);
 		close(s);
 		return rv;
 	}
@@ -1256,8 +1194,8 @@ int lockfile(void)
 
 	fd = open(lockfile_path, O_CREAT|O_WRONLY|O_CLOEXEC, 0666);
 	if (fd < 0) {
-		fprintf(stderr, "cannot open/create lock file %s\n",
-			lockfile_path);
+		log_error(NULL, "cannot open/create lockfile %s",
+			  lockfile_path);
 		return fd;
 	}
 
@@ -1268,13 +1206,13 @@ int lockfile(void)
 
 	error = fcntl(fd, F_SETLK, &lock);
 	if (error) {
-		fprintf(stderr, "is already running\n");
+		log_error(NULL, "lockfile busy");
 		return error;
 	}
 
 	error = ftruncate(fd, 0);
 	if (error) {
-		fprintf(stderr, "cannot clear lock file %s\n", lockfile_path);
+		log_error(NULL, "cannot clear lockfile %s", lockfile_path);
 		return error;
 	}
 
@@ -1283,8 +1221,8 @@ int lockfile(void)
 
 	error = write(fd, buf, strlen(buf));
 	if (error <= 0) {
-		fprintf(stderr, "cannot write lock file %s\n", lockfile_path);
-		return rv;
+		log_error(NULL, "cannot write lockfile %s", lockfile_path);
+		return -1;
 	}
 
 	return 0;
@@ -1314,13 +1252,13 @@ int add_tmp_disk(int d, char *arg)
 	int rv;
 
 	if (d > MAX_DISKS) {
-		fprintf(stderr, "disk option (-d) limit is %d\n", MAX_DISKS);
+		log_error(NULL, "disk option (-d) limit is %d", MAX_DISKS);
 		return -EINVAL;
 	}
 
 	p = strstr(arg, ":");
 	if (!p) {
-		fprintf(stderr, "disk option (-d) missing :offset\n");
+		log_error(NULL, "disk option (-d) missing :offset");
 		return -EINVAL;
 	}
 
@@ -1329,11 +1267,13 @@ int add_tmp_disk(int d, char *arg)
 
 	strncpy(tmp_disks[d].path, arg, DISK_PATH_LEN - 1);
 
-	rv = sscanf(p, "%llu", &tmp_disks[d].offset);
+	rv = sscanf(p, "%llu", (unsigned long long *)&tmp_disks[d].offset);
 	if (rv != 1) {
-		fprintf(stderr, "disk option (-d) invalid offset\n");
+		log_error(NULL, "disk option (-d) invalid offset");
 		return -EINVAL;
 	}
+
+	return 0;
 }
 
 /* TODO: option to start up as the receiving side of a transfer
@@ -1343,6 +1283,8 @@ int add_tmp_disk(int d, char *arg)
  
    TODO: option to transfer the ownership of all leases to a specified
    hostid, then watch for pid to exit? */
+
+/* TODO: option to set timeouts, e.g. -m name1=num,name2=num,name3=num */
 
 #define RELEASE_VERSION "0.0"
 
@@ -1354,7 +1296,7 @@ int read_args(int argc, char *argv[], char *token_name, int *num_disks_out)
 	char *arg1 = argv[1];
 	int optarg_used;
 	int num_disks = 0;
-	int i, j, len;
+	int i, j, len, rv;
 	int begin_command = 0;
 
 	if (argc < 2 || !strcmp(arg1, "--help") || !strcmp(arg1, "-h")) {
@@ -1367,9 +1309,6 @@ int read_args(int argc, char *argv[], char *token_name, int *num_disks_out)
 		       argv[0], RELEASE_VERSION, __DATE__, __TIME__);
 		exit(EXIT_SUCCESS);
 	}
-
-	if (argc < 2)
-		return;
 
 	for (i = 1; i < argc; ) {
 		p = argv[i];
@@ -1456,7 +1395,7 @@ int read_args(int argc, char *argv[], char *token_name, int *num_disks_out)
 		cmd_argc = argc - i - 1;
 
 		if (cmd_argc < 1) {
-			fprintf("command option (-c) requires an arg\n");
+			log_error(NULL, "command option (-c) requires an arg");
 			exit(EXIT_FAILURE);
 		}
 
@@ -1502,6 +1441,7 @@ int main(int argc, char *argv[])
 	setup_logging();
 
 	to.lease_timeout_seconds = 60;
+	to.lease_renewal_warn_seconds = 30;
 	to.lease_renewal_fail_seconds = 40;
 	to.lease_renewal_seconds = 10;
 	to.wd_touch_seconds = 4;
@@ -1531,7 +1471,7 @@ int main(int argc, char *argv[])
 		if (rv < 0)
 			goto out_lockfile;
 
-		rv = add_lease_thread(token_name, num_disks, disks, &num);
+		rv = add_lease_thread(token_name, num_disks, &num);
 		if (rv < 0)
 			goto out_watchdog;
 

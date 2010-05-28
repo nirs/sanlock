@@ -1,6 +1,3 @@
-#define _GNU_SOURCE
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <inttypes.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -12,9 +9,14 @@
 #include <errno.h>
 #include <limits.h>
 #include <time.h>
+#include <syslog.h>
+#include <sys/types.h>
+#include <sys/time.h>
 
-#include "disk_paxos.h"
 #include "sm.h"
+#include "sm_msg.h"
+#include "disk_paxos.h"
+#include "log.h"
 
 /*
  * largely copied from vdsm.git/sync_manager/
@@ -30,7 +32,7 @@
 
 extern uint64_t our_host_id;
 extern uint64_t num_hosts;
-extern lease_timeout_seconds;
+extern struct sm_timeouts to;
 
 int majority_disks(struct token *token, int num)
 {
@@ -574,12 +576,12 @@ int get_prev_leader(struct token *token, int force,
 
 	leaders = malloc(leaders_len);
 	if (!leaders)
-		return DP_NO_MEM;
+		return DP_NOMEM;
 
 	leader_reps = malloc(leader_reps_len);
 	if (!leader_reps) {
 		free(leaders);
-		return DP_NO_MEM;
+		return DP_NOMEM;
 	}
 
 	/*
@@ -719,9 +721,10 @@ int get_prev_leader(struct token *token, int force,
 	 * check if current leader fails to update lease
 	 */
 
-	log_debug(token, "wait lease_timeout_seconds %u", lease_timeout_seconds);
+	log_debug(token, "wait lease_timeout_seconds %u",
+		  to.lease_timeout_seconds);
 
-	sleep(lease_timeout_seconds);
+	sleep(to.lease_timeout_seconds);
 
 	num_timeout = 0;
 
@@ -771,7 +774,7 @@ int write_new_leader(struct token *token, struct leader_record *nl)
 
 	if (!majority_disks(token, num_writes)) {
 		log_error(token, "cannot write leader to majority of disks");
-		error = DP_WRITE_NEW_LEADERS;
+		error = DP_WRITE_LEADERS;
 	}
 
 	return error;
@@ -788,8 +791,6 @@ int disk_paxos_acquire(struct token *token, int force,
 	struct leader_record prev_leader;
 	struct leader_record new_leader;
 	struct paxos_dblock dblock;
-	int num_disks = token->num_disks;
-	int d, num_writes;
 	int error;
 
 	/*
@@ -886,6 +887,7 @@ int disk_paxos_transfer(struct token *token, uint64_t hostid,
 {
 	/* what to change for a transfer?  new hostid in leader blocks,
 	   new dblocks?  new lver in leader and dblocks? */
+	return -1;
 }
 
 void token_status(struct token *token)
@@ -978,10 +980,10 @@ void token_init(struct token *token)
 	memset(&dblock, 0, sizeof(struct paxos_dblock));
 
 	for (d = 0; d < token->num_disks; d++) {
-		write_leader(&token->disks[d], &leader);
-		write_request(&token->disks[d], &req);
+		write_leader(token, &token->disks[d], &leader);
+		write_request(token, &token->disks[d], &req);
 		for (q = 0; q < MAX_HOSTS; q++)
-			write_dblock(&token->disks[d], q, &dblock);
+			write_dblock(token, &token->disks[d], q, &dblock);
 	}
 
 	/* make local host id the leader */
@@ -999,8 +1001,8 @@ void token_init(struct token *token)
 	strncpy(leader.token_name, token->name, NAME_ID_SIZE);
 
 	for (d = 0; d < token->num_disks; d++) {
-		write_leader(&token->disks[d], &leader);
-		write_dblock(&token->disks[d], our_host_id, &dblock);
+		write_leader(token, &token->disks[d], &leader);
+		write_dblock(token, &token->disks[d], our_host_id, &dblock);
 	}
 }
 
