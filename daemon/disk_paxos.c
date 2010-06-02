@@ -30,8 +30,7 @@
 
 #define NO_VAL 0
 
-extern uint64_t our_host_id;
-extern uint64_t num_hosts;
+extern int our_host_id;
 extern struct sm_timeouts to;
 
 int majority_disks(struct token *token, int num)
@@ -337,7 +336,7 @@ int read_request(struct token *token, struct paxos_disk *disk,
 
 /* host_id and inp are both generally our_host_id */
 
-int run_disk_paxos(struct token *token, uint64_t host_id, uint64_t inp,
+int run_disk_paxos(struct token *token, int host_id, uint64_t inp,
 		   int num_hosts, uint64_t lver,
 		   struct paxos_dblock *dblock_out)
 {
@@ -881,7 +880,7 @@ int disk_paxos_release(struct token *token,
 	return error;
 }
 
-int disk_paxos_transfer(struct token *token, uint64_t hostid,
+int disk_paxos_transfer(struct token *token, int hostid,
 			struct leader_record *leader_last,
 			struct leader_record *leader_ret)
 {
@@ -890,94 +889,21 @@ int disk_paxos_transfer(struct token *token, uint64_t hostid,
 	return -1;
 }
 
-void token_status(struct token *token)
-{
-	struct leader_record leader;
-	struct request_record req;
-	struct paxos_dblock bk[MAX_HOSTS];
-	struct paxos_disk *disk;
-	int d, q, rv;
-
-	for (d = 0; d < token->num_disks; d++) {
-		disk = &token->disks[d];
-
-		printf("disk %d offset %llu %s\n", d,
-		       (unsigned long long)disk->offset, disk->path);
-
-		memset(&leader, 0, sizeof(leader));
-
-		rv = read_leader(token, disk, &leader);
-		if (rv < 0)
-			continue;
-
-		printf("leader[%u].owner_id        %llu\n", d,
-		       (unsigned long long)leader.owner_id);
-
-		printf("leader[%u].lver            %llu\n", d,
-		       (unsigned long long)leader.lver);
-
-		printf("leader[%u].num_hosts       %llu\n", d,
-		       (unsigned long long)leader.num_hosts);
-
-		printf("leader[%u].num_alloc_slots %llu\n", d,
-		       (unsigned long long)leader.num_alloc_slots);
-
-		printf("leader[%u].cluster_mode    %u\n", d,
-		       leader.cluster_mode);
-
-		printf("leader[%u].version         %u\n", d, leader.version);
-
-		printf("leader[%u].token_type      %u\n", d, leader.token_type);
-
-		printf("leader[%u].token_name      %s\n", d, leader.token_name);
-
-		printf("leader[%u].timestamp       %llu\n", d,
-		       (unsigned long long)leader.timestamp);
-
-		printf("leader[%u].checksum        %u\n", d, leader.checksum);
-
-		memset(&req, 0, sizeof(req));
-
-		rv = read_request(token, disk, &req);
-		if (rv < 0)
-			continue;
-
-		printf("reques[%u].lver            %llu\n", d,
-		       (unsigned long long)req.lver);
-
-		printf("reques[%u].force_mode      %u\n", d, req.force_mode);
-
-		memset(&bk, 0, sizeof(bk));
-
-		rv = read_dblocks(token, disk, num_hosts, bk);
-		if (rv < 0)
-			continue;
-
-		for (q = 0; q < num_hosts; q++) {
-			printf("dblock[%u][%u].mbal %llu\n", d, q,
-			       (unsigned long long)bk[q].mbal);
-			printf("dblock[%u][%u].bal  %llu\n", d, q,
-			       (unsigned long long)bk[q].bal);
-			printf("dblock[%u][%u].inp  %llu\n", d, q,
-			       (unsigned long long)bk[q].inp);
-			printf("dblock[%u][%u].lver %llu\n", d, q,
-			       (unsigned long long)bk[q].lver);
-		}
-	}
-}
-
-void token_init(struct token *token)
+int disk_paxos_init(struct token *token, int num_hosts)
 {
 	struct leader_record leader;
 	struct request_record req;
 	struct paxos_dblock dblock;
 	int d, q;
 
-	/* zero all blocks */
-
 	memset(&leader, 0, sizeof(struct leader_record));
 	memset(&req, 0, sizeof(struct request_record));
 	memset(&dblock, 0, sizeof(struct paxos_dblock));
+
+	leader.timestamp = LEASE_FREE;
+	leader.num_hosts = num_hosts;
+	leader.token_type = token->type;
+	strncpy(leader.token_name, token->name, NAME_ID_SIZE);
 
 	for (d = 0; d < token->num_disks; d++) {
 		write_leader(token, &token->disks[d], &leader);
@@ -986,23 +912,8 @@ void token_init(struct token *token)
 			write_dblock(token, &token->disks[d], q, &dblock);
 	}
 
-	/* make local host id the leader */
+	/* TODO: return error if cannot initialize majority of disks */
 
-	dblock.inp = our_host_id;
-	dblock.lver = 1;
-	dblock.mbal = our_host_id;
-	dblock.bal = our_host_id;
-
-	leader.owner_id = our_host_id;
-	leader.lver = 1;
-	leader.num_hosts = num_hosts;
-	leader.timestamp = time(NULL);
-	leader.token_type = token->type;
-	strncpy(leader.token_name, token->name, NAME_ID_SIZE);
-
-	for (d = 0; d < token->num_disks; d++) {
-		write_leader(token, &token->disks[d], &leader);
-		write_dblock(token, &token->disks[d], our_host_id, &dblock);
-	}
+	return 0;
 }
 

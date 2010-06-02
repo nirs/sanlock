@@ -46,9 +46,9 @@ static FILE *logfile_fp;
 extern int log_logfile_priority;
 extern int log_syslog_priority;
 extern int log_stderr_priority;
-extern char *resource_id;
+extern char resource_id[NAME_ID_SIZE + 1];
 
-static void _log_save_dump(int level, char *buf, int len)
+static void _log_save_dump(int level, int len)
 {
 	int i;
 
@@ -62,9 +62,12 @@ static void _log_save_dump(int level, char *buf, int len)
 	}
 }
 
-static void _log_save_ent(int level, char *buf, int len)
+static void _log_save_ent(int level, int len)
 {
 	struct entry *e;
+
+	if (!log_ents)
+		return;
 
 	if (log_pending_ents == log_num_ents) {
 		log_dropped++;
@@ -75,8 +78,8 @@ static void _log_save_ent(int level, char *buf, int len)
 	log_head_ent = log_head_ent % log_num_ents;
 	log_pending_ents++;
 
-	strncpy(e->str, buf, LOG_STR_LEN);
 	e->level = level;
+	memcpy(e->str, log_str, len);
 }
 
 /*
@@ -120,7 +123,7 @@ void log_level(struct token *token, int level, char *fmt, ...)
 	 * sent over unix socket
 	 */
 
-	_log_save_dump(level, log_str, pos - 1);
+	_log_save_dump(level, pos - 1);
 
 	/*
 	 * save some messages in circular array "log_ents" that a thread
@@ -128,7 +131,7 @@ void log_level(struct token *token, int level, char *fmt, ...)
 	 */
 
 	if (level <= log_logfile_priority || level <= log_syslog_priority)
-		_log_save_ent(level, log_str, pos - 1);
+		_log_save_ent(level, pos);
 
 	if (level <= log_stderr_priority)
 		fprintf(stderr, "%s", log_str);
@@ -211,10 +214,10 @@ int setup_logging(void)
 		 "/var/log/sync_manager/%s", resource_id);
 
 	logfile_fp = fopen(logfile_path, "a+");
-	if (!logfile_fp)
-		return -1;
-	fd = fileno(logfile_fp);
-	fcntl(fd, F_SETFD, fcntl(fd, F_GETFD, 0) | FD_CLOEXEC);
+	if (logfile_fp) {
+		fd = fileno(logfile_fp);
+		fcntl(fd, F_SETFD, fcntl(fd, F_GETFD, 0) | FD_CLOEXEC);
+	}
 
 	log_ents = malloc(log_num_ents * sizeof(struct entry));
 	if (!log_ents) {
@@ -223,6 +226,9 @@ int setup_logging(void)
 		return -1;
 	}
 	memset(log_ents, 0, log_num_ents * sizeof(struct entry));
+
+	openlog("sync_manager", LOG_CONS | LOG_PID, LOG_DAEMON);
+
 	return 0;
 }
 

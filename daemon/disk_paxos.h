@@ -86,11 +86,12 @@ int disk_paxos_acquire(struct token *token, int force,
 int disk_paxos_renew(struct token *token,
 		     struct leader_record *leader_last,
 		     struct leader_record *leader_ret);
-int disk_paxos_transfer(struct token *token, uint64_t hostid,
+int disk_paxos_transfer(struct token *token, int hostid,
 			struct leader_record *leader_last,
 			struct leader_record *leader_ret);
 int disk_paxos_release(struct token *token,
 		       struct leader_record *leader_last,
 		       struct leader_record *leader_ret);
+int disk_paxos_init(struct token *token, int num_hosts);
 
 #endif

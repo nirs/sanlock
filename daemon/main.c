@@ -45,12 +45,13 @@ int log_stderr_priority;
 char command[COMMAND_MAX];
 char killscript[COMMAND_MAX];
 char resource_id[NAME_ID_SIZE + 1];
-uint64_t our_host_id;
-uint64_t num_hosts;
+int our_host_id;
+int num_hosts;
 struct paxos_disk tmp_disks[MAX_DISKS];
 int cmd_argc;
 char **cmd_argv;
 
+int opt_init;
 int opt_watchdog = 1;
 char lockfile_path[PATH_MAX];
 int supervise_pid;
@@ -760,7 +761,9 @@ void *lease_thread(void *arg)
 		rv = renew_lease(token, &leader);
 		set_lease_status(num, OP_RENEWAL, rv, leader.timestamp);
 		if (rv < 0)
-			log_error(token, "renew failed %d", rv);
+			log_error(token, "renewal failed %d", rv);
+		else
+			log_debug(token, "renewal");
 	}
 
 	rv = release_lease(token, &leader);
@@ -776,12 +779,10 @@ void *lease_thread(void *arg)
 
 /* the disk_paxos structs in global tmp_disks */
 
-int add_lease_thread(char *name, int num_disks, int *num_ret)
+int create_token(char *name, int num_disks, struct token **token_out)
 {
 	struct token *token;
 	struct paxos_disk *disks;
-	pthread_attr_t attr;
-	int i, rv, num, found = 0;
 
 	token = malloc(sizeof(struct token));
 	if (!token)
@@ -799,8 +800,22 @@ int add_lease_thread(char *name, int num_disks, int *num_ret)
 	token->num_disks = num_disks;
 	strncpy(token->name, name, NAME_ID_SIZE);
 
-	disks = NULL;
 	memset(&tmp_disks, 0, num_disks * sizeof(struct paxos_disk));
+	*token_out = token;
+	return 0;
+}
+
+int add_lease_thread(char *name, int num_disks, int *num_ret)
+{
+	struct token *token;
+	pthread_attr_t attr;
+	int i, rv, num, found = 0;
+
+	rv = create_token(name, num_disks, &token);
+	if (rv < 0) {
+		log_error(NULL, "create token failed");
+		return rv;
+	}
 
 	/* find an unused lease num, only main loop accesses
 	   tokens[] and lease_threads[], no locking needed */
@@ -1244,6 +1259,8 @@ void print_usage(void)
 	printf("  -k <path>		command to stop supervised process\n");
 	printf("  -w <num>		enable (1) or disable (0) using watchdog\n");
 	printf("  -c <path> <args>	run command with args, -c must be final option\n");
+	printf("\nInitialize disk blocks:\n");
+	printf("sync_manager -I -r <name> -t <name> -n <num> -d <path>:<offset>...\n");
 }
 
 int add_tmp_disk(int d, char *arg)
@@ -1315,6 +1332,7 @@ int read_args(int argc, char *argv[], char *token_name, int *num_disks_out)
 
 		if ((p[0] != '-') || (strlen(p) != 2)) {
 			fprintf(stderr, "unknown option %s\n", p);
+			fprintf(stderr, "space required before option value\n");
 			print_usage();
 			exit(EXIT_FAILURE);
 		}
@@ -1360,13 +1378,17 @@ int read_args(int argc, char *argv[], char *token_name, int *num_disks_out)
 		case 'w':
 			opt_watchdog = atoi(optarg);
 			break;
+		case 'I':
+			opt_init = 1;
+			optarg_used = 0;
+			break;
 		case 'c':
 			begin_command = 1;
 			optarg_used = 0;
 			break;
 		default:
-			fprintf(stderr, "unknown option: %c", optchar);
-			break;
+			fprintf(stderr, "unknown option: %c\n", optchar);
+			exit(EXIT_FAILURE);
 		};
 
 		if (optarg_used)
@@ -1418,13 +1440,86 @@ int read_args(int argc, char *argv[], char *token_name, int *num_disks_out)
 		strncpy(command, cmd_argv[0], COMMAND_MAX - 1);
 	}
 
+	if (!opt_init && !our_host_id) {
+		log_error(NULL, "local host id required from 1-%d", MAX_HOSTS);
+		return -EINVAL;
+	}
+
+	if (!resource_id[0]) {
+		log_error(NULL, "resource id option (-r) required");
+		return -EINVAL;
+	}
+
+	log_debug(NULL, "resource_id %s token_name %s num_hosts %d our_host_id %d",
+		  resource_id, token_name, num_hosts, our_host_id);
+
 	*num_disks_out = num_disks;
 	return 0;
+}
+
+int make_dirs(void)
+{
+	mode_t old_umask;
+	int rv;
+
+	old_umask = umask(0022);
+	rv = mkdir("/var/run/sync_manager", 0777);
+	if (rv < 0 && errno != EEXIST)
+		goto out;
+
+	rv = mkdir("/var/run/sync_manager/lockfiles", 0777);
+	if (rv < 0 && errno != EEXIST)
+		goto out;
+
+	rv = mkdir("/var/run/sync_manager/sockets", 0777);
+	if (rv < 0 && errno != EEXIST)
+		goto out;
+
+	rv = mkdir("/var/run/sync_manager/watchdog", 0777);
+	if (rv < 0 && errno != EEXIST)
+		goto out;
+
+	rv = mkdir("/var/log/sync_manager", 0777);
+	if (rv < 0 && errno != EEXIST)
+		goto out;
+
+	rv = 0;
+ out:
+	umask(old_umask);
+	if (rv < 0)
+		log_error(NULL, "mkdir errno %d", errno);
+	return rv;
 }
 
 void sigterm_handler(int sig)
 {
 	external_shutdown = 1;
+}
+
+void do_init(char *name, int num_disks)
+{
+	struct token *token;
+	int rv, num_opened;
+
+	rv = create_token(name, num_disks, &token);
+	if (rv < 0) {
+		log_error(NULL, "create token failed");
+		return;
+	}
+
+	num_opened = open_disks(token);
+	if (!majority_disks(token, num_opened)) {
+		log_error(token, "cannot open majority of disks");
+		goto out;
+	}
+
+	rv = disk_paxos_init(token, num_hosts);
+	if (rv < 0) {
+		log_error(token, "cannot initialize disks");
+	}
+ out:
+	free(token->disks);
+	free(token);
 }
 
 int main(int argc, char *argv[])
@@ -1438,6 +1533,7 @@ int main(int argc, char *argv[])
 	log_stderr_priority = LOG_ERR;
 	log_logfile_priority = LOG_ERR;
 	log_syslog_priority = LOG_ERR;
+
 	setup_logging();
 
 	to.lease_timeout_seconds = 60;
@@ -1456,11 +1552,20 @@ int main(int argc, char *argv[])
 	if (rv < 0)
 		goto out;
 
-	signal(SIGTERM, sigterm_handler);
+	rv = make_dirs();
+	if (rv < 0)
+		goto out;
 
 	rv = lockfile();
 	if (rv < 0)
 		goto out;
+
+	if (opt_init) {
+		do_init(token_name, num_disks);
+		goto out_lockfile;
+	}
+
+	signal(SIGTERM, sigterm_handler);
 
 	rv = setup_listener();
 	if (rv < 0)
