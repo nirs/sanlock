@@ -26,7 +26,7 @@
 
 #define BLOCK_SIZE 512
 
-#define LEADER_COMPARE_LEN 80	/* through end of token_name */
+#define LEADER_COMPARE_LEN 80	/* through end of resource_id */
 
 #define NO_VAL 0
 
@@ -656,19 +656,18 @@ int get_prev_leader(struct token *token, int force,
 	log_debug(token, "prev_leader d %u reps %u", d, leader_reps[d]);
 
 	log_debug(token, "prev_leader owner %llu lver %llu hosts %llu "
-		  "time %llu token %u %s",
+		  "time %llu res %s",
 		  (unsigned long long)prev_leader.owner_id,
 		  (unsigned long long)prev_leader.lver,
 		  (unsigned long long)prev_leader.num_hosts,
 		  (unsigned long long)prev_leader.timestamp,
-		  prev_leader.token_type, prev_leader.token_name);
+		  prev_leader.resource_id);
 
-	/* sanity check that the new leader token name is correct and that
+	/* sanity check that the new leader resource_id is correct and that
 	   our host_id is within the accepted range */
 
-	if (token->type != prev_leader.token_type ||
-	    strcmp(token->name, prev_leader.token_name)) {
-		log_error(token, "leader has wrong token name");
+	if (strcmp(token->resource_id, prev_leader.resource_id)) {
+		log_error(token, "leader has wrong resource_id");
 		error = DP_BAD_NAME;
 		goto fail;
 	}
@@ -792,7 +791,7 @@ int write_new_leader(struct token *token, struct leader_record *nl)
 }
 
 /*
- * token_lease - obtain the lease on the token
+ * acquire a lease
  * ref: obtain()
  */
 
@@ -820,8 +819,7 @@ int disk_paxos_acquire(struct token *token, int force,
 	 */
 
 	memset(&new_leader, 0, sizeof(struct leader_record));
-	strncpy(new_leader.token_name, token->name, NAME_ID_SIZE);
-	new_leader.token_type = token->type;
+	strncpy(new_leader.resource_id, token->resource_id, NAME_ID_SIZE);
 	new_leader.lver = prev_leader.lver + 1; /* req.lver */
 	new_leader.num_hosts = prev_leader.num_hosts;
 	new_leader.max_hosts = prev_leader.max_hosts;
@@ -916,8 +914,7 @@ int disk_paxos_init(struct token *token, int num_hosts, int max_hosts)
 	leader.timestamp = LEASE_FREE;
 	leader.num_hosts = num_hosts;
 	leader.max_hosts = max_hosts;
-	leader.token_type = token->type;
-	strncpy(leader.token_name, token->name, NAME_ID_SIZE);
+	strncpy(leader.resource_id, token->resource_id, NAME_ID_SIZE);
 
 	for (d = 0; d < token->num_disks; d++) {
 		write_leader(token, &token->disks[d], &leader);

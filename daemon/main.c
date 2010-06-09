@@ -24,6 +24,13 @@
 #include "disk_paxos.h"
 #include "log.h"
 
+#define SM_RUN_DIR "/var/run/sync_manager"
+#define SM_LOG_DIR "/var/log/sync_manager"
+#define DAEMON_WATCHDOG_DIR "/var/run/sync_manager/watchdog"
+#define DAEMON_SOCKET_DIR "/var/run/sync_manager/sockets"
+#define DAEMON_LOCKFILE_DIR "/var/run/sync_manager/daemon_lockfiles/"
+#define RESOURCE_LOCKFILE_DIR "/var/run/sync_manager/resource_lockfiles/"
+
 #define CLIENT_NALLOC 2
 
 struct client {
@@ -44,7 +51,7 @@ int log_stderr_priority;
 
 char command[COMMAND_MAX];
 char killscript[COMMAND_MAX];
-char resource_id[NAME_ID_SIZE + 1];
+char sm_id[NAME_ID_SIZE + 1];
 int our_host_id;
 struct paxos_disk tmp_disks[MAX_DISKS];
 int cmd_argc;
@@ -52,7 +59,6 @@ char **cmd_argv;
 
 int opt_init;
 int opt_watchdog = 1;
-char lockfile_path[PATH_MAX];
 int supervise_pid;
 int killscript_pid;
 int supervise_pid_exit_status;
@@ -80,7 +86,7 @@ struct lease_status {
 	int stop_thread;
 	int thread_running;
 
-	char token_name[NAME_ID_SIZE + 1];
+	char resource_id[NAME_ID_SIZE + 1];
 };
 
 #define MAX_LEASES 64
@@ -448,8 +454,7 @@ int touch_watchdog(void)
 	wd_touch_last_result = 0;
 	wd_touch_last_time = 0;
 
-	snprintf(wd_path, PATH_MAX,
-		 "/var/run/sync_manager/watchdog/%s", resource_id);
+	snprintf(wd_path, PATH_MAX, "%s/%s", DAEMON_WATCHDOG_DIR, sm_id);
 
 	pthread_attr_init(&attr);
 	rv = pthread_create(&wd_thread, &attr, watchdog_thread, NULL);
@@ -708,6 +713,12 @@ void set_thread_running(int num, int val)
 	pthread_mutex_unlock(&lease_status_mutex);
 }
 
+/* TODO: take lockfile on resource_id at beginning and unlink it at end;
+   prevents two local sm instances from trying to use the same resource.
+   Also possibly take lockfiles for disks/offsets to catch errors
+   in overlapping disk:offset args.  Do this in add_lease_thread()?
+   Think about what happens to posix locks with threads and forking. */
+
 void *lease_thread(void *arg)
 {
 	struct token *token = (struct token *)arg;
@@ -778,7 +789,7 @@ void *lease_thread(void *arg)
 
 /* the disk_paxos structs in global tmp_disks */
 
-int create_token(char *name, int num_disks, struct token **token_out)
+int create_token(char *resource_id, int num_disks, struct token **token_out)
 {
 	struct token *token;
 	struct paxos_disk *disks;
@@ -797,20 +808,20 @@ int create_token(char *name, int num_disks, struct token **token_out)
 	memcpy(disks, &tmp_disks, num_disks * sizeof(struct paxos_disk));
 	token->disks = disks;
 	token->num_disks = num_disks;
-	strncpy(token->name, name, NAME_ID_SIZE);
+	strncpy(token->resource_id, resource_id, NAME_ID_SIZE);
 
 	memset(&tmp_disks, 0, num_disks * sizeof(struct paxos_disk));
 	*token_out = token;
 	return 0;
 }
 
-int add_lease_thread(char *name, int num_disks, int *num_ret)
+int add_lease_thread(char *resource_id, int num_disks, int *num_ret)
 {
 	struct token *token;
 	pthread_attr_t attr;
 	int i, rv, num, found = 0;
 
-	rv = create_token(name, num_disks, &token);
+	rv = create_token(resource_id, num_disks, &token);
 	if (rv < 0) {
 		log_error(NULL, "create token failed");
 		return rv;
@@ -835,13 +846,13 @@ int add_lease_thread(char *name, int num_disks, int *num_ret)
 	token->num = i;
 
 	/* verify that the token num slot is unused in lease_status[],
-	   and that that the token_name is not already used */
+	   and that that the resource_id is not already used */
 
 	pthread_mutex_lock(&lease_status_mutex);
 	for (i = 0; i < MAX_LEASES; i++) {
 		if (!lease_status[i].thread_running)
 			continue;
-		if (strcmp(lease_status[i].token_name, name))
+		if (strcmp(lease_status[i].resource_id, resource_id))
 			continue;
 		pthread_mutex_unlock(&lease_status_mutex);
 		rv = -EINVAL;
@@ -853,7 +864,7 @@ int add_lease_thread(char *name, int num_disks, int *num_ret)
 		rv = -EINVAL;
 		goto out;
 	}
-	strncpy(lease_status[num].token_name, name, NAME_ID_SIZE);
+	strncpy(lease_status[num].resource_id, resource_id, NAME_ID_SIZE);
 	pthread_mutex_unlock(&lease_status_mutex);
 
 	pthread_attr_init(&attr);
@@ -960,6 +971,7 @@ int main_loop(void)
 			get_lease_status(0, OP_ACQUIRE, &r);
 			if (r < 0) {
 				/* lease_thread 0 failed to acquire lease */
+				unlink_watchdog();
 				starting_lease_thread = 0;
 				stopping_lease_threads = 1;
 				error = r;
@@ -971,9 +983,9 @@ int main_loop(void)
 				if (command[0]) {
 					rv = run_command(command);
 					if (rv < 0) {
+						unlink_watchdog();
 						stopping_lease_threads = 1;
 						stop_lease_threads();
-						unlink_watchdog();
 						error = rv;
 					}
 				}
@@ -1034,9 +1046,9 @@ int main_loop(void)
 		 	 * pid has stopped running, stop the lease threads;
 			 * this may or may not be due to us killing it.
 		 	 */
+			unlink_watchdog();
 			stopping_lease_threads = 1;
 			stop_lease_threads();
-			unlink_watchdog();
 
 		} else if (pid_status < 0) {
 			/*
@@ -1119,7 +1131,7 @@ void process_listener(int ci)
 	if (h.magic != SM_MAGIC) {
 	}
 
-	if (strcmp(resource_id, h.resource_id)) {
+	if (strcmp(sm_id, h.sm_id)) {
 	}
 
 	switch (h.cmd) {
@@ -1171,8 +1183,7 @@ int setup_listener(void)
 		return s;
 	}
 
-	snprintf(path, PATH_MAX,
-		 "/var/run/sync_manager/sockets/%s", resource_id);
+	snprintf(path, PATH_MAX, "%s/%s", DAEMON_SOCKET_DIR, sm_id);
 
 	memset(&addr, 0, sizeof(struct sockaddr_un));
 	addr.sun_family = AF_LOCAL;
@@ -1197,19 +1208,18 @@ int setup_listener(void)
 	return 0;
 }
 
-int lockfile(void)
+int lockfile(char *dir, char *name)
 {
+	char path[PATH_MAX];
 	char buf[16];
 	struct flock lock;
 	int fd, error;
 
-	snprintf(lockfile_path, PATH_MAX,
-		 "/var/run/sync_manager/lockfiles/%s", resource_id);
+	snprintf(path, PATH_MAX, "%s/%s", dir, name);
 
-	fd = open(lockfile_path, O_CREAT|O_WRONLY|O_CLOEXEC, 0666);
+	fd = open(path, O_CREAT|O_WRONLY|O_CLOEXEC, 0666);
 	if (fd < 0) {
-		log_error(NULL, "cannot open/create lockfile %s",
-			  lockfile_path);
+		log_error(NULL, "cannot open/create lockfile %s", path);
 		return fd;
 	}
 
@@ -1226,7 +1236,7 @@ int lockfile(void)
 
 	error = ftruncate(fd, 0);
 	if (error) {
-		log_error(NULL, "cannot clear lockfile %s", lockfile_path);
+		log_error(NULL, "cannot clear lockfile %s", path);
 		return error;
 	}
 
@@ -1235,11 +1245,20 @@ int lockfile(void)
 
 	error = write(fd, buf, strlen(buf));
 	if (error <= 0) {
-		log_error(NULL, "cannot write lockfile %s", lockfile_path);
+		log_error(NULL, "cannot write lockfile %s", path);
 		return -1;
 	}
 
 	return 0;
+}
+
+void unlink_lockfile(char *dir, char *name)
+{
+	char path[PATH_MAX];
+
+	snprintf(path, PATH_MAX, "%s/%s", dir, name);
+
+	unlink(path);
 }
 
 void print_usage(void)
@@ -1250,18 +1269,24 @@ void print_usage(void)
 	printf("  -D			print all logging to stderr\n");
 	printf("  -L <level>		write logging at level and up to logfile (-1 none)\n");
 	printf("  -S <level>		write logging at level and up to syslog (-1 none)\n");
-	printf("  -r <name>		resource id\n");
+	printf("  -n <name>		name of this sync_manager instance\n");
 	printf("  -i <num>		local host id\n");
-	printf("  -t <name>		token (lease) name\n");
-	printf("  -d <path>:<offset>	disk path and offset\n");
+	printf("  -l LEASE		lease description, see below\n");
 	printf("  -k <path>		command to stop supervised process\n");
 	printf("  -w <num>		enable (1) or disable (0) using watchdog\n");
 	printf("  -c <path> <args>	run command with args, -c must be final option\n");
 	printf("\nInitialize a lease disk area:\n");
-	printf("sync_manager -I -h <num_hosts> [-H <max_hosts>] -r <name> -t <name> -d <path>:<offset>...\n");
-	printf("  -h <num_hosts>	the maximum host id that will be able to acquire the lease\n");
-	printf("  -H <max_hosts>	the maximum number of hosts that the disk area will support\n");
+	printf("sync_manager -I -h <num_hosts> [-H <max_hosts>] -l LEASE\n");
+	printf("  -h <num_hosts>	max host id that will be able to acquire the lease\n");
+	printf("  -H <max_hosts>	max number of hosts the disk area will support\n");
 	printf("                        (default %d)\n", DEFAULT_MAX_HOSTS);
+	printf("  -l LEASE		lease description, see below\n");
+	printf("\nLEASE = <resource_id>:<path>:<offset>[:<path>:<offset>...]\n");
+	printf("  <resource_id>		name of resource being leased\n");
+	printf("  <path>		disk path\n");
+	printf("  <offset>		offset on disk\n");
+	printf("  [:<path>:<offset>...] other disks in a multi-disk lease\n");
+	printf("\n");
 }
 
 int add_tmp_disk(int d, char *arg)
@@ -1294,6 +1319,34 @@ int add_tmp_disk(int d, char *arg)
 	return 0;
 }
 
+/* <resource_id>:<path>:<offset>[:<path>:<offset>...] */
+
+int parse_lease_arg(char *arg, char *resource_id, int *num_disks)
+{
+	char *p;
+	int rv;
+
+	p = strstr(arg, ":");
+	if (!p) {
+		log_error(NULL, "invalid lease arg");
+		return -EINVAL;
+	}
+
+	*p = '\0';
+	p++;
+
+	strncpy(resource_id, arg, NAME_ID_SIZE);
+
+	/* TODO: this only handles a single <path>:<offset> */
+
+	rv = add_tmp_disk(*num_disks, p);
+
+	if (!rv)
+		(*num_disks)++;
+
+	return rv;
+}
+
 /* TODO: option to start up as the receiving side of a transfer
    from another host.  Watch the other host's lease renewals until
    the other host writes our hostid is written in the leader block,
@@ -1306,7 +1359,7 @@ int add_tmp_disk(int d, char *arg)
 
 #define RELEASE_VERSION "0.0"
 
-int read_args(int argc, char *argv[], char *token_name, int *num_disks_out,
+int read_args(int argc, char *argv[], char *resource_id, int *num_disks_out,
 	      int *num_hosts_out, int *max_hosts_out)
 {
 	char optchar;
@@ -1358,8 +1411,8 @@ int read_args(int argc, char *argv[], char *token_name, int *num_disks_out,
 		case 'S':
 			log_syslog_priority = atoi(optarg);
 			break;
-		case 'r':
-			strncpy(resource_id, optarg, NAME_ID_SIZE);
+		case 'n':
+			strncpy(sm_id, optarg, NAME_ID_SIZE);
 			break;
 		case 'i':
 			our_host_id = atoi(optarg);
@@ -1370,12 +1423,8 @@ int read_args(int argc, char *argv[], char *token_name, int *num_disks_out,
 		case 'H':
 			max_hosts = atoi(optarg);
 			break;
-		case 't':
-			strncpy(token_name, optarg, NAME_ID_SIZE);
-			break;
-		case 'd':
-			num_disks++;
-			rv = add_tmp_disk(num_disks - 1, optarg);
+		case 'l':
+			rv = parse_lease_arg(optarg, resource_id, &num_disks);
 			if (rv < 0)
 				return rv;
 			break;
@@ -1457,13 +1506,10 @@ int read_args(int argc, char *argv[], char *token_name, int *num_disks_out,
 		return -EINVAL;
 	}
 
-	if (!resource_id[0]) {
-		log_error(NULL, "resource id option (-r) required");
+	if (!opt_init && !sm_id[0]) {
+		log_error(NULL, "name option (-n) required");
 		return -EINVAL;
 	}
-
-	log_debug(NULL, "resource_id %s token_name %s our_host_id %d",
-		  resource_id, token_name, our_host_id);
 
 	*num_disks_out = num_disks;
 	*num_hosts_out = num_hosts;
@@ -1477,23 +1523,27 @@ int make_dirs(void)
 	int rv;
 
 	old_umask = umask(0022);
-	rv = mkdir("/var/run/sync_manager", 0777);
+	rv = mkdir(SM_RUN_DIR, 0777);
 	if (rv < 0 && errno != EEXIST)
 		goto out;
 
-	rv = mkdir("/var/run/sync_manager/lockfiles", 0777);
+	rv = mkdir(DAEMON_LOCKFILE_DIR, 0777);
 	if (rv < 0 && errno != EEXIST)
 		goto out;
 
-	rv = mkdir("/var/run/sync_manager/sockets", 0777);
+	rv = mkdir(RESOURCE_LOCKFILE_DIR, 0777);
 	if (rv < 0 && errno != EEXIST)
 		goto out;
 
-	rv = mkdir("/var/run/sync_manager/watchdog", 0777);
+	rv = mkdir(DAEMON_SOCKET_DIR, 0777);
 	if (rv < 0 && errno != EEXIST)
 		goto out;
 
-	rv = mkdir("/var/log/sync_manager", 0777);
+	rv = mkdir(DAEMON_WATCHDOG_DIR, 0777);
+	if (rv < 0 && errno != EEXIST)
+		goto out;
+
+	rv = mkdir(SM_LOG_DIR, 0777);
 	if (rv < 0 && errno != EEXIST)
 		goto out;
 
@@ -1510,38 +1560,44 @@ void sigterm_handler(int sig)
 	external_shutdown = 1;
 }
 
-void do_init(char *name, int num_disks, int num_hosts, int max_hosts)
+/* TODO: return an error if init fails on majority */
+
+int do_init(char *resource_id, int num_disks, int num_hosts, int max_hosts)
 {
 	struct token *token;
 	int rv, num_opened;
 
-	rv = create_token(name, num_disks, &token);
+	rv = create_token(resource_id, num_disks, &token);
 	if (rv < 0) {
 		log_error(NULL, "create token failed");
-		return;
+		return rv;
 	}
 
 	num_opened = open_disks(token);
 	if (!majority_disks(token, num_opened)) {
 		log_error(token, "cannot open majority of disks");
+		rv = -1;
 		goto out;
 	}
 
 	rv = disk_paxos_init(token, num_hosts, max_hosts);
-	if (rv < 0) {
+	if (rv < 0)
 		log_error(token, "cannot initialize disks");
-	}
  out:
 	free(token->disks);
 	free(token);
+
+	return rv;
 }
 
 int main(int argc, char *argv[])
 {
-	char token_name[NAME_ID_SIZE + 1];
+	char resource_id[NAME_ID_SIZE + 1];
 	int num_disks = 0;
 	int num_hosts = 0, max_hosts = 0; /* only used for do_init */
 	int rv, num;
+
+	memset(&resource_id, 0, sizeof(resource_id));
 
 	/* default logging: LOG_ERR and up to stderr, logfile and syslog */
 
@@ -1563,7 +1619,7 @@ int main(int argc, char *argv[])
 	to.stable_poll_ms = 2000;
 	to.unstable_poll_ms = 500;
 
-	rv = read_args(argc, argv, token_name, &num_disks, &num_hosts, &max_hosts);
+	rv = read_args(argc, argv, resource_id, &num_disks, &num_hosts, &max_hosts);
 	if (rv < 0)
 		goto out;
 
@@ -1571,27 +1627,27 @@ int main(int argc, char *argv[])
 	if (rv < 0)
 		goto out;
 
-	rv = lockfile();
-	if (rv < 0)
-		goto out;
-
 	if (opt_init) {
-		do_init(token_name, num_disks, num_hosts, max_hosts);
-		goto out_lockfile;
+		rv = do_init(resource_id, num_disks, num_hosts, max_hosts);
+		goto out;
 	}
 
 	signal(SIGTERM, sigterm_handler);
+
+	rv = lockfile(DAEMON_LOCKFILE_DIR, sm_id);
+	if (rv < 0)
+		goto out;
 
 	rv = setup_listener();
 	if (rv < 0)
 		goto out_lockfile;
 
-	if (num_disks) {
+	if (resource_id[0]) {
 		rv = touch_watchdog();
 		if (rv < 0)
 			goto out_lockfile;
 
-		rv = add_lease_thread(token_name, num_disks, &num);
+		rv = add_lease_thread(resource_id, num_disks, &num);
 		if (rv < 0)
 			goto out_watchdog;
 
@@ -1615,7 +1671,7 @@ int main(int argc, char *argv[])
  out_watchdog:
 	unlink_watchdog();
  out_lockfile:
-	unlink(lockfile_path);
+	unlink_lockfile(DAEMON_LOCKFILE_DIR, sm_id);
  out:
 	return rv;
 }

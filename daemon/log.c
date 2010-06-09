@@ -46,7 +46,7 @@ static FILE *logfile_fp;
 extern int log_logfile_priority;
 extern int log_syslog_priority;
 extern int log_stderr_priority;
-extern char resource_id[NAME_ID_SIZE + 1];
+extern char sm_id[NAME_ID_SIZE + 1];
 
 static void _log_save_dump(int level, int len)
 {
@@ -98,12 +98,12 @@ void log_level(struct token *token, int level, char *fmt, ...)
 	int len = LOG_STR_LEN - 2; /* leave room for \n\0 */
 
 	memset(name, 0, sizeof(name));
-	snprintf(name, NAME_ID_SIZE, "%s", token ? token->name : "-");
+	snprintf(name, NAME_ID_SIZE, "%s", token ? token->resource_id: "-");
 
 	pthread_mutex_lock(&log_mutex);
 
 	ret = snprintf(log_str + pos, len - pos, "%s %ld %s ",
-		       resource_id, time(NULL), name);
+		       sm_id, time(NULL), name);
 	pos += ret;
 
 	va_start(ap, fmt);
@@ -211,7 +211,7 @@ int setup_logging(void)
 	int fd;
 
 	snprintf(logfile_path, PATH_MAX,
-		 "/var/log/sync_manager/%s", resource_id);
+		 "/var/log/sync_manager/%s", sm_id);
 
 	logfile_fp = fopen(logfile_path, "a+");
 	if (logfile_fp) {

@@ -42,8 +42,7 @@ struct paxos_disk {
 struct token {
 	int num;
 	int num_disks;
-	uint32_t type;
-	char name[NAME_ID_SIZE];
+	char resource_id[NAME_ID_SIZE];
 	struct paxos_disk *disks;
 };
 
@@ -51,16 +50,21 @@ struct token {
    uint64 aligned on 8 byte boundaries,
    uint32 aligned on 4 byte boundaries, etc */
 
+/* NB. adjust LEADER_COMPARE_LEN when changing this struct.
+   LEADER_COMPARE_LEN should include everything up through
+   the end of resource_id. */
+
+/* TODO: verify that timestamp should be excluded from leader comparison */
+
 struct leader_record {
-	uint64_t owner_id; /* host_id of owner, host_id's are 1-255 */
+	uint64_t owner_id; /* host_id of owner */
 	uint64_t lver;
 	uint64_t num_hosts;
 	uint64_t max_hosts;
 	uint32_t cluster_mode; /* what's this? */
 	uint32_t version;
 	uint32_t pad1;
-	uint32_t token_type;
-	char token_name[NAME_ID_SIZE]; /* object being locked */
+	char resource_id[NAME_ID_SIZE]; /* resource being locked */
 	uint64_t timestamp;
 	uint32_t checksum; /* TODO */
 	uint32_t pad2;

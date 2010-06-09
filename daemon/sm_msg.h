@@ -23,7 +23,7 @@ struct sm_header {
 	uint32_t seq;
 	uint32_t data;
 	uint32_t unused;
-	char resource_id[NAME_ID_SIZE];
+	char sm_id[NAME_ID_SIZE];
 };
 
 struct sm_info {
