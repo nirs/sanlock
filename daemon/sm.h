@@ -9,9 +9,9 @@
 
 #define DISK_PATH_LEN 1024
 
-/* host id's 1-254 */
+/* default num_hosts and host_id range */
 
-#define MAX_HOSTS 254
+#define DEFAULT_MAX_HOSTS 2000
 
 /* does not include terminating null byte */
 

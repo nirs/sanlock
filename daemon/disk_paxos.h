@@ -92,6 +92,6 @@ int disk_paxos_transfer(struct token *token, int hostid,
 int disk_paxos_release(struct token *token,
 		       struct leader_record *leader_last,
 		       struct leader_record *leader_ret);
-int disk_paxos_init(struct token *token, int num_hosts);
+int disk_paxos_init(struct token *token, int num_hosts, int max_hosts);
 
 #endif

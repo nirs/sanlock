@@ -340,7 +340,7 @@ int run_disk_paxos(struct token *token, int host_id, uint64_t inp,
 		   int num_hosts, uint64_t lver,
 		   struct paxos_dblock *dblock_out)
 {
-	struct paxos_dblock bk[MAX_HOSTS];
+	struct paxos_dblock bk[num_hosts];
 	struct paxos_dblock bk_max;
 	struct paxos_dblock dblock;
 	int num_disks = token->num_disks;
@@ -386,7 +386,7 @@ int run_disk_paxos(struct token *token, int host_id, uint64_t inp,
 		dblock.inp = NO_VAL;
 		dblock.lver = lver;
 	} else {
-		dblock.mbal += MAX_HOSTS; /* or num_hosts? */
+		dblock.mbal += num_hosts;
 	}
 
 	/*
@@ -902,7 +902,7 @@ int disk_paxos_transfer(struct token *token, int hostid,
 	return -1;
 }
 
-int disk_paxos_init(struct token *token, int num_hosts)
+int disk_paxos_init(struct token *token, int num_hosts, int max_hosts)
 {
 	struct leader_record leader;
 	struct request_record req;
@@ -915,14 +915,14 @@ int disk_paxos_init(struct token *token, int num_hosts)
 
 	leader.timestamp = LEASE_FREE;
 	leader.num_hosts = num_hosts;
-	leader.max_hosts = MAX_HOSTS;
+	leader.max_hosts = max_hosts;
 	leader.token_type = token->type;
 	strncpy(leader.token_name, token->name, NAME_ID_SIZE);
 
 	for (d = 0; d < token->num_disks; d++) {
 		write_leader(token, &token->disks[d], &leader);
 		write_request(token, &token->disks[d], &req);
-		for (q = 0; q < MAX_HOSTS; q++)
+		for (q = 0; q < max_hosts; q++)
 			write_dblock(token, &token->disks[d], q, &dblock);
 	}
 
