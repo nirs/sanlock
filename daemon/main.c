@@ -46,7 +46,6 @@ char command[COMMAND_MAX];
 char killscript[COMMAND_MAX];
 char resource_id[NAME_ID_SIZE + 1];
 int our_host_id;
-int num_hosts;
 struct paxos_disk tmp_disks[MAX_DISKS];
 int cmd_argc;
 char **cmd_argv;
@@ -1253,14 +1252,14 @@ void print_usage(void)
 	printf("  -S <level>		write logging at level and up to syslog (-1 none)\n");
 	printf("  -r <name>		resource id\n");
 	printf("  -i <num>		local host id\n");
-	printf("  -n <num>		number of hosts\n");
 	printf("  -t <name>		token (lease) name\n");
 	printf("  -d <path>:<offset>	disk path and offset\n");
 	printf("  -k <path>		command to stop supervised process\n");
 	printf("  -w <num>		enable (1) or disable (0) using watchdog\n");
 	printf("  -c <path> <args>	run command with args, -c must be final option\n");
 	printf("\nInitialize disk blocks:\n");
-	printf("sync_manager -I -r <name> -t <name> -n <num> -d <path>:<offset>...\n");
+	printf("sync_manager -I -h <num_hosts> -r <name> -t <name> -d <path>:<offset>...\n");
+	printf("  -h <num_hosts>	the maximum host id that will initially use the lease\n");
 }
 
 int add_tmp_disk(int d, char *arg)
@@ -1305,7 +1304,8 @@ int add_tmp_disk(int d, char *arg)
 
 #define RELEASE_VERSION "0.0"
 
-int read_args(int argc, char *argv[], char *token_name, int *num_disks_out)
+int read_args(int argc, char *argv[], char *token_name, int *num_disks_out,
+	      int *num_hosts_out)
 {
 	char optchar;
 	char *optarg;
@@ -1313,6 +1313,7 @@ int read_args(int argc, char *argv[], char *token_name, int *num_disks_out)
 	char *arg1 = argv[1];
 	int optarg_used;
 	int num_disks = 0;
+	int num_hosts = 0;
 	int i, j, len, rv;
 	int begin_command = 0;
 
@@ -1360,7 +1361,7 @@ int read_args(int argc, char *argv[], char *token_name, int *num_disks_out)
 		case 'i':
 			our_host_id = atoi(optarg);
 			break;
-		case 'n':
+		case 'h':
 			num_hosts = atoi(optarg);
 			break;
 		case 't':
@@ -1445,15 +1446,21 @@ int read_args(int argc, char *argv[], char *token_name, int *num_disks_out)
 		return -EINVAL;
 	}
 
+	if (opt_init && !num_hosts) {
+		log_error(NULL, "num_hosts required from 1-%d", MAX_HOSTS);
+		return -EINVAL;
+	}
+
 	if (!resource_id[0]) {
 		log_error(NULL, "resource id option (-r) required");
 		return -EINVAL;
 	}
 
-	log_debug(NULL, "resource_id %s token_name %s num_hosts %d our_host_id %d",
-		  resource_id, token_name, num_hosts, our_host_id);
+	log_debug(NULL, "resource_id %s token_name %s our_host_id %d",
+		  resource_id, token_name, our_host_id);
 
 	*num_disks_out = num_disks;
+	*num_hosts_out = num_hosts;
 	return 0;
 }
 
@@ -1496,7 +1503,7 @@ void sigterm_handler(int sig)
 	external_shutdown = 1;
 }
 
-void do_init(char *name, int num_disks)
+void do_init(char *name, int num_disks, int num_hosts)
 {
 	struct token *token;
 	int rv, num_opened;
@@ -1525,7 +1532,7 @@ void do_init(char *name, int num_disks)
 int main(int argc, char *argv[])
 {
 	char token_name[NAME_ID_SIZE + 1];
-	int num_disks = 0;
+	int num_disks = 0, num_hosts = 0;
 	int rv, num;
 
 	/* default logging: LOG_ERR and up to stderr, logfile and syslog */
@@ -1548,7 +1555,7 @@ int main(int argc, char *argv[])
 	to.stable_poll_ms = 2000;
 	to.unstable_poll_ms = 500;
 
-	rv = read_args(argc, argv, token_name, &num_disks);
+	rv = read_args(argc, argv, token_name, &num_disks, &num_hosts);
 	if (rv < 0)
 		goto out;
 
@@ -1561,7 +1568,7 @@ int main(int argc, char *argv[])
 		goto out;
 
 	if (opt_init) {
-		do_init(token_name, num_disks);
+		do_init(token_name, num_disks, num_hosts);
 		goto out_lockfile;
 	}
 

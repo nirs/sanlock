@@ -549,6 +549,13 @@ int run_disk_paxos(struct token *token, int host_id, uint64_t inp,
 	return DP_OK;
 }
 
+int verify_leader(struct token *token, struct paxos_disk *disk,
+		  struct leader_record *lr)
+{
+	/* TODO: check magic number, version, max_hosts, checksum */
+	return 0;
+}
+
 int leaders_match(struct leader_record *a, struct leader_record *b)
 {
 	if (!memcmp(a, b, LEADER_COMPARE_LEN))
@@ -599,6 +606,11 @@ int get_prev_leader(struct token *token, int force,
 		rv = read_leader(token, &token->disks[d], &leaders[d]);
 		if (rv < 0)
 			continue;
+
+		rv = verify_leader(token, &token->disks[d], &leaders[d]);
+		if (rv < 0)
+			continue;
+
 		num_reads++;
 
 		leader_reps[d] = 1;
@@ -812,7 +824,7 @@ int disk_paxos_acquire(struct token *token, int force,
 	new_leader.token_type = token->type;
 	new_leader.lver = prev_leader.lver + 1; /* req.lver */
 	new_leader.num_hosts = prev_leader.num_hosts;
-	new_leader.num_alloc_slots = prev_leader.num_alloc_slots; /* ? */
+	new_leader.max_hosts = prev_leader.max_hosts;
 
 	error = run_disk_paxos(token, our_host_id, our_host_id,
 			       new_leader.num_hosts, new_leader.lver, &dblock);
@@ -832,6 +844,7 @@ int disk_paxos_acquire(struct token *token, int force,
 	new_leader.owner_id = dblock.inp;
 	new_leader.lver = dblock.lver;
 	new_leader.timestamp = time(NULL);
+	/* TODO: new_leader.checksum = leader_checksum(&new_leader); */
 
 	error = write_new_leader(token, &new_leader);
 	if (error < 0)
@@ -902,6 +915,7 @@ int disk_paxos_init(struct token *token, int num_hosts)
 
 	leader.timestamp = LEASE_FREE;
 	leader.num_hosts = num_hosts;
+	leader.max_hosts = MAX_HOSTS;
 	leader.token_type = token->type;
 	strncpy(leader.token_name, token->name, NAME_ID_SIZE);
 

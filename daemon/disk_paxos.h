@@ -55,9 +55,9 @@ struct leader_record {
 	uint64_t owner_id; /* host_id of owner, host_id's are 1-255 */
 	uint64_t lver;
 	uint64_t num_hosts;
-	uint64_t num_alloc_slots; /* what's this? */
+	uint64_t max_hosts;
 	uint32_t cluster_mode; /* what's this? */
-	uint32_t version; /* what's this? */
+	uint32_t version;
 	uint32_t pad1;
 	uint32_t token_type;
 	char token_name[NAME_ID_SIZE]; /* object being locked */
