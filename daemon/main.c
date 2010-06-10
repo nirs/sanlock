@@ -46,11 +46,9 @@ char command[COMMAND_MAX];
 char killscript[COMMAND_MAX];
 char sm_id[NAME_ID_SIZE + 1];
 int our_host_id;
-struct paxos_disk tmp_disks[MAX_DISKS];
 int cmd_argc;
 char **cmd_argv;
 
-int opt_init;
 int opt_watchdog = 1;
 int supervise_pid;
 int killscript_pid;
@@ -82,7 +80,6 @@ struct lease_status {
 	char resource_id[NAME_ID_SIZE + 1];
 };
 
-#define MAX_LEASES 64
 pthread_t lease_threads[MAX_LEASES];
 pthread_mutex_t lease_status_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t lease_status_cond = PTHREAD_COND_INITIALIZER;
@@ -838,9 +835,7 @@ void *lease_thread(void *arg)
 	return NULL;
 }
 
-/* the disk_paxos structs in global tmp_disks */
-
-int create_token(char *resource_id, int num_disks, struct token **token_out)
+int create_token(int num_disks, struct token **token_out)
 {
 	struct token *token;
 	struct paxos_disk *disks;
@@ -856,27 +851,16 @@ int create_token(char *resource_id, int num_disks, struct token **token_out)
 		return -ENOMEM;
 	}
 
-	memcpy(disks, &tmp_disks, num_disks * sizeof(struct paxos_disk));
 	token->disks = disks;
 	token->num_disks = num_disks;
-	strncpy(token->resource_id, resource_id, NAME_ID_SIZE);
-
-	memset(&tmp_disks, 0, num_disks * sizeof(struct paxos_disk));
 	*token_out = token;
 	return 0;
 }
 
-int add_lease_thread(char *resource_id, int num_disks, int *num_ret)
+int add_lease_thread(struct token *token, int *num_ret)
 {
-	struct token *token;
 	pthread_attr_t attr;
 	int i, rv, num, found = 0;
-
-	rv = create_token(resource_id, num_disks, &token);
-	if (rv < 0) {
-		log_error(NULL, "create token failed");
-		return rv;
-	}
 
 	/* find an unused lease num, only main loop accesses
 	   tokens[] and lease_threads[], no locking needed */
@@ -903,7 +887,7 @@ int add_lease_thread(char *resource_id, int num_disks, int *num_ret)
 	for (i = 0; i < MAX_LEASES; i++) {
 		if (!lease_status[i].thread_running)
 			continue;
-		if (strcmp(lease_status[i].resource_id, resource_id))
+		if (strcmp(lease_status[i].resource_id, token->resource_id))
 			continue;
 		pthread_mutex_unlock(&lease_status_mutex);
 		rv = -EINVAL;
@@ -915,7 +899,7 @@ int add_lease_thread(char *resource_id, int num_disks, int *num_ret)
 		rv = -EINVAL;
 		goto out;
 	}
-	strncpy(lease_status[num].resource_id, resource_id, NAME_ID_SIZE);
+	strncpy(lease_status[num].resource_id, token->resource_id, NAME_ID_SIZE);
 	pthread_mutex_unlock(&lease_status_mutex);
 
 	pthread_attr_init(&attr);
@@ -1287,62 +1271,98 @@ void print_usage(void)
 	printf("\n");
 }
 
-int add_tmp_disk(int d, char *arg)
+/* arg = <resource_id>:<path>:<offset>[:<path>:<offset>...] */
+
+int add_token_arg(char *arg, int *token_count, struct token *token_args[])
 {
-	char *p;
-	int rv;
+	struct token *token;
+	char sub[DISK_PATH_LEN + 1];
+	int sub_count;
+	int colons;
+	int num_disks;
+	int rv, i, j, d;
+	int len = strlen(arg);
 
-	if (d > MAX_DISKS) {
-		log_error(NULL, "disk option (-d) limit is %d", MAX_DISKS);
-		return -EINVAL;
+	if (*token_count >= MAX_LEASE_ARGS) {
+		log_error(NULL, "lease args over max %d", MAX_LEASE_ARGS);
+		return -1;
 	}
 
-	p = strstr(arg, ":");
-	if (!p) {
-		log_error(NULL, "disk option (-d) missing :offset");
-		return -EINVAL;
+	colons = 0;
+	for (i = 0; i < strlen(arg); i++) {
+		if (arg[i] == ':')
+			colons++;
+	}
+	if (!colons || (colons % 2)) {
+		log_error(NULL, "invalid lease arg");
+		return -1;
+	}
+	num_disks = colons / 2;
+
+	if (num_disks > MAX_DISKS) {
+		log_error(NULL, "invalid lease arg num_disks %d", num_disks);
+		return -1;
 	}
 
-	*p = '\0';
-	p++;
+	rv = create_token(num_disks, &token);
+	if (rv < 0) {
+		log_error(NULL, "lease arg create num_disks %d", num_disks);
+		return rv;
+	}
 
-	strncpy(tmp_disks[d].path, arg, DISK_PATH_LEN - 1);
+	token_args[*token_count] = token;
+	(*token_count)++;
 
-	rv = sscanf(p, "%llu", (unsigned long long *)&tmp_disks[d].offset);
-	if (rv != 1) {
-		log_error(NULL, "disk option (-d) invalid offset");
-		return -EINVAL;
+	d = 0;
+	sub_count = 0;
+	j = 0;
+	memset(sub, 0, sizeof(sub));
+
+	for (i = 0; i < len + 1; i++) {
+		if (i < len && arg[i] != ':') {
+			if (j >= DISK_PATH_LEN) {
+				log_error(NULL, "lease arg length error");
+				goto fail;
+			}
+			sub[j++] = arg[i];
+			continue;
+		}
+
+		/* do something with sub when we hit ':' or end of arg,
+		   first sub is id, odd sub is path, even sub is offset */
+
+		if (!sub_count) {
+			if (strlen(sub) > NAME_ID_SIZE) {
+				log_error(NULL, "lease arg id length error");
+				goto fail;
+			}
+			strncpy(token->resource_id, sub, NAME_ID_SIZE);
+		} else if (sub_count % 2) {
+			if (strlen(sub) > DISK_PATH_LEN - 1) {
+				log_error(NULL, "lease arg path length error");
+				goto fail;
+			}
+			strncpy(token->disks[d].path, sub, DISK_PATH_LEN - 1);
+		} else {
+			rv = sscanf(sub, "%llu", (unsigned long long *)&token->disks[d].offset);
+			if (rv != 1) {
+				log_error(NULL, "lease arg offset error");
+				goto fail;
+			}
+			d++;
+		}
+
+		sub_count++;
+		j = 0;
+		memset(sub, 0, sizeof(sub));
 	}
 
 	return 0;
-}
 
-/* <resource_id>:<path>:<offset>[:<path>:<offset>...] */
-
-int parse_lease_arg(char *arg, char *resource_id, int *num_disks)
-{
-	char *p;
-	int rv;
-
-	p = strstr(arg, ":");
-	if (!p) {
-		log_error(NULL, "invalid lease arg");
-		return -EINVAL;
-	}
-
-	*p = '\0';
-	p++;
-
-	strncpy(resource_id, arg, NAME_ID_SIZE);
-
-	/* TODO: this only handles a single <path>:<offset> */
-
-	rv = add_tmp_disk(*num_disks, p);
-
-	if (!rv)
-		(*num_disks)++;
-
-	return rv;
+ fail:
+	free(token->disks);
+	free(token);
+	return -1;
 }
 
 /* TODO: option to start up as the receiving side of a transfer
@@ -1357,17 +1377,15 @@ int parse_lease_arg(char *arg, char *resource_id, int *num_disks)
 
 #define RELEASE_VERSION "0.0"
 
-int read_args(int argc, char *argv[], char *resource_id, int *num_disks_out,
-	      int *num_hosts_out, int *max_hosts_out)
+int read_args(int argc, char *argv[],
+	      int *token_count, struct token *token_args[],
+	      int *init, int *init_num_hosts, int *init_max_hosts)
 {
 	char optchar;
 	char *optarg;
 	char *p;
 	char *arg1 = argv[1];
 	int optarg_used;
-	int num_disks = 0;
-	int num_hosts = 0;
-	int max_hosts = DEFAULT_MAX_HOSTS;
 	int i, j, len, rv;
 	int begin_command = 0;
 
@@ -1409,20 +1427,26 @@ int read_args(int argc, char *argv[], char *resource_id, int *num_disks_out,
 		case 'S':
 			log_syslog_priority = atoi(optarg);
 			break;
+
+		case 'I':
+			*init = 1;
+			optarg_used = 0;
+			break;
+		case 'h':
+			*init_num_hosts = atoi(optarg);
+			break;
+		case 'H':
+			*init_max_hosts = atoi(optarg);
+			break;
+
 		case 'n':
 			strncpy(sm_id, optarg, NAME_ID_SIZE);
 			break;
 		case 'i':
 			our_host_id = atoi(optarg);
 			break;
-		case 'h':
-			num_hosts = atoi(optarg);
-			break;
-		case 'H':
-			max_hosts = atoi(optarg);
-			break;
 		case 'l':
-			rv = parse_lease_arg(optarg, resource_id, &num_disks);
+			rv = add_token_arg(optarg, token_count, token_args);
 			if (rv < 0)
 				return rv;
 			break;
@@ -1431,10 +1455,6 @@ int read_args(int argc, char *argv[], char *resource_id, int *num_disks_out,
 			break;
 		case 'w':
 			opt_watchdog = atoi(optarg);
-			break;
-		case 'I':
-			opt_init = 1;
-			optarg_used = 0;
 			break;
 		case 'c':
 			begin_command = 1;
@@ -1494,24 +1514,16 @@ int read_args(int argc, char *argv[], char *resource_id, int *num_disks_out,
 		strncpy(command, cmd_argv[0], COMMAND_MAX - 1);
 	}
 
-	if (!opt_init && !our_host_id) {
-		log_error(NULL, "local host id required from 1-%d", max_hosts);
+	if (!*init && !our_host_id) {
+		log_error(NULL, "local host id required");
 		return -EINVAL;
 	}
 
-	if (opt_init && !num_hosts) {
-		log_error(NULL, "num_hosts required from 1-%d", max_hosts);
-		return -EINVAL;
-	}
-
-	if (!opt_init && !sm_id[0]) {
+	if (!*init && !sm_id[0]) {
 		log_error(NULL, "name option (-n) required");
 		return -EINVAL;
 	}
 
-	*num_disks_out = num_disks;
-	*num_hosts_out = num_hosts;
-	*max_hosts_out = max_hosts;
 	return 0;
 }
 
@@ -1558,44 +1570,39 @@ void sigterm_handler(int sig)
 	external_shutdown = 1;
 }
 
-/* TODO: return an error if init fails on majority */
-
-int do_init(char *resource_id, int num_disks, int num_hosts, int max_hosts)
+int do_init(int token_count, struct token *token_args[],
+	    int init_num_hosts, int init_max_hosts)
 {
 	struct token *token;
-	int rv, num_opened;
+	int num_opened;
+	int i, rv = 0;
 
-	rv = create_token(resource_id, num_disks, &token);
-	if (rv < 0) {
-		log_error(NULL, "create token failed");
-		return rv;
+	for (i = 0; i < token_count; i++) {
+		token = token_args[i];
+
+		num_opened = open_disks(token);
+		if (!majority_disks(token, num_opened)) {
+			log_error(token, "cannot open majority of disks");
+			rv = -1;
+			continue;
+		}
+
+		rv = disk_paxos_init(token, init_num_hosts, init_max_hosts);
+		if (rv < 0) {
+			log_error(token, "cannot initialize disks");
+			rv = -1;
+		}
 	}
-
-	num_opened = open_disks(token);
-	if (!majority_disks(token, num_opened)) {
-		log_error(token, "cannot open majority of disks");
-		rv = -1;
-		goto out;
-	}
-
-	rv = disk_paxos_init(token, num_hosts, max_hosts);
-	if (rv < 0)
-		log_error(token, "cannot initialize disks");
- out:
-	free(token->disks);
-	free(token);
 
 	return rv;
 }
 
 int main(int argc, char *argv[])
 {
-	char resource_id[NAME_ID_SIZE + 1];
-	int num_disks = 0;
-	int num_hosts = 0, max_hosts = 0; /* only used for do_init */
+	struct token *token_args[MAX_LEASE_ARGS];
+	int token_count = 0;
+	int init = 0, init_num_hosts = 0, init_max_hosts = DEFAULT_MAX_HOSTS;
 	int fd, rv, num;
-
-	memset(&resource_id, 0, sizeof(resource_id));
 
 	/* default logging: LOG_ERR and up to stderr, logfile and syslog */
 
@@ -1604,6 +1611,10 @@ int main(int argc, char *argv[])
 	log_syslog_priority = LOG_ERR;
 
 	setup_logging();
+
+	rv = make_dirs();
+	if (rv < 0)
+		goto out;
 
 	to.lease_timeout_seconds = 60;
 	to.lease_renewal_warn_seconds = 30;
@@ -1617,16 +1628,14 @@ int main(int argc, char *argv[])
 	to.stable_poll_ms = 2000;
 	to.unstable_poll_ms = 500;
 
-	rv = read_args(argc, argv, resource_id, &num_disks, &num_hosts, &max_hosts);
+	rv = read_args(argc, argv, &token_count, token_args,
+		       &init, &init_num_hosts, &init_max_hosts);
 	if (rv < 0)
 		goto out;
 
-	rv = make_dirs();
-	if (rv < 0)
-		goto out;
-
-	if (opt_init) {
-		rv = do_init(resource_id, num_disks, num_hosts, max_hosts);
+	if (init) {
+		rv = do_init(token_count, token_args,
+			     init_num_hosts, init_max_hosts);
 		goto out;
 	}
 
@@ -1640,12 +1649,14 @@ int main(int argc, char *argv[])
 	if (rv < 0)
 		goto out_lockfile;
 
-	if (resource_id[0]) {
+	if (token_count) {
 		rv = touch_watchdog();
 		if (rv < 0)
 			goto out_lockfile;
 
-		rv = add_lease_thread(resource_id, num_disks, &num);
+		/* TODO: support more than one initial lease */
+
+		rv = add_lease_thread(token_args[0], &num);
 		if (rv < 0)
 			goto out_watchdog;
 
