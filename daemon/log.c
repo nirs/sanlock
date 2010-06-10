@@ -210,8 +210,7 @@ int setup_logging(void)
 {
 	int fd;
 
-	snprintf(logfile_path, PATH_MAX,
-		 "/var/log/sync_manager/%s", sm_id);
+	snprintf(logfile_path, PATH_MAX, "%s/%s", SM_LOG_DIR, sm_id);
 
 	logfile_fp = fopen(logfile_path, "a+");
 	if (logfile_fp) {

@@ -21,6 +21,13 @@
 
 #define COMMAND_MAX 1024
 
+#define SM_RUN_DIR "/var/run/sync_manager"
+#define SM_LOG_DIR "/var/log/sync_manager"
+#define DAEMON_WATCHDOG_DIR "/var/run/sync_manager/watchdog"
+#define DAEMON_SOCKET_DIR "/var/run/sync_manager/sockets"
+#define DAEMON_LOCKFILE_DIR "/var/run/sync_manager/daemon_lockfiles/"
+#define RESOURCE_LOCKFILE_DIR "/var/run/sync_manager/resource_lockfiles/"
+
 /*
  * lease_timeout_seconds
  * disk paxos takes over lease if it's not been renewed for this long

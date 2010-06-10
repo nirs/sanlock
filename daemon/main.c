@@ -24,13 +24,6 @@
 #include "disk_paxos.h"
 #include "log.h"
 
-#define SM_RUN_DIR "/var/run/sync_manager"
-#define SM_LOG_DIR "/var/log/sync_manager"
-#define DAEMON_WATCHDOG_DIR "/var/run/sync_manager/watchdog"
-#define DAEMON_SOCKET_DIR "/var/run/sync_manager/sockets"
-#define DAEMON_LOCKFILE_DIR "/var/run/sync_manager/daemon_lockfiles/"
-#define RESOURCE_LOCKFILE_DIR "/var/run/sync_manager/resource_lockfiles/"
-
 #define CLIENT_NALLOC 2
 
 struct client {
@@ -171,6 +164,62 @@ int client_add(int fd, void (*workfn)(int ci), void (*deadfn)(int ci))
 
 	client_alloc();
 	goto again;
+}
+
+int lockfile(struct token *token, char *dir, char *name)
+{
+	char path[PATH_MAX];
+	char buf[16];
+	struct flock lock;
+	int fd, rv;
+
+	snprintf(path, PATH_MAX, "%s/%s", dir, name);
+
+	fd = open(path, O_CREAT|O_WRONLY|O_CLOEXEC, 0666);
+	if (fd < 0) {
+		log_error(token, "lockfile open error %d", errno);
+		return -1;
+	}
+
+	lock.l_type = F_WRLCK;
+	lock.l_start = 0;
+	lock.l_whence = SEEK_SET;
+	lock.l_len = 0;
+
+	rv = fcntl(fd, F_SETLK, &lock);
+	if (rv < 0) {
+		log_error(token, "lockfile setlk error %d", errno);
+		goto fail;
+	}
+
+	rv = ftruncate(fd, 0);
+	if (rv < 0) {
+		log_error(token, "lockfile truncate error %d", errno);
+		goto fail;
+	}
+
+	memset(buf, 0, sizeof(buf));
+	snprintf(buf, sizeof(buf), "%d\n", getpid());
+
+	rv = write(fd, buf, strlen(buf));
+	if (rv <= 0) {
+		log_error(token, "lockfile write error %d", errno);
+		goto fail;
+	}
+
+	return fd;
+ fail:
+	close(fd);
+	return -1;
+}
+
+void unlink_lockfile(int fd, char *dir, char *name)
+{
+	char path[PATH_MAX];
+
+	snprintf(path, PATH_MAX, "%s/%s", dir, name);
+	unlink(path);
+	close(fd);
 }
 
 /* return number of opened disks */
@@ -713,27 +762,27 @@ void set_thread_running(int num, int val)
 	pthread_mutex_unlock(&lease_status_mutex);
 }
 
-/* TODO: take lockfile on resource_id at beginning and unlink it at end;
-   prevents two local sm instances from trying to use the same resource.
-   Also possibly take lockfiles for disks/offsets to catch errors
-   in overlapping disk:offset args.  Do this in add_lease_thread()?
-   Think about what happens to posix locks with threads and forking. */
-
 void *lease_thread(void *arg)
 {
 	struct token *token = (struct token *)arg;
 	struct leader_record leader;
 	struct timespec ts;
 	int num = token->num;
-	int rv, stop, num_opened;
+	int fd, rv, stop, num_opened;
 
 	set_thread_running(num, 1);
+
+	fd = lockfile(token, RESOURCE_LOCKFILE_DIR, token->resource_id);
+	if (fd < 0) {
+		set_lease_status(num, OP_ACQUIRE, -EBADF, 0);
+		goto out_run;
+	}
 
 	num_opened = open_disks(token);
 	if (!majority_disks(token, num_opened)) {
 		log_error(token, "cannot open majority of disks");
 		set_lease_status(num, OP_ACQUIRE, -ENODEV, 0);
-		goto out_running;
+		goto out_lockfile;
 	}
 
 	rv = acquire_lease(token, &leader);
@@ -782,7 +831,9 @@ void *lease_thread(void *arg)
 
  out_disks:
 	close_disks(token);
- out_running:
+ out_lockfile:
+	unlink_lockfile(fd, RESOURCE_LOCKFILE_DIR, token->resource_id);
+ out_run:
 	set_thread_running(num, 0);
 	return NULL;
 }
@@ -1208,59 +1259,6 @@ int setup_listener(void)
 	return 0;
 }
 
-int lockfile(char *dir, char *name)
-{
-	char path[PATH_MAX];
-	char buf[16];
-	struct flock lock;
-	int fd, error;
-
-	snprintf(path, PATH_MAX, "%s/%s", dir, name);
-
-	fd = open(path, O_CREAT|O_WRONLY|O_CLOEXEC, 0666);
-	if (fd < 0) {
-		log_error(NULL, "cannot open/create lockfile %s", path);
-		return fd;
-	}
-
-	lock.l_type = F_WRLCK;
-	lock.l_start = 0;
-	lock.l_whence = SEEK_SET;
-	lock.l_len = 0;
-
-	error = fcntl(fd, F_SETLK, &lock);
-	if (error) {
-		log_error(NULL, "lockfile busy");
-		return error;
-	}
-
-	error = ftruncate(fd, 0);
-	if (error) {
-		log_error(NULL, "cannot clear lockfile %s", path);
-		return error;
-	}
-
-	memset(buf, 0, sizeof(buf));
-	snprintf(buf, sizeof(buf), "%d\n", getpid());
-
-	error = write(fd, buf, strlen(buf));
-	if (error <= 0) {
-		log_error(NULL, "cannot write lockfile %s", path);
-		return -1;
-	}
-
-	return 0;
-}
-
-void unlink_lockfile(char *dir, char *name)
-{
-	char path[PATH_MAX];
-
-	snprintf(path, PATH_MAX, "%s/%s", dir, name);
-
-	unlink(path);
-}
-
 void print_usage(void)
 {
 	printf("Usage:\n");
@@ -1595,7 +1593,7 @@ int main(int argc, char *argv[])
 	char resource_id[NAME_ID_SIZE + 1];
 	int num_disks = 0;
 	int num_hosts = 0, max_hosts = 0; /* only used for do_init */
-	int rv, num;
+	int fd, rv, num;
 
 	memset(&resource_id, 0, sizeof(resource_id));
 
@@ -1634,8 +1632,8 @@ int main(int argc, char *argv[])
 
 	signal(SIGTERM, sigterm_handler);
 
-	rv = lockfile(DAEMON_LOCKFILE_DIR, sm_id);
-	if (rv < 0)
+	fd = lockfile(NULL, DAEMON_LOCKFILE_DIR, sm_id);
+	if (fd < 0)
 		goto out;
 
 	rv = setup_listener();
@@ -1671,7 +1669,7 @@ int main(int argc, char *argv[])
  out_watchdog:
 	unlink_watchdog();
  out_lockfile:
-	unlink_lockfile(DAEMON_LOCKFILE_DIR, sm_id);
+	unlink_lockfile(fd, DAEMON_LOCKFILE_DIR, sm_id);
  out:
 	return rv;
 }
