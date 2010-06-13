@@ -24,24 +24,25 @@ DBlock = namedtuple("DBlock", "mbal bal inp lver")
 DBlock.fromStream = new.instancemethod(partial(_makeFromStream, DBlock, dblockStruct), DBlock, DBlock.__class__)
 DBlock.fromBuffer = new.instancemethod(partial(_makeFromBuffer, DBlock, dblockStruct), DBlock, DBlock.__class__)
 
-leaderRecordStruct = aligneStruct(Struct("QQQQII4xI32sQI4x"))
-LeaderRecord = namedtuple('LeaderRecord', 'ownerID lver numHosts numAllocSlots clusterMode version tokenType tokenName timestamp checksum')
+leaderRecordStruct = aligneStruct(Struct("QQQQII4x32sQI4x"))
+LeaderRecord = namedtuple('LeaderRecord', 'ownerID lver numHosts maxHosts clusterMode version resourceID timestamp checksum')
 
 LeaderRecord.fromStream = new.instancemethod(partial(_makeFromStream, LeaderRecord, leaderRecordStruct), LeaderRecord, LeaderRecord.__class__)
 LeaderRecord.fromBuffer = new.instancemethod(partial(_makeFromBuffer, LeaderRecord, leaderRecordStruct), LeaderRecord, LeaderRecord.__class__)
 
-def driveValidator(value):
-    drives = Validate.list(value)
-    res = []
-    for driveDecl in drives:
-        drive, offset = driveDecl.split(":")
+def leasesValidator(value):
+    rawLeases = Validate.list(value)
+    leases = []
+    for lease in rawLeases:
+        parts = lease.split(":")
+        resourceID = parts[0]
+        disks = []
+        for i in range(1, len(parts), 2):
+            disks.append((parts[i], int(parts[i + 1])))
 
-        drive = Validate.pathExists(drive)
-        offset = Validate.int(offset)
+        leases.append((resourceID, tuple(disks)))
 
-        res.append((drive, offset))
-
-    return res
+    return tuple(leases)
 
 
 nullTerminated = lambda str : str[:str.find("\0")]

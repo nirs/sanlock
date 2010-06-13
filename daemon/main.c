@@ -415,7 +415,7 @@ void *watchdog_thread(void *arg)
 		do_create = 0;
 
 		pthread_mutex_lock(&wd_mutex);
-		do_touch = wd_touch; 
+		do_touch = wd_touch;
 		do_unlink = wd_unlink;
 		pthread_mutex_unlock(&wd_mutex);
 
@@ -1369,7 +1369,7 @@ int add_token_arg(char *arg, int *token_count, struct token *token_args[])
    from another host.  Watch the other host's lease renewals until
    the other host writes our hostid is written in the leader block,
    at which point the lease is ours and we start doing the renewals.
- 
+
    TODO: option to transfer the ownership of all leases to a specified
    hostid, then watch for pid to exit? */
 
@@ -1472,9 +1472,9 @@ int read_args(int argc, char *argv[],
 			break;
 	}
 
-	/* 
+	/*
 	 * the remaining args are for the command
-	 * 
+	 *
 	 * sync_manager -r foo -n 2 -d bar:0 -c /bin/cmd -X -Y -Z
 	 * argc = 12
 	 * loop above breaks with i = 7, argv[7] = "-c"

@@ -13,12 +13,13 @@ def formatPaxoState(disk, offset):
 
     res = StringIO()
     res.write("LEADER\n------\n")
-    for key, val in leader._asdict().iteritems():
+    for key in leader._fields:
+        val = getattr(leader, key)
         if key == "timestamp":
             val = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(val))
-        elif key == "tokenName":
+        elif isinstance(val, str):
             val = nullTerminated(val)
-        res.write("%s:\t%s\n" % (key, val))
+        res.write("%s:\t%s%s\n" % (key, '\t' if len(key) < 7 else '', val))
 
     res.write("\nBLOCKS\n------\n")
     for field in DBlock._fields:
