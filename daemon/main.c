@@ -1482,9 +1482,9 @@ int read_args(int argc, char *argv[],
 	 *
 	 * sync_manager -r foo -n 2 -d bar:0 -c /bin/cmd -X -Y -Z
 	 * argc = 12
-	 * loop above breaks with i = 7, argv[7] = "-c"
+	 * loop above breaks with i = 8, argv[8] = "/bin/cmd"
 	 *
-	 * cmd_argc = 4 = argc (12) - i (7) - 1
+	 * cmd_argc = 4 = argc (12) - i (8)
 	 * cmd_argv[0] = "/bin/cmd"
 	 * cmd_argv[1] = "-X"
 	 * cmd_argv[2] = "-Y"
@@ -1493,7 +1493,7 @@ int read_args(int argc, char *argv[],
 	 */
 
 	if (begin_command) {
-		cmd_argc = argc - i - 1;
+		cmd_argc = argc - i;
 
 		if (cmd_argc < 1) {
 			log_error(NULL, "command option (-c) requires an arg");
@@ -1505,10 +1505,6 @@ int read_args(int argc, char *argv[],
 		if (!cmd_argv)
 			return -ENOMEM;
 		memset(cmd_argv, 0, len);
-
-		/* place i at arg following "-c", e.g. argv[8] "/bin/cmd" */
-		i++;
-		j = 0;
 
 		for (j = 0; j < cmd_argc; j++) {
 			cmd_argv[j] = strdup(argv[i++]);
