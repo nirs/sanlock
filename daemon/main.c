@@ -42,6 +42,9 @@ int log_logfile_priority;
 int log_syslog_priority;
 int log_stderr_priority;
 
+#define ACT_INIT 1
+#define ACT_DAEMON 2
+
 char command[COMMAND_MAX];
 char killscript[COMMAND_MAX];
 char sm_id[NAME_ID_SIZE + 1];
@@ -1251,8 +1254,19 @@ int setup_listener(void)
 void print_usage(void)
 {
 	printf("Usage:\n");
-	printf("sync_manager [options] [-c <path> <args>]\n\n");
-	printf("Options:\n");
+	printf("sync_manager <action> [options]\n\n");
+	printf("actions:\n");
+	printf("  help			print usage\n");
+	printf("  init			initialize a lease disk area\n");
+	printf("  daemon		update leases and monitor pid\n");
+
+	printf("\ninit -h <num_hosts> [-H <max_hosts>] -l LEASE\n");
+	printf("  -h <num_hosts>	max host id that will be able to acquire the lease\n");
+	printf("  -H <max_hosts>	max number of hosts the disk area will support\n");
+	printf("                        (default %d)\n", DEFAULT_MAX_HOSTS);
+	printf("  -l LEASE		lease description, see below\n");
+
+	printf("\ndaemon [options] [-l LEASE] [-c <path> <args>]\n");
 	printf("  -D			print all logging to stderr\n");
 	printf("  -L <level>		write logging at level and up to logfile (-1 none)\n");
 	printf("  -S <level>		write logging at level and up to syslog (-1 none)\n");
@@ -1262,12 +1276,7 @@ void print_usage(void)
 	printf("  -k <path>		command to stop supervised process\n");
 	printf("  -w <num>		enable (1) or disable (0) using watchdog\n");
 	printf("  -c <path> <args>	run command with args, -c must be final option\n");
-	printf("\nInitialize a lease disk area:\n");
-	printf("sync_manager -I -h <num_hosts> [-H <max_hosts>] -l LEASE\n");
-	printf("  -h <num_hosts>	max host id that will be able to acquire the lease\n");
-	printf("  -H <max_hosts>	max number of hosts the disk area will support\n");
-	printf("                        (default %d)\n", DEFAULT_MAX_HOSTS);
-	printf("  -l LEASE		lease description, see below\n");
+
 	printf("\nLEASE = <resource_id>:<path>:<offset>[:<path>:<offset>...]\n");
 	printf("  <resource_id>		name of resource being leased\n");
 	printf("  <path>		disk path\n");
@@ -1343,7 +1352,7 @@ int add_token_arg(char *arg, int *token_count, struct token *token_args[])
 			}
 			strncpy(token->resource_id, sub, NAME_ID_SIZE);
 		} else if (sub_count % 2) {
-			if (strlen(sub) > DISK_PATH_LEN - 1) {
+			if (strlen(sub) > DISK_PATH_LEN-1 || strlen(sub) < 1) {
 				log_error(NULL, "lease arg path length error");
 				goto fail;
 			}
@@ -1370,6 +1379,42 @@ int add_token_arg(char *arg, int *token_count, struct token *token_args[])
 	return -1;
 }
 
+int make_dirs(void)
+{
+	mode_t old_umask;
+	int rv;
+
+	old_umask = umask(0022);
+	rv = mkdir(SM_RUN_DIR, 0777);
+	if (rv < 0 && errno != EEXIST)
+		goto out;
+
+	rv = mkdir(DAEMON_LOCKFILE_DIR, 0777);
+	if (rv < 0 && errno != EEXIST)
+		goto out;
+
+	rv = mkdir(RESOURCE_LOCKFILE_DIR, 0777);
+	if (rv < 0 && errno != EEXIST)
+		goto out;
+
+	rv = mkdir(DAEMON_SOCKET_DIR, 0777);
+	if (rv < 0 && errno != EEXIST)
+		goto out;
+
+	rv = mkdir(DAEMON_WATCHDOG_DIR, 0777);
+	if (rv < 0 && errno != EEXIST)
+		goto out;
+
+	rv = mkdir(SM_LOG_DIR, 0777);
+	if (rv < 0 && errno != EEXIST)
+		goto out;
+
+	rv = 0;
+ out:
+	umask(old_umask);
+	return rv;
+}
+
 /* TODO: option to start up as the receiving side of a transfer
    from another host.  Watch the other host's lease renewals until
    the other host writes our hostid is written in the leader block,
@@ -1384,7 +1429,7 @@ int add_token_arg(char *arg, int *token_count, struct token *token_args[])
 
 int read_args(int argc, char *argv[],
 	      int *token_count, struct token *token_args[],
-	      int *init, int *init_num_hosts, int *init_max_hosts)
+	      int *action, int *init_num_hosts, int *init_max_hosts)
 {
 	char optchar;
 	char *optarg;
@@ -1394,18 +1439,37 @@ int read_args(int argc, char *argv[],
 	int i, j, len, rv;
 	int begin_command = 0;
 
-	if (argc < 2 || !strcmp(arg1, "--help") || !strcmp(arg1, "-h")) {
+	if (argc < 2 || !strcmp(arg1, "help") || !strcmp(arg1, "--help") ||
+	    !strcmp(arg1, "-h")) {
 		print_usage();
 		exit(EXIT_SUCCESS);
 	}
 
-	if (!strcmp(arg1, "--version") || !strcmp(arg1, "-V")) {
+	if (!strcmp(arg1, "version") || !strcmp(arg1, "--version") ||
+	    !strcmp(arg1, "-V")) {
 		printf("%s %s (built %s %s)\n",
 		       argv[0], RELEASE_VERSION, __DATE__, __TIME__);
 		exit(EXIT_SUCCESS);
 	}
 
-	for (i = 1; i < argc; ) {
+	if (!strcmp(arg1, "init"))
+		*action = ACT_INIT;
+	else if (!strcmp(arg1, "daemon"))
+		*action = ACT_DAEMON;
+	else {
+		fprintf(stderr, "first arg is unknown action\n");
+		print_usage();
+		exit(EXIT_FAILURE);
+	}
+
+	/* after creating dirs we can use log_error/log_debug */
+	rv = make_dirs();
+	if (rv < 0) {
+		fprintf(stderr, "cannot create logging dirs\n");
+		exit(EXIT_FAILURE);
+	}
+
+	for (i = 2; i < argc; ) {
 		p = argv[i];
 
 		if ((p[0] != '-') || (strlen(p) != 2)) {
@@ -1433,10 +1497,6 @@ int read_args(int argc, char *argv[],
 			log_syslog_priority = atoi(optarg);
 			break;
 
-		case 'I':
-			*init = 1;
-			optarg_used = 0;
-			break;
 		case 'h':
 			*init_num_hosts = atoi(optarg);
 			break;
@@ -1515,55 +1575,17 @@ int read_args(int argc, char *argv[],
 		strncpy(command, cmd_argv[0], COMMAND_MAX - 1);
 	}
 
-	if (!*init && !our_host_id) {
+	if ((*action == ACT_DAEMON) && !our_host_id) {
 		log_error(NULL, "local host id required");
 		return -EINVAL;
 	}
 
-	if (!*init && !sm_id[0]) {
+	if ((*action != ACT_INIT) && !sm_id[0]) {
 		log_error(NULL, "name option (-n) required");
 		return -EINVAL;
 	}
 
 	return 0;
-}
-
-int make_dirs(void)
-{
-	mode_t old_umask;
-	int rv;
-
-	old_umask = umask(0022);
-	rv = mkdir(SM_RUN_DIR, 0777);
-	if (rv < 0 && errno != EEXIST)
-		goto out;
-
-	rv = mkdir(DAEMON_LOCKFILE_DIR, 0777);
-	if (rv < 0 && errno != EEXIST)
-		goto out;
-
-	rv = mkdir(RESOURCE_LOCKFILE_DIR, 0777);
-	if (rv < 0 && errno != EEXIST)
-		goto out;
-
-	rv = mkdir(DAEMON_SOCKET_DIR, 0777);
-	if (rv < 0 && errno != EEXIST)
-		goto out;
-
-	rv = mkdir(DAEMON_WATCHDOG_DIR, 0777);
-	if (rv < 0 && errno != EEXIST)
-		goto out;
-
-	rv = mkdir(SM_LOG_DIR, 0777);
-	if (rv < 0 && errno != EEXIST)
-		goto out;
-
-	rv = 0;
- out:
-	umask(old_umask);
-	if (rv < 0)
-		log_error(NULL, "mkdir errno %d", errno);
-	return rv;
 }
 
 void sigterm_handler(int sig)
@@ -1598,48 +1620,9 @@ int do_init(int token_count, struct token *token_args[],
 	return rv;
 }
 
-int main(int argc, char *argv[])
+int do_daemon(int token_count, struct token *token_args[])
 {
-	struct token *token_args[MAX_LEASE_ARGS];
-	int token_count = 0;
-	int init = 0, init_num_hosts = 0, init_max_hosts = DEFAULT_MAX_HOSTS;
-	int fd, rv, num;
-	int i;
-
-	/* default logging: LOG_ERR and up to stderr, logfile and syslog */
-
-	log_stderr_priority = LOG_ERR;
-	log_logfile_priority = LOG_ERR;
-	log_syslog_priority = LOG_ERR;
-
-	setup_logging();
-
-	rv = make_dirs();
-	if (rv < 0)
-		goto out;
-
-	to.lease_timeout_seconds = 60;
-	to.lease_renewal_warn_seconds = 30;
-	to.lease_renewal_fail_seconds = 40;
-	to.lease_renewal_seconds = 10;
-	to.wd_touch_seconds = 4;
-	to.wd_reboot_seconds = 15;
-	to.wd_touch_fail_seconds = 10;
-	to.script_shutdown_seconds = 10;
-	to.sigterm_shutdown_seconds = 10;
-	to.stable_poll_ms = 2000;
-	to.unstable_poll_ms = 500;
-
-	rv = read_args(argc, argv, &token_count, token_args,
-		       &init, &init_num_hosts, &init_max_hosts);
-	if (rv < 0)
-		goto out;
-
-	if (init) {
-		rv = do_init(token_count, token_args,
-			     init_num_hosts, init_max_hosts);
-		goto out;
-	}
+	int fd, rv, i, num;
 
 	signal(SIGTERM, sigterm_handler);
 
@@ -1688,6 +1671,54 @@ int main(int argc, char *argv[])
 	unlink_watchdog();
  out_lockfile:
 	unlink_lockfile(fd, DAEMON_LOCKFILE_DIR, sm_id);
+ out:
+	return rv;
+}
+
+int main(int argc, char *argv[])
+{
+	struct token *token_args[MAX_LEASE_ARGS];
+	int token_count = 0;
+	int action = 0;
+	int init_num_hosts = 0, init_max_hosts = DEFAULT_MAX_HOSTS;
+	int rv;
+
+	/* default logging: LOG_ERR and up to stderr, logfile and syslog */
+
+	log_stderr_priority = LOG_ERR;
+	log_logfile_priority = LOG_ERR;
+	log_syslog_priority = LOG_ERR;
+
+	setup_logging();
+
+	to.lease_timeout_seconds = 60;
+	to.lease_renewal_warn_seconds = 30;
+	to.lease_renewal_fail_seconds = 40;
+	to.lease_renewal_seconds = 10;
+	to.wd_touch_seconds = 4;
+	to.wd_reboot_seconds = 15;
+	to.wd_touch_fail_seconds = 10;
+	to.script_shutdown_seconds = 10;
+	to.sigterm_shutdown_seconds = 10;
+	to.stable_poll_ms = 2000;
+	to.unstable_poll_ms = 500;
+
+	rv = read_args(argc, argv, &token_count, token_args,
+		       &action, &init_num_hosts, &init_max_hosts);
+	if (rv < 0)
+		goto out;
+
+	switch (action) {
+	case ACT_INIT:
+		rv = do_init(token_count, token_args,
+			     init_num_hosts, init_max_hosts);
+		break;
+	case ACT_DAEMON:
+		rv = do_daemon(token_count, token_args);
+		break;
+	default:
+		break;
+	}
  out:
 	return rv;
 }
