@@ -4,7 +4,7 @@ from StringIO import StringIO
 import time
 import sys
 
-USAGE = "usage: paxosState.py <DISK>:<OFFSET>"
+USAGE = "usage: paxosState.py <DISK>:<OFFSET> [<DISK>:<OFFSET>]"
 
 def formatPaxoState(disk, offset):
     with open(disk, "rb") as f:
@@ -33,17 +33,22 @@ def formatPaxoState(disk, offset):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
+    if len(sys.argv) < 2:
         print USAGE
         sys.exit(1)
 
+    disks = []
     try:
-        disk, offset = sys.argv[1].split(":")
-        offset = int(offset)
+        for arg in sys.argv[1:]:
+            disk, offset = arg.split(":")
+            offset = int(offset)
+            disks.append((disk, offset))
     except:
         print USAGE
         sys.exit(1)
 
-    print formatPaxoState(disk, offset)
+    for disk, offset in disks:
+        print "**** %s:%d ****" % (disk, offset)
+        print formatPaxoState(disk, offset)
 
 

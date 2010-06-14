@@ -53,7 +53,7 @@ int opt_watchdog = 1;
 int supervise_pid;
 int killscript_pid;
 int supervise_pid_exit_status;
-int starting_lease_thread;
+int starting_lease_threads;
 int stopping_lease_threads;
 int killing_supervise_pid;
 int external_shutdown;
@@ -726,6 +726,8 @@ void stop_lease_threads(void)
 {
 	int i;
 
+	stopping_lease_threads = 1;
+
 	pthread_mutex_lock(&lease_status_mutex);
 	for (i = 0; i < MAX_LEASES; i++) {
 		if (lease_status[i].thread_running)
@@ -766,8 +768,6 @@ void *lease_thread(void *arg)
 	struct timespec ts;
 	int num = token->num;
 	int fd, rv, stop, num_opened;
-
-	set_thread_running(num, 1);
 
 	fd = lockfile(token, RESOURCE_LOCKFILE_DIR, token->resource_id);
 	if (fd < 0) {
@@ -900,6 +900,12 @@ int add_lease_thread(struct token *token, int *num_ret)
 		goto out;
 	}
 	strncpy(lease_status[num].resource_id, token->resource_id, NAME_ID_SIZE);
+
+	/* Changed here so that the initial state change will occure
+	 * in the synchroniouse state. Otherwise there is a point
+	 * where a thread is active but is not marked as such. */
+	lease_status[num].thread_running = 1;
+
 	pthread_mutex_unlock(&lease_status_mutex);
 
 	pthread_attr_init(&attr);
@@ -996,30 +1002,30 @@ int main_loop(void)
 		}
 
 		/*
-		 * sync_manager has just been started and given an initial
-		 * lease to acquire (which is always num 0).  Once the initial
-		 * lease is acquired, the command should be run if one was
-		 * provided.
+		 * sync_manager has just been started and given initial
+		 * leases to acquire (num 0 to starting_lease_threads - 1).
+		 * Once they are all acquired, the command should be run if
+		 * one was provided.
 		 */
 
-		if (starting_lease_thread) {
-			get_lease_status(0, OP_ACQUIRE, &r);
+		if (starting_lease_threads) {
+			get_lease_status(starting_lease_threads - 1,
+					 OP_ACQUIRE, &r);
 			if (r < 0) {
-				/* lease_thread 0 failed to acquire lease */
+				/* lease_thread failed to acquire lease */
+				starting_lease_threads = 0;
 				unlink_watchdog();
-				starting_lease_thread = 0;
-				stopping_lease_threads = 1;
+				stop_lease_threads();
 				error = r;
 
 			} else if (r > 0) {
-				/* lease_thread 0 has acquired lease */
-				starting_lease_thread = 0;
+				/* lease_thread has acquired lease */
+				starting_lease_threads--;
 
-				if (command[0]) {
+				if (!starting_lease_threads && command[0]) {
 					rv = run_command(command);
 					if (rv < 0) {
 						unlink_watchdog();
-						stopping_lease_threads = 1;
 						stop_lease_threads();
 						error = rv;
 					}
@@ -1082,7 +1088,6 @@ int main_loop(void)
 			 * this may or may not be due to us killing it.
 		 	 */
 			unlink_watchdog();
-			stopping_lease_threads = 1;
 			stop_lease_threads();
 
 		} else if (pid_status < 0) {
@@ -1119,7 +1124,7 @@ int main_loop(void)
 		   timely fashion. */
 
 		if ((pid_status > 0) && !killing_supervise_pid &&
-		    !stopping_lease_threads && !starting_lease_thread &&
+		    !stopping_lease_threads && !starting_lease_threads &&
 		    (time(NULL) - oldest_renewal_time < to.lease_renewal_seconds))
 			poll_timeout = to.stable_poll_ms;
 		else
@@ -1603,6 +1608,7 @@ int main(int argc, char *argv[])
 	int token_count = 0;
 	int init = 0, init_num_hosts = 0, init_max_hosts = DEFAULT_MAX_HOSTS;
 	int fd, rv, num;
+	int i;
 
 	/* default logging: LOG_ERR and up to stderr, logfile and syslog */
 
@@ -1653,23 +1659,28 @@ int main(int argc, char *argv[])
 		rv = touch_watchdog();
 		if (rv < 0)
 			goto out_lockfile;
+	}
 
-		/* TODO: support more than one initial lease */
-
-		rv = add_lease_thread(token_args[0], &num);
-		if (rv < 0)
+	starting_lease_threads = 0;
+	for (i = 0; i < token_count; i++) {
+		rv = add_lease_thread(token_args[i], &num);
+		if (rv < 0) {
+			if (starting_lease_threads) {
+				stop_lease_threads();
+				cleanup_lease_threads();
+			}
 			goto out_watchdog;
+		}
+		starting_lease_threads++;
 
-		starting_lease_thread = 1;
-
-		/* once the lease is acquired, the main loop will run
+		/* once all lease are acquired, the main loop will run
 		   command if there is one */
 	}
 
-	/* there was no initial lease, just a command (a lease may be
-	   added later) */
+	/* there were no initial leases, just a command
+	   (a lease may be added later) */
 
-	if (!starting_lease_thread && command[0]) {
+	if (!starting_lease_threads && command[0]) {
 		rv = run_command(command);
 		if (rv < 0)
 			goto out_watchdog;

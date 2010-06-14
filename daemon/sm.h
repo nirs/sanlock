@@ -13,7 +13,7 @@
 
 /* max leases on the command line */
 
-#define MAX_LEASE_ARGS 1
+#define MAX_LEASE_ARGS 50
 
 /* includes terminating null byte */
 

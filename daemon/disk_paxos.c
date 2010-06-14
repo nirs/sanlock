@@ -40,7 +40,7 @@ int majority_disks(struct token *token, int num)
 	/* odd number of disks */
 
 	if (num_disks % 2)
-		return num >= ((num_disks / 2) + 1); 
+		return num >= ((num_disks / 2) + 1);
 
 	/* even number of disks */
 
