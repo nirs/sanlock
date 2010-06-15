@@ -1,6 +1,10 @@
 #ifndef __SM_H__
 #define __SM_H__
 
+#define PAXOS_DISK_MAGIC 0x06152010
+#define PAXOS_DISK_VERSION_MAJOR 0x00010000
+#define PAXOS_DISK_VERSION_MINOR 0x00000001
+
 #define SM_MAGIC 0x04282010
 
 /* max leases that sm will manage */

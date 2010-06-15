@@ -26,11 +26,10 @@
 
 #define BLOCK_SIZE 512
 
-#define LEADER_COMPARE_LEN 80	/* through end of resource_id */
-
 #define NO_VAL 0
 
 extern int our_host_id;
+extern int cluster_mode;
 extern struct sm_timeouts to;
 
 int majority_disks(struct token *token, int num)
@@ -549,10 +548,51 @@ int run_disk_paxos(struct token *token, int host_id, uint64_t inp,
 	return DP_OK;
 }
 
-int verify_leader(struct token *token, struct paxos_disk *disk,
-		  struct leader_record *lr)
+/* TODO: use a real checksum function */
+
+uint32_t leader_checksum(struct leader_record *lr)
 {
-	/* TODO: check magic number, version, max_hosts, checksum */
+	char *data = (char *)lr;
+	uint32_t c = 0;
+	int i;
+
+	for (i = 0; i < LEADER_CHECKSUM_LEN; i++)
+		c += data[i];
+	return c;
+}
+
+int verify_leader(struct token *token, int d, struct leader_record *lr)
+{
+	if (lr->magic != PAXOS_DISK_MAGIC) {
+		log_error(token, "disk %d leader has wrong magic number", d);
+		return DP_BAD_MAGIC;
+	}
+
+	if ((lr->version & 0xFFFF0000) != PAXOS_DISK_VERSION_MAJOR) {
+		log_error(token, "disk %d leader has wrong version", d);
+		return DP_BAD_VERSION;
+	}
+
+	if (lr->cluster_mode != cluster_mode) {
+		log_error(token, "disk %d leader has wrong cluster mode", d);
+		return DP_BAD_CLUSTERMODE;
+	}
+
+	if (strncmp(lr->resource_id, token->resource_id, NAME_ID_SIZE)) {
+		log_error(token, "disk %d leader has wrong resource id", d);
+		return DP_BAD_RESOURCEID;
+	}
+
+	if (lr->num_hosts < our_host_id) {
+		log_error(token, "disk %d leader num_hosts too small", d);
+		return DP_BAD_NUMHOSTS;
+	}
+
+	if (leader_checksum(lr) != lr->checksum) {
+		log_error(token, "disk %d leader has wrong checksum", d);
+		return DP_BAD_CHECKSUM;
+	}
+
 	return 0;
 }
 
@@ -607,7 +647,7 @@ int get_prev_leader(struct token *token, int force,
 		if (rv < 0)
 			continue;
 
-		rv = verify_leader(token, &token->disks[d], &leaders[d]);
+		rv = verify_leader(token, d, &leaders[d]);
 		if (rv < 0)
 			continue;
 
@@ -662,21 +702,6 @@ int get_prev_leader(struct token *token, int force,
 		  (unsigned long long)prev_leader.num_hosts,
 		  (unsigned long long)prev_leader.timestamp,
 		  prev_leader.resource_id);
-
-	/* sanity check that the new leader resource_id is correct and that
-	   our host_id is within the accepted range */
-
-	if (strcmp(token->resource_id, prev_leader.resource_id)) {
-		log_error(token, "leader has wrong resource_id");
-		error = DP_BAD_NAME;
-		goto fail;
-	}
-
-	if (prev_leader.num_hosts < our_host_id) {
-		log_error(token, "leader num_hosts too small");
-		error = DP_BAD_NUMHOSTS;
-		goto fail;
-	}
 
 	/*
 	 * signal handover request to current leader (prev_leader);
@@ -818,11 +843,8 @@ int disk_paxos_acquire(struct token *token, int force,
 	 * run disk paxos to reach consensus on a new leader
 	 */
 
-	memset(&new_leader, 0, sizeof(struct leader_record));
-	strncpy(new_leader.resource_id, token->resource_id, NAME_ID_SIZE);
-	new_leader.lver = prev_leader.lver + 1; /* req.lver */
-	new_leader.num_hosts = prev_leader.num_hosts;
-	new_leader.max_hosts = prev_leader.max_hosts;
+	memcpy(&new_leader, &prev_leader, sizeof(struct leader_record));
+	new_leader.lver += 1; /* req.lver */
 
 	error = run_disk_paxos(token, our_host_id, our_host_id,
 			       new_leader.num_hosts, new_leader.lver, &dblock);
@@ -842,7 +864,7 @@ int disk_paxos_acquire(struct token *token, int force,
 	new_leader.owner_id = dblock.inp;
 	new_leader.lver = dblock.lver;
 	new_leader.timestamp = time(NULL);
-	/* TODO: new_leader.checksum = leader_checksum(&new_leader); */
+	new_leader.checksum = leader_checksum(&new_leader);
 
 	error = write_new_leader(token, &new_leader);
 	if (error < 0)
@@ -862,6 +884,7 @@ int disk_paxos_renew(struct token *token,
 
 	memcpy(&new_leader, leader_last, sizeof(struct leader_record));
 	new_leader.timestamp = time(NULL);
+	new_leader.checksum = leader_checksum(&new_leader);
 
 	error = write_new_leader(token, &new_leader);
 	if (error < 0)
@@ -881,6 +904,7 @@ int disk_paxos_release(struct token *token,
 
 	memcpy(&new_leader, leader_last, sizeof(struct leader_record));
 	new_leader.timestamp = LEASE_FREE;
+	new_leader.checksum = leader_checksum(&new_leader);
 
 	error = write_new_leader(token, &new_leader);
 	if (error < 0)
@@ -911,10 +935,14 @@ int disk_paxos_init(struct token *token, int num_hosts, int max_hosts)
 	memset(&req, 0, sizeof(struct request_record));
 	memset(&dblock, 0, sizeof(struct paxos_dblock));
 
-	leader.timestamp = LEASE_FREE;
+	leader.magic = PAXOS_DISK_MAGIC;
+	leader.version = PAXOS_DISK_VERSION_MAJOR | PAXOS_DISK_VERSION_MINOR;
+	leader.cluster_mode = cluster_mode;
 	leader.num_hosts = num_hosts;
 	leader.max_hosts = max_hosts;
+	leader.timestamp = LEASE_FREE;
 	strncpy(leader.resource_id, token->resource_id, NAME_ID_SIZE);
+	leader.checksum = leader_checksum(&leader);
 
 	for (d = 0; d < token->num_disks; d++) {
 		write_leader(token, &token->disks[d], &leader);

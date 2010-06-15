@@ -49,6 +49,7 @@ char command[COMMAND_MAX];
 char killscript[COMMAND_MAX];
 char sm_id[NAME_ID_SIZE + 1];
 int our_host_id;
+int cluster_mode;
 int cmd_argc;
 char **cmd_argv;
 
@@ -1260,10 +1261,11 @@ void print_usage(void)
 	printf("  init			initialize a lease disk area\n");
 	printf("  daemon		update leases and monitor pid\n");
 
-	printf("\ninit -h <num_hosts> [-H <max_hosts>] -l LEASE\n");
+	printf("\ninit [options] -h <num_hosts> -l LEASE\n");
 	printf("  -h <num_hosts>	max host id that will be able to acquire the lease\n");
 	printf("  -H <max_hosts>	max number of hosts the disk area will support\n");
 	printf("                        (default %d)\n", DEFAULT_MAX_HOSTS);
+	printf("  -m <num>		cluster mode of hosts (default 0)\n");
 	printf("  -l LEASE		lease description, see below\n");
 
 	printf("\ndaemon [options] [-l LEASE] [-c <path> <args>]\n");
@@ -1271,6 +1273,7 @@ void print_usage(void)
 	printf("  -L <level>		write logging at level and up to logfile (-1 none)\n");
 	printf("  -S <level>		write logging at level and up to syslog (-1 none)\n");
 	printf("  -n <name>		name of this sync_manager instance\n");
+	printf("  -m <num>		cluster mode of hosts (default 0)\n");
 	printf("  -i <num>		local host id\n");
 	printf("  -l LEASE		lease description, see below\n");
 	printf("  -k <path>		command to stop supervised process\n");
@@ -1503,7 +1506,9 @@ int read_args(int argc, char *argv[],
 		case 'H':
 			*init_max_hosts = atoi(optarg);
 			break;
-
+		case 'm':
+			cluster_mode = atoi(optarg);
+			break;
 		case 'n':
 			strncpy(sm_id, optarg, NAME_ID_SIZE);
 			break;
