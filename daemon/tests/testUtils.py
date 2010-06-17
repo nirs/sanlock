@@ -24,8 +24,8 @@ DBlock = namedtuple("DBlock", "mbal bal inp lver")
 DBlock.fromStream = new.instancemethod(partial(_makeFromStream, DBlock, dblockStruct), DBlock, DBlock.__class__)
 DBlock.fromBuffer = new.instancemethod(partial(_makeFromBuffer, DBlock, dblockStruct), DBlock, DBlock.__class__)
 
-leaderRecordStruct = aligneStruct(Struct("QQQQII4x32sQI4x"))
-LeaderRecord = namedtuple('LeaderRecord', 'ownerID lver numHosts maxHosts clusterMode version resourceID timestamp checksum')
+leaderRecordStruct = aligneStruct(Struct("III4xQQQQ32sQI4x"))
+LeaderRecord = namedtuple('LeaderRecord', 'magic version clusterMode numHosts maxHosts ownerID lver resourceID timestamp checksum')
 
 LeaderRecord.fromStream = new.instancemethod(partial(_makeFromStream, LeaderRecord, leaderRecordStruct), LeaderRecord, LeaderRecord.__class__)
 LeaderRecord.fromBuffer = new.instancemethod(partial(_makeFromBuffer, LeaderRecord, leaderRecordStruct), LeaderRecord, LeaderRecord.__class__)
@@ -44,6 +44,7 @@ def leasesValidator(value):
 
     return tuple(leases)
 
+getResources = lambda leases : [resource for resource, disks in leases]
 
 nullTerminated = lambda str : str[:str.find("\0")]
 

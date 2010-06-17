@@ -4,7 +4,7 @@ import time
 from ruth import RuthTestCase
 from syncManager import SyncManager
 from confUtils import Validate
-from testUtils import LeaderRecord, readState, nullTerminated, leasesValidator
+from testUtils import LeaderRecord, readState, nullTerminated, leasesValidator, getResources
 
 DEFAULT_NUMBER_OF_HOSTS = 10
 MAXIMUM_NUMBER_OF_HOSTS = 2000
@@ -22,7 +22,7 @@ class DriveInitialization(RuthTestCase):
                 }
 
     def test(self):
-        mgr = SyncManager(DEFAULT_NAME, 1)
+        mgr = SyncManager(DEFAULT_NAME)
         leases = self.mycfg["Leases"]
         mgr.initStorage(leases, self.mycfg["NumberOfHosts"], MAXIMUM_NUMBER_OF_HOSTS)
         for lease, drives in leases:
@@ -50,7 +50,7 @@ class InitPerformanceTest(RuthTestCase):
                 }
 
     def test(self):
-        mgr = SyncManager(DEFAULT_NAME, 1)
+        mgr = SyncManager(DEFAULT_NAME)
         start = time.time()
         mgr.initStorage(self.mycfg["Leases"], self.mycfg["NumberOfHosts"], MAXIMUM_NUMBER_OF_HOSTS)
         end = time.time()
@@ -64,22 +64,58 @@ class AcquireLease(RuthTestCase):
                     "NumberOfHosts" : {"validator" : Validate.int, "default" : DEFAULT_NUMBER_OF_HOSTS}
                     }
                 }
+
     def setUp(self):
-        self.mgr = SyncManager(DEFAULT_NAME, 1)
+        self.mgr = SyncManager(DEFAULT_NAME)
         self.log.debug("Initializing disks")
         self.mgr.initStorage(self.mycfg["Leases"], self.mycfg["NumberOfHosts"])
+        self.log.debug("Starting Dummy Process")
+        #self.mgr.startDummyProcess()
 
-    def test(self):
+    def testGood(self):
         self.log.debug("Acquiring leases")
         self.mgr.acquireLeases(self.mycfg["Leases"])
-        self.mgr.releaseLeases()
+        self.mgr.releaseLeases(getResources(self.mycfg["Leases"]))
+
+    def testWithBadDrive(self):
+        self.log.debug("Acquiring leases")
+        # Adding fake lease
+        leases = list(self.mycfg["Leases"]) + [("Sense-Sphere", [("./disk.fake", 0)])]
+        self.assertRaises(Exception, self.mgr.acquireLeases, leases);
+
+class ReleaseLease(RuthTestCase):
+    @classmethod
+    def getConfigTemplate(cls):
+        return { cls.__name__ : {
+                    "Leases" : LEASES_CONFIG_DEFINITION,
+                    "NumberOfHosts" : {"validator" : Validate.int, "default" : DEFAULT_NUMBER_OF_HOSTS}
+                    }
+                }
+
+    def setUp(self):
+        self.mgr = SyncManager(DEFAULT_NAME)
+        self.log.debug("Initializing disks")
+        self.mgr.initStorage(self.mycfg["Leases"], self.mycfg["NumberOfHosts"])
+        self.log.debug("Starting Dummy Process")
+        #self.mgr.startDummyProcess()
+        self.log.debug("Acquiring leases")
+        self.mgr.acquireLeases(self.mycfg["Leases"])
+
+    def testGood(self):
+        self.mgr.releaseLeases(getResources(self.mycfg["Leases"]))
+
+    def testUnacquired(self):
+        resources = getResources(self.mycfg["Leases"])
+        self.assertRaises(Exception, self.mgr.releaseLeases, resources + ["Sense-Sphere"])
+        self.mgr.releaseLeases(resources)
 
 
 def suite():
     tests = {
         DriveInitialization : ["test"],
         InitPerformanceTest : ["test"],
-        AcquireLease : ["test"]
+        AcquireLease : ["testGood", "testWithBadDrive"],
+        ReleaseLease : ["testGood", "testUnacquired"]
     }
 
     resSuite = ut.TestSuite()

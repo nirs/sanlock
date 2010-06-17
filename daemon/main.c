@@ -44,6 +44,8 @@ int log_stderr_priority;
 
 #define ACT_INIT 1
 #define ACT_DAEMON 2
+#define ACT_ACQUIRE 3
+#define ACT_RELEASE 4
 
 char command[COMMAND_MAX];
 char killscript[COMMAND_MAX];
@@ -744,12 +746,14 @@ void stop_lease_threads(void)
 void cleanup_lease_threads(void)
 {
 	struct token *token;
-	int i;
+	int i, stopping;
 	void *ret;
 
 	for (i = 0; i < MAX_LEASES; i++) {
 		token =  tokens[i];
-		if (token) {
+		stopping = lease_status[i].stop_thread;
+		if (token && stopping) {
+			log_debug(token, "cleaning thread");
 			pthread_join(lease_threads[i], &ret);
 			free(token->disks);
 			free(token);
@@ -891,7 +895,7 @@ int add_lease_thread(struct token *token, int *num_ret)
 	for (i = 0; i < MAX_LEASES; i++) {
 		if (!lease_status[i].thread_running)
 			continue;
-		if (strcmp(lease_status[i].resource_id, token->resource_id))
+		if (strncmp(lease_status[i].resource_id, token->resource_id, NAME_ID_SIZE))
 			continue;
 		pthread_mutex_unlock(&lease_status_mutex);
 		rv = -EINVAL;
@@ -905,8 +909,8 @@ int add_lease_thread(struct token *token, int *num_ret)
 	}
 	strncpy(lease_status[num].resource_id, token->resource_id, NAME_ID_SIZE);
 
-	/* Changed here so that the initial state change will occure
-	 * in the synchroniouse state. Otherwise there is a point
+	/* Changed here so that the initial state change will occur
+	 * in the synchronous state. Otherwise there is a point
 	 * where a thread is active but is not marked as such. */
 	lease_status[num].thread_running = 1;
 
@@ -927,15 +931,23 @@ int add_lease_thread(struct token *token, int *num_ret)
 	return rv;
 }
 
-void del_lease_thread(int num)
+int stop_lease_thread(char *resource_id)
 {
+	int i, found = 0;
+
 	pthread_mutex_lock(&lease_status_mutex);
-	lease_status[num].stop_thread = 1;
+	for (i = 0; i < MAX_LEASES; i++) {
+		if (strncmp(lease_status[i].resource_id, resource_id, NAME_ID_SIZE))
+			continue;
+		lease_status[i].stop_thread = 1;
+		found = 1;
+		break;
+	}
 	pthread_mutex_unlock(&lease_status_mutex);
 
-	/* TODO: don't block main loop waiting for the thread to quit;
-	   have main loop check for stopped threads that are ready to be
-	   cleaned up. */
+	if (found)
+		return 0;
+	return -ENOENT;
 }
 
 /*
@@ -1159,6 +1171,148 @@ void cmd_log_dump(int fd, struct sm_header *h_recv)
 	write_log_dump(fd, &h);
 }
 
+void cmd_acquire(int fd, struct sm_header *h_recv)
+{
+	struct sm_header h;
+	struct token *token = NULL;
+	struct paxos_disk *disks = NULL;
+	int token_ids[MAX_LEASE_ARGS];
+	int results[MAX_LEASE_ARGS];
+	int token_count = h_recv->data;
+	int added_count;
+	int rv, i, j, num_disks;
+
+	memset(token_ids, 0, sizeof(token_ids));
+	memset(results, 0, sizeof(results));
+	added_count = 0;
+
+	if (token_count > MAX_LEASE_ARGS) {
+		log_error(NULL, "client asked for %d leases maximum is %d",
+			  token_count, MAX_LEASE_ARGS);
+		goto out;
+	}
+
+	for (i = 0; i < token_count; i++) {
+		token = NULL;
+		disks = NULL;
+
+		token = malloc(sizeof(struct token));
+		if (!token) {
+			results[i] = -ENOMEM;
+			goto out;
+		}
+
+		rv = recv(fd, token, sizeof(struct token), MSG_DONTWAIT);
+		if (rv != sizeof(struct token)) {
+			log_error(NULL, "connection closed unexpectedly %d", rv);
+			results[i] = -1;
+			goto out;
+		}
+
+		num_disks = token->num_disks;
+
+		disks = malloc(num_disks * sizeof(struct paxos_disk));
+		if (!disks) {
+			results[i] = -ENOMEM;
+			goto out;
+		}
+		memset(disks, 0, num_disks * sizeof(struct paxos_disk));
+
+		for (j = 0; j < num_disks; j++) {
+			rv = recv(fd, &disks[j], sizeof(struct paxos_disk), MSG_DONTWAIT);
+			if (rv != sizeof(struct paxos_disk)) {
+				log_error(NULL, "connection closed unexpectedly %d", rv);
+				results[i] = -1;
+				goto out;
+			}
+		}
+		token->disks = disks;
+		log_debug(token, "received request to acquire lease");
+
+		rv = add_lease_thread(token, &token_ids[i]);
+
+		/* add_lease_thread frees token and disks on error */
+		token = NULL;
+		disks = NULL;
+
+		if (rv < 0) {
+			results[i] = rv;
+			goto out;
+		}
+
+		results[i] = 1;
+		added_count++;
+	}
+
+ out:
+	if (token)
+		free(token);
+	if (disks)
+		free(disks);
+
+	/*
+	 * one result for each token/resource_id received:
+	 * 1 = added a lease thread, make status query to check result
+	 * < 0 = error, no lease thread added for this resource_id
+	 * 0 = no attempt made to acquire this lease
+	 *
+	 * h.data is the number of results that are "1"
+	 */
+
+	memcpy(&h, h_recv, sizeof(struct sm_header));
+	h.length = sizeof(h) + sizeof(int) * token_count;
+	h.data = added_count;
+
+	send(fd, &h, sizeof(struct sm_header), MSG_DONTWAIT);
+	send(fd, &results, sizeof(int) * token_count, MSG_DONTWAIT);
+}
+
+void cmd_release(int fd, struct sm_header *h_recv)
+{
+	struct sm_header h;
+	char resource_id[NAME_ID_SIZE];
+	int results[MAX_LEASE_ARGS];
+	int lease_count = h_recv->data;
+	int stopped_count;
+	int rv, i;
+
+	memset(results, 0, sizeof(results));
+	stopped_count = 0;
+
+	for (i = 0; i < lease_count; i++) {
+		rv = recv(fd, resource_id, NAME_ID_SIZE, MSG_DONTWAIT);
+		if (rv != NAME_ID_SIZE) {
+			log_error(NULL, "connection closed unexpectedly %d", rv);
+			results[i] = -1;
+			break;
+		}
+
+		rv = stop_lease_thread(resource_id);
+		if (rv < 0) {
+			results[i] = rv;
+		} else {
+			results[i] = 1;
+			stopped_count++;
+		}
+	}
+
+	/*
+	 * one result for each resource_id received:
+	 * 1 = stopped the lease thread, make status query to check result
+	 * < 0 = error, no lease thread stopped for this resource_id
+	 * 0 = no attempt made to stop this resource_id's lease thread
+	 *
+	 * h.data is the number of results that are "1"
+	 */
+
+	memcpy(&h, h_recv, sizeof(struct sm_header));
+	h.length = sizeof(h) + sizeof(int) * lease_count;
+	h.data = stopped_count;
+
+	send(fd, &h, sizeof(struct sm_header), MSG_DONTWAIT);
+	send(fd, &results, sizeof(int) * lease_count, MSG_DONTWAIT);
+}
+
 void process_listener(int ci)
 {
 	struct sm_header h;
@@ -1168,7 +1322,7 @@ void process_listener(int ci)
 	if (fd < 0)
 		return;
 
-	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	rv = recv(fd, &h, sizeof(h), MSG_DONTWAIT);
 	if (rv != sizeof(h)) {
 	}
 
@@ -1195,11 +1349,11 @@ void process_listener(int ci)
 	case SM_CMD_NUM_HOSTS:
 		/* just rewrite leader block in leases? */
 		break;
-	case SM_CMD_ADD_LEASE:
-		/* add_lease_thread(), get_lease_status(OP_ACQUIRE) loop */
+	case SM_CMD_ACQUIRE:
+		cmd_acquire(fd, &h);
 		break;
-	case SM_CMD_DEL_LEASE:
-		/* del_lease_thread() */
+	case SM_CMD_RELEASE:
+		cmd_release(fd, &h);
 		break;
 	case SM_CMD_STATUS:
 		cmd_status(fd, &h);
@@ -1260,6 +1414,8 @@ void print_usage(void)
 	printf("  help			print usage\n");
 	printf("  init			initialize a lease disk area\n");
 	printf("  daemon		update leases and monitor pid\n");
+	printf("  acquire		acquire leases for a running pid\n");
+	printf("  release		release leases for a running pid\n");
 
 	printf("\ninit [options] -h <num_hosts> -l LEASE\n");
 	printf("  -h <num_hosts>	max host id that will be able to acquire the lease\n");
@@ -1268,11 +1424,11 @@ void print_usage(void)
 	printf("  -m <num>		cluster mode of hosts (default 0)\n");
 	printf("  -l LEASE		lease description, see below\n");
 
-	printf("\ndaemon [options] [-l LEASE] [-c <path> <args>]\n");
+	printf("\ndaemon [options] -n <name> [-l LEASE] [-c <path> <args>]\n");
 	printf("  -D			print all logging to stderr\n");
 	printf("  -L <level>		write logging at level and up to logfile (-1 none)\n");
 	printf("  -S <level>		write logging at level and up to syslog (-1 none)\n");
-	printf("  -n <name>		name of this sync_manager instance\n");
+	printf("  -n <name>		name for the new sync_manager instance\n");
 	printf("  -m <num>		cluster mode of hosts (default 0)\n");
 	printf("  -i <num>		local host id\n");
 	printf("  -l LEASE		lease description, see below\n");
@@ -1280,12 +1436,42 @@ void print_usage(void)
 	printf("  -w <num>		enable (1) or disable (0) using watchdog\n");
 	printf("  -c <path> <args>	run command with args, -c must be final option\n");
 
+	printf("\nacquire -n <name> -l LEASE\n");
+	printf("  -n <name>		name of a running sync_manager instance\n");
+	printf("  -l LEASE		lease description, see below\n");
+
+	printf("\nrelease -n <name> -r <resource_id>\n");
+	printf("  -n <name>		name of a running sync_manager instance\n");
+	printf("  -r <resource_id>	resource id of a previously acquired lease\n");
+
 	printf("\nLEASE = <resource_id>:<path>:<offset>[:<path>:<offset>...]\n");
 	printf("  <resource_id>		name of resource being leased\n");
 	printf("  <path>		disk path\n");
 	printf("  <offset>		offset on disk\n");
 	printf("  [:<path>:<offset>...] other disks in a multi-disk lease\n");
 	printf("\n");
+}
+
+int add_resource_arg(char *arg, int *token_count, struct token *token_args[])
+{
+	struct token *token;
+	int rv;
+
+	if (*token_count >= MAX_LEASE_ARGS) {
+		log_error(NULL, "lease args over max %d", MAX_LEASE_ARGS);
+		return -1;
+	}
+
+	rv = create_token(0, &token);
+	if (rv < 0) {
+		log_error(NULL, "resource arg create");
+		return rv;
+	}
+
+	strncpy(token->resource_id, arg, NAME_ID_SIZE);
+	token_args[*token_count] = token;
+	(*token_count)++;
+	return rv;
 }
 
 /* arg = <resource_id>:<path>:<offset>[:<path>:<offset>...] */
@@ -1459,6 +1645,10 @@ int read_args(int argc, char *argv[],
 		*action = ACT_INIT;
 	else if (!strcmp(arg1, "daemon"))
 		*action = ACT_DAEMON;
+	else if (!strcmp(arg1, "acquire"))
+		*action = ACT_ACQUIRE;
+	else if (!strcmp(arg1, "release"))
+		*action = ACT_RELEASE;
 	else {
 		fprintf(stderr, "first arg is unknown action\n");
 		print_usage();
@@ -1515,7 +1705,18 @@ int read_args(int argc, char *argv[],
 		case 'i':
 			our_host_id = atoi(optarg);
 			break;
+		case 'r':
+			if ((*action) != ACT_RELEASE)
+				return -1;
+
+			rv = add_resource_arg(optarg, token_count, token_args);
+			if (rv < 0)
+				return rv;
+			break;
 		case 'l':
+			if ((*action) == ACT_RELEASE)
+				return -1;
+
 			rv = add_token_arg(optarg, token_count, token_args);
 			if (rv < 0)
 				return rv;
@@ -1590,6 +1791,11 @@ int read_args(int argc, char *argv[],
 		return -EINVAL;
 	}
 
+	if ((*action == ACT_ACQUIRE) && !token_count) {
+		log_error(NULL, "no leases were asked to be acquired");
+		return -EINVAL;
+	}
+
 	return 0;
 }
 
@@ -1622,6 +1828,141 @@ int do_init(int token_count, struct token *token_args[],
 		}
 	}
 
+	return rv;
+}
+
+int send_command(int sm_command, uint32_t data)
+{
+	char path[PATH_MAX];
+	struct sockaddr_un addr;
+	socklen_t addrlen;
+	struct sm_header header;
+	int rv, sock;
+
+	sock = socket(AF_LOCAL, SOCK_STREAM, 0);
+	if (sock < 0) {
+		log_error(NULL, "socket error %d %d", sock, errno);
+		return sock;
+	}
+
+	snprintf(path, PATH_MAX, "%s/%s", DAEMON_SOCKET_DIR, sm_id);
+	log_debug(NULL, "connecting to socket '%s'", path);
+
+	memset(&addr, 0, sizeof(struct sockaddr_un));
+	addr.sun_family = AF_LOCAL;
+	strncpy(&addr.sun_path[1], path, PATH_MAX - 1);
+	addrlen = sizeof(sa_family_t) + strlen(addr.sun_path+1) + 1;
+
+	rv = connect(sock, (struct sockaddr *) &addr, addrlen);
+	if (rv < 0) {
+		log_error(NULL, "connect error %d %d", rv, errno);
+		close(sock);
+		return rv;
+	}
+
+	memset(&header, 0, sizeof(struct sm_header));
+	header.magic = SM_MAGIC;
+	header.cmd = sm_command;
+	header.data = data;
+	strncpy(&header.sm_id[1], sm_id, NAME_ID_SIZE);
+
+	log_debug(NULL, "sending message header");
+
+	rv = send(sock, (void *) &header, sizeof(struct sm_header), 0);
+	if (rv < 0) {
+		log_error(NULL, "send error %d %d", rv, errno);
+		close(sock);
+		return rv;
+	}
+
+	return sock;
+}
+
+int do_acquire(int token_count, struct token *token_args[])
+{
+	struct token *t;
+	struct sm_header h;
+	int results[MAX_LEASE_ARGS];
+	int sock, rv, i, j;
+
+	sock = send_command(SM_CMD_ACQUIRE, token_count);
+	if (sock < 0)
+		return sock;
+
+	for (i = 0; i < token_count; i++) {
+		t = token_args[i];
+		rv = send(sock, t, sizeof(struct token), 0);
+		if (rv < 0) {
+			log_error(NULL, "send error %d %d", rv, errno);
+			goto out;
+		}
+
+		for (j = 0; j < t->num_disks; j++) {
+			rv = send(sock, &t->disks[j], sizeof(struct paxos_disk), 0);
+			if (rv < 0) {
+				log_error(NULL, "send error %d %d", rv, errno);
+				goto out;
+			}
+		}
+	}
+
+	memset(&h, 0, sizeof(h));
+	memset(&results, 0, sizeof(results));
+
+	rv = recv(sock, &h, sizeof(struct sm_header), MSG_WAITALL);
+	if (rv != sizeof(h)) {
+		log_error(NULL, "connection closed unexpectedly %d", rv);
+		goto out;
+	}
+
+	rv = recv(sock, &results, sizeof(int) * token_count, MSG_WAITALL);
+	if (rv != sizeof(int) * token_count) {
+		log_error(NULL, "connection closed unexpectedly %d", rv);
+		goto out;
+	}
+
+	/* TODO: report something about results, maybe send a status query? */
+ out:
+	close(sock);
+	return rv;
+}
+
+int do_release(int token_count, struct token *token_args[])
+{
+	struct sm_header h;
+	int results[MAX_LEASE_ARGS];
+	int sock, rv, i;
+
+	sock = send_command(SM_CMD_RELEASE, token_count);
+	if (sock < 0)
+		return sock;
+
+	for (i = 0; i < token_count; i++) {
+		rv = send(sock, token_args[i]->resource_id, NAME_ID_SIZE, 0);
+		if (rv < 0) {
+			log_error(NULL, "send error %d %d", rv, errno);
+			goto out;
+		}
+	}
+
+	memset(&h, 0, sizeof(h));
+	memset(&results, 0, sizeof(results));
+
+	rv = recv(sock, &h, sizeof(struct sm_header), MSG_WAITALL);
+	if (rv != sizeof(h)) {
+		log_error(NULL, "connection closed unexpectedly %d", rv);
+		goto out;
+	}
+
+	rv = recv(sock, &results, sizeof(int) * token_count, MSG_WAITALL);
+	if (rv != sizeof(int) * token_count) {
+		log_error(NULL, "connection closed unexpectedly %d", rv);
+		goto out;
+	}
+
+	/* TODO: report something about results, maybe send a status query? */
+ out:
+	close(sock);
 	return rv;
 }
 
@@ -1720,6 +2061,12 @@ int main(int argc, char *argv[])
 		break;
 	case ACT_DAEMON:
 		rv = do_daemon(token_count, token_args);
+		break;
+	case ACT_ACQUIRE:
+		rv = do_acquire(token_count, token_args);
+		break;
+	case ACT_RELEASE:
+		rv = do_release(token_count, token_args);
 		break;
 	default:
 		break;
