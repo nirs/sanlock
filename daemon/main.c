@@ -1460,6 +1460,228 @@ int setup_listener(void)
 	return 0;
 }
 
+void sigterm_handler(int sig)
+{
+	external_shutdown = 1;
+}
+
+int do_daemon(int token_count, struct token *token_args[])
+{
+	int fd, rv, i, num;
+
+	signal(SIGTERM, sigterm_handler);
+
+	fd = lockfile(NULL, DAEMON_LOCKFILE_DIR, sm_id);
+	if (fd < 0)
+		goto out;
+
+	rv = setup_listener();
+	if (rv < 0)
+		goto out_lockfile;
+
+	if (token_count) {
+		rv = touch_watchdog();
+		if (rv < 0)
+			goto out_lockfile;
+	}
+
+	starting_lease_threads = 0;
+	for (i = 0; i < token_count; i++) {
+		rv = add_lease_thread(token_args[i], &num);
+		if (rv < 0) {
+			if (starting_lease_threads) {
+				stop_all_lease_threads();
+				cleanup_all_lease_threads();
+			}
+			goto out_watchdog;
+		}
+		starting_lease_threads++;
+
+		/* once all lease are acquired, the main loop will run
+		   command if there is one */
+	}
+
+	/* there were no initial leases, just a command
+	   (a lease may be added later) */
+
+	if (!starting_lease_threads && command[0]) {
+		rv = run_command(command);
+		if (rv < 0)
+			goto out_watchdog;
+	}
+
+	rv = main_loop();
+
+ out_watchdog:
+	unlink_watchdog();
+ out_lockfile:
+	unlink_lockfile(fd, DAEMON_LOCKFILE_DIR, sm_id);
+ out:
+	return rv;
+}
+
+int send_command(int sm_command, uint32_t data)
+{
+	char path[PATH_MAX];
+	struct sockaddr_un addr;
+	socklen_t addrlen;
+	struct sm_header header;
+	int rv, sock;
+
+	sock = socket(AF_LOCAL, SOCK_STREAM, 0);
+	if (sock < 0) {
+		log_error(NULL, "socket error %d %d", sock, errno);
+		return sock;
+	}
+
+	snprintf(path, PATH_MAX, "%s/%s", DAEMON_SOCKET_DIR, sm_id);
+	log_debug(NULL, "connecting to socket '%s'", path);
+
+	memset(&addr, 0, sizeof(struct sockaddr_un));
+	addr.sun_family = AF_LOCAL;
+	strncpy(&addr.sun_path[1], path, PATH_MAX - 1);
+	addrlen = sizeof(sa_family_t) + strlen(addr.sun_path+1) + 1;
+
+	rv = connect(sock, (struct sockaddr *) &addr, addrlen);
+	if (rv < 0) {
+		log_error(NULL, "connect error %d %d", rv, errno);
+		close(sock);
+		return rv;
+	}
+
+	memset(&header, 0, sizeof(struct sm_header));
+	header.magic = SM_MAGIC;
+	header.cmd = sm_command;
+	header.data = data;
+	strncpy(&header.sm_id[1], sm_id, NAME_ID_SIZE);
+
+	log_debug(NULL, "sending message header");
+
+	rv = send(sock, (void *) &header, sizeof(struct sm_header), 0);
+	if (rv < 0) {
+		log_error(NULL, "send error %d %d", rv, errno);
+		close(sock);
+		return rv;
+	}
+
+	return sock;
+}
+
+int do_init(int token_count, struct token *token_args[],
+	    int init_num_hosts, int init_max_hosts)
+{
+	struct token *token;
+	int num_opened;
+	int i, rv = 0;
+
+	for (i = 0; i < token_count; i++) {
+		token = token_args[i];
+
+		num_opened = open_disks(token);
+		if (!majority_disks(token, num_opened)) {
+			log_error(token, "cannot open majority of disks");
+			rv = -1;
+			continue;
+		}
+
+		rv = disk_paxos_init(token, init_num_hosts, init_max_hosts);
+		if (rv < 0) {
+			log_error(token, "cannot initialize disks");
+			rv = -1;
+		}
+	}
+
+	return rv;
+}
+
+int do_acquire(int token_count, struct token *token_args[])
+{
+	struct token *t;
+	struct sm_header h;
+	int results[MAX_LEASE_ARGS];
+	int sock, rv, i, j;
+
+	sock = send_command(SM_CMD_ACQUIRE, token_count);
+	if (sock < 0)
+		return sock;
+
+	for (i = 0; i < token_count; i++) {
+		t = token_args[i];
+		rv = send(sock, t, sizeof(struct token), 0);
+		if (rv < 0) {
+			log_error(NULL, "send error %d %d", rv, errno);
+			goto out;
+		}
+
+		for (j = 0; j < t->num_disks; j++) {
+			rv = send(sock, &t->disks[j], sizeof(struct paxos_disk), 0);
+			if (rv < 0) {
+				log_error(NULL, "send error %d %d", rv, errno);
+				goto out;
+			}
+		}
+	}
+
+	memset(&h, 0, sizeof(h));
+	memset(&results, 0, sizeof(results));
+
+	rv = recv(sock, &h, sizeof(struct sm_header), MSG_WAITALL);
+	if (rv != sizeof(h)) {
+		log_error(NULL, "connection closed unexpectedly %d", rv);
+		goto out;
+	}
+
+	rv = recv(sock, &results, sizeof(int) * token_count, MSG_WAITALL);
+	if (rv != sizeof(int) * token_count) {
+		log_error(NULL, "connection closed unexpectedly %d", rv);
+		goto out;
+	}
+
+	/* TODO: report something about results, maybe send a status query? */
+ out:
+	close(sock);
+	return rv;
+}
+
+int do_release(int token_count, struct token *token_args[])
+{
+	struct sm_header h;
+	int results[MAX_LEASE_ARGS];
+	int sock, rv, i;
+
+	sock = send_command(SM_CMD_RELEASE, token_count);
+	if (sock < 0)
+		return sock;
+
+	for (i = 0; i < token_count; i++) {
+		rv = send(sock, token_args[i]->resource_id, NAME_ID_SIZE, 0);
+		if (rv < 0) {
+			log_error(NULL, "send error %d %d", rv, errno);
+			goto out;
+		}
+	}
+
+	memset(&h, 0, sizeof(h));
+	memset(&results, 0, sizeof(results));
+
+	rv = recv(sock, &h, sizeof(struct sm_header), MSG_WAITALL);
+	if (rv != sizeof(h)) {
+		log_error(NULL, "connection closed unexpectedly %d", rv);
+		goto out;
+	}
+
+	rv = recv(sock, &results, sizeof(int) * token_count, MSG_WAITALL);
+	if (rv != sizeof(int) * token_count) {
+		log_error(NULL, "connection closed unexpectedly %d", rv);
+		goto out;
+	}
+
+	/* TODO: report something about results, maybe send a status query? */
+ out:
+	close(sock);
+	return rv;
+}
+
 void print_usage(void)
 {
 	printf("Usage:\n");
@@ -1853,228 +2075,6 @@ int read_args(int argc, char *argv[],
 	return 0;
 }
 
-void sigterm_handler(int sig)
-{
-	external_shutdown = 1;
-}
-
-int do_init(int token_count, struct token *token_args[],
-	    int init_num_hosts, int init_max_hosts)
-{
-	struct token *token;
-	int num_opened;
-	int i, rv = 0;
-
-	for (i = 0; i < token_count; i++) {
-		token = token_args[i];
-
-		num_opened = open_disks(token);
-		if (!majority_disks(token, num_opened)) {
-			log_error(token, "cannot open majority of disks");
-			rv = -1;
-			continue;
-		}
-
-		rv = disk_paxos_init(token, init_num_hosts, init_max_hosts);
-		if (rv < 0) {
-			log_error(token, "cannot initialize disks");
-			rv = -1;
-		}
-	}
-
-	return rv;
-}
-
-int send_command(int sm_command, uint32_t data)
-{
-	char path[PATH_MAX];
-	struct sockaddr_un addr;
-	socklen_t addrlen;
-	struct sm_header header;
-	int rv, sock;
-
-	sock = socket(AF_LOCAL, SOCK_STREAM, 0);
-	if (sock < 0) {
-		log_error(NULL, "socket error %d %d", sock, errno);
-		return sock;
-	}
-
-	snprintf(path, PATH_MAX, "%s/%s", DAEMON_SOCKET_DIR, sm_id);
-	log_debug(NULL, "connecting to socket '%s'", path);
-
-	memset(&addr, 0, sizeof(struct sockaddr_un));
-	addr.sun_family = AF_LOCAL;
-	strncpy(&addr.sun_path[1], path, PATH_MAX - 1);
-	addrlen = sizeof(sa_family_t) + strlen(addr.sun_path+1) + 1;
-
-	rv = connect(sock, (struct sockaddr *) &addr, addrlen);
-	if (rv < 0) {
-		log_error(NULL, "connect error %d %d", rv, errno);
-		close(sock);
-		return rv;
-	}
-
-	memset(&header, 0, sizeof(struct sm_header));
-	header.magic = SM_MAGIC;
-	header.cmd = sm_command;
-	header.data = data;
-	strncpy(&header.sm_id[1], sm_id, NAME_ID_SIZE);
-
-	log_debug(NULL, "sending message header");
-
-	rv = send(sock, (void *) &header, sizeof(struct sm_header), 0);
-	if (rv < 0) {
-		log_error(NULL, "send error %d %d", rv, errno);
-		close(sock);
-		return rv;
-	}
-
-	return sock;
-}
-
-int do_acquire(int token_count, struct token *token_args[])
-{
-	struct token *t;
-	struct sm_header h;
-	int results[MAX_LEASE_ARGS];
-	int sock, rv, i, j;
-
-	sock = send_command(SM_CMD_ACQUIRE, token_count);
-	if (sock < 0)
-		return sock;
-
-	for (i = 0; i < token_count; i++) {
-		t = token_args[i];
-		rv = send(sock, t, sizeof(struct token), 0);
-		if (rv < 0) {
-			log_error(NULL, "send error %d %d", rv, errno);
-			goto out;
-		}
-
-		for (j = 0; j < t->num_disks; j++) {
-			rv = send(sock, &t->disks[j], sizeof(struct paxos_disk), 0);
-			if (rv < 0) {
-				log_error(NULL, "send error %d %d", rv, errno);
-				goto out;
-			}
-		}
-	}
-
-	memset(&h, 0, sizeof(h));
-	memset(&results, 0, sizeof(results));
-
-	rv = recv(sock, &h, sizeof(struct sm_header), MSG_WAITALL);
-	if (rv != sizeof(h)) {
-		log_error(NULL, "connection closed unexpectedly %d", rv);
-		goto out;
-	}
-
-	rv = recv(sock, &results, sizeof(int) * token_count, MSG_WAITALL);
-	if (rv != sizeof(int) * token_count) {
-		log_error(NULL, "connection closed unexpectedly %d", rv);
-		goto out;
-	}
-
-	/* TODO: report something about results, maybe send a status query? */
- out:
-	close(sock);
-	return rv;
-}
-
-int do_release(int token_count, struct token *token_args[])
-{
-	struct sm_header h;
-	int results[MAX_LEASE_ARGS];
-	int sock, rv, i;
-
-	sock = send_command(SM_CMD_RELEASE, token_count);
-	if (sock < 0)
-		return sock;
-
-	for (i = 0; i < token_count; i++) {
-		rv = send(sock, token_args[i]->resource_id, NAME_ID_SIZE, 0);
-		if (rv < 0) {
-			log_error(NULL, "send error %d %d", rv, errno);
-			goto out;
-		}
-	}
-
-	memset(&h, 0, sizeof(h));
-	memset(&results, 0, sizeof(results));
-
-	rv = recv(sock, &h, sizeof(struct sm_header), MSG_WAITALL);
-	if (rv != sizeof(h)) {
-		log_error(NULL, "connection closed unexpectedly %d", rv);
-		goto out;
-	}
-
-	rv = recv(sock, &results, sizeof(int) * token_count, MSG_WAITALL);
-	if (rv != sizeof(int) * token_count) {
-		log_error(NULL, "connection closed unexpectedly %d", rv);
-		goto out;
-	}
-
-	/* TODO: report something about results, maybe send a status query? */
- out:
-	close(sock);
-	return rv;
-}
-
-int do_daemon(int token_count, struct token *token_args[])
-{
-	int fd, rv, i, num;
-
-	signal(SIGTERM, sigterm_handler);
-
-	fd = lockfile(NULL, DAEMON_LOCKFILE_DIR, sm_id);
-	if (fd < 0)
-		goto out;
-
-	rv = setup_listener();
-	if (rv < 0)
-		goto out_lockfile;
-
-	if (token_count) {
-		rv = touch_watchdog();
-		if (rv < 0)
-			goto out_lockfile;
-	}
-
-	starting_lease_threads = 0;
-	for (i = 0; i < token_count; i++) {
-		rv = add_lease_thread(token_args[i], &num);
-		if (rv < 0) {
-			if (starting_lease_threads) {
-				stop_all_lease_threads();
-				cleanup_all_lease_threads();
-			}
-			goto out_watchdog;
-		}
-		starting_lease_threads++;
-
-		/* once all lease are acquired, the main loop will run
-		   command if there is one */
-	}
-
-	/* there were no initial leases, just a command
-	   (a lease may be added later) */
-
-	if (!starting_lease_threads && command[0]) {
-		rv = run_command(command);
-		if (rv < 0)
-			goto out_watchdog;
-	}
-
-	rv = main_loop();
-
- out_watchdog:
-	unlink_watchdog();
- out_lockfile:
-	unlink_lockfile(fd, DAEMON_LOCKFILE_DIR, sm_id);
- out:
-	return rv;
-}
-
 int main(int argc, char *argv[])
 {
 	struct token *token_args[MAX_LEASE_ARGS];
@@ -2109,12 +2109,12 @@ int main(int argc, char *argv[])
 		goto out;
 
 	switch (action) {
+	case ACT_DAEMON:
+		rv = do_daemon(token_count, token_args);
+		break;
 	case ACT_INIT:
 		rv = do_init(token_count, token_args,
 			     init_num_hosts, init_max_hosts);
-		break;
-	case ACT_DAEMON:
-		rv = do_daemon(token_count, token_args);
 		break;
 	case ACT_ACQUIRE:
 		rv = do_acquire(token_count, token_args);
