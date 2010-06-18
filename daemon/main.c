@@ -38,14 +38,19 @@ static struct client *client = NULL;
 static struct pollfd *pollfd = NULL;
 
 /* priorities are LOG_* from syslog.h */
-int log_logfile_priority;
-int log_syslog_priority;
-int log_stderr_priority;
+int log_logfile_priority = LOG_ERR;
+int log_syslog_priority = LOG_ERR;
+int log_stderr_priority = LOG_ERR;
 
-#define ACT_INIT 1
-#define ACT_DAEMON 2
-#define ACT_ACQUIRE 3
-#define ACT_RELEASE 4
+/* sync_manager <action>'s */
+#define ACT_INIT	1
+#define ACT_DAEMON	2
+#define ACT_ACQUIRE	3
+#define ACT_RELEASE	4
+#define ACT_SHUTDOWN	5
+#define ACT_SUPERVISE	6
+#define ACT_STATUS	7
+#define ACT_LOG_DUMP	8
 
 char command[COMMAND_MAX];
 char killscript[COMMAND_MAX];
@@ -1204,27 +1209,6 @@ int main_loop(void)
 	return error;
 }
 
-void cmd_status(int fd, struct sm_header *h_recv)
-{
-	/* no more to recv */
-
-	/* reply:
-	   struct sm_header +
-	   struct sm_info +
-	   N * (struct sm_lease_info + (M * struct sm_disk_info)) */
-}
-
-void cmd_log_dump(int fd, struct sm_header *h_recv)
-{
-	struct sm_header h;
-
-	memcpy(&h, h_recv, sizeof(struct sm_header));
-
-	/* can't send header until taking log_mutex to find the length */
-
-	write_log_dump(fd, &h);
-}
-
 void cmd_acquire(int fd, struct sm_header *h_recv)
 {
 	struct sm_header h;
@@ -1367,6 +1351,126 @@ void cmd_release(int fd, struct sm_header *h_recv)
 	send(fd, &results, sizeof(int) * lease_count, MSG_DONTWAIT);
 }
 
+/* reply:
+   struct sm_header +
+   struct sm_info +
+   N * (struct sm_lease_info + (M * struct sm_disk_info)) */
+
+void cmd_status(int fd, struct sm_header *h_recv)
+{
+	struct lease_status ls;
+	struct token *t;
+	struct sm_header *hd;
+	struct sm_info *in;
+	struct sm_lease_info *li;
+	struct sm_disk_info *di;
+	char *buf, *li_begin;
+	int rv, i, d, len, token_count, disk_count, tokens_copied, disks_copied;
+
+	token_count = 0;
+	disk_count = 0;
+
+	for (i = 0; i < MAX_LEASES; i++) {
+		if (!tokens[i])
+			continue;
+		token_count++;
+		disk_count += tokens[i]->num_disks;
+	}
+
+	len = sizeof(struct sm_header) + sizeof(struct sm_info) +
+	      (token_count * sizeof(struct sm_lease_info)) +
+	      (disk_count * sizeof(struct sm_disk_info));
+
+	buf = malloc(len);
+	if (!buf)
+		return;
+	memset(buf, 0, len);
+
+	hd = (struct sm_header *)buf;
+	in = (struct sm_info *)(buf + sizeof(struct sm_header));
+	li_begin = buf + sizeof(struct sm_header) + sizeof(struct sm_info);
+
+	memcpy(hd, h_recv, sizeof(struct sm_header));
+	hd->length = len;
+
+	strncpy(in->command, command, COMMAND_MAX - 1);
+	strncpy(in->killscript, killscript, COMMAND_MAX - 1);
+	in->our_host_id = our_host_id;
+	in->supervise_pid = supervise_pid;
+	in->supervise_pid_exit_status = supervise_pid_exit_status;
+	in->starting_lease_threads = starting_lease_threads;
+	in->stopping_lease_threads = stopping_lease_threads;
+	in->killing_supervise_pid = killing_supervise_pid;
+	in->external_shutdown = external_shutdown;
+
+	/* TODO: wd info */
+
+	in->current_time = time(NULL);
+	in->oldest_renewal_time = oldest_renewal_time;
+	in->lease_info_len = sizeof(struct sm_lease_info);
+	in->lease_info_count = token_count;
+
+	tokens_copied = 0;
+	disks_copied = 0;
+
+	for (i = 0; i < MAX_LEASES; i++) {
+		if (!tokens[i])
+			continue;
+
+		t = tokens[i];
+		pthread_mutex_lock(&lease_status_mutex);
+		memcpy(&ls, &lease_status[t->num], sizeof(struct lease_status));
+		pthread_mutex_unlock(&lease_status_mutex);
+
+		li = (struct sm_lease_info *)(li_begin +
+		     (tokens_copied * sizeof(struct sm_lease_info)) +
+		     (disks_copied * sizeof(struct sm_disk_info)));
+
+		strncpy(li->resource_id, t->resource_id, NAME_ID_SIZE);
+		li->num = t->num;
+		li->disk_info_len = sizeof(struct sm_disk_info);
+		li->disk_info_count = t->num_disks;
+		li->stop_thread = ls.stop_thread;
+		li->thread_running = ls.thread_running;
+
+		li->acquire_last_result = ls.acquire_last_result;
+		li->renewal_last_result = ls.renewal_last_result;
+		li->release_last_result = ls.release_last_result;
+		li->acquire_last_time = ls.acquire_last_time;
+		li->acquire_good_time = ls.acquire_good_time;
+		li->renewal_last_time = ls.renewal_last_time;
+		li->renewal_good_time = ls.renewal_good_time;
+		li->release_last_time = ls.release_last_time;
+
+		for (d = 0; d < t->num_disks; d++) {
+			di = (struct sm_disk_info *)((char *)li +
+			     sizeof(struct sm_lease_info) +
+			     (d * sizeof(struct sm_disk_info)));
+
+			di->offset = t->disks[d].offset;
+			strncpy(di->path, t->disks[d].path, DISK_PATH_LEN - 1);
+		}
+
+		tokens_copied++;
+		disks_copied += t->num_disks;
+	}
+
+	rv = send(fd, buf, len, MSG_DONTWAIT);
+
+	free(buf);
+}
+
+void cmd_log_dump(int fd, struct sm_header *h_recv)
+{
+	struct sm_header h;
+
+	memcpy(&h, h_recv, sizeof(struct sm_header));
+
+	/* can't send header until taking log_mutex to find the length */
+
+	write_log_dump(fd, &h);
+}
+
 void process_listener(int ci)
 {
 	struct sm_header h;
@@ -1386,28 +1490,21 @@ void process_listener(int ci)
 	if (strcmp(sm_id, h.sm_id)) {
 	}
 
+	log_debug(NULL, "cmd %d ci %d fd %d", h.cmd, ci, fd);
+
 	switch (h.cmd) {
-	case SM_CMD_GET_TIMEOUTS:
-		/* memcpy(sdata, &to, sizeof(to)); */
-		break;
-	case SM_CMD_SET_TIMEOUTS:
-		/* memcpy(&to, rdata, sizeof(to)); */
-		break;
-	case SM_CMD_SHUTDOWN:
-		external_shutdown = 1;
-		break;
-	case SM_CMD_SUPERVISE_PID:
-		if (!supervise_pid)
-			supervise_pid = h.data;
-		break;
-	case SM_CMD_NUM_HOSTS:
-		/* just rewrite leader block in leases? */
-		break;
 	case SM_CMD_ACQUIRE:
 		cmd_acquire(fd, &h);
 		break;
 	case SM_CMD_RELEASE:
 		cmd_release(fd, &h);
+		break;
+	case SM_CMD_SHUTDOWN:
+		external_shutdown = 1;
+		break;
+	case SM_CMD_SUPERVISE:
+		if (!supervise_pid)
+			supervise_pid = h.data;
 		break;
 	case SM_CMD_STATUS:
 		cmd_status(fd, &h);
@@ -1415,6 +1512,19 @@ void process_listener(int ci)
 	case SM_CMD_LOG_DUMP:
 		cmd_log_dump(fd, &h);
 		break;
+#if 0
+	case SM_CMD_GET_TIMEOUTS:
+		/* memcpy(sdata, &to, sizeof(to)); */
+		break;
+	case SM_CMD_SET_TIMEOUTS:
+		/* memcpy(&to, rdata, sizeof(to)); */
+		break;
+	case SM_CMD_NUM_HOSTS:
+		/* just rewrite leader block in leases? */
+		break;
+#endif
+	default:
+		log_error(NULL, "cmd %d not supported", h.cmd);
 	};
 
 	close(fd);
@@ -1465,9 +1575,70 @@ void sigterm_handler(int sig)
 	external_shutdown = 1;
 }
 
+int make_dirs(void)
+{
+	mode_t old_umask;
+	int rv;
+
+	old_umask = umask(0022);
+	rv = mkdir(SM_RUN_DIR, 0777);
+	if (rv < 0 && errno != EEXIST)
+		goto out;
+
+	rv = mkdir(DAEMON_LOCKFILE_DIR, 0777);
+	if (rv < 0 && errno != EEXIST)
+		goto out;
+
+	rv = mkdir(RESOURCE_LOCKFILE_DIR, 0777);
+	if (rv < 0 && errno != EEXIST)
+		goto out;
+
+	rv = mkdir(DAEMON_SOCKET_DIR, 0777);
+	if (rv < 0 && errno != EEXIST)
+		goto out;
+
+	rv = mkdir(DAEMON_WATCHDOG_DIR, 0777);
+	if (rv < 0 && errno != EEXIST)
+		goto out;
+
+	rv = mkdir(SM_LOG_DIR, 0777);
+	if (rv < 0 && errno != EEXIST)
+		goto out;
+
+	rv = 0;
+ out:
+	umask(old_umask);
+	return rv;
+}
+
 int do_daemon(int token_count, struct token *token_args[])
 {
 	int fd, rv, i, num;
+
+	/*
+	 * after creating dirs and setting up logging the daemon can
+	 * use log_error/log_debug
+	 */
+
+	rv = make_dirs();
+	if (rv < 0) {
+		log_tool("cannot create logging dirs\n");
+		return -1;
+	}
+
+	setup_logging();
+
+	to.lease_timeout_seconds = 60;
+	to.lease_renewal_warn_seconds = 30;
+	to.lease_renewal_fail_seconds = 40;
+	to.lease_renewal_seconds = 10;
+	to.wd_touch_seconds = 4;
+	to.wd_reboot_seconds = 15;
+	to.wd_touch_fail_seconds = 10;
+	to.script_shutdown_seconds = 10;
+	to.sigterm_shutdown_seconds = 10;
+	to.stable_poll_ms = 2000;
+	to.unstable_poll_ms = 500;
 
 	signal(SIGTERM, sigterm_handler);
 
@@ -1520,7 +1691,7 @@ int do_daemon(int token_count, struct token *token_args[])
 	return rv;
 }
 
-int send_command(int sm_command, uint32_t data)
+int send_header(int cmd, uint32_t data)
 {
 	char path[PATH_MAX];
 	struct sockaddr_un addr;
@@ -1530,12 +1701,12 @@ int send_command(int sm_command, uint32_t data)
 
 	sock = socket(AF_LOCAL, SOCK_STREAM, 0);
 	if (sock < 0) {
-		log_error(NULL, "socket error %d %d", sock, errno);
+		log_tool("socket error %d %d", sock, errno);
 		return sock;
 	}
 
 	snprintf(path, PATH_MAX, "%s/%s", DAEMON_SOCKET_DIR, sm_id);
-	log_debug(NULL, "connecting to socket '%s'", path);
+	log_tool("connecting to socket '%s'", path);
 
 	memset(&addr, 0, sizeof(struct sockaddr_un));
 	addr.sun_family = AF_LOCAL;
@@ -1544,22 +1715,22 @@ int send_command(int sm_command, uint32_t data)
 
 	rv = connect(sock, (struct sockaddr *) &addr, addrlen);
 	if (rv < 0) {
-		log_error(NULL, "connect error %d %d", rv, errno);
+		log_tool("connect error %d %d", rv, errno);
 		close(sock);
 		return rv;
 	}
 
 	memset(&header, 0, sizeof(struct sm_header));
 	header.magic = SM_MAGIC;
-	header.cmd = sm_command;
+	header.cmd = cmd;
 	header.data = data;
 	strncpy(&header.sm_id[1], sm_id, NAME_ID_SIZE);
 
-	log_debug(NULL, "sending message header");
+	log_tool("send_header cmd %d data %u", cmd, data);
 
 	rv = send(sock, (void *) &header, sizeof(struct sm_header), 0);
 	if (rv < 0) {
-		log_error(NULL, "send error %d %d", rv, errno);
+		log_tool("send error %d %d", rv, errno);
 		close(sock);
 		return rv;
 	}
@@ -1579,14 +1750,14 @@ int do_init(int token_count, struct token *token_args[],
 
 		num_opened = open_disks(token);
 		if (!majority_disks(token, num_opened)) {
-			log_error(token, "cannot open majority of disks");
+			log_tool("cannot open majority of disks");
 			rv = -1;
 			continue;
 		}
 
 		rv = disk_paxos_init(token, init_num_hosts, init_max_hosts);
 		if (rv < 0) {
-			log_error(token, "cannot initialize disks");
+			log_tool("cannot initialize disks");
 			rv = -1;
 		}
 	}
@@ -1601,7 +1772,7 @@ int do_acquire(int token_count, struct token *token_args[])
 	int results[MAX_LEASE_ARGS];
 	int sock, rv, i, j;
 
-	sock = send_command(SM_CMD_ACQUIRE, token_count);
+	sock = send_header(SM_CMD_ACQUIRE, token_count);
 	if (sock < 0)
 		return sock;
 
@@ -1609,14 +1780,14 @@ int do_acquire(int token_count, struct token *token_args[])
 		t = token_args[i];
 		rv = send(sock, t, sizeof(struct token), 0);
 		if (rv < 0) {
-			log_error(NULL, "send error %d %d", rv, errno);
+			log_tool("send error %d %d", rv, errno);
 			goto out;
 		}
 
 		for (j = 0; j < t->num_disks; j++) {
 			rv = send(sock, &t->disks[j], sizeof(struct paxos_disk), 0);
 			if (rv < 0) {
-				log_error(NULL, "send error %d %d", rv, errno);
+				log_tool("send error %d %d", rv, errno);
 				goto out;
 			}
 		}
@@ -1627,17 +1798,20 @@ int do_acquire(int token_count, struct token *token_args[])
 
 	rv = recv(sock, &h, sizeof(struct sm_header), MSG_WAITALL);
 	if (rv != sizeof(h)) {
-		log_error(NULL, "connection closed unexpectedly %d", rv);
+		log_tool("connection closed unexpectedly %d", rv);
 		goto out;
 	}
 
 	rv = recv(sock, &results, sizeof(int) * token_count, MSG_WAITALL);
 	if (rv != sizeof(int) * token_count) {
-		log_error(NULL, "connection closed unexpectedly %d", rv);
+		log_tool("connection closed unexpectedly %d", rv);
 		goto out;
 	}
 
-	/* TODO: report something about results, maybe send a status query? */
+	for (i = 0; i < token_count; i++) {
+		t = token_args[i];
+		printf("%s - %d\n", token_args[i]->resource_id, results[i]);
+	}
  out:
 	close(sock);
 	return rv;
@@ -1649,14 +1823,14 @@ int do_release(int token_count, struct token *token_args[])
 	int results[MAX_LEASE_ARGS];
 	int sock, rv, i;
 
-	sock = send_command(SM_CMD_RELEASE, token_count);
+	sock = send_header(SM_CMD_RELEASE, token_count);
 	if (sock < 0)
 		return sock;
 
 	for (i = 0; i < token_count; i++) {
 		rv = send(sock, token_args[i]->resource_id, NAME_ID_SIZE, 0);
 		if (rv < 0) {
-			log_error(NULL, "send error %d %d", rv, errno);
+			log_tool("send error %d %d", rv, errno);
 			goto out;
 		}
 	}
@@ -1666,20 +1840,144 @@ int do_release(int token_count, struct token *token_args[])
 
 	rv = recv(sock, &h, sizeof(struct sm_header), MSG_WAITALL);
 	if (rv != sizeof(h)) {
-		log_error(NULL, "connection closed unexpectedly %d", rv);
+		log_tool("connection closed unexpectedly %d", rv);
 		goto out;
 	}
 
 	rv = recv(sock, &results, sizeof(int) * token_count, MSG_WAITALL);
 	if (rv != sizeof(int) * token_count) {
-		log_error(NULL, "connection closed unexpectedly %d", rv);
+		log_tool("connection closed unexpectedly %d", rv);
 		goto out;
 	}
 
-	/* TODO: report something about results, maybe send a status query? */
+	for (i = 0; i < token_count; i++) {
+		printf("%s - %d\n", token_args[i]->resource_id, results[i]);
+	}
  out:
 	close(sock);
 	return rv;
+}
+
+int do_shutdown(void)
+{
+	struct sm_header h;
+	int fd, rv;
+
+	fd = send_header(SM_CMD_SHUTDOWN, 0);
+	if (fd < 0)
+		return fd;
+
+	memset(&h, 0, sizeof(h));
+
+	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	if (rv != sizeof(h))
+		log_tool("connection closed unexpectedly %d", rv);
+
+	close(fd);
+	return 0;
+}
+
+int do_supervise(uint32_t pid)
+{
+	struct sm_header h;
+	int fd, rv;
+
+	fd = send_header(SM_CMD_SUPERVISE, pid);
+	if (fd < 0)
+		return fd;
+
+	memset(&h, 0, sizeof(h));
+
+	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	if (rv != sizeof(h))
+		log_tool("connection closed unexpectedly %d", rv);
+
+	close(fd);
+	return 0;
+}
+
+int do_status(void)
+{
+	struct sm_header h;
+	char *buf;
+	struct sm_info *in;
+	int fd, rv, len;
+
+	fd = send_header(SM_CMD_STATUS, 0);
+	if (fd < 0)
+		return fd;
+
+	memset(&h, 0, sizeof(h));
+
+	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	if (rv != sizeof(h)) {
+		log_tool("connection closed unexpectedly %d", rv);
+		goto out;
+	}
+
+	len = h.length - sizeof(h);
+
+	buf = malloc(len);
+	if (!buf) {
+		log_tool("cannot malloc %d", len);
+		goto out;
+	}
+	memset(buf, 0, len);
+
+	rv = recv(fd, buf, len, MSG_WAITALL);
+	if (rv != len) {
+		log_tool("connection closed unexpectedly %d", rv);
+		goto out;
+	}
+
+	in = (struct sm_info *)buf;
+
+	printf("our_host_id %llu\n", (unsigned long long)in->our_host_id);
+	printf("current_time %llu\n", (unsigned long long)in->current_time);
+	printf("lease count %d\n", in->lease_info_count);
+
+	/* TODO: decode and print all */
+
+ out:
+	close(fd);
+	return 0;
+}
+
+int do_log_dump(void)
+{
+	struct sm_header h;
+	char *buf;
+	int fd, rv, len;
+
+	fd = send_header(SM_CMD_LOG_DUMP, 0);
+	if (fd < 0)
+		return fd;
+
+	memset(&h, 0, sizeof(h));
+
+	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	if (rv != sizeof(h)) {
+		log_tool("connection closed unexpectedly %d", rv);
+		goto out;
+	}
+
+	len = h.length - sizeof(h);
+
+	buf = malloc(len);
+	if (!buf) {
+		log_tool("cannot malloc %d", len);
+		goto out;
+	}
+	memset(buf, 0, len);
+
+	rv = recv(fd, buf, len, MSG_WAITALL);
+	if (rv != len)
+		log_tool("connection closed unexpectedly %d", rv);
+
+	printf("%s\n", buf);
+ out:
+	close(fd);
+	return 0;
 }
 
 void print_usage(void)
@@ -1734,13 +2032,13 @@ int add_resource_arg(char *arg, int *token_count, struct token *token_args[])
 	int rv;
 
 	if (*token_count >= MAX_LEASE_ARGS) {
-		log_error(NULL, "lease args over max %d", MAX_LEASE_ARGS);
+		log_tool("lease args over max %d", MAX_LEASE_ARGS);
 		return -1;
 	}
 
 	rv = create_token(0, &token);
 	if (rv < 0) {
-		log_error(NULL, "resource arg create");
+		log_tool("resource arg create");
 		return rv;
 	}
 
@@ -1763,7 +2061,7 @@ int add_token_arg(char *arg, int *token_count, struct token *token_args[])
 	int len = strlen(arg);
 
 	if (*token_count >= MAX_LEASE_ARGS) {
-		log_error(NULL, "lease args over max %d", MAX_LEASE_ARGS);
+		log_tool("lease args over max %d", MAX_LEASE_ARGS);
 		return -1;
 	}
 
@@ -1773,19 +2071,19 @@ int add_token_arg(char *arg, int *token_count, struct token *token_args[])
 			colons++;
 	}
 	if (!colons || (colons % 2)) {
-		log_error(NULL, "invalid lease arg");
+		log_tool("invalid lease arg");
 		return -1;
 	}
 	num_disks = colons / 2;
 
 	if (num_disks > MAX_DISKS) {
-		log_error(NULL, "invalid lease arg num_disks %d", num_disks);
+		log_tool("invalid lease arg num_disks %d", num_disks);
 		return -1;
 	}
 
 	rv = create_token(num_disks, &token);
 	if (rv < 0) {
-		log_error(NULL, "lease arg create num_disks %d", num_disks);
+		log_tool("lease arg create num_disks %d", num_disks);
 		return rv;
 	}
 
@@ -1800,7 +2098,7 @@ int add_token_arg(char *arg, int *token_count, struct token *token_args[])
 	for (i = 0; i < len + 1; i++) {
 		if (i < len && arg[i] != ':') {
 			if (j >= DISK_PATH_LEN) {
-				log_error(NULL, "lease arg length error");
+				log_tool("lease arg length error");
 				goto fail;
 			}
 			sub[j++] = arg[i];
@@ -1812,20 +2110,20 @@ int add_token_arg(char *arg, int *token_count, struct token *token_args[])
 
 		if (!sub_count) {
 			if (strlen(sub) > NAME_ID_SIZE) {
-				log_error(NULL, "lease arg id length error");
+				log_tool("lease arg id length error");
 				goto fail;
 			}
 			strncpy(token->resource_id, sub, NAME_ID_SIZE);
 		} else if (sub_count % 2) {
 			if (strlen(sub) > DISK_PATH_LEN-1 || strlen(sub) < 1) {
-				log_error(NULL, "lease arg path length error");
+				log_tool("lease arg path length error");
 				goto fail;
 			}
 			strncpy(token->disks[d].path, sub, DISK_PATH_LEN - 1);
 		} else {
 			rv = sscanf(sub, "%llu", (unsigned long long *)&token->disks[d].offset);
 			if (rv != 1) {
-				log_error(NULL, "lease arg offset error");
+				log_tool("lease arg offset error");
 				goto fail;
 			}
 			d++;
@@ -1842,42 +2140,6 @@ int add_token_arg(char *arg, int *token_count, struct token *token_args[])
 	free(token->disks);
 	free(token);
 	return -1;
-}
-
-int make_dirs(void)
-{
-	mode_t old_umask;
-	int rv;
-
-	old_umask = umask(0022);
-	rv = mkdir(SM_RUN_DIR, 0777);
-	if (rv < 0 && errno != EEXIST)
-		goto out;
-
-	rv = mkdir(DAEMON_LOCKFILE_DIR, 0777);
-	if (rv < 0 && errno != EEXIST)
-		goto out;
-
-	rv = mkdir(RESOURCE_LOCKFILE_DIR, 0777);
-	if (rv < 0 && errno != EEXIST)
-		goto out;
-
-	rv = mkdir(DAEMON_SOCKET_DIR, 0777);
-	if (rv < 0 && errno != EEXIST)
-		goto out;
-
-	rv = mkdir(DAEMON_WATCHDOG_DIR, 0777);
-	if (rv < 0 && errno != EEXIST)
-		goto out;
-
-	rv = mkdir(SM_LOG_DIR, 0777);
-	if (rv < 0 && errno != EEXIST)
-		goto out;
-
-	rv = 0;
- out:
-	umask(old_umask);
-	return rv;
 }
 
 /* TODO: option to start up as the receiving side of a transfer
@@ -1925,16 +2187,17 @@ int read_args(int argc, char *argv[],
 		*action = ACT_ACQUIRE;
 	else if (!strcmp(arg1, "release"))
 		*action = ACT_RELEASE;
+	else if (!strcmp(arg1, "shutdown"))
+		*action = ACT_SHUTDOWN;
+	else if (!strcmp(arg1, "supervise"))
+		*action = ACT_SUPERVISE;
+	else if (!strcmp(arg1, "status"))
+		*action = ACT_STATUS;
+	else if (!strcmp(arg1, "log_dump"))
+		*action = ACT_LOG_DUMP;
 	else {
-		fprintf(stderr, "first arg is unknown action\n");
+		log_tool("first arg is unknown action");
 		print_usage();
-		exit(EXIT_FAILURE);
-	}
-
-	/* after creating dirs we can use log_error/log_debug */
-	rv = make_dirs();
-	if (rv < 0) {
-		fprintf(stderr, "cannot create logging dirs\n");
 		exit(EXIT_FAILURE);
 	}
 
@@ -1942,8 +2205,8 @@ int read_args(int argc, char *argv[],
 		p = argv[i];
 
 		if ((p[0] != '-') || (strlen(p) != 2)) {
-			fprintf(stderr, "unknown option %s\n", p);
-			fprintf(stderr, "space required before option value\n");
+			log_tool("unknown option %s", p);
+			log_tool("space required before option value");
 			print_usage();
 			exit(EXIT_FAILURE);
 		}
@@ -2008,7 +2271,7 @@ int read_args(int argc, char *argv[],
 			optarg_used = 0;
 			break;
 		default:
-			fprintf(stderr, "unknown option: %c\n", optchar);
+			log_tool("unknown option: %c", optchar);
 			exit(EXIT_FAILURE);
 		};
 
@@ -2038,8 +2301,8 @@ int read_args(int argc, char *argv[],
 		cmd_argc = argc - i;
 
 		if (cmd_argc < 1) {
-			log_error(NULL, "command option (-c) requires an arg");
-			exit(EXIT_FAILURE);
+			log_tool("command option (-c) requires an arg");
+			return -EINVAL;
 		}
 
 		len = (cmd_argc + 1) * sizeof(char *); /* +1 for final NULL */
@@ -2058,17 +2321,17 @@ int read_args(int argc, char *argv[],
 	}
 
 	if ((*action == ACT_DAEMON) && !our_host_id) {
-		log_error(NULL, "local host id required");
+		log_tool("local host id required");
 		return -EINVAL;
 	}
 
 	if ((*action != ACT_INIT) && !sm_id[0]) {
-		log_error(NULL, "name option (-n) required");
+		log_tool("name option (-n) required");
 		return -EINVAL;
 	}
 
 	if ((*action == ACT_ACQUIRE) && !token_count) {
-		log_error(NULL, "no leases were asked to be acquired");
+		log_tool("no leases were asked to be acquired");
 		return -EINVAL;
 	}
 
@@ -2082,26 +2345,6 @@ int main(int argc, char *argv[])
 	int action = 0;
 	int init_num_hosts = 0, init_max_hosts = DEFAULT_MAX_HOSTS;
 	int rv;
-
-	/* default logging: LOG_ERR and up to stderr, logfile and syslog */
-
-	log_stderr_priority = LOG_ERR;
-	log_logfile_priority = LOG_ERR;
-	log_syslog_priority = LOG_ERR;
-
-	setup_logging();
-
-	to.lease_timeout_seconds = 60;
-	to.lease_renewal_warn_seconds = 30;
-	to.lease_renewal_fail_seconds = 40;
-	to.lease_renewal_seconds = 10;
-	to.wd_touch_seconds = 4;
-	to.wd_reboot_seconds = 15;
-	to.wd_touch_fail_seconds = 10;
-	to.script_shutdown_seconds = 10;
-	to.sigterm_shutdown_seconds = 10;
-	to.stable_poll_ms = 2000;
-	to.unstable_poll_ms = 500;
 
 	rv = read_args(argc, argv, &token_count, token_args,
 		       &action, &init_num_hosts, &init_max_hosts);
@@ -2121,6 +2364,18 @@ int main(int argc, char *argv[])
 		break;
 	case ACT_RELEASE:
 		rv = do_release(token_count, token_args);
+		break;
+	case ACT_SHUTDOWN:
+		rv = do_shutdown();
+		break;
+	case ACT_SUPERVISE:
+		rv = do_supervise(supervise_pid);
+		break;
+	case ACT_STATUS:
+		rv = do_status();
+		break;
+	case ACT_LOG_DUMP:
+		rv = do_log_dump();
 		break;
 	default:
 		break;

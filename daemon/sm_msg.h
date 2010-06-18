@@ -11,7 +11,7 @@ enum {
 	SM_CMD_RELEASE,
 	SM_CMD_GET_TIMEOUTS,
 	SM_CMD_SET_TIMEOUTS,
-	SM_CMD_SUPERVISE_PID,
+	SM_CMD_SUPERVISE,
 };
 
 struct sm_header {
@@ -30,11 +30,10 @@ struct sm_info {
 	char command[COMMAND_MAX];
 	char killscript[COMMAND_MAX];
 	uint64_t our_host_id;
-	uint64_t num_hosts;
 
 	int supervise_pid;
 	int supervise_pid_exit_status;
-	int starting_lease_thread;
+	int starting_lease_threads;
 	int stopping_lease_threads;
 	int killing_supervise_pid;
 	int external_shutdown;
@@ -43,18 +42,18 @@ struct sm_info {
 
 	uint64_t current_time;
 	uint64_t oldest_renewal_time;
-	int oldest_renewal_num;
 
 	uint32_t lease_info_len;
 	uint32_t lease_info_count;
 };
 
 struct sm_lease_info {
-	char token_name[NAME_ID_SIZE];
-	uint32_t token_type;
+	char resource_id[NAME_ID_SIZE];
 	int num;
 	int stop_thread;
 	int thread_running;
+
+	/* TODO: copy out the latest leader record ? */
 
 	int acquire_last_result;
 	int renewal_last_result;
