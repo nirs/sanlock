@@ -728,7 +728,7 @@ int check_leases_renewed(void)
 
 /* tell all threads to release and exit */
 
-void stop_lease_threads(void)
+void stop_all_lease_threads(void)
 {
 	int i;
 
@@ -743,17 +743,25 @@ void stop_lease_threads(void)
 	pthread_mutex_unlock(&lease_status_mutex);
 }
 
-void cleanup_lease_threads(void)
+/* This assumes that stop_all_lease_threads() has been called, so all threads
+   are stopping and it doesn't need to check any lease_status[] values.
+   It's also ok to block the main thread doing this since there's nothing
+   for it to continue monitoring. */
+
+void cleanup_all_lease_threads(void)
 {
 	struct token *token;
-	int i, stopping;
+	int i;
 	void *ret;
 
+	/* sanity check */
+	if (!stopping_lease_threads)
+		log_error(NULL, "cleanup_all_lease_threads before stop");
+
 	for (i = 0; i < MAX_LEASES; i++) {
-		token =  tokens[i];
-		stopping = lease_status[i].stop_thread;
-		if (token && stopping) {
-			log_debug(token, "cleaning thread");
+		token = tokens[i];
+		if (token) {
+			log_debug(token, "clean thread %d", i);
 			pthread_join(lease_threads[i], &ret);
 			free(token->disks);
 			free(token);
@@ -762,10 +770,50 @@ void cleanup_lease_threads(void)
 	}
 }
 
+/* This is intended to clean up individual threads that have been stopped
+   (e.g. sync_manager acquire failed or sync_manager release called) without
+   all threads having been stopped (which cleanup_all_lease_threads is for). */
+
+void cleanup_stopped_lease_thread(void)
+{
+	struct token *token;
+	int found = 0;
+	int i;
+	void *ret;
+
+	pthread_mutex_lock(&lease_status_mutex);
+	for (i = 0; i < MAX_LEASES; i++) {
+		if (lease_status[i].stop_thread &&
+		    !lease_status[i].thread_running) {
+			memset(&lease_status[i], 0, sizeof(struct lease_status));
+			found = 1;
+			break;
+		}
+	}
+	pthread_mutex_unlock(&lease_status_mutex);
+
+	if (!found)
+		return;
+
+	token = tokens[i];
+	log_debug(token, "clean thread %d", i);
+	pthread_join(lease_threads[i], &ret);
+	free(token->disks);
+	free(token);
+	tokens[i] = NULL;
+}
+
 void set_thread_running(int num, int val)
 {
 	pthread_mutex_lock(&lease_status_mutex);
 	lease_status[num].thread_running = val;
+
+	/* stop_thread may not be 1 in the case where lease_thread
+	   fails to do the initial acquire.  stop_thread needs to be 1
+	   for clean_stopped_threads to clean it up. */
+	if (!val)
+		lease_status[num].stop_thread = 1;
+
 	pthread_mutex_unlock(&lease_status_mutex);
 }
 
@@ -913,6 +961,7 @@ int add_lease_thread(struct token *token, int *num_ret)
 	 * in the synchronous state. Otherwise there is a point
 	 * where a thread is active but is not marked as such. */
 	lease_status[num].thread_running = 1;
+	lease_status[num].stop_thread = 0;
 
 	pthread_mutex_unlock(&lease_status_mutex);
 
@@ -1031,7 +1080,7 @@ int main_loop(void)
 				/* lease_thread failed to acquire lease */
 				starting_lease_threads = 0;
 				unlink_watchdog();
-				stop_lease_threads();
+				stop_all_lease_threads();
 				error = r;
 
 			} else if (r > 0) {
@@ -1042,7 +1091,7 @@ int main_loop(void)
 					rv = run_command(command);
 					if (rv < 0) {
 						unlink_watchdog();
-						stop_lease_threads();
+						stop_all_lease_threads();
 						error = rv;
 					}
 				}
@@ -1060,7 +1109,7 @@ int main_loop(void)
 		 */
 
 		if (stopping_lease_threads) {
-			cleanup_lease_threads();
+			cleanup_all_lease_threads();
 			/* error may be set from initial lease acquire
 			   or run_command */
 			if (!error)
@@ -1072,9 +1121,14 @@ int main_loop(void)
 		 * someone has asked sync_manager to shut down
 		 */
 
-		if (external_shutdown) {
+		if (external_shutdown)
 			kill_supervise_pid();
-		}
+
+		/*
+		 * sync_manager release stops threads that need cleanup
+		 */
+
+		cleanup_stopped_lease_thread();
 
 		/*
 		 * if watchdog is supposed to be updated (we haven't
@@ -1104,7 +1158,7 @@ int main_loop(void)
 			 * this may or may not be due to us killing it.
 		 	 */
 			unlink_watchdog();
-			stop_lease_threads();
+			stop_all_lease_threads();
 
 		} else if (pid_status < 0) {
 			/*
@@ -1991,8 +2045,8 @@ int do_daemon(int token_count, struct token *token_args[])
 		rv = add_lease_thread(token_args[i], &num);
 		if (rv < 0) {
 			if (starting_lease_threads) {
-				stop_lease_threads();
-				cleanup_lease_threads();
+				stop_all_lease_threads();
+				cleanup_all_lease_threads();
 			}
 			goto out_watchdog;
 		}
