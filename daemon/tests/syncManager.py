@@ -4,6 +4,7 @@ import os
 import sys
 import logging
 from select import select
+from StringIO import StringIO
 
 SYNCMANAGER_PATH = "../sync_manager"
 
@@ -65,17 +66,42 @@ class SyncManager(object):
 
     def _runTool(self, command, args):
         mngr = self._runToolAsync(command, args)
-        stdout, stderr = mngr.communicate()
+        stdout = StringIO()
+        stderr = StringIO()
+        empty = False
+        while (mngr.poll() is None) or (not empty):
+            readyObjects = select([mngr.stdout, mngr.stderr], [], [], 1)[0]
+            for obj in readyObjects:
+                line = obj.readline().replace("\n", "")
+                if line == "":
+                    empty = True
+                    continue
+                if obj is mngr.stdout:
+                    stdout.write(line)
+                    stdout.write("\n")
+                else:
+                    stderr.write(line)
+                    stderr.write("\n")
+
+                empty = False
+
+                self._log.debug("synctool - %s" % line)
+
         rc = mngr.returncode
+        stdout.seek(0)
+        stderr.seek(0)
+        stdout = stdout.read()
+        stderr = stderr.read()
         if rc != 0:
             cmd = ["sync_manager", command] + args;
             cmd = subprocess.list2cmdline(cmd)
-            self._log.debug(stderr);
-            raise SyncManagerException("SyncManager failed (CMD:%s) (OUT:%s) (ERR:%s)" %
-                                            (cmd, stdout, stderr),
+
+            raise SyncManagerException("SyncManager failed (CMD:%s) (RC:%d) (OUT:%s) (ERR:%s)" %
+                                            (cmd, rc, stdout, stderr),
                                         errno = rc,
                                         stdout = stdout,
                                         stderr = stderr)
+
 
         return (stdout, stderr)
 

@@ -5,9 +5,10 @@ from ruth import RuthTestCase
 from syncManager import SyncManager
 from confUtils import Validate
 from testUtils import LeaderRecord, readState, nullTerminated, leasesValidator, getResources
+from testUtils import Dummy
 
 DEFAULT_NUMBER_OF_HOSTS = 10
-MAXIMUM_NUMBER_OF_HOSTS = 2000
+MAXIMUM_NUMBER_OF_HOSTS = 10 #2000
 DEFAULT_NAME = "RUTH"
 DEFAULT_LEASES = "<ResourceDI>:<DRIVE>:<OFFSET>[<DRIVE>:<OFFSET>], ..."
 LEASES_CONFIG_DEFINITION = {"validator": leasesValidator, "default" : DEFAULT_LEASES}
@@ -68,9 +69,9 @@ class AcquireLease(RuthTestCase):
     def setUp(self):
         self.mgr = SyncManager(DEFAULT_NAME)
         self.log.debug("Initializing disks")
-        self.mgr.initStorage(self.mycfg["Leases"], self.mycfg["NumberOfHosts"])
+        self.mgr.initStorage(self.mycfg["Leases"], self.mycfg["NumberOfHosts"], MAXIMUM_NUMBER_OF_HOSTS)
         self.log.debug("Starting Dummy Process")
-        #self.mgr.startDummyProcess()
+        self.dummy = Dummy(DEFAULT_NAME, 1)
 
     def testGood(self):
         self.log.debug("Acquiring leases")
@@ -82,6 +83,9 @@ class AcquireLease(RuthTestCase):
         # Adding fake lease
         leases = list(self.mycfg["Leases"]) + [("Sense-Sphere", [("./disk.fake", 0)])]
         self.assertRaises(Exception, self.mgr.acquireLeases, leases);
+
+    def tearDown(self):
+        self.dummy.stop()
 
 class ReleaseLease(RuthTestCase):
     @classmethod
@@ -95,9 +99,9 @@ class ReleaseLease(RuthTestCase):
     def setUp(self):
         self.mgr = SyncManager(DEFAULT_NAME)
         self.log.debug("Initializing disks")
-        self.mgr.initStorage(self.mycfg["Leases"], self.mycfg["NumberOfHosts"])
+        self.mgr.initStorage(self.mycfg["Leases"], self.mycfg["NumberOfHosts"], MAXIMUM_NUMBER_OF_HOSTS)
         self.log.debug("Starting Dummy Process")
-        #self.mgr.startDummyProcess()
+        self.dummy = Dummy(DEFAULT_NAME, 1)
         self.log.debug("Acquiring leases")
         self.mgr.acquireLeases(self.mycfg["Leases"])
 
@@ -108,6 +112,9 @@ class ReleaseLease(RuthTestCase):
         resources = getResources(self.mycfg["Leases"])
         self.assertRaises(Exception, self.mgr.releaseLeases, resources + ["Sense-Sphere"])
         self.mgr.releaseLeases(resources)
+
+    def tearDown(self):
+        self.dummy.stop()
 
 
 def suite():

@@ -828,7 +828,32 @@ void *lease_thread(void *arg)
 	struct leader_record leader;
 	struct timespec ts;
 	int num = token->num;
-	int fd, rv, stop, num_opened;
+	int i, fd, rv, stop, num_opened, prev_token;
+	void *ret;
+
+	/* There can be a situation where a previous request
+	 * is currently begin freed. We have to find it and
+	 * wait for it to finish before reaquireing        */
+	prev_token = -1;
+	pthread_mutex_lock(&lease_status_mutex);
+	for (i = 0; i < MAX_LEASES; i++) {
+		if (i == num) {
+			continue;
+		}
+
+		if (!lease_status[i].thread_running) {
+			continue;
+		}
+
+		if (strncmp(lease_status[i].resource_id, token->resource_id, NAME_ID_SIZE)) {
+			prev_token = i;
+			break;
+		}
+	}
+	pthread_mutex_unlock(&lease_status_mutex);
+
+	if (prev_token >= 0)
+		pthread_join(lease_threads[i], &ret);
 
 	fd = lockfile(token, RESOURCE_LOCKFILE_DIR, token->resource_id);
 	if (fd < 0) {
@@ -991,6 +1016,11 @@ int stop_lease_thread(char *resource_id)
 
 	pthread_mutex_lock(&lease_status_mutex);
 	for (i = 0; i < MAX_LEASES; i++) {
+		if (!lease_status[i].thread_running) {
+			/* an old, stopped but not cleaned token */
+			continue;
+		}
+
 		if (strncmp(lease_status[i].resource_id, resource_id, NAME_ID_SIZE))
 			continue;
 		lease_status[i].stop_thread = 1;
@@ -1240,7 +1270,7 @@ void cmd_acquire(int fd, struct sm_header *h_recv)
 			goto out;
 		}
 
-		rv = recv(fd, token, sizeof(struct token), MSG_DONTWAIT);
+		rv = recv(fd, token, sizeof(struct token), MSG_WAITALL);
 		if (rv != sizeof(struct token)) {
 			log_error(NULL, "connection closed unexpectedly %d", rv);
 			results[i] = -1;
@@ -1257,7 +1287,7 @@ void cmd_acquire(int fd, struct sm_header *h_recv)
 		memset(disks, 0, num_disks * sizeof(struct paxos_disk));
 
 		for (j = 0; j < num_disks; j++) {
-			rv = recv(fd, &disks[j], sizeof(struct paxos_disk), MSG_DONTWAIT);
+			rv = recv(fd, &disks[j], sizeof(struct paxos_disk), MSG_WAITALL);
 			if (rv != sizeof(struct paxos_disk)) {
 				log_error(NULL, "connection closed unexpectedly %d", rv);
 				results[i] = -1;
@@ -1301,8 +1331,8 @@ void cmd_acquire(int fd, struct sm_header *h_recv)
 	h.length = sizeof(h) + sizeof(int) * token_count;
 	h.data = added_count;
 
-	send(fd, &h, sizeof(struct sm_header), MSG_DONTWAIT);
-	send(fd, &results, sizeof(int) * token_count, MSG_DONTWAIT);
+	send(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
+	send(fd, &results, sizeof(int) * token_count, MSG_WAITALL);
 }
 
 void cmd_release(int fd, struct sm_header *h_recv)
@@ -1318,7 +1348,7 @@ void cmd_release(int fd, struct sm_header *h_recv)
 	stopped_count = 0;
 
 	for (i = 0; i < lease_count; i++) {
-		rv = recv(fd, resource_id, NAME_ID_SIZE, MSG_DONTWAIT);
+		rv = recv(fd, resource_id, NAME_ID_SIZE, MSG_WAITALL);
 		if (rv != NAME_ID_SIZE) {
 			log_error(NULL, "connection closed unexpectedly %d", rv);
 			results[i] = -1;
@@ -1347,8 +1377,8 @@ void cmd_release(int fd, struct sm_header *h_recv)
 	h.length = sizeof(h) + sizeof(int) * lease_count;
 	h.data = stopped_count;
 
-	send(fd, &h, sizeof(struct sm_header), MSG_DONTWAIT);
-	send(fd, &results, sizeof(int) * lease_count, MSG_DONTWAIT);
+	send(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
+	send(fd, &results, sizeof(int) * lease_count, MSG_WAITALL);
 }
 
 /* reply:
@@ -1455,7 +1485,7 @@ void cmd_status(int fd, struct sm_header *h_recv)
 		disks_copied += t->num_disks;
 	}
 
-	rv = send(fd, buf, len, MSG_DONTWAIT);
+	rv = send(fd, buf, len, MSG_WAITALL);
 
 	free(buf);
 }
@@ -1480,8 +1510,10 @@ void process_listener(int ci)
 	if (fd < 0)
 		return;
 
-	rv = recv(fd, &h, sizeof(h), MSG_DONTWAIT);
+	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+
 	if (rv != sizeof(h)) {
+		return;
 	}
 
 	if (h.magic != SM_MAGIC) {
@@ -1812,6 +1844,7 @@ int do_acquire(int token_count, struct token *token_args[])
 		t = token_args[i];
 		printf("%s - %d\n", token_args[i]->resource_id, results[i]);
 	}
+	rv = 0;
  out:
 	close(sock);
 	return rv;
@@ -1853,6 +1886,7 @@ int do_release(int token_count, struct token *token_args[])
 	for (i = 0; i < token_count; i++) {
 		printf("%s - %d\n", token_args[i]->resource_id, results[i]);
 	}
+	rv = 0;
  out:
 	close(sock);
 	return rv;
@@ -1927,6 +1961,7 @@ int do_status(void)
 	rv = recv(fd, buf, len, MSG_WAITALL);
 	if (rv != len) {
 		log_tool("connection closed unexpectedly %d", rv);
+		free(buf);
 		goto out;
 	}
 
