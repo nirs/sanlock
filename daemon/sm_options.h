@@ -7,7 +7,6 @@ struct sm_options {
 };
 
 extern struct sm_options options;
-extern time_t oldest_renewal_time; /* timestamp of oldest lease renewal */
 extern struct sm_timeouts to;
 #endif
 

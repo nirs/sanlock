@@ -69,7 +69,7 @@ int supervise_pid_exit_status;
 int killing_supervise_pid;
 int external_shutdown;
 
-int acquering_initial_leases;
+int acquiring_initial_leases;
 
 static void client_alloc(void)
 {
@@ -242,7 +242,7 @@ void kill_supervise_pid(void)
 	if (!supervise_pid)
 		return;
 
-	expire_time = oldest_renewal_time + to.lease_timeout_seconds;
+	expire_time = get_oldest_renewal_time() + to.lease_timeout_seconds;
 
 	if (time(NULL) >= expire_time)
 		goto do_kill;
@@ -287,9 +287,6 @@ void kill_supervise_pid(void)
 	killing_supervise_pid = 4;
 	kill(supervise_pid, SIGKILL);
 }
-
-
-
 
 /*
  * updating a lease tells other hosts we are running a vm,
@@ -360,30 +357,30 @@ int main_loop(void)
 
 		/*
 		 * sync_manager has just been started and given initial
-		 * leases to acquire (num 0 to acquering_initial_leases - 1).
+		 * leases to acquire (num 0 to acquiring_initial_leases - 1).
 		 * Once they are all acquired, the command should be run if
 		 * one was provided.
 		 */
 
-		if (acquering_initial_leases) {
-			get_lease_status(acquering_initial_leases - 1,
+		if (acquiring_initial_leases) {
+			get_lease_result(acquiring_initial_leases - 1,
 					 OP_ACQUIRE, &r);
 			if (r < 0) {
 				/* lease_thread failed to acquire lease */
-				acquering_initial_leases = 0;
+				acquiring_initial_leases = 0;
 				unlink_watchdog();
-				stop_all_lease_threads();
+				stop_all_leases();
 				error = r;
 
 			} else if (r > 0) {
 				/* lease_thread has acquired lease */
-				acquering_initial_leases--;
+				acquiring_initial_leases--;
 
-				if (!acquering_initial_leases && command[0]) {
+				if (!acquiring_initial_leases && command[0]) {
 					rv = run_command(command);
 					if (rv < 0) {
 						unlink_watchdog();
-						stop_all_lease_threads();
+						stop_all_leases();
 						error = rv;
 					}
 				}
@@ -400,8 +397,8 @@ int main_loop(void)
 		 * has stopped.  pthread_join lease threads and free tokens
 		 */
 
-		if (tm_is_shutting_down()) {
-			cleanup_all_lease_threads();
+		if (stopping_all_leases()) {
+			cleanup_all_leases();
 			/* error may be set from initial lease acquire
 			   or run_command */
 			if (!error)
@@ -420,7 +417,7 @@ int main_loop(void)
 		 * sync_manager release stops threads that need cleanup
 		 */
 
-		cleanup_stopped_lease_thread();
+		cleanup_stopped_lease();
 
 		/*
 		 * if watchdog is supposed to be updated (we haven't
@@ -435,7 +432,7 @@ int main_loop(void)
 		 * The main running case (not stopping or starting).
 		 * We also continue to run through here after killing the pid,
 		 * until the pid has exited at which point we shift to
-		 * the stopping_lease_threads mode.
+		 * the stopping_all_leases mode.
 		 * Watch the pid and renew its associated leases while it
 		 * continues to run.  The watchdog is one way to deal with
 		 * the error case where the pid continues running but we fail
@@ -450,7 +447,7 @@ int main_loop(void)
 			 * this may or may not be due to us killing it.
 		 	 */
 			unlink_watchdog();
-			stop_all_lease_threads();
+			stop_all_leases();
 
 		} else if (pid_status < 0) {
 			/*
@@ -486,8 +483,8 @@ int main_loop(void)
 		   timely fashion. */
 
 		if ((pid_status > 0) && !killing_supervise_pid &&
-		    !tm_is_shutting_down() && !acquering_initial_leases &&
-		    (time(NULL) - oldest_renewal_time < to.lease_renewal_seconds))
+		    !stopping_all_leases() && !acquiring_initial_leases &&
+		    (time(NULL) - get_oldest_renewal_time() < to.lease_renewal_seconds))
 			poll_timeout = to.stable_poll_ms;
 		else
 			poll_timeout = to.unstable_poll_ms;
@@ -612,7 +609,7 @@ void cmd_release(int fd, struct sm_header *h_recv)
 			break;
 		}
 
-		rv = stop_lease_thread(resource_name);
+		rv = stop_lease(resource_name);
 		if (rv < 0) {
 			results[i] = rv;
 		} else {
@@ -685,15 +682,15 @@ void cmd_status(int fd, struct sm_header *h_recv)
 	in->our_host_id = our_host_id;
 	in->supervise_pid = supervise_pid;
 	in->supervise_pid_exit_status = supervise_pid_exit_status;
-	in->starting_lease_threads = acquering_initial_leases;
-	in->stopping_lease_threads = tm_is_shutting_down();
+	in->starting_lease_threads = acquiring_initial_leases;
+	in->stopping_lease_threads = stopping_all_leases();
 	in->killing_supervise_pid = killing_supervise_pid;
 	in->external_shutdown = external_shutdown;
 
 	/* TODO: wd info */
 
 	in->current_time = time(NULL);
-	in->oldest_renewal_time = oldest_renewal_time;
+	in->oldest_renewal_time = get_oldest_renewal_time();
 	in->lease_info_len = sizeof(struct sm_lease_info);
 	in->lease_info_count = token_count;
 
@@ -705,7 +702,7 @@ void cmd_status(int fd, struct sm_header *h_recv)
 			continue;
 
 		t = tokens[i];
-		get_token_status(t->token_id, &ls);
+		get_lease_status(t->token_id, &ls);
 
 		li = (struct sm_lease_info *)(li_begin +
 		     (tokens_copied * sizeof(struct sm_lease_info)) +
@@ -943,17 +940,17 @@ int do_daemon(int token_count, struct token *token_args[])
 			goto out_lockfile;
 	}
 
-	acquering_initial_leases = 0;
+	acquiring_initial_leases = 0;
 	for (i = 0; i < token_count; i++) {
 		rv = add_lease_thread(token_args[i], &num);
 		if (rv < 0) {
-			if (acquering_initial_leases) {
-				stop_all_lease_threads();
-				cleanup_all_lease_threads();
+			if (acquiring_initial_leases) {
+				stop_all_leases();
+				cleanup_all_leases();
 			}
 			goto out_watchdog;
 		}
-		acquering_initial_leases++;
+		acquiring_initial_leases++;
 
 		/* once all lease are acquired, the main loop will run
 		   command if there is one */
@@ -962,7 +959,7 @@ int do_daemon(int token_count, struct token *token_args[])
 	/* there were no initial leases, just a command
 	   (a lease may be added later) */
 
-	if (!acquering_initial_leases && command[0]) {
+	if (!acquiring_initial_leases && command[0]) {
 		rv = run_command(command);
 		if (rv < 0)
 			goto out_watchdog;
@@ -1306,10 +1303,10 @@ void print_usage(void)
 
 	printf("\nrelease -n <name> -r <resource_name>\n");
 	printf("  -n <name>		name of a running sync_manager instance\n");
-	printf("  -r <resource_name>	resource id of a previously acquired lease\n");
+	printf("  -r <resource_name>	resource name of a previously acquired lease\n");
 
 	printf("\nLEASE = <resource_name>:<path>:<offset>[:<path>:<offset>...]\n");
-	printf("  <resource_name>		name of resource being leased\n");
+	printf("  <resource_name>	name of resource being leased\n");
 	printf("  <path>		disk path\n");
 	printf("  <offset>		offset on disk\n");
 	printf("  [:<path>:<offset>...] other disks in a multi-disk lease\n");

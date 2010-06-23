@@ -26,14 +26,9 @@ pthread_t lease_threads[MAX_LEASES];
 pthread_mutex_t lease_status_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_cond_t lease_status_cond = PTHREAD_COND_INITIALIZER;
 struct lease_status lease_status[MAX_LEASES];
-time_t oldest_renewal_time; /* timestamp of oldest lease renewal */
-
-int stopping_lease_threads;
+time_t _oldest_renewal_time; /* timestamp of oldest lease renewal */
+int _stopping_all_leases;
 struct sm_timeouts to;
-
-int tm_is_shutting_down() {
-	return stopping_lease_threads;
-}
 
 /* return < 0 on error, 1 on success */
 
@@ -109,7 +104,12 @@ void set_lease_status(int token_id, int op, int r, uint64_t t)
 	pthread_mutex_unlock(&lease_status_mutex);
 }
 
-void get_lease_status(int token_id, int op, int *r)
+uint64_t get_oldest_renewal_time(void)
+{
+	return _oldest_renewal_time;
+}
+
+void get_lease_result(int token_id, int op, int *r)
 {
 	pthread_mutex_lock(&lease_status_mutex);
 	if (op == OP_ACQUIRE) {
@@ -122,7 +122,8 @@ void get_lease_status(int token_id, int op, int *r)
 	pthread_mutex_unlock(&lease_status_mutex);
 }
 
-int get_token_status(int token_id, struct lease_status *status) {
+int get_lease_status(int token_id, struct lease_status *status)
+{
 	//TODO : check if token id exists
 	pthread_mutex_lock(&lease_status_mutex);
 	memcpy(status, &lease_status[token_id], sizeof(struct lease_status));
@@ -171,7 +172,7 @@ int check_leases_renewed(void)
 	}
 	pthread_mutex_unlock(&lease_status_mutex);
 
-	oldest_renewal_time = oldest;
+	_oldest_renewal_time = oldest;
 
 	if (fail_count)
 		return -1;
@@ -179,13 +180,18 @@ int check_leases_renewed(void)
 	return 0;
 }
 
+int stopping_all_leases(void)
+{
+	return _stopping_all_leases;
+}
+
 /* tell all threads to release and exit */
 
-void stop_all_lease_threads(void)
+void stop_all_leases(void)
 {
 	int i;
 
-	stopping_lease_threads = 1;
+	_stopping_all_leases = 1;
 
 	pthread_mutex_lock(&lease_status_mutex);
 	for (i = 0; i < MAX_LEASES; i++) {
@@ -196,20 +202,20 @@ void stop_all_lease_threads(void)
 	pthread_mutex_unlock(&lease_status_mutex);
 }
 
-/* This assumes that stop_all_lease_threads() has been called, so all threads
+/* This assumes that stop_all_leases() has been called, so all threads
    are stopping and it doesn't need to check any lease_status[] values.
    It's also ok to block the main thread doing this since there's nothing
    for it to continue monitoring. */
 
-void cleanup_all_lease_threads(void)
+void cleanup_all_leases(void)
 {
 	struct token *token;
 	int i;
 	void *ret;
 
 	/* sanity check */
-	if (!stopping_lease_threads)
-		log_error(NULL, "cleanup_all_lease_threads before stop");
+	if (!_stopping_all_leases)
+		log_error(NULL, "cleanup_all_leases before stop");
 
 	for (i = 0; i < MAX_LEASES; i++) {
 		token = tokens[i];
@@ -225,9 +231,9 @@ void cleanup_all_lease_threads(void)
 
 /* This is intended to clean up individual threads that have been stopped
    (e.g. sync_manager acquire failed or sync_manager release called) without
-   all threads having been stopped (which cleanup_all_lease_threads is for). */
+   all threads having been stopped (which cleanup_all_leases is for). */
 
-void cleanup_stopped_lease_thread(void)
+void cleanup_stopped_lease(void)
 {
 	struct token *token;
 	int found = 0;
@@ -391,12 +397,12 @@ int create_token(int num_disks, struct token **token_out)
 	return 0;
 }
 
-int add_lease_thread(struct token *token, int *num_ret)
+int add_lease_thread(struct token *token, int *id_ret)
 {
 	pthread_attr_t attr;
-	int i, rv, num, found = 0;
+	int i, rv, id, found = 0;
 
-	/* find an unused lease num, only main loop accesses
+	/* find an unused lease id, only main loop accesses
 	   tokens[] and lease_threads[], no locking needed */
 
 	for (i = 0; i < MAX_LEASES; i++) {
@@ -411,10 +417,10 @@ int add_lease_thread(struct token *token, int *num_ret)
 		goto out;
 	}
 
-	num = i;
+	id = i;
 	token->token_id = i;
 
-	/* verify that the token num slot is unused in lease_status[],
+	/* verify that the token id slot is unused in lease_status[],
 	   and that that the resource_name is not already used */
 
 	pthread_mutex_lock(&lease_status_mutex);
@@ -427,24 +433,24 @@ int add_lease_thread(struct token *token, int *num_ret)
 		rv = -EINVAL;
 		goto out;
 	}
-	if (lease_status[num].thread_running) {
+	if (lease_status[id].thread_running) {
 		pthread_mutex_unlock(&lease_status_mutex);
-		log_error(token, "add lease failed, thread %d running", num);
+		log_error(token, "add lease failed, thread %d running", id);
 		rv = -EINVAL;
 		goto out;
 	}
-	strncpy(lease_status[num].resource_name, token->resource_name, NAME_ID_SIZE);
+	strncpy(lease_status[id].resource_name, token->resource_name, NAME_ID_SIZE);
 
 	/* Changed here so that the initial state change will occur
 	 * in the synchronous state. Otherwise there is a point
 	 * where a thread is active but is not marked as such. */
-	lease_status[num].thread_running = 1;
-	lease_status[num].stop_thread = 0;
+	lease_status[id].thread_running = 1;
+	lease_status[id].stop_thread = 0;
 
 	pthread_mutex_unlock(&lease_status_mutex);
 
 	pthread_attr_init(&attr);
-	rv = pthread_create(&lease_threads[num], &attr, lease_thread, token);
+	rv = pthread_create(&lease_threads[id], &attr, lease_thread, token);
 	pthread_attr_destroy(&attr);
  out:
 	if (rv < 0) {
@@ -452,13 +458,13 @@ int add_lease_thread(struct token *token, int *num_ret)
 		free(token->disks);
 		free(token);
 	} else {
-		tokens[num] = token;
-		*num_ret = num;
+		tokens[id] = token;
+		*id_ret = id;
 	}
 	return rv;
 }
 
-int stop_lease_thread(char *resource_name)
+int stop_lease(char *resource_name)
 {
 	int i, found = 0;
 

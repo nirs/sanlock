@@ -24,19 +24,18 @@ struct lease_status {
 
 extern struct token *tokens[MAX_LEASES];
 
-void get_lease_status(int token_id, int op, int *r);
-int get_token_status(int token_id, struct lease_status *status);
-
+uint64_t get_oldest_renewal_time();
+void get_lease_result(int token_id, int op, int *r);
+int get_lease_status(int token_id, struct lease_status *status);
 int check_leases_renewed(void);
-
-void stop_all_lease_threads(void);
-void cleanup_all_lease_threads(void);
-void cleanup_stopped_lease_thread(void);
 int create_token(int num_disks, struct token **token_out);
-
 int add_lease_thread(struct token *token, int *num_ret);
-int stop_lease_thread(char *resource_name);
 
-int tm_is_shutting_down();
+int stop_lease(char *resource_name);
+void cleanup_stopped_lease(void);
+
+int stopping_all_leases(void);
+void stop_all_leases(void);
+void cleanup_all_leases(void);
 #endif
 
