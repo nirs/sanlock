@@ -29,7 +29,7 @@ void get_lease_result(int token_id, int op, int *r);
 int get_lease_status(int token_id, struct lease_status *status);
 int check_leases_renewed(void);
 int create_token(int num_disks, struct token **token_out);
-int add_lease_thread(struct token *token, int *num_ret);
+int add_lease_thread(struct token *token, int *id_ret);
 
 int stop_lease(char *resource_name);
 void cleanup_stopped_lease(void);

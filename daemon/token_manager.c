@@ -29,6 +29,7 @@ struct lease_status lease_status[MAX_LEASES];
 time_t _oldest_renewal_time; /* timestamp of oldest lease renewal */
 int _stopping_all_leases;
 struct sm_timeouts to;
+int token_id_counter = 1;
 
 /* return < 0 on error, 1 on success */
 
@@ -74,29 +75,29 @@ int release_lease(struct token *token, struct leader_record *leader)
 	memcpy(leader, &leader_ret, sizeof(struct leader_record));
 	return 1;
 }
-void set_lease_status(int token_id, int op, int r, uint64_t t)
+void set_lease_status(int index, int op, int r, uint64_t t)
 {
 	pthread_mutex_lock(&lease_status_mutex);
 	switch (op) {
 	case OP_ACQUIRE:
-		lease_status[token_id].acquire_last_result = r;
-		lease_status[token_id].acquire_last_time = t;
+		lease_status[index].acquire_last_result = r;
+		lease_status[index].acquire_last_time = t;
 		if (r == DP_OK)
-			lease_status[token_id].acquire_good_time = t;
+			lease_status[index].acquire_good_time = t;
 		/* fall through, acquire works as renewal */
 
 	case OP_RENEWAL:
-		lease_status[token_id].renewal_last_result = r;
-		lease_status[token_id].renewal_last_time = t;
+		lease_status[index].renewal_last_result = r;
+		lease_status[index].renewal_last_time = t;
 		if (r == DP_OK)
-			lease_status[token_id].renewal_good_time = t;
+			lease_status[index].renewal_good_time = t;
 		break;
 
 	case OP_RELEASE:
-		lease_status[token_id].release_last_result = r;
-		lease_status[token_id].release_last_time = t;
+		lease_status[index].release_last_result = r;
+		lease_status[index].release_last_time = t;
 		if (r == DP_OK)
-			lease_status[token_id].release_good_time = t;
+			lease_status[index].release_good_time = t;
 		break;
 	default:
 		log_error(NULL, "invalid op %d", op);
@@ -109,24 +110,24 @@ uint64_t get_oldest_renewal_time(void)
 	return _oldest_renewal_time;
 }
 
-void get_lease_result(int token_id, int op, int *r)
+void get_lease_result(int index, int op, int *r)
 {
 	pthread_mutex_lock(&lease_status_mutex);
 	if (op == OP_ACQUIRE) {
-		*r = lease_status[token_id].acquire_last_result;
+		*r = lease_status[index].acquire_last_result;
 	} else if (op == OP_RENEWAL) {
-		*r = lease_status[token_id].renewal_last_result;
+		*r = lease_status[index].renewal_last_result;
 	} else if (op == OP_RELEASE) {
-		*r = lease_status[token_id].release_last_result;
+		*r = lease_status[index].release_last_result;
 	}
 	pthread_mutex_unlock(&lease_status_mutex);
 }
 
-int get_lease_status(int token_id, struct lease_status *status)
+int get_lease_status(int index, struct lease_status *status)
 {
 	//TODO : check if token id exists
 	pthread_mutex_lock(&lease_status_mutex);
-	memcpy(status, &lease_status[token_id], sizeof(struct lease_status));
+	memcpy(status, &lease_status[index], sizeof(struct lease_status));
 	pthread_mutex_unlock(&lease_status_mutex);
 	return 1;
 
@@ -262,16 +263,16 @@ void cleanup_stopped_lease(void)
 	tokens[i] = NULL;
 }
 
-void set_thread_running(int token_id, int val)
+void set_thread_running(int index, int val)
 {
 	pthread_mutex_lock(&lease_status_mutex);
-	lease_status[token_id].thread_running = val;
+	lease_status[index].thread_running = val;
 
 	/* stop_thread may not be 1 in the case where lease_thread
 	   fails to do the initial acquire.  stop_thread needs to be 1
 	   for clean_stopped_threads to clean it up. */
 	if (!val)
-		lease_status[token_id].stop_thread = 1;
+		lease_status[index].stop_thread = 1;
 
 	pthread_mutex_unlock(&lease_status_mutex);
 }
@@ -281,17 +282,19 @@ void *lease_thread(void *arg)
 	struct token *token = (struct token *)arg;
 	struct leader_record leader;
 	struct timespec ts;
-	int token_id = token->token_id;
+	int index = token->index;
 	int i, fd, rv, stop, num_opened, prev_token;
 	void *ret;
 
+	/* TODO: remove this */
+#if 0
 	/* There can be a situation where a previous request
 	 * is currently begin freed. We have to find it and
 	 * wait for it to finish before reaquireing        */
 	prev_token = -1;
 	pthread_mutex_lock(&lease_status_mutex);
 	for (i = 0; i < MAX_LEASES; i++) {
-		if (i == token_id) {
+		if (i == index) {
 			continue;
 		}
 
@@ -306,24 +309,30 @@ void *lease_thread(void *arg)
 	}
 	pthread_mutex_unlock(&lease_status_mutex);
 
-	if (prev_token >= 0)
+	if (prev_token >= 0) {
+		log_debug(token, "joining previous thread at index %d", i);
 		pthread_join(lease_threads[i], &ret);
+	}
+#endif
 
 	fd = lockfile(token, RESOURCE_LOCKFILE_DIR, token->resource_name);
 	if (fd < 0) {
-		set_lease_status(token_id, OP_ACQUIRE, -EBADF, 0);
+		set_lease_status(index, OP_ACQUIRE, -EBADF, 0);
 		goto out_run;
 	}
 
 	num_opened = open_disks(token);
 	if (!majority_disks(token, num_opened)) {
 		log_error(token, "cannot open majority of disks");
-		set_lease_status(token_id, OP_ACQUIRE, -ENODEV, 0);
+		set_lease_status(index, OP_ACQUIRE, -ENODEV, 0);
 		goto out_lockfile;
 	}
 
+	log_debug(token, "lease_thread index %d token_id %d acquire_lease...",
+		  index, token->token_id);
+
 	rv = acquire_lease(token, &leader);
-	set_lease_status(token_id, OP_ACQUIRE, rv, leader.timestamp);
+	set_lease_status(index, OP_ACQUIRE, rv, leader.timestamp);
 	if (rv < 0) {
 		log_error(token, "acquire failed %d", rv);
 		goto out_disks;
@@ -335,7 +344,7 @@ void *lease_thread(void *arg)
 #if 0
 		sleep(to.lease_renewal_seconds);
 		pthread_mutex_lock(&lease_status_mutex);
-		stop = lease_status[token_id].stop_thread;
+		stop = lease_status[index].stop_thread;
 		pthread_mutex_unlock(&lease_status_mutex);
 		if (stop)
 			break;
@@ -345,17 +354,17 @@ void *lease_thread(void *arg)
 		clock_gettime(CLOCK_REALTIME, &ts);
 		ts.tv_sec += to.lease_renewal_seconds;
 		rv = 0;
-		while (!lease_status[token_id].stop_thread && rv == 0) {
+		while (!lease_status[index].stop_thread && rv == 0) {
 			rv = pthread_cond_timedwait(&lease_status_cond,
 						    &lease_status_mutex, &ts);
 		}
-		stop = lease_status[token_id].stop_thread;
+		stop = lease_status[index].stop_thread;
 		pthread_mutex_unlock(&lease_status_mutex);
 		if (stop)
 			break;
 
 		rv = renew_lease(token, &leader);
-		set_lease_status(token_id, OP_RENEWAL, rv, leader.timestamp);
+		set_lease_status(index, OP_RENEWAL, rv, leader.timestamp);
 		if (rv < 0)
 			log_error(token, "renewal failed %d", rv);
 		else
@@ -363,7 +372,7 @@ void *lease_thread(void *arg)
 	}
 
 	rv = release_lease(token, &leader);
-	set_lease_status(token_id, OP_RELEASE, rv, leader.timestamp);
+	set_lease_status(index, OP_RELEASE, rv, leader.timestamp);
 	log_debug(token, "release rv %d", rv);
 
  out_disks:
@@ -371,7 +380,7 @@ void *lease_thread(void *arg)
  out_lockfile:
 	unlink_lockfile(fd, RESOURCE_LOCKFILE_DIR, token->resource_name);
  out_run:
-	set_thread_running(token_id, 0);
+	set_thread_running(index, 0);
 	return NULL;
 }
 
@@ -418,7 +427,8 @@ int add_lease_thread(struct token *token, int *id_ret)
 	}
 
 	id = i;
-	token->token_id = i;
+	token->index = i;
+	token->token_id = token_id_counter++;
 
 	/* verify that the token id slot is unused in lease_status[],
 	   and that that the resource_name is not already used */

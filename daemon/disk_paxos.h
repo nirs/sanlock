@@ -44,6 +44,7 @@ struct paxos_disk {
    threads. */
 
 struct token {
+	int index;
 	int token_id;
 	int num_disks;
 	char resource_name[NAME_ID_SIZE];

@@ -70,6 +70,7 @@ int killing_supervise_pid;
 int external_shutdown;
 
 int acquiring_initial_leases;
+int acquiring_initial_ids[MAX_LEASE_ARGS];
 
 static void client_alloc(void)
 {
@@ -357,13 +358,12 @@ int main_loop(void)
 
 		/*
 		 * sync_manager has just been started and given initial
-		 * leases to acquire (num 0 to acquiring_initial_leases - 1).
-		 * Once they are all acquired, the command should be run if
-		 * one was provided.
+		 * leases to acquire.  Once they are all acquired, the command
+		 * should be run if one was provided.
 		 */
 
 		if (acquiring_initial_leases) {
-			get_lease_result(acquiring_initial_leases - 1,
+			get_lease_result(acquiring_initial_ids[acquiring_initial_leases - 1],
 					 OP_ACQUIRE, &r);
 			if (r < 0) {
 				/* lease_thread failed to acquire lease */
@@ -562,7 +562,7 @@ void cmd_acquire(int fd, struct sm_header *h_recv)
 			goto out;
 		}
 
-		results[i] = 1;
+		results[i] = token_ids[i];
 		added_count++;
 	}
 
@@ -897,7 +897,7 @@ int make_dirs(void)
 
 int do_daemon(int token_count, struct token *token_args[])
 {
-	int fd, rv, i, num;
+	int fd, rv, i;
 
 	/*
 	 * after creating dirs and setting up logging the daemon can
@@ -942,7 +942,7 @@ int do_daemon(int token_count, struct token *token_args[])
 
 	acquiring_initial_leases = 0;
 	for (i = 0; i < token_count; i++) {
-		rv = add_lease_thread(token_args[i], &num);
+		rv = add_lease_thread(token_args[i], &acquiring_initial_ids[i]);
 		if (rv < 0) {
 			if (acquiring_initial_leases) {
 				stop_all_leases();
