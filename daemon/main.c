@@ -22,6 +22,10 @@
 #include "sm.h"
 #include "sm_msg.h"
 #include "disk_paxos.h"
+#include "sm_options.h"
+#include "token_manager.h"
+#include "lockfile.h"
+#include "watchdog.h"
 #include "log.h"
 
 #define CLIENT_NALLOC 2
@@ -54,62 +58,18 @@ int log_stderr_priority = LOG_ERR;
 
 char command[COMMAND_MAX];
 char killscript[COMMAND_MAX];
-char sm_id[NAME_ID_SIZE + 1];
 int our_host_id;
 int cluster_mode;
 int cmd_argc;
 char **cmd_argv;
 
-int opt_watchdog = 1;
 int supervise_pid;
 int killscript_pid;
 int supervise_pid_exit_status;
-int starting_lease_threads;
-int stopping_lease_threads;
 int killing_supervise_pid;
 int external_shutdown;
-struct sm_timeouts to;
 
-#define OP_ACQUIRE 1
-#define OP_RENEWAL 2
-#define OP_RELEASE 3
-
-struct lease_status {
-	int acquire_last_result;
-	int renewal_last_result;
-	int release_last_result;
-	uint64_t acquire_last_time;
-	uint64_t acquire_good_time;
-	uint64_t renewal_last_time;
-	uint64_t renewal_good_time;
-	uint64_t release_last_time;
-	uint64_t release_good_time;
-
-	int stop_thread;
-	int thread_running;
-
-	char resource_id[NAME_ID_SIZE + 1];
-};
-
-pthread_t lease_threads[MAX_LEASES];
-pthread_mutex_t lease_status_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t lease_status_cond = PTHREAD_COND_INITIALIZER;
-struct lease_status lease_status[MAX_LEASES];
-struct token *tokens[MAX_LEASES];
-time_t oldest_renewal_time; /* timestamp of oldest lease renewal */
-
-pthread_t wd_thread;
-pthread_mutex_t wd_mutex = PTHREAD_MUTEX_INITIALIZER;
-int wd_thread_running;
-int wd_touch;
-int wd_unlink;
-int wd_fd;
-char wd_path[PATH_MAX];
-int wd_create_result;
-int wd_touch_last_result;
-time_t wd_create_time;
-time_t wd_touch_last_time;
-time_t wd_touch_good_time;
+int acquering_initial_leases;
 
 static void client_alloc(void)
 {
@@ -172,95 +132,6 @@ int client_add(int fd, void (*workfn)(int ci), void (*deadfn)(int ci))
 
 	client_alloc();
 	goto again;
-}
-
-int lockfile(struct token *token, char *dir, char *name)
-{
-	char path[PATH_MAX];
-	char buf[16];
-	struct flock lock;
-	int fd, rv;
-
-	snprintf(path, PATH_MAX, "%s/%s", dir, name);
-
-	fd = open(path, O_CREAT|O_WRONLY|O_CLOEXEC, 0666);
-	if (fd < 0) {
-		log_error(token, "lockfile open error %d", errno);
-		return -1;
-	}
-
-	lock.l_type = F_WRLCK;
-	lock.l_start = 0;
-	lock.l_whence = SEEK_SET;
-	lock.l_len = 0;
-
-	rv = fcntl(fd, F_SETLK, &lock);
-	if (rv < 0) {
-		log_error(token, "lockfile setlk error %d", errno);
-		goto fail;
-	}
-
-	rv = ftruncate(fd, 0);
-	if (rv < 0) {
-		log_error(token, "lockfile truncate error %d", errno);
-		goto fail;
-	}
-
-	memset(buf, 0, sizeof(buf));
-	snprintf(buf, sizeof(buf), "%d\n", getpid());
-
-	rv = write(fd, buf, strlen(buf));
-	if (rv <= 0) {
-		log_error(token, "lockfile write error %d", errno);
-		goto fail;
-	}
-
-	return fd;
- fail:
-	close(fd);
-	return -1;
-}
-
-void unlink_lockfile(int fd, char *dir, char *name)
-{
-	char path[PATH_MAX];
-
-	snprintf(path, PATH_MAX, "%s/%s", dir, name);
-	unlink(path);
-	close(fd);
-}
-
-/* return number of opened disks */
-
-int open_disks(struct token *token)
-{
-	struct paxos_disk *disk;
-	int num_opens = 0;
-	int d, fd;
-
-	for (d = 0; d < token->num_disks; d++) {
-		disk = &token->disks[d];
-		fd = open(disk->path, O_RDWR | O_DIRECT | O_SYNC, 0);
-		if (fd < 0) {
-			log_error(NULL, "open error %d %s", fd, disk->path);
-			continue;
-		}
-
-		disk->fd = fd;
-		num_opens++;
-	}
-	return num_opens;
-}
-
-void close_disks(struct token *token)
-{
-	struct paxos_disk *disk;
-	int d;
-
-	for (d = 0; d < token->num_disks; d++) {
-		disk = &token->disks[d];
-		close(disk->fd);
-	}
 }
 
 int check_killscript_pid(void)
@@ -417,622 +288,8 @@ void kill_supervise_pid(void)
 	kill(supervise_pid, SIGKILL);
 }
 
-void *watchdog_thread(void *arg)
-{
-	int rv, fd, do_touch, do_unlink, do_create;
-	time_t t;
 
-	while (1) {
-		do_create = 0;
 
-		pthread_mutex_lock(&wd_mutex);
-		do_touch = wd_touch;
-		do_unlink = wd_unlink;
-		pthread_mutex_unlock(&wd_mutex);
-
-		if (do_unlink) {
-			unlink(wd_path);
-			log_debug(NULL, "unlinked watchdog file");
-			break;
-		}
-
-		if (!do_touch)
-			continue;
-
-		if (!wd_fd) {
-			fd = open(wd_path, O_WRONLY|O_CREAT|O_EXCL|O_NONBLOCK,
-				  0666);
-			if (fd < 0) {
-				rv = fd;
-			} else {
-				rv = 0;
-				wd_fd = fd;
-			}
-			do_create = 1;
-		} else {
-			rv = futimes(wd_fd, NULL);
-		}
-		t = time(NULL);
-
-		pthread_mutex_lock(&wd_mutex);
-		if (do_create) {
-			wd_create_result = fd;
-			wd_create_time = t;
-		}
-		wd_touch_last_result = rv;
-		wd_touch_last_time = t;
-		if (!rv)
-			wd_touch_good_time = t;
-		pthread_mutex_unlock(&wd_mutex);
-
-		/* TODO: use a pthread_cond_timedwait() here so
-		   unlink_watchdog can be quicker? */
-
-		sleep(to.wd_touch_seconds);
-	}
-	return NULL;
-}
-
-void unlink_watchdog(void)
-{
-	void *ret;
-
-	if (!opt_watchdog)
-		return;
-
-	pthread_mutex_lock(&wd_mutex);
-	wd_unlink = 1;
-	pthread_mutex_unlock(&wd_mutex);
-
-	if (!wd_thread_running)
-		return;
-
-	pthread_join(wd_thread, &ret);
-	wd_thread_running = 0;
-}
-
-int touch_watchdog(void)
-{
-	pthread_attr_t attr;
-	time_t t, start;
-	int rv;
-
-	if (!opt_watchdog)
-		return 0;
-
-	if (wd_thread_running)
-		return 0;
-
-	wd_touch = 1;
-	wd_fd = 0;
-	wd_unlink = 0;
-	wd_create_result = 0;
-	wd_create_time = 0;
-	wd_touch_last_result = 0;
-	wd_touch_last_time = 0;
-
-	snprintf(wd_path, PATH_MAX, "%s/%s", DAEMON_WATCHDOG_DIR, sm_id);
-
-	pthread_attr_init(&attr);
-	rv = pthread_create(&wd_thread, &attr, watchdog_thread, NULL);
-	pthread_attr_destroy(&attr);
-	if (rv < 0) {
-		log_error(NULL, "create wd_thread failed %d", rv);
-		return rv;
-	}
-	wd_thread_running = 1;
-
-	start = time(NULL);
-
-	while (1) {
-		pthread_mutex_lock(&wd_mutex);
-		rv = wd_create_result;
-		t = wd_create_time;
-		pthread_mutex_unlock(&wd_mutex);
-
-		if (t)
-			break;
-
-		if (time(NULL) - start > to.wd_touch_fail_seconds) {
-			rv = -1;
-			break;
-		}
-
-		usleep(10000);
-	}
-
-	if (rv < 0) {
-		log_error(NULL, "create watchdog file failed %d", rv);
-		unlink_watchdog();
-	} else {
-		log_debug(NULL, "create watchdog file at %llu",
-			  (unsigned long long)wd_create_time);
-		rv = 0;
-	}
-
-	return rv;
-}
-
-void notouch_watchdog(void)
-{
-	time_t log_t = 0;
-
-	pthread_mutex_lock(&wd_mutex);
-	if (wd_touch)
-		log_t = wd_touch_good_time;
-	wd_touch = 0;
-	pthread_mutex_unlock(&wd_mutex);
-
-	if (log_t)
-		log_error(NULL, "touch watchdog file stopped last %llu",
-			  (unsigned long long)log_t);
-}
-
-int check_watchdog_thread(void)
-{
-	int touch;
-	time_t t;
-
-	if (!opt_watchdog)
-		return 0;
-
-	if (!wd_thread_running)
-		return 0;
-
-	pthread_mutex_lock(&wd_mutex);
-	touch = wd_touch;
-	t = wd_touch_good_time;
-	pthread_mutex_unlock(&wd_mutex);
-
-	if (!touch)
-		return 0;
-
-	if (time(NULL) - t > to.wd_touch_fail_seconds) {
-		log_error(NULL, "touch watchdog file last %llu timeout %d",
-			  (unsigned long long)t, to.wd_touch_fail_seconds);
-		return -1;
-	}
-	return 0;
-}
-
-/* return < 0 on error, 1 on success */
-
-int acquire_lease(struct token *token, struct leader_record *leader)
-{
-	struct leader_record leader_ret;
-	int rv;
-
-	rv = disk_paxos_acquire(token, 0, &leader_ret);
-	if (rv < 0)
-		return rv;
-
-	memcpy(leader, &leader_ret, sizeof(struct leader_record));
-	return 1;
-}
-
-/* return < 0 on error, 1 on success */
-
-int renew_lease(struct token *token, struct leader_record *leader)
-{
-	struct leader_record leader_ret;
-	int rv;
-
-	rv = disk_paxos_renew(token, leader, &leader_ret);
-	if (rv < 0)
-		return rv;
-
-	memcpy(leader, &leader_ret, sizeof(struct leader_record));
-	return 1;
-}
-
-/* return < 0 on error, 1 on success */
-
-int release_lease(struct token *token, struct leader_record *leader)
-{
-	struct leader_record leader_ret;
-	int rv;
-
-	rv = disk_paxos_release(token, leader, &leader_ret);
-	if (rv < 0)
-		return rv;
-
-	memcpy(leader, &leader_ret, sizeof(struct leader_record));
-	return 1;
-}
-
-void set_lease_status(int num, int op, int r, uint64_t t)
-{
-	pthread_mutex_lock(&lease_status_mutex);
-	switch (op) {
-	case OP_ACQUIRE:
-		lease_status[num].acquire_last_result = r;
-		lease_status[num].acquire_last_time = t;
-		if (r == DP_OK)
-			lease_status[num].acquire_good_time = t;
-		/* fall through, acquire works as renewal */
-
-	case OP_RENEWAL:
-		lease_status[num].renewal_last_result = r;
-		lease_status[num].renewal_last_time = t;
-		if (r == DP_OK)
-			lease_status[num].renewal_good_time = t;
-		break;
-
-	case OP_RELEASE:
-		lease_status[num].release_last_result = r;
-		lease_status[num].release_last_time = t;
-		if (r == DP_OK)
-			lease_status[num].release_good_time = t;
-		break;
-	default:
-		log_error(NULL, "invalid op %d", op);
-	};
-	pthread_mutex_unlock(&lease_status_mutex);
-}
-
-void get_lease_status(int num, int op, int *r)
-{
-	pthread_mutex_lock(&lease_status_mutex);
-	if (op == OP_ACQUIRE) {
-		*r = lease_status[num].acquire_last_result;
-	} else if (op == OP_RENEWAL) {
-		*r = lease_status[num].renewal_last_result;
-	} else if (op == OP_RELEASE) {
-		*r = lease_status[num].release_last_result;
-	}
-	pthread_mutex_unlock(&lease_status_mutex);
-}
-
-int check_leases_renewed(void)
-{
-	uint64_t sec, oldest = 0;
-	int fail_count = 0;
-	int i;
-
-	pthread_mutex_lock(&lease_status_mutex);
-	for (i = 0; i < MAX_LEASES; i++) {
-		if (!lease_status[i].thread_running)
-			continue;
-
-		if (lease_status[i].stop_thread)
-			continue;
-
-		/* this lease has not been acquired */
-		if (!lease_status[i].renewal_good_time)
-			continue;
-
-		if (!oldest || (oldest < lease_status[i].renewal_good_time))
-			oldest = lease_status[i].renewal_good_time;
-
-		sec = time(NULL) - lease_status[i].renewal_good_time;
-
-		if (sec >= to.lease_renewal_fail_seconds) {
-			fail_count++;
-			log_error(tokens[i], "renewal fail last result %d "
-				  "at %llu good %llu",
-				  lease_status[i].renewal_last_result,
-				  (unsigned long long)lease_status[i].renewal_last_time,
-				  (unsigned long long)lease_status[i].renewal_good_time);
-		} else if (sec >= to.lease_renewal_warn_seconds) {
-			log_error(tokens[i], "renewal delay last result %d "
-				  "at %llu good %llu",
-				  lease_status[i].renewal_last_result,
-				  (unsigned long long)lease_status[i].renewal_last_time,
-				  (unsigned long long)lease_status[i].renewal_good_time);
-		}
-	}
-	pthread_mutex_unlock(&lease_status_mutex);
-
-	oldest_renewal_time = oldest;
-
-	if (fail_count)
-		return -1;
-
-	return 0;
-}
-
-/* tell all threads to release and exit */
-
-void stop_all_lease_threads(void)
-{
-	int i;
-
-	stopping_lease_threads = 1;
-
-	pthread_mutex_lock(&lease_status_mutex);
-	for (i = 0; i < MAX_LEASES; i++) {
-		if (lease_status[i].thread_running)
-			lease_status[i].stop_thread = 1;
-	}
-	pthread_cond_broadcast(&lease_status_cond);
-	pthread_mutex_unlock(&lease_status_mutex);
-}
-
-/* This assumes that stop_all_lease_threads() has been called, so all threads
-   are stopping and it doesn't need to check any lease_status[] values.
-   It's also ok to block the main thread doing this since there's nothing
-   for it to continue monitoring. */
-
-void cleanup_all_lease_threads(void)
-{
-	struct token *token;
-	int i;
-	void *ret;
-
-	/* sanity check */
-	if (!stopping_lease_threads)
-		log_error(NULL, "cleanup_all_lease_threads before stop");
-
-	for (i = 0; i < MAX_LEASES; i++) {
-		token = tokens[i];
-		if (token) {
-			log_debug(token, "clean thread %d", i);
-			pthread_join(lease_threads[i], &ret);
-			free(token->disks);
-			free(token);
-			tokens[i] = NULL;
-		}
-	}
-}
-
-/* This is intended to clean up individual threads that have been stopped
-   (e.g. sync_manager acquire failed or sync_manager release called) without
-   all threads having been stopped (which cleanup_all_lease_threads is for). */
-
-void cleanup_stopped_lease_thread(void)
-{
-	struct token *token;
-	int found = 0;
-	int i;
-	void *ret;
-
-	pthread_mutex_lock(&lease_status_mutex);
-	for (i = 0; i < MAX_LEASES; i++) {
-		if (lease_status[i].stop_thread &&
-		    !lease_status[i].thread_running) {
-			memset(&lease_status[i], 0, sizeof(struct lease_status));
-			found = 1;
-			break;
-		}
-	}
-	pthread_mutex_unlock(&lease_status_mutex);
-
-	if (!found)
-		return;
-
-	token = tokens[i];
-	log_debug(token, "clean thread %d", i);
-	pthread_join(lease_threads[i], &ret);
-	free(token->disks);
-	free(token);
-	tokens[i] = NULL;
-}
-
-void set_thread_running(int num, int val)
-{
-	pthread_mutex_lock(&lease_status_mutex);
-	lease_status[num].thread_running = val;
-
-	/* stop_thread may not be 1 in the case where lease_thread
-	   fails to do the initial acquire.  stop_thread needs to be 1
-	   for clean_stopped_threads to clean it up. */
-	if (!val)
-		lease_status[num].stop_thread = 1;
-
-	pthread_mutex_unlock(&lease_status_mutex);
-}
-
-void *lease_thread(void *arg)
-{
-	struct token *token = (struct token *)arg;
-	struct leader_record leader;
-	struct timespec ts;
-	int num = token->num;
-	int i, fd, rv, stop, num_opened, prev_token;
-	void *ret;
-
-	/* There can be a situation where a previous request
-	 * is currently begin freed. We have to find it and
-	 * wait for it to finish before reaquireing        */
-	prev_token = -1;
-	pthread_mutex_lock(&lease_status_mutex);
-	for (i = 0; i < MAX_LEASES; i++) {
-		if (i == num) {
-			continue;
-		}
-
-		if (!lease_status[i].thread_running) {
-			continue;
-		}
-
-		if (strncmp(lease_status[i].resource_id, token->resource_id, NAME_ID_SIZE)) {
-			prev_token = i;
-			break;
-		}
-	}
-	pthread_mutex_unlock(&lease_status_mutex);
-
-	if (prev_token >= 0)
-		pthread_join(lease_threads[i], &ret);
-
-	fd = lockfile(token, RESOURCE_LOCKFILE_DIR, token->resource_id);
-	if (fd < 0) {
-		set_lease_status(num, OP_ACQUIRE, -EBADF, 0);
-		goto out_run;
-	}
-
-	num_opened = open_disks(token);
-	if (!majority_disks(token, num_opened)) {
-		log_error(token, "cannot open majority of disks");
-		set_lease_status(num, OP_ACQUIRE, -ENODEV, 0);
-		goto out_lockfile;
-	}
-
-	rv = acquire_lease(token, &leader);
-	set_lease_status(num, OP_ACQUIRE, rv, leader.timestamp);
-	if (rv < 0) {
-		log_error(token, "acquire failed %d", rv);
-		goto out_disks;
-	}
-	log_debug(token, "acquire at %llu",
-		  (unsigned long long)leader.timestamp);
-
-	while (1) {
-#if 0
-		sleep(to.lease_renewal_seconds);
-		pthread_mutex_lock(&lease_status_mutex);
-		stop = lease_status[num].stop_thread;
-		pthread_mutex_unlock(&lease_status_mutex);
-		if (stop)
-			break;
-#endif
-
-		pthread_mutex_lock(&lease_status_mutex);
-		clock_gettime(CLOCK_REALTIME, &ts);
-		ts.tv_sec += to.lease_renewal_seconds;
-		rv = 0;
-		while (!lease_status[num].stop_thread && rv == 0) {
-			rv = pthread_cond_timedwait(&lease_status_cond,
-						    &lease_status_mutex, &ts);
-		}
-		stop = lease_status[num].stop_thread;
-		pthread_mutex_unlock(&lease_status_mutex);
-		if (stop)
-			break;
-
-		rv = renew_lease(token, &leader);
-		set_lease_status(num, OP_RENEWAL, rv, leader.timestamp);
-		if (rv < 0)
-			log_error(token, "renewal failed %d", rv);
-		else
-			log_debug(token, "renewal");
-	}
-
-	rv = release_lease(token, &leader);
-	set_lease_status(num, OP_RELEASE, rv, leader.timestamp);
-	log_debug(token, "release rv %d", rv);
-
- out_disks:
-	close_disks(token);
- out_lockfile:
-	unlink_lockfile(fd, RESOURCE_LOCKFILE_DIR, token->resource_id);
- out_run:
-	set_thread_running(num, 0);
-	return NULL;
-}
-
-int create_token(int num_disks, struct token **token_out)
-{
-	struct token *token;
-	struct paxos_disk *disks;
-
-	token = malloc(sizeof(struct token));
-	if (!token)
-		return -ENOMEM;
-	memset(token, 0, sizeof(struct token));
-
-	disks = malloc(num_disks * sizeof(struct paxos_disk));
-	if (!disks) {
-		free(token);
-		return -ENOMEM;
-	}
-
-	token->disks = disks;
-	token->num_disks = num_disks;
-	*token_out = token;
-	return 0;
-}
-
-int add_lease_thread(struct token *token, int *num_ret)
-{
-	pthread_attr_t attr;
-	int i, rv, num, found = 0;
-
-	/* find an unused lease num, only main loop accesses
-	   tokens[] and lease_threads[], no locking needed */
-
-	for (i = 0; i < MAX_LEASES; i++) {
-		if (!tokens[i]) {
-			found = 1;
-			break;
-		}
-	}
-	if (!found) {
-		log_error(token, "add lease failed, max leases in use");
-		rv = -ENOSPC;
-		goto out;
-	}
-
-	num = i;
-	token->num = i;
-
-	/* verify that the token num slot is unused in lease_status[],
-	   and that that the resource_id is not already used */
-
-	pthread_mutex_lock(&lease_status_mutex);
-	for (i = 0; i < MAX_LEASES; i++) {
-		if (!lease_status[i].thread_running)
-			continue;
-		if (strncmp(lease_status[i].resource_id, token->resource_id, NAME_ID_SIZE))
-			continue;
-		pthread_mutex_unlock(&lease_status_mutex);
-		rv = -EINVAL;
-		goto out;
-	}
-	if (lease_status[num].thread_running) {
-		pthread_mutex_unlock(&lease_status_mutex);
-		log_error(token, "add lease failed, thread %d running", num);
-		rv = -EINVAL;
-		goto out;
-	}
-	strncpy(lease_status[num].resource_id, token->resource_id, NAME_ID_SIZE);
-
-	/* Changed here so that the initial state change will occur
-	 * in the synchronous state. Otherwise there is a point
-	 * where a thread is active but is not marked as such. */
-	lease_status[num].thread_running = 1;
-	lease_status[num].stop_thread = 0;
-
-	pthread_mutex_unlock(&lease_status_mutex);
-
-	pthread_attr_init(&attr);
-	rv = pthread_create(&lease_threads[num], &attr, lease_thread, token);
-	pthread_attr_destroy(&attr);
- out:
-	if (rv < 0) {
-		log_error(token, "add lease failed, thread create %d", rv);
-		free(token->disks);
-		free(token);
-	} else {
-		tokens[num] = token;
-		*num_ret = num;
-	}
-	return rv;
-}
-
-int stop_lease_thread(char *resource_id)
-{
-	int i, found = 0;
-
-	pthread_mutex_lock(&lease_status_mutex);
-	for (i = 0; i < MAX_LEASES; i++) {
-		if (!lease_status[i].thread_running) {
-			/* an old, stopped but not cleaned token */
-			continue;
-		}
-
-		if (strncmp(lease_status[i].resource_id, resource_id, NAME_ID_SIZE))
-			continue;
-		lease_status[i].stop_thread = 1;
-		found = 1;
-		break;
-	}
-	pthread_mutex_unlock(&lease_status_mutex);
-
-	if (found)
-		return 0;
-	return -ENOENT;
-}
 
 /*
  * updating a lease tells other hosts we are running a vm,
@@ -1103,26 +360,26 @@ int main_loop(void)
 
 		/*
 		 * sync_manager has just been started and given initial
-		 * leases to acquire (num 0 to starting_lease_threads - 1).
+		 * leases to acquire (num 0 to acquering_initial_leases - 1).
 		 * Once they are all acquired, the command should be run if
 		 * one was provided.
 		 */
 
-		if (starting_lease_threads) {
-			get_lease_status(starting_lease_threads - 1,
+		if (acquering_initial_leases) {
+			get_lease_status(acquering_initial_leases - 1,
 					 OP_ACQUIRE, &r);
 			if (r < 0) {
 				/* lease_thread failed to acquire lease */
-				starting_lease_threads = 0;
+				acquering_initial_leases = 0;
 				unlink_watchdog();
 				stop_all_lease_threads();
 				error = r;
 
 			} else if (r > 0) {
 				/* lease_thread has acquired lease */
-				starting_lease_threads--;
+				acquering_initial_leases--;
 
-				if (!starting_lease_threads && command[0]) {
+				if (!acquering_initial_leases && command[0]) {
 					rv = run_command(command);
 					if (rv < 0) {
 						unlink_watchdog();
@@ -1143,7 +400,7 @@ int main_loop(void)
 		 * has stopped.  pthread_join lease threads and free tokens
 		 */
 
-		if (stopping_lease_threads) {
+		if (tm_is_shutting_down()) {
 			cleanup_all_lease_threads();
 			/* error may be set from initial lease acquire
 			   or run_command */
@@ -1229,7 +486,7 @@ int main_loop(void)
 		   timely fashion. */
 
 		if ((pid_status > 0) && !killing_supervise_pid &&
-		    !stopping_lease_threads && !starting_lease_threads &&
+		    !tm_is_shutting_down() && !acquering_initial_leases &&
 		    (time(NULL) - oldest_renewal_time < to.lease_renewal_seconds))
 			poll_timeout = to.stable_poll_ms;
 		else
@@ -1319,9 +576,9 @@ void cmd_acquire(int fd, struct sm_header *h_recv)
 		free(disks);
 
 	/*
-	 * one result for each token/resource_id received:
+	 * one result for each token/resource_name received:
 	 * 1 = added a lease thread, make status query to check result
-	 * < 0 = error, no lease thread added for this resource_id
+	 * < 0 = error, no lease thread added for this resource_name
 	 * 0 = no attempt made to acquire this lease
 	 *
 	 * h.data is the number of results that are "1"
@@ -1338,7 +595,7 @@ void cmd_acquire(int fd, struct sm_header *h_recv)
 void cmd_release(int fd, struct sm_header *h_recv)
 {
 	struct sm_header h;
-	char resource_id[NAME_ID_SIZE];
+	char resource_name[NAME_ID_SIZE];
 	int results[MAX_LEASE_ARGS];
 	int lease_count = h_recv->data;
 	int stopped_count;
@@ -1348,14 +605,14 @@ void cmd_release(int fd, struct sm_header *h_recv)
 	stopped_count = 0;
 
 	for (i = 0; i < lease_count; i++) {
-		rv = recv(fd, resource_id, NAME_ID_SIZE, MSG_WAITALL);
+		rv = recv(fd, resource_name, NAME_ID_SIZE, MSG_WAITALL);
 		if (rv != NAME_ID_SIZE) {
 			log_error(NULL, "connection closed unexpectedly %d", rv);
 			results[i] = -1;
 			break;
 		}
 
-		rv = stop_lease_thread(resource_id);
+		rv = stop_lease_thread(resource_name);
 		if (rv < 0) {
 			results[i] = rv;
 		} else {
@@ -1365,10 +622,10 @@ void cmd_release(int fd, struct sm_header *h_recv)
 	}
 
 	/*
-	 * one result for each resource_id received:
+	 * one result for each resource_name received:
 	 * 1 = stopped the lease thread, make status query to check result
-	 * < 0 = error, no lease thread stopped for this resource_id
-	 * 0 = no attempt made to stop this resource_id's lease thread
+	 * < 0 = error, no lease thread stopped for this resource_name
+	 * 0 = no attempt made to stop this resource_name's lease thread
 	 *
 	 * h.data is the number of results that are "1"
 	 */
@@ -1428,8 +685,8 @@ void cmd_status(int fd, struct sm_header *h_recv)
 	in->our_host_id = our_host_id;
 	in->supervise_pid = supervise_pid;
 	in->supervise_pid_exit_status = supervise_pid_exit_status;
-	in->starting_lease_threads = starting_lease_threads;
-	in->stopping_lease_threads = stopping_lease_threads;
+	in->starting_lease_threads = acquering_initial_leases;
+	in->stopping_lease_threads = tm_is_shutting_down();
 	in->killing_supervise_pid = killing_supervise_pid;
 	in->external_shutdown = external_shutdown;
 
@@ -1448,16 +705,14 @@ void cmd_status(int fd, struct sm_header *h_recv)
 			continue;
 
 		t = tokens[i];
-		pthread_mutex_lock(&lease_status_mutex);
-		memcpy(&ls, &lease_status[t->num], sizeof(struct lease_status));
-		pthread_mutex_unlock(&lease_status_mutex);
+		get_token_status(t->token_id, &ls);
 
 		li = (struct sm_lease_info *)(li_begin +
 		     (tokens_copied * sizeof(struct sm_lease_info)) +
 		     (disks_copied * sizeof(struct sm_disk_info)));
 
-		strncpy(li->resource_id, t->resource_id, NAME_ID_SIZE);
-		li->num = t->num;
+		strncpy(li->resource_name, t->resource_name, NAME_ID_SIZE);
+		li->token_id = t->token_id;
 		li->disk_info_len = sizeof(struct sm_disk_info);
 		li->disk_info_count = t->num_disks;
 		li->stop_thread = ls.stop_thread;
@@ -1519,7 +774,7 @@ void process_listener(int ci)
 	if (h.magic != SM_MAGIC) {
 	}
 
-	if (strcmp(sm_id, h.sm_id)) {
+	if (strcmp(options.sm_id, h.sm_id)) {
 	}
 
 	log_debug(NULL, "cmd %d ci %d fd %d", h.cmd, ci, fd);
@@ -1577,7 +832,7 @@ int setup_listener(void)
 		return s;
 	}
 
-	snprintf(path, PATH_MAX, "%s/%s", DAEMON_SOCKET_DIR, sm_id);
+	snprintf(path, PATH_MAX, "%s/%s", DAEMON_SOCKET_DIR, options.sm_id);
 
 	memset(&addr, 0, sizeof(struct sockaddr_un));
 	addr.sun_family = AF_LOCAL;
@@ -1674,7 +929,7 @@ int do_daemon(int token_count, struct token *token_args[])
 
 	signal(SIGTERM, sigterm_handler);
 
-	fd = lockfile(NULL, DAEMON_LOCKFILE_DIR, sm_id);
+	fd = lockfile(NULL, DAEMON_LOCKFILE_DIR, options.sm_id);
 	if (fd < 0)
 		goto out;
 
@@ -1688,17 +943,17 @@ int do_daemon(int token_count, struct token *token_args[])
 			goto out_lockfile;
 	}
 
-	starting_lease_threads = 0;
+	acquering_initial_leases = 0;
 	for (i = 0; i < token_count; i++) {
 		rv = add_lease_thread(token_args[i], &num);
 		if (rv < 0) {
-			if (starting_lease_threads) {
+			if (acquering_initial_leases) {
 				stop_all_lease_threads();
 				cleanup_all_lease_threads();
 			}
 			goto out_watchdog;
 		}
-		starting_lease_threads++;
+		acquering_initial_leases++;
 
 		/* once all lease are acquired, the main loop will run
 		   command if there is one */
@@ -1707,7 +962,7 @@ int do_daemon(int token_count, struct token *token_args[])
 	/* there were no initial leases, just a command
 	   (a lease may be added later) */
 
-	if (!starting_lease_threads && command[0]) {
+	if (!acquering_initial_leases && command[0]) {
 		rv = run_command(command);
 		if (rv < 0)
 			goto out_watchdog;
@@ -1718,7 +973,7 @@ int do_daemon(int token_count, struct token *token_args[])
  out_watchdog:
 	unlink_watchdog();
  out_lockfile:
-	unlink_lockfile(fd, DAEMON_LOCKFILE_DIR, sm_id);
+	unlink_lockfile(fd, DAEMON_LOCKFILE_DIR, options.sm_id);
  out:
 	return rv;
 }
@@ -1737,7 +992,7 @@ int send_header(int cmd, uint32_t data)
 		return sock;
 	}
 
-	snprintf(path, PATH_MAX, "%s/%s", DAEMON_SOCKET_DIR, sm_id);
+	snprintf(path, PATH_MAX, "%s/%s", DAEMON_SOCKET_DIR, options.sm_id);
 	log_tool("connecting to socket '%s'", path);
 
 	memset(&addr, 0, sizeof(struct sockaddr_un));
@@ -1756,7 +1011,7 @@ int send_header(int cmd, uint32_t data)
 	header.magic = SM_MAGIC;
 	header.cmd = cmd;
 	header.data = data;
-	strncpy(&header.sm_id[1], sm_id, NAME_ID_SIZE);
+	strncpy(&header.sm_id[1], options.sm_id, NAME_ID_SIZE);
 
 	log_tool("send_header cmd %d data %u", cmd, data);
 
@@ -1842,7 +1097,7 @@ int do_acquire(int token_count, struct token *token_args[])
 
 	for (i = 0; i < token_count; i++) {
 		t = token_args[i];
-		printf("%s - %d\n", token_args[i]->resource_id, results[i]);
+		printf("%s - %d\n", token_args[i]->resource_name, results[i]);
 	}
 	rv = 0;
  out:
@@ -1861,7 +1116,7 @@ int do_release(int token_count, struct token *token_args[])
 		return sock;
 
 	for (i = 0; i < token_count; i++) {
-		rv = send(sock, token_args[i]->resource_id, NAME_ID_SIZE, 0);
+		rv = send(sock, token_args[i]->resource_name, NAME_ID_SIZE, 0);
 		if (rv < 0) {
 			log_tool("send error %d %d", rv, errno);
 			goto out;
@@ -1884,7 +1139,7 @@ int do_release(int token_count, struct token *token_args[])
 	}
 
 	for (i = 0; i < token_count; i++) {
-		printf("%s - %d\n", token_args[i]->resource_id, results[i]);
+		printf("%s - %d\n", token_args[i]->resource_name, results[i]);
 	}
 	rv = 0;
  out:
@@ -2049,12 +1304,12 @@ void print_usage(void)
 	printf("  -n <name>		name of a running sync_manager instance\n");
 	printf("  -l LEASE		lease description, see below\n");
 
-	printf("\nrelease -n <name> -r <resource_id>\n");
+	printf("\nrelease -n <name> -r <resource_name>\n");
 	printf("  -n <name>		name of a running sync_manager instance\n");
-	printf("  -r <resource_id>	resource id of a previously acquired lease\n");
+	printf("  -r <resource_name>	resource id of a previously acquired lease\n");
 
-	printf("\nLEASE = <resource_id>:<path>:<offset>[:<path>:<offset>...]\n");
-	printf("  <resource_id>		name of resource being leased\n");
+	printf("\nLEASE = <resource_name>:<path>:<offset>[:<path>:<offset>...]\n");
+	printf("  <resource_name>		name of resource being leased\n");
 	printf("  <path>		disk path\n");
 	printf("  <offset>		offset on disk\n");
 	printf("  [:<path>:<offset>...] other disks in a multi-disk lease\n");
@@ -2077,13 +1332,13 @@ int add_resource_arg(char *arg, int *token_count, struct token *token_args[])
 		return rv;
 	}
 
-	strncpy(token->resource_id, arg, NAME_ID_SIZE);
+	strncpy(token->resource_name, arg, NAME_ID_SIZE);
 	token_args[*token_count] = token;
 	(*token_count)++;
 	return rv;
 }
 
-/* arg = <resource_id>:<path>:<offset>[:<path>:<offset>...] */
+/* arg = <resource_name>:<path>:<offset>[:<path>:<offset>...] */
 
 int add_token_arg(char *arg, int *token_count, struct token *token_args[])
 {
@@ -2148,7 +1403,7 @@ int add_token_arg(char *arg, int *token_count, struct token *token_args[])
 				log_tool("lease arg id length error");
 				goto fail;
 			}
-			strncpy(token->resource_id, sub, NAME_ID_SIZE);
+			strncpy(token->resource_name, sub, NAME_ID_SIZE);
 		} else if (sub_count % 2) {
 			if (strlen(sub) > DISK_PATH_LEN-1 || strlen(sub) < 1) {
 				log_tool("lease arg path length error");
@@ -2274,7 +1529,7 @@ int read_args(int argc, char *argv[],
 			cluster_mode = atoi(optarg);
 			break;
 		case 'n':
-			strncpy(sm_id, optarg, NAME_ID_SIZE);
+			strncpy(options.sm_id, optarg, NAME_ID_SIZE);
 			break;
 		case 'i':
 			our_host_id = atoi(optarg);
@@ -2299,7 +1554,7 @@ int read_args(int argc, char *argv[],
 			strncpy(killscript, optarg, COMMAND_MAX - 1);
 			break;
 		case 'w':
-			opt_watchdog = atoi(optarg);
+			options.opt_watchdog = atoi(optarg);
 			break;
 		case 'c':
 			begin_command = 1;
@@ -2360,7 +1615,7 @@ int read_args(int argc, char *argv[],
 		return -EINVAL;
 	}
 
-	if ((*action != ACT_INIT) && !sm_id[0]) {
+	if ((*action != ACT_INIT) && !options.sm_id[0]) {
 		log_tool("name option (-n) required");
 		return -EINVAL;
 	}

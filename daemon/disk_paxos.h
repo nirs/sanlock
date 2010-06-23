@@ -44,9 +44,9 @@ struct paxos_disk {
    threads. */
 
 struct token {
-	int num;
+	int token_id;
 	int num_disks;
-	char resource_id[NAME_ID_SIZE];
+	char resource_name[NAME_ID_SIZE];
 	struct paxos_disk *disks;
 };
 
@@ -76,7 +76,7 @@ struct leader_record {
 	uint64_t max_hosts;
 	uint64_t owner_id; /* host_id of owner */
 	uint64_t lver;
-	char resource_id[NAME_ID_SIZE]; /* resource being locked */
+	char resource_name[NAME_ID_SIZE]; /* resource being locked */
 	uint64_t timestamp;
 	uint32_t checksum;
 	uint32_t pad2;
@@ -97,7 +97,7 @@ struct paxos_dblock {
 
 
 int majority_disks(struct token *token, int num);
-int disk_paxos_acquire(struct token *token, int force, 
+int disk_paxos_acquire(struct token *token, int force,
 		       struct leader_record *leader_ret);
 int disk_paxos_renew(struct token *token,
 		     struct leader_record *leader_last,
@@ -110,4 +110,6 @@ int disk_paxos_release(struct token *token,
 		       struct leader_record *leader_ret);
 int disk_paxos_init(struct token *token, int num_hosts, int max_hosts);
 
+void close_disks(struct token *token);
+int open_disks(struct token *token);
 #endif

@@ -32,6 +32,39 @@ extern int our_host_id;
 extern int cluster_mode;
 extern struct sm_timeouts to;
 
+/* return number of opened disks */
+
+int open_disks(struct token *token)
+{
+	struct paxos_disk *disk;
+	int num_opens = 0;
+	int d, fd;
+
+	for (d = 0; d < token->num_disks; d++) {
+		disk = &token->disks[d];
+		fd = open(disk->path, O_RDWR | O_DIRECT | O_SYNC, 0);
+		if (fd < 0) {
+			log_error(NULL, "open error %d %s", fd, disk->path);
+			continue;
+		}
+
+		disk->fd = fd;
+		num_opens++;
+	}
+	return num_opens;
+}
+
+void close_disks(struct token *token)
+{
+	struct paxos_disk *disk;
+	int d;
+
+	for (d = 0; d < token->num_disks; d++) {
+		disk = &token->disks[d];
+		close(disk->fd);
+	}
+}
+
 int majority_disks(struct token *token, int num)
 {
 	int num_disks = token->num_disks;
@@ -578,7 +611,7 @@ int verify_leader(struct token *token, int d, struct leader_record *lr)
 		return DP_BAD_CLUSTERMODE;
 	}
 
-	if (strncmp(lr->resource_id, token->resource_id, NAME_ID_SIZE)) {
+	if (strncmp(lr->resource_name, token->resource_name, NAME_ID_SIZE)) {
 		log_error(token, "disk %d leader has wrong resource id", d);
 		return DP_BAD_RESOURCEID;
 	}
@@ -701,7 +734,7 @@ int get_prev_leader(struct token *token, int force,
 		  (unsigned long long)prev_leader.lver,
 		  (unsigned long long)prev_leader.num_hosts,
 		  (unsigned long long)prev_leader.timestamp,
-		  prev_leader.resource_id);
+		  prev_leader.resource_name);
 
 	/*
 	 * signal handover request to current leader (prev_leader);
@@ -941,7 +974,7 @@ int disk_paxos_init(struct token *token, int num_hosts, int max_hosts)
 	leader.num_hosts = num_hosts;
 	leader.max_hosts = max_hosts;
 	leader.timestamp = LEASE_FREE;
-	strncpy(leader.resource_id, token->resource_id, NAME_ID_SIZE);
+	strncpy(leader.resource_name, token->resource_name, NAME_ID_SIZE);
 	leader.checksum = leader_checksum(&leader);
 
 	for (d = 0; d < token->num_disks; d++) {

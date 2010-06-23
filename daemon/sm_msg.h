@@ -48,8 +48,8 @@ struct sm_info {
 };
 
 struct sm_lease_info {
-	char resource_id[NAME_ID_SIZE];
-	int num;
+	char resource_name[NAME_ID_SIZE];
+	int token_id;
 	int stop_thread;
 	int thread_running;
 

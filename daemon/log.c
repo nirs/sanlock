@@ -17,6 +17,7 @@
 #include "sm.h"
 #include "sm_msg.h"
 #include "disk_paxos.h"
+#include "sm_options.h"
 
 #define LOG_STR_LEN 256
 static char log_str[LOG_STR_LEN];
@@ -46,7 +47,6 @@ static FILE *logfile_fp;
 extern int log_logfile_priority;
 extern int log_syslog_priority;
 extern int log_stderr_priority;
-extern char sm_id[NAME_ID_SIZE + 1];
 
 static void _log_save_dump(int level, int len)
 {
@@ -98,12 +98,12 @@ void log_level(struct token *token, int level, char *fmt, ...)
 	int len = LOG_STR_LEN - 2; /* leave room for \n\0 */
 
 	memset(name, 0, sizeof(name));
-	snprintf(name, NAME_ID_SIZE, "%s", token ? token->resource_id: "-");
+	snprintf(name, NAME_ID_SIZE, "%s", token ? token->resource_name: "-");
 
 	pthread_mutex_lock(&log_mutex);
 
 	ret = snprintf(log_str + pos, len - pos, "%s %ld %s ",
-		       sm_id, time(NULL), name);
+		       options.sm_id, time(NULL), name);
 	pos += ret;
 
 	va_start(ap, fmt);
@@ -210,7 +210,7 @@ int setup_logging(void)
 {
 	int fd;
 
-	snprintf(logfile_path, PATH_MAX, "%s/%s", SM_LOG_DIR, sm_id);
+	snprintf(logfile_path, PATH_MAX, "%s/%s", SM_LOG_DIR, options.sm_id);
 
 	logfile_fp = fopen(logfile_path, "a+");
 	if (logfile_fp) {
