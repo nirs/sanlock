@@ -102,6 +102,7 @@ void set_lease_status(int index, int op, int r, uint64_t t)
 	default:
 		log_error(NULL, "invalid op %d", op);
 	};
+	pthread_cond_broadcast(&lease_status_cond);
 	pthread_mutex_unlock(&lease_status_mutex);
 }
 
@@ -283,37 +284,7 @@ void *lease_thread(void *arg)
 	struct leader_record leader;
 	struct timespec ts;
 	int index = token->index;
-	int i, fd, rv, stop, num_opened, prev_token;
-	void *ret;
-
-	/* TODO: remove this */
-#if 0
-	/* There can be a situation where a previous request
-	 * is currently begin freed. We have to find it and
-	 * wait for it to finish before reaquireing        */
-	prev_token = -1;
-	pthread_mutex_lock(&lease_status_mutex);
-	for (i = 0; i < MAX_LEASES; i++) {
-		if (i == index) {
-			continue;
-		}
-
-		if (!lease_status[i].thread_running) {
-			continue;
-		}
-
-		if (strncmp(lease_status[i].resource_name, token->resource_name, NAME_ID_SIZE)) {
-			prev_token = i;
-			break;
-		}
-	}
-	pthread_mutex_unlock(&lease_status_mutex);
-
-	if (prev_token >= 0) {
-		log_debug(token, "joining previous thread at index %d", i);
-		pthread_join(lease_threads[i], &ret);
-	}
-#endif
+	int fd, rv, stop, num_opened;
 
 	fd = lockfile(token, RESOURCE_LOCKFILE_DIR, token->resource_name);
 	if (fd < 0) {
@@ -472,6 +443,26 @@ int add_lease_thread(struct token *token, int *id_ret)
 		*id_ret = id;
 	}
 	return rv;
+}
+
+int waitForStateCond(struct timespec timeout)
+{
+    int rv;
+    pthread_mutex_lock(&lease_status_mutex);
+    if ( (timeout.tv_sec == 0) && (timeout.tv_sec == 0) ) {
+        rv = pthread_cond_wait(&lease_status_cond, &lease_status_mutex);
+    } else {
+        rv = pthread_cond_timedwait(&lease_status_cond, &lease_status_mutex, &timeout);
+    }
+    pthread_mutex_unlock(&lease_status_mutex);
+    return rv;
+}
+
+int stop_token(int token_id) {
+	pthread_mutex_lock(&lease_status_mutex);
+	lease_status[token_id].stop_thread = 1;
+	pthread_mutex_unlock(&lease_status_mutex);
+	return 1;
 }
 
 int stop_lease(char *resource_name)

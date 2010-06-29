@@ -32,10 +32,12 @@ int create_token(int num_disks, struct token **token_out);
 int add_lease_thread(struct token *token, int *id_ret);
 
 int stop_lease(char *resource_name);
+int stop_token(int token_id);
 void cleanup_stopped_lease(void);
 
 int stopping_all_leases(void);
 void stop_all_leases(void);
 void cleanup_all_leases(void);
+int waitForStateCond(struct timespec timeout);
 #endif
 
