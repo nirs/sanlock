@@ -69,14 +69,10 @@ int supervise_pid_exit_status;
 int killing_supervise_pid;
 int external_shutdown;
 
-int acquiring_initial_leases;
-int acquiring_initial_ids[MAX_LEASE_ARGS];
-
-struct cmd_acquire_phase2_args {
+struct cmd_acquire_args {
 	int sock;
 	int token_count;
-	int tokens[MAX_LEASE_ARGS];
-	struct timespec timeout;
+	int token_ids[MAX_LEASE_ARGS];
 	struct sm_header h_recv;
 };
 
@@ -297,35 +293,36 @@ void kill_supervise_pid(void)
 	kill(supervise_pid, SIGKILL);
 }
 
-int waitForLeases(int leaseCount, int* lease_ids, struct timespec timeout)
+/* This is called from both the main thread and from the acquire_wait_thread.
+   Each lease_thread we're waiting on here should normally time out on its own
+   unless there's some problem causing the thread to get stuck.  If we want
+   to use a timeout to address that condition, it should probably be
+   some value a little over lease_timeout_seconds, which is the longest
+   that each lease_thread to should take to acquire the lease or fail. */
+
+int wait_lease_results(int token_count, int *token_ids)
 {
-    int i = 0, r, error;
+	int rv, result;
+	int i = 0;
 
-    while (i < leaseCount) {
-            get_lease_result(lease_ids[i],
-                             OP_ACQUIRE, &r);
-            if (r < 0) {
-                    /* lease_thread failed to acquire lease */
-                    error = r;
-                    goto stop_all;
+	while (i < token_count) {
+		rv = get_lease_result(token_ids[i], OP_ACQUIRE, &result);
+		if (rv < 0)
+			return -1;
 
-            } else if (r > 0) {
-                    /* lease_thread has acquired lease */
-                    i++;
+		if (result < 0) {
+			/* lease_thread failed to acquire lease */
+			return result;
+		} else if (result > 0) {
+			/* lease_thread has acquired lease */
+			i++;
+		} else {
+			/* lease_thread still waiting */
+			usleep(5000);
+		}
+	}
 
-            } else {
-               waitForStateCond(timeout);
-            }
-    }
-
-    return 1;
-
- stop_all:
-    for (i = 0; i < leaseCount; i++) {
-    	stop_token(lease_ids[i]);
-    }
-
-    return error;
+	return 0;
 }
 
 /*
@@ -354,7 +351,6 @@ int main_loop(void)
 	void (*deadfn) (int ci);
 	int i, rv, pid_status, wd_status;
 	int poll_timeout = to.unstable_poll_ms;
-	int error = 0;
 
 	while (1) {
 		/*
@@ -396,20 +392,6 @@ int main_loop(void)
 		}
 
 		/*
-		 * sync_manager is shutting down after the supervised pid
-		 * has stopped.  pthread_join lease threads and free tokens
-		 */
-
-		if (stopping_all_leases()) {
-			cleanup_all_leases();
-			/* error may be set from initial lease acquire
-			   or run_command */
-			if (!error)
-				error = supervise_pid_exit_status;
-			break;
-		}
-
-		/*
 		 * someone has asked sync_manager to shut down
 		 */
 
@@ -445,12 +427,7 @@ int main_loop(void)
 		pid_status = check_supervise_pid();
 
 		if (!pid_status) {
-			/*
-		 	 * pid has stopped running, stop the lease threads;
-			 * this may or may not be due to us killing it.
-		 	 */
-			unlink_watchdog();
-			stop_all_leases();
+			break;
 
 		} else if (pid_status < 0) {
 			/*
@@ -486,34 +463,34 @@ int main_loop(void)
 		   timely fashion. */
 
 		if ((pid_status > 0) && !killing_supervise_pid &&
-		    !stopping_all_leases() && !acquiring_initial_leases &&
 		    (time(NULL) - get_oldest_renewal_time() < to.lease_renewal_seconds))
 			poll_timeout = to.stable_poll_ms;
 		else
 			poll_timeout = to.unstable_poll_ms;
 	}
 
-	return error;
+	return supervise_pid_exit_status;
 }
 
-void *cmd_acquire_phase2(void *rawArgs) {
-	struct cmd_acquire_phase2_args *args = (struct cmd_acquire_phase2_args *) rawArgs;
-	int sock, token_count, rv;
-	int *tokens;
-	struct timespec *timeout;
+void *acquire_wait_thread(void *args_in)
+{
+	struct cmd_acquire_args *args = args_in;
+	int i, sock, token_count, rv;
+	int *token_ids;
 	struct sm_header *h_recv;
 	struct sm_header h;
 
-	sock = args->sock;
 	token_count = args->token_count;
-	tokens = args->tokens;
-	timeout = &args->timeout;
+	token_ids = args->token_ids;
 	h_recv = &args->h_recv;
+	sock = args->sock;
 
 	memcpy(&h, h_recv, sizeof(struct sm_header));
 
-	rv = waitForLeases(token_count, tokens, *timeout);
+	rv = wait_lease_results(token_count, token_ids);
 	if (rv < 0) {
+		for (i = 0; i < token_count; i++)
+			stop_token(token_ids[i]);
 		h.length = sizeof(h);
 		h.data = 0;
 		send(sock, &h, sizeof(struct sm_header), MSG_WAITALL);
@@ -521,7 +498,7 @@ void *cmd_acquire_phase2(void *rawArgs) {
 		h.length = sizeof(h) + (sizeof(int) * token_count);
 		h.data = token_count;
 		send(sock, &h, sizeof(struct sm_header), MSG_WAITALL);
-		send(sock, tokens, sizeof(int) * token_count, MSG_WAITALL);
+		send(sock, token_ids, sizeof(int) * token_count, MSG_WAITALL);
 	}
 	close(sock);
 
@@ -531,7 +508,7 @@ void *cmd_acquire_phase2(void *rawArgs) {
 
 void cmd_acquire(int fd, struct sm_header *h_recv)
 {
-	pthread_t phase2_thread;
+	pthread_t wait_thread;
 	pthread_attr_t attr;
 	struct sm_header h;
 	struct token *token = NULL;
@@ -540,7 +517,7 @@ void cmd_acquire(int fd, struct sm_header *h_recv)
 	int token_count = h_recv->data;
 	int added_count;
 	int rv, i, disks_len, num_disks;
-	struct cmd_acquire_phase2_args *phase2_args;
+	struct cmd_acquire_args *args;
 
 	memset(token_ids, 0, sizeof(token_ids));
 	added_count = 0;
@@ -548,7 +525,8 @@ void cmd_acquire(int fd, struct sm_header *h_recv)
 	if (token_count > MAX_LEASE_ARGS) {
 		log_error(NULL, "client asked for %d leases maximum is %d",
 			  token_count, MAX_LEASE_ARGS);
-		goto out;
+		rv = -1;
+		goto fail;
 	}
 
 	for (i = 0; i < token_count; i++) {
@@ -558,14 +536,14 @@ void cmd_acquire(int fd, struct sm_header *h_recv)
 		token = malloc(sizeof(struct token));
 		if (!token) {
 			rv = -ENOMEM;
-			goto out;
+			goto fail;
 		}
 
 		rv = recv(fd, token, sizeof(struct token), MSG_WAITALL);
 		if (rv != sizeof(struct token)) {
 			log_error(NULL, "connection closed unexpectedly %d", rv);
 			rv = -1;
-			goto out;
+			goto fail;
 		}
 
 		num_disks = token->num_disks;
@@ -573,7 +551,7 @@ void cmd_acquire(int fd, struct sm_header *h_recv)
 		disks = malloc(num_disks * sizeof(struct paxos_disk));
 		if (!disks) {
 			rv = -ENOMEM;
-			goto out;
+			goto fail;
 		}
 
 		disks_len = num_disks * sizeof(struct paxos_disk);
@@ -583,7 +561,7 @@ void cmd_acquire(int fd, struct sm_header *h_recv)
 		if (rv != disks_len) {
 			log_error(NULL, "connection closed unexpectedly %d", rv);
 			rv = -1;
-			goto out;
+			goto fail;
 		}
 		token->disks = disks;
 		log_debug(token, "received request to acquire lease");
@@ -594,49 +572,51 @@ void cmd_acquire(int fd, struct sm_header *h_recv)
 		token = NULL;
 		disks = NULL;
 
-		if (rv < 0) {
-			goto out;
-		}
+		if (rv < 0)
+			goto fail;
 
 		added_count++;
 	}
 
- out:
-	if (token)
-		free(token);
-	if (disks)
-		free(disks);
+	/* lease_thread created for each token, new thread will wait for
+	   the results of the threads and send back a reply */
 
-	if (rv < 0) {
+	/* TODO: thinking about a permanent worker thread to handle things
+	   like write_log_ents(), replying to dump and possibly query cmd's,
+	   polling for acquire results and replying.  This will further
+	   reduce the work for main_loop to do and avoid ad hoc threads.
+	   I'd like to preserve the property of the main thread being the
+	   only one to ever touch tokens[] and lease_threads[] since that
+	   keeps locking simpler. */
+	   
+	args = malloc(sizeof(struct cmd_acquire_args));
+	if (!args)
 		goto fail;
-	}
 
-	phase2_args = malloc(sizeof(struct cmd_acquire_phase2_args));
-	if (!phase2_args) {
-		goto fail;
-	}
-
-	phase2_args->sock = fd;
-	phase2_args->token_count = added_count;
-	memcpy(phase2_args->tokens, token_ids, sizeof(int) * added_count);
-	phase2_args->timeout.tv_sec = 0;
-	phase2_args->timeout.tv_nsec = 0;
-	memcpy(&phase2_args->h_recv, h_recv, sizeof(struct sm_header));
+	args->sock = fd;
+	args->token_count = added_count;
+	memcpy(args->token_ids, token_ids, sizeof(int) * added_count);
+	memcpy(&args->h_recv, h_recv, sizeof(struct sm_header));
 
 	pthread_attr_init(&attr);
-	rv = pthread_create(&phase2_thread, &attr, cmd_acquire_phase2, (void *) phase2_args);
+	rv = pthread_create(&wait_thread, &attr, acquire_wait_thread, (void *)args);
 	pthread_attr_destroy(&attr);
 	if (rv < 0) {
 		log_error(NULL, "could not start monitor lease for request");
+		free(args);
 		goto fail;
 	}
 
 	return;
 
  fail:
-	for (i = 0; i <= added_count && i < token_count; i++) {
+	if (token)
+		free(token);
+	if (disks)
+		free(disks);
+
+	for (i = 0; i < added_count && i < token_count; i++)
 		stop_token(token_ids[i]);
-	}
 
 	memcpy(&h, h_recv, sizeof(struct sm_header));
 	h.length = sizeof(h);
@@ -738,8 +718,6 @@ void cmd_status(int fd, struct sm_header *h_recv)
 	in->our_host_id = our_host_id;
 	in->supervise_pid = supervise_pid;
 	in->supervise_pid_exit_status = supervise_pid_exit_status;
-	in->starting_lease_threads = acquiring_initial_leases;
-	in->stopping_lease_threads = stopping_all_leases();
 	in->killing_supervise_pid = killing_supervise_pid;
 	in->external_shutdown = external_shutdown;
 
@@ -955,8 +933,8 @@ int make_dirs(void)
 
 int do_daemon(int token_count, struct token *token_args[])
 {
+	int token_ids[MAX_LEASE_ARGS];
 	int fd, rv, i;
-	struct timespec timeout = {0,0};
 
 	/*
 	 * after creating dirs and setting up logging the daemon can
@@ -999,39 +977,28 @@ int do_daemon(int token_count, struct token *token_args[])
 			goto out_lockfile;
 	}
 
-	acquiring_initial_leases = 0;
 	for (i = 0; i < token_count; i++) {
-		rv = add_lease_thread(token_args[i], &acquiring_initial_ids[i]);
-		if (rv < 0) {
-			if (acquiring_initial_leases) {
-				stop_all_leases();
-				cleanup_all_leases();
-			}
-			goto out_watchdog;
-		}
-		acquiring_initial_leases++;
-
-		/* once all lease are acquired, the main loop will run
-		   command if there is one */
+		rv = add_lease_thread(token_args[i], &token_ids[i]);
+		if (rv < 0)
+			goto out_leases;
 	}
 
-	/* there were no initial leases, just a command
-	   (a lease may be added later) */
-	rv = waitForLeases(acquiring_initial_leases, acquiring_initial_ids, timeout);
-	if (rv < 0) {
-		goto out_watchdog;
-	}
+	rv = wait_lease_results(token_count, token_ids);
+	if (rv < 0)
+		goto out_leases;
 
 	if (command[0]) {
 		rv = run_command(command);
 		if (rv < 0)
-			goto out_watchdog;
+			goto out_leases;
 	}
 
 	rv = main_loop();
 
- out_watchdog:
+ out_leases:
 	unlink_watchdog();
+	stop_all_leases();
+	cleanup_all_leases();
  out_lockfile:
 	unlink_lockfile(fd, DAEMON_LOCKFILE_DIR, options.sm_id);
  out:
@@ -1147,7 +1114,7 @@ int do_acquire(int token_count, struct token *token_args[])
 		goto out;
 	}
 
-	if (h.data == 0) {
+	if (h.data == 0 || h.data == -1) {
 		log_tool("acquire failed");
 		rv = -1;
 		goto out;
