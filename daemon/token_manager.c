@@ -18,6 +18,7 @@
 #include "sm_msg.h"
 #include "disk_paxos.h"
 #include "token_manager.h"
+#include "sm_options.h"
 #include "lockfile.h"
 #include "log.h"
 
@@ -411,7 +412,13 @@ int add_lease_thread(struct token *token, int *token_id_ret)
 	pthread_attr_t attr;
 	int i, rv, index, tmp_token_id, found = 0;
 
-	/* find an unused lease index, only main loop accesses
+	if (options.our_host_id < 0) {
+		log_error(token, "cannot acquire leases before host id has been set");
+		rv = -1;
+		goto out;
+	}
+
+	/* find an unused lease id, only main loop accesses
 	   tokens[] and lease_threads[], no locking needed */
 
 	for (i = 0; i < MAX_LEASES; i++) {

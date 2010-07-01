@@ -4,6 +4,7 @@
 struct sm_options {
 	char sm_id[NAME_ID_SIZE + 1];
 	int opt_watchdog;
+	int our_host_id;
 };
 
 extern struct sm_options options;

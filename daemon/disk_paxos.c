@@ -16,6 +16,7 @@
 #include "sm.h"
 #include "sm_msg.h"
 #include "disk_paxos.h"
+#include "sm_options.h"
 #include "log.h"
 
 /*
@@ -28,7 +29,6 @@
 
 #define NO_VAL 0
 
-extern int our_host_id;
 extern int cluster_mode;
 extern struct sm_timeouts to;
 
@@ -616,7 +616,7 @@ int verify_leader(struct token *token, int d, struct leader_record *lr)
 		return DP_BAD_RESOURCEID;
 	}
 
-	if (lr->num_hosts < our_host_id) {
+	if (lr->num_hosts < options.our_host_id) {
 		log_error(token, "disk %d leader num_hosts too small", d);
 		return DP_BAD_NUMHOSTS;
 	}
@@ -879,7 +879,7 @@ int disk_paxos_acquire(struct token *token, int force,
 	memcpy(&new_leader, &prev_leader, sizeof(struct leader_record));
 	new_leader.lver += 1; /* req.lver */
 
-	error = run_disk_paxos(token, our_host_id, our_host_id,
+	error = run_disk_paxos(token, options.our_host_id, options.our_host_id,
 			       new_leader.num_hosts, new_leader.lver, &dblock);
 	if (error < 0) {
 		log_error(token, "run_disk_paxos error %d", error);

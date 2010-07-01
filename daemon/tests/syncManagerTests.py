@@ -116,13 +116,61 @@ class ReleaseLease(RuthTestCase):
     def tearDown(self):
         self.dummy.stop()
 
+class InitialLeasesTests(RuthTestCase):
+    @classmethod
+    def getConfigTemplate(cls):
+        return { cls.__name__ : {
+                    "Leases" : LEASES_CONFIG_DEFINITION,
+                    "NumberOfHosts" : {"validator" : Validate.int, "default" : DEFAULT_NUMBER_OF_HOSTS}
+                    }
+                }
+
+    def setUp(self):
+        self.mgr = SyncManager(DEFAULT_NAME)
+        self.log.debug("Initializing disks")
+        self.mgr.initStorage(self.mycfg["Leases"], self.mycfg["NumberOfHosts"], MAXIMUM_NUMBER_OF_HOSTS)
+
+    def acquireInitialLeases(self):
+        self.dummy = Dummy(DEFAULT_NAME, 1, self.mycfg["Leases"])
+        self.mgr.releaseLeases(getResources(self.mycfg["Leases"]))
+
+    def acquireInitialLeasesWithoutHostID(self):
+        try:
+            self.dummy = Dummy(DEFAULT_NAME, -1, self.mycfg["Leases"])
+        except:
+            return
+        self.fail("Managed to start sync_manager daemon without a host ID")
+
+    def acquireLeasesFromDaemonizedSyncManagerWithoutSettingHostID(self):
+        self.dummy = Dummy(DEFAULT_NAME)
+        self.assertRaises(Exception, self.mgr.acquireLeases, self.mycfg["Leases"])
+
+    def acquireLeasesFromDaemonizedSyncManagerAfterSettingHostID(self):
+        self.dummy = Dummy(DEFAULT_NAME)
+        self.mgr.setHostID(1);
+        self.mgr.acquireLeases(self.mycfg["Leases"])
+
+    def resetHostID(self):
+        self.dummy = Dummy(DEFAULT_NAME)
+        self.mgr.setHostID(1);
+        self.assertRaises(Exception, self.mgr.setHostID, 2);
+        self.mgr.acquireLeases(self.mycfg["Leases"])
+
+    def tearDown(self):
+        if hasattr(self, "dummy"):
+            self.dummy.stop()
 
 def suite():
     tests = {
         DriveInitialization : ["test"],
         InitPerformanceTest : ["test"],
         AcquireLease : ["testGood", "testWithBadDrive"],
-        ReleaseLease : ["testGood", "testUnacquired"]
+        ReleaseLease : ["testGood", "testUnacquired"],
+        InitialLeasesTests : ["acquireInitialLeases",
+                              "acquireInitialLeasesWithoutHostID",
+                              "acquireLeasesFromDaemonizedSyncManagerWithoutSettingHostID",
+                              "acquireLeasesFromDaemonizedSyncManagerAfterSettingHostID",
+                              "resetHostID"]
     }
 
     resSuite = ut.TestSuite()

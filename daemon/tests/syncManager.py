@@ -37,6 +37,9 @@ class SyncManager(object):
         args.extend(self._compileLeaseArgs(leases))
         self._runTool("acquire", args)
 
+    def setHostID(self, hostID):
+        args = ["-n", self.name, "-i", str(hostID)]
+        self._runTool("set_host_id", args)
 
     def releaseLeases(self, resources):
         args = ["-n", self.name]

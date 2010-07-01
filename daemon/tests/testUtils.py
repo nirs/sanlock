@@ -86,8 +86,10 @@ DUMMY_CMD = ["/usr/bin/sudo", "-u", pwd.getpwuid(os.geteuid())[0], os.path.abspa
 class Dummy(object):
     _log = logging.getLogger("Dummy");
     _pidRegex = re.compile(r".*supervise_pid\s+(\d+).*")
-    def __init__(self, name, hostID):
-        cmd = ["sudo", "-n", "../sync_manager", "daemon", "-D", "-n", name, "-i", str(hostID), "-c"]
+    def __init__(self, name, hostID = -1, leases = []):
+        cmd = ["sudo", "-n", "../sync_manager", "daemon", "-D", "-n", name, "-i", str(hostID)]
+        cmd.extend(self._compileLeaseArgs(leases))
+        cmd.append("-c")
         cmd.extend(DUMMY_CMD)
         self._log.debug("CMD: %s" % subprocess.list2cmdline(cmd))
         self.process = subprocess.Popen(cmd,
@@ -120,6 +122,14 @@ class Dummy(object):
                 self._log.debug("Daemon - %s" % line)
 
         self._pidStarted.set()
+
+    def _compileLeaseArgs(self, leases):
+        args = []
+        for lease, disks in leases:
+            mangledDisks = ["%s:%d" % (os.path.abspath(disk), offset) for (disk, offset) in disks]
+            args.extend(["-l", "%s:%s" % (lease, ":".join(mangledDisks))])
+
+        return args
 
     def stop(self):
         if not self.process.poll() is None:

@@ -12,6 +12,7 @@ enum {
 	SM_CMD_GET_TIMEOUTS,
 	SM_CMD_SET_TIMEOUTS,
 	SM_CMD_SUPERVISE,
+	SM_CMD_SET_HOST_ID,
 };
 
 struct sm_header {

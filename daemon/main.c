@@ -55,10 +55,10 @@ int log_stderr_priority = LOG_ERR;
 #define ACT_SUPERVISE	6
 #define ACT_STATUS	7
 #define ACT_LOG_DUMP	8
+#define ACT_SET_HOST_ID	9
 
 char command[COMMAND_MAX];
 char killscript[COMMAND_MAX];
-int our_host_id;
 int cluster_mode;
 int cmd_argc;
 char **cmd_argv;
@@ -588,7 +588,7 @@ void cmd_acquire(int fd, struct sm_header *h_recv)
 	   I'd like to preserve the property of the main thread being the
 	   only one to ever touch tokens[] and lease_threads[] since that
 	   keeps locking simpler. */
-	   
+
 	args = malloc(sizeof(struct cmd_acquire_args));
 	if (!args)
 		goto fail;
@@ -715,7 +715,7 @@ void cmd_status(int fd, struct sm_header *h_recv)
 
 	strncpy(in->command, command, COMMAND_MAX - 1);
 	strncpy(in->killscript, killscript, COMMAND_MAX - 1);
-	in->our_host_id = our_host_id;
+	in->our_host_id = options.our_host_id;
 	in->supervise_pid = supervise_pid;
 	in->supervise_pid_exit_status = supervise_pid_exit_status;
 	in->killing_supervise_pid = killing_supervise_pid;
@@ -787,6 +787,25 @@ void cmd_log_dump(int fd, struct sm_header *h_recv)
 	write_log_dump(fd, &h);
 }
 
+void cmd_set_host_id(int fd, struct sm_header *h_recv)
+{
+	struct sm_header h;
+	int rv;
+
+	if (options.our_host_id < 0) {
+		options.our_host_id = h_recv->data;
+		rv = 0;
+		log_debug(NULL, "host ID set to %d", options.our_host_id);
+	} else {
+		rv = 1;
+		log_error(NULL, "client tried to reset host ID");
+	}
+	memcpy(&h, h_recv, sizeof(struct sm_header));
+	h.length = sizeof(h);
+	h.data = rv;
+	send(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
+}
+
 void process_listener(int ci)
 {
 	struct sm_header h;
@@ -830,6 +849,9 @@ void process_listener(int ci)
 		break;
 	case SM_CMD_LOG_DUMP:
 		cmd_log_dump(fd, &h);
+		break;
+	case SM_CMD_SET_HOST_ID:
+		cmd_set_host_id(fd, &h);
 		break;
 #if 0
 	case SM_CMD_GET_TIMEOUTS:
@@ -1077,6 +1099,28 @@ int do_init(int token_count, struct token *token_args[],
 	}
 
 	return rv;
+}
+
+int do_set_host_id(void)
+{
+	struct sm_header h;
+	int sock, rv;
+
+	sock = send_header(SM_CMD_SET_HOST_ID, options.our_host_id);
+	if (sock < 0)
+		return sock;
+
+	rv = recv(sock, &h, sizeof(struct sm_header), MSG_WAITALL);
+	if (rv != sizeof(h)) {
+		log_tool("connection closed unexpectedly %d", rv);
+		return -1;
+	}
+
+	if (!h.data)
+		log_tool("host ID set to %d", options.our_host_id);
+	else
+		log_tool("could not set host ID, it was already set");
+	return h.data;
 }
 
 int do_acquire(int token_count, struct token *token_args[])
@@ -1520,6 +1564,8 @@ int read_args(int argc, char *argv[],
 		*action = ACT_STATUS;
 	else if (!strcmp(arg1, "log_dump"))
 		*action = ACT_LOG_DUMP;
+	else if (!strcmp(arg1, "set_host_id"))
+		*action = ACT_SET_HOST_ID;
 	else {
 		log_tool("first arg is unknown action");
 		print_usage();
@@ -1567,7 +1613,7 @@ int read_args(int argc, char *argv[],
 			strncpy(options.sm_id, optarg, NAME_ID_SIZE);
 			break;
 		case 'i':
-			our_host_id = atoi(optarg);
+			options.our_host_id = atoi(optarg);
 			break;
 		case 'r':
 			if ((*action) != ACT_RELEASE)
@@ -1645,8 +1691,13 @@ int read_args(int argc, char *argv[],
 		strncpy(command, cmd_argv[0], COMMAND_MAX - 1);
 	}
 
-	if ((*action == ACT_DAEMON) && !our_host_id) {
-		log_tool("local host id required");
+	if ((*action == ACT_DAEMON) && (options.our_host_id < 0) && (*token_count > 0)) {
+		log_tool("local host id required is you wish to acquire initial leases");
+		return -EINVAL;
+	}
+
+	if ((*action == ACT_SET_HOST_ID) && (options.our_host_id < 0)) {
+		log_tool("local host id parameter not set");
 		return -EINVAL;
 	}
 
@@ -1701,6 +1752,9 @@ int main(int argc, char *argv[])
 		break;
 	case ACT_LOG_DUMP:
 		rv = do_log_dump();
+		break;
+	case ACT_SET_HOST_ID:
+		rv = do_set_host_id();
 		break;
 	default:
 		break;
