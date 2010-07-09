@@ -128,7 +128,7 @@ int _token_id_to_index(int token_id, int *index)
 	return -1;
 }
 
-int get_lease_result(int token_id, int op, int *r)
+int wait_acquire_result(int token_id, int *result)
 {
 	int rv, index;
 
@@ -138,13 +138,10 @@ int get_lease_result(int token_id, int op, int *r)
 	if (rv < 0)
 		goto out;
 
-	if (op == OP_ACQUIRE) {
-		*r = lease_status[index].acquire_last_result;
-	} else if (op == OP_RENEWAL) {
-		*r = lease_status[index].renewal_last_result;
-	} else if (op == OP_RELEASE) {
-		*r = lease_status[index].release_last_result;
+	while (!lease_status[index].acquire_last_result) {
+		pthread_cond_wait(&lease_status_cond, &lease_status_mutex);
 	}
+	*result = lease_status[index].acquire_last_result;
  out:
 	pthread_mutex_unlock(&lease_status_mutex);
 	return rv;

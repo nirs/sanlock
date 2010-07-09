@@ -293,33 +293,28 @@ void kill_supervise_pid(void)
 	kill(supervise_pid, SIGKILL);
 }
 
-/* This is called from both the main thread and from the acquire_wait_thread.
+/* This is called from both the main thread and from the cmd_acquire_thread.
    Each lease_thread we're waiting on here should normally time out on its own
    unless there's some problem causing the thread to get stuck.  If we want
    to use a timeout to address that condition, it should probably be
    some value a little over lease_timeout_seconds, which is the longest
    that each lease_thread to should take to acquire the lease or fail. */
 
-int wait_lease_results(int token_count, int *token_ids)
+int wait_acquire_results(int token_count, int *token_ids)
 {
-	int rv, result;
-	int i = 0;
+	int i, rv, result;
 
-	while (i < token_count) {
-		rv = get_lease_result(token_ids[i], OP_ACQUIRE, &result);
+	for (i = 0; i < token_count; i++) {
+		rv = wait_acquire_result(token_ids[i], &result);
+
 		if (rv < 0)
-			return -1;
-
-		if (result < 0) {
-			/* lease_thread failed to acquire lease */
+			return rv;
+		if (result < 0)
 			return result;
-		} else if (result > 0) {
-			/* lease_thread has acquired lease */
-			i++;
-		} else {
-			/* lease_thread still waiting */
-			usleep(5000);
-		}
+
+		/* this shouldn't happen */
+		if (!result)
+			return -1;
 	}
 
 	return 0;
@@ -472,22 +467,20 @@ int main_loop(void)
 	return supervise_pid_exit_status;
 }
 
-void *acquire_wait_thread(void *args_in)
+void *cmd_acquire_thread(void *args_in)
 {
 	struct cmd_acquire_args *args = args_in;
 	int i, sock, token_count, rv;
 	int *token_ids;
-	struct sm_header *h_recv;
 	struct sm_header h;
 
 	token_count = args->token_count;
 	token_ids = args->token_ids;
-	h_recv = &args->h_recv;
 	sock = args->sock;
 
-	memcpy(&h, h_recv, sizeof(struct sm_header));
+	memcpy(&h, &args->h_recv, sizeof(struct sm_header));
 
-	rv = wait_lease_results(token_count, token_ids);
+	rv = wait_acquire_results(token_count, token_ids);
 	if (rv < 0) {
 		for (i = 0; i < token_count; i++)
 			stop_token(token_ids[i]);
@@ -581,25 +574,19 @@ void cmd_acquire(int fd, struct sm_header *h_recv)
 	/* lease_thread created for each token, new thread will wait for
 	   the results of the threads and send back a reply */
 
-	/* TODO: thinking about a permanent worker thread to handle things
-	   like write_log_ents(), replying to dump and possibly query cmd's,
-	   polling for acquire results and replying.  This will further
-	   reduce the work for main_loop to do and avoid ad hoc threads.
-	   I'd like to preserve the property of the main thread being the
-	   only one to ever touch tokens[] and lease_threads[] since that
-	   keeps locking simpler. */
-
 	args = malloc(sizeof(struct cmd_acquire_args));
 	if (!args)
 		goto fail;
 
+	memset(args, 0, sizeof(struct cmd_acquire_args));
 	args->sock = fd;
 	args->token_count = added_count;
 	memcpy(args->token_ids, token_ids, sizeof(int) * added_count);
 	memcpy(&args->h_recv, h_recv, sizeof(struct sm_header));
 
 	pthread_attr_init(&attr);
-	rv = pthread_create(&wait_thread, &attr, acquire_wait_thread, (void *)args);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+	rv = pthread_create(&wait_thread, &attr, cmd_acquire_thread, args);
 	pthread_attr_destroy(&attr);
 	if (rv < 0) {
 		log_error(NULL, "could not start monitor lease for request");
@@ -1005,7 +992,7 @@ int do_daemon(int token_count, struct token *token_args[])
 			goto out_leases;
 	}
 
-	rv = wait_lease_results(token_count, token_ids);
+	rv = wait_acquire_results(token_count, token_ids);
 	if (rv < 0)
 		goto out_leases;
 
