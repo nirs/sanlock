@@ -28,19 +28,6 @@
 #include "watchdog.h"
 #include "log.h"
 
-#define CLIENT_NALLOC 2
-
-struct client {
-	int fd;
-	void *workfn;
-	void *deadfn;
-};
-
-static int client_maxi;
-static int client_size = 0;
-static struct client *client = NULL;
-static struct pollfd *pollfd = NULL;
-
 /* priorities are LOG_* from syslog.h */
 int log_logfile_priority = LOG_ERR;
 int log_syslog_priority = LOG_ERR;
@@ -63,11 +50,14 @@ int cluster_mode;
 int cmd_argc;
 char **cmd_argv;
 
+int listener_socket;
 int supervise_pid;
 int killscript_pid;
 int supervise_pid_exit_status;
 int killing_supervise_pid;
 int external_shutdown;
+
+void process_listener(void);
 
 struct cmd_acquire_args {
 	int sock;
@@ -75,69 +65,6 @@ struct cmd_acquire_args {
 	int token_ids[MAX_LEASE_ARGS];
 	struct sm_header h_recv;
 };
-
-static void client_alloc(void)
-{
-	int i;
-
-	if (!client) {
-		client = malloc(CLIENT_NALLOC * sizeof(struct client));
-		pollfd = malloc(CLIENT_NALLOC * sizeof(struct pollfd));
-	} else {
-		client = realloc(client, (client_size + CLIENT_NALLOC) *
-					 sizeof(struct client));
-		pollfd = realloc(pollfd, (client_size + CLIENT_NALLOC) *
-					 sizeof(struct pollfd));
-		if (!pollfd)
-			log_error(NULL, "can't alloc for pollfd");
-	}
-	if (!client || !pollfd)
-		log_error(NULL, "can't alloc for client array");
-
-	for (i = client_size; i < client_size + CLIENT_NALLOC; i++) {
-		client[i].workfn = NULL;
-		client[i].deadfn = NULL;
-		client[i].fd = -1;
-		pollfd[i].fd = -1;
-		pollfd[i].revents = 0;
-	}
-	client_size += CLIENT_NALLOC;
-}
-
-void client_dead(int ci)
-{
-	close(client[ci].fd);
-	client[ci].workfn = NULL;
-	client[ci].fd = -1;
-	pollfd[ci].fd = -1;
-}
-
-int client_add(int fd, void (*workfn)(int ci), void (*deadfn)(int ci))
-{
-	int i;
-
-	if (!client)
-		client_alloc();
- again:
-	for (i = 0; i < client_size; i++) {
-		if (client[i].fd == -1) {
-			client[i].workfn = workfn;
-			if (deadfn)
-				client[i].deadfn = deadfn;
-			else
-				client[i].deadfn = client_dead;
-			client[i].fd = fd;
-			pollfd[i].fd = fd;
-			pollfd[i].events = POLLIN;
-			if (i > client_maxi)
-				client_maxi = i;
-			return i;
-		}
-	}
-
-	client_alloc();
-	goto again;
-}
 
 int check_killscript_pid(void)
 {
@@ -342,10 +269,13 @@ int wait_acquire_results(int token_count, int *token_ids)
 
 int main_loop(void)
 {
-	void (*workfn) (int ci);
-	void (*deadfn) (int ci);
-	int i, rv, pid_status, wd_status;
+	struct pollfd pollfd[1];
 	int poll_timeout = to.unstable_poll_ms;
+	int rv, pid_status, wd_status;
+
+	memset(&pollfd, 0, sizeof(pollfd));
+	pollfd[0].fd = listener_socket;
+	pollfd[0].events = POLLIN;
 
 	while (1) {
 		/*
@@ -362,27 +292,21 @@ int main_loop(void)
 		 * status, adding/deleting leases, etc.
 		 */
 
-		rv = poll(pollfd, client_maxi + 1, poll_timeout);
-		if (rv == -1 && errno == EINTR) {
+		rv = poll(pollfd, 1, poll_timeout);
+		if (rv == -1 && errno == EINTR)
 			continue;
-		}
 		if (rv < 0) {
 			/* errors here unlikely, do we want to shut down,
 			   i.e. kill pid / release leases, or continue
 			   running with no poll? */
 		}
 		if (rv > 0) {
-			for (i = 0; i <= client_maxi; i++) {
-				if (client[i].fd < 0)
-					continue;
-				if (pollfd[i].revents & POLLIN) {
-					workfn = client[i].workfn;
-					workfn(i);
-				}
-				if (pollfd[i].revents & (POLLERR | POLLHUP | POLLNVAL)) {
-					deadfn = client[i].deadfn;
-					deadfn(i);
-				}
+			if (pollfd[0].revents & POLLIN)
+				process_listener();
+			if (pollfd[0].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+				close(pollfd[0].fd);
+				pollfd[0].fd = -1;
+				pollfd[0].events = 0;
 			}
 		}
 
@@ -793,12 +717,12 @@ void cmd_set_host_id(int fd, struct sm_header *h_recv)
 	send(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
 }
 
-void process_listener(int ci)
+void process_listener(void)
 {
 	struct sm_header h;
 	int fd, rv, auto_close = 1;
 
-	fd = accept(client[ci].fd, NULL, NULL);
+	fd = accept(listener_socket, NULL, NULL);
 	if (fd < 0)
 		return;
 
@@ -814,7 +738,7 @@ void process_listener(int ci)
 	if (strcmp(options.sm_id, h.sm_id)) {
 	}
 
-	log_debug(NULL, "cmd %d ci %d fd %d", h.cmd, ci, fd);
+	log_debug(NULL, "cmd %d fd %d", h.cmd, fd);
 
 	switch (h.cmd) {
 	case SM_CMD_ACQUIRE:
@@ -866,8 +790,6 @@ int setup_listener(void)
 	socklen_t addrlen;
 	int rv, s;
 
-	/* we listen for new client connections on socket s */
-
 	s = socket(AF_LOCAL, SOCK_STREAM, 0);
 	if (s < 0) {
 		log_error(NULL, "socket error %d %d", s, errno);
@@ -895,7 +817,7 @@ int setup_listener(void)
 		return rv;
 	}
 
-	client_add(s, process_listener, NULL);
+	listener_socket = s;
 	return 0;
 }
 
