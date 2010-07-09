@@ -162,29 +162,31 @@ void write_log_ents(void)
 	struct entry *e;
 	int level, prev_dropped = 0;
 
-	pthread_mutex_lock(&log_mutex);
-	if (log_head_ent == log_tail_ent) {
+	while (1) {
+		pthread_mutex_lock(&log_mutex);
+		if (log_head_ent == log_tail_ent) {
+			pthread_mutex_unlock(&log_mutex);
+			return;
+		}
+
+		e = &log_ents[log_tail_ent++];
+		log_tail_ent = log_tail_ent % log_num_ents;
+		log_pending_ents--;
+
+		memcpy(str, e->str, LOG_STR_LEN);
+		level = e->level;
+
+		prev_dropped = log_dropped;
+		log_dropped = 0;
 		pthread_mutex_unlock(&log_mutex);
-		return;
+
+		if (prev_dropped) {
+			write_dropped(level, prev_dropped);
+			prev_dropped = 0;
+		}
+
+		write_entry(level, str);
 	}
-
-	e = &log_ents[log_tail_ent++];
-	log_tail_ent = log_tail_ent % log_num_ents;
-	log_pending_ents--;
-
-	memcpy(str, e->str, LOG_STR_LEN);
-	level = e->level;
-
-	prev_dropped = log_dropped;
-	log_dropped = 0;
-	pthread_mutex_unlock(&log_mutex);
-
-	if (prev_dropped) {
-		write_dropped(level, prev_dropped);
-		prev_dropped = 0;
-	}
-
-	write_entry(level, str);
 }
 
 void write_log_dump(int fd, struct sm_header *hd)
