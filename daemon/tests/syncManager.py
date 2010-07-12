@@ -19,6 +19,7 @@ class SyncManager(object):
     _log = logging.getLogger("SyncManager");
     def __init__(self, name):
         self.name = name
+        self.syncManagerPath = SYNCMANAGER_PATH
 
     def initStorage(self, leases, numberOfHosts, maximumNumberOfHosts = None):
         self._log.debug("Initializing leases on '%s'", leases)
@@ -58,7 +59,7 @@ class SyncManager(object):
         return args
 
     def _runToolAsync(self, command, args):
-        cmd = ["sudo", "-n", SYNCMANAGER_PATH] + [command, "-D"] + args
+        cmd = ["sudo", "-n", self.syncManagerPath] + [command, "-D"] + args
         self._log.debug("Running syncmanager CMD:'%s'", subprocess.list2cmdline(cmd))
         mngr = subprocess.Popen(cmd,
                                 stdin = subprocess.PIPE,

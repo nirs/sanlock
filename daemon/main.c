@@ -349,7 +349,7 @@ int main_loop(void)
 		} else if (pid_status < 0) {
 			/*
 			 * can't get status, don't know if pid is running
-			 * (use a secondary method to check process?)
+			 * use a secondary method to check process
 			 *
 			 * If the status of the pid is uncertain we need to
 			 * continue updating the lease in case it's still
@@ -363,6 +363,9 @@ int main_loop(void)
 				/* just killed pid, don't need to again */
 				notouch_watchdog();
 			}
+			/* PID is not responding to singal 0. It is down */
+			if (kill(supervise_pid, 0))
+				break;
 
 		} else if (pid_status > 0) {
 			/*
