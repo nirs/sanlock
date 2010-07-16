@@ -53,7 +53,6 @@ char **cmd_argv;
 int listener_socket;
 int supervise_pid;
 int killscript_pid;
-int supervise_pid_exit_status;
 int killing_supervise_pid;
 int external_shutdown;
 
@@ -74,12 +73,13 @@ int check_killscript_pid(void)
 		return 0;
 
 	rv = waitpid(killscript_pid, &status, WNOHANG);
-	if (rv > 0)
-		killscript_pid = 0;
-	else if (!rv) {
-		/* TODO: call again before sync_manager exit */
-	}
 
+	/* still running */
+	/* TODO: call again before sync_manager exit? */
+	if (!rv)
+		return 0;
+
+	killscript_pid = 0;
 	return 0;
 }
 
@@ -101,24 +101,22 @@ int check_supervise_pid(void)
 		return 1;
 
 	rv = waitpid(supervise_pid, &status, WNOHANG);
-	if (!rv)
-		return 1;
-	if (rv < 0) {
-		log_error(NULL, "waitpid errno %d supervise_pid %d",
-			  errno, supervise_pid);
-		return rv;
-	}
 
-	if (WIFEXITED(status)) {
-		supervise_pid_exit_status = WEXITSTATUS(status);
-		log_debug(NULL, "supervise_pid %d exit status %d",
-			  supervise_pid, supervise_pid_exit_status);
+	if (!rv) {
+		/* pid exists, no state change */
+		return 1;
+	} else if (rv < 0) {
+		log_error(NULL, "waitpid errno %d supervise_pid %d", errno,
+			  supervise_pid);
+		return rv;
+	} else {
+		/* pid has terminated */
+		log_debug(NULL, "waitpid success %d exited %d signaled %d",
+			  rv, WIFEXITED(status), WIFSIGNALED(status));
 		check_killscript_pid();
 		supervise_pid = 0;
 		return 0;
 	}
-
-	return 1;
 }
 
 int run_killscript(void)
@@ -388,7 +386,7 @@ int main_loop(void)
 			poll_timeout = to.unstable_poll_ms;
 	}
 
-	return supervise_pid_exit_status;
+	return 0;
 }
 
 void *cmd_acquire_thread(void *args_in)
@@ -628,7 +626,6 @@ void cmd_status(int fd, struct sm_header *h_recv)
 	strncpy(in->killscript, killscript, COMMAND_MAX - 1);
 	in->our_host_id = options.our_host_id;
 	in->supervise_pid = supervise_pid;
-	in->supervise_pid_exit_status = supervise_pid_exit_status;
 	in->killing_supervise_pid = killing_supervise_pid;
 	in->external_shutdown = external_shutdown;
 
@@ -826,6 +823,10 @@ void sigterm_handler(int sig)
 	external_shutdown = 1;
 }
 
+void sigchld_handler(int sig)
+{
+}
+
 int make_dirs(void)
 {
 	mode_t old_umask;
@@ -865,6 +866,7 @@ int make_dirs(void)
 int do_daemon(int token_count, struct token *token_args[])
 {
 	int token_ids[MAX_LEASE_ARGS];
+	struct sigaction act;
 	int fd, rv, i;
 
 	/*
@@ -892,7 +894,18 @@ int do_daemon(int token_count, struct token *token_args[])
 	to.stable_poll_ms = 2000;
 	to.unstable_poll_ms = 500;
 
-	signal(SIGTERM, sigterm_handler);
+	memset(&act, 0, sizeof(act));
+	act.sa_handler = sigterm_handler;
+	rv = sigaction(SIGTERM, &act, NULL);
+	if (rv < 0)
+		return -rv;
+
+	memset(&act, 0, sizeof(act));
+	act.sa_handler = sigchld_handler;
+	act.sa_flags = SA_NOCLDSTOP;
+	rv = sigaction(SIGCHLD, &act, NULL);
+	if (rv < 0)
+		return -rv;
 
 	fd = lockfile(NULL, DAEMON_LOCKFILE_DIR, options.sm_id);
 	if (fd < 0)
