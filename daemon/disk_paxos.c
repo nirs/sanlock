@@ -645,7 +645,7 @@ int get_prev_leader(struct token *token, int force,
 	struct request_record req;
 	int *leader_reps;
 	int leaders_len, leader_reps_len;
-	int num_reads, num_writes, num_free, num_timeout;
+	int num_reads, num_writes, num_free, num_diff;
 	int num_disks = token->num_disks;
 	int rv, d, i, found;
 	int error;
@@ -792,30 +792,28 @@ int get_prev_leader(struct token *token, int force,
 	log_debug(token, "wait lease_timeout_seconds %u",
 		  to.lease_timeout_seconds);
 
-	sleep(to.lease_timeout_seconds);
+	for (i = 0; i < to.lease_timeout_seconds; i++) {
+		sleep(1);
+		num_diff = 0;
 
-	num_timeout = 0;
+		for (d = 0; d < num_disks; d++) {
+			rv = read_leader(token, &token->disks[d], &tmp_leader);
+			if (rv < 0)
+				continue;
 
-	for (d = 0; d < num_disks; d++) {
-		rv = read_leader(token, &token->disks[d], &tmp_leader);
-		if (rv < 0)
-			continue;
+			if (memcmp(&leaders[d], &tmp_leader, sizeof(struct leader_record)))
+				num_diff++;
+		}
 
-		/* looks for different timestamp */
-
-		if (!memcmp(&leaders[d], &tmp_leader,
-			    sizeof(struct leader_record)))
-			num_timeout++;
+		if (majority_disks(token, num_diff)) {
+			log_error(token, "lease renewed on majority %d disks",
+				  num_diff);
+			error = DP_LIVE_LEADER;
+			goto fail;
+		}
 	}
 
-	if (!majority_disks(token, num_timeout)) {
-		log_error(token, "no lease timeout on majority of disks");
-		error = DP_LIVE_LEADER;
-		goto fail;
-	}
-
-	log_debug(token, "lease timeout on majority %d disks", num_timeout);
-
+	log_debug(token, "lease timeout on majority of disks");
  out:
 	memcpy(leader_out, &prev_leader, sizeof(struct leader_record));
 	return DP_OK;
