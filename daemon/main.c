@@ -949,6 +949,7 @@ int do_daemon(int token_count, struct token *token_args[])
  out_lockfile:
 	unlink_lockfile(fd, DAEMON_LOCKFILE_DIR, options.sm_id);
  out:
+	write_log_ents();
 	return rv;
 }
 

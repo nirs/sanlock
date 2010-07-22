@@ -365,8 +365,10 @@ void *lease_thread(void *arg)
 		set_lease_status(index, OP_RENEWAL, rv, leader.timestamp);
 		if (rv < 0)
 			log_error(token, "renewal failed %d", rv);
+		/*
 		else
 			log_debug(token, "renewal");
+		*/
 	}
 
 	rv = release_lease(token, &leader);
