@@ -1,5 +1,13 @@
 CFLAGS := -D_GNU_SOURCE -Wall -g
 
+INSTALL=$(shell which install)
+BINDIR=$(DESTDIR)/usr/libexec
+
+RPMTOP=$(shell bash -c "pwd -P")/rpmbuild
+rpmversion:=0.1
+rpmrelease:=1.$(shell date +%Y%m%d)git
+TARBALL=sync-manger-$(rpmversion)-$(rpmrelease).tar.gz
+
 all: sync_manager
 
 sync_manager:	main.o disk_paxos.o log.o lockfile.o token_manager.o watchdog.o sm_options.o
@@ -29,3 +37,19 @@ sm_options.o:	sm_options.c
 clean:
 	rm -f *.o sync_manager
 
+.PHONY: install
+install: sync_manager
+	mkdir -p $(BINDIR)
+	$(INSTALL) -c -m 755 sync_manager $(BINDIR)
+
+rpm:
+	rm -rf $(RPMTOP)
+	mkdir $(RPMTOP)
+	mkdir $(RPMTOP)/BUILD  $(RPMTOP)/BUILDROOT  $(RPMTOP)/RPMS  $(RPMTOP)/SOURCES  $(RPMTOP)/SPECS $(RPMTOP)/SRPMS
+	tar zcf $(TARBALL) `git ls-files | grep -v /tests/`
+	mv $(TARBALL) $(RPMTOP)/SOURCES
+	sed 's/^Version:.*/Version: $(rpmversion)/;s/^Release:.*/Release: $(rpmrelease)%{?dist}/;s/^Source0:.*/Source0: $(TARBALL)/' \
+		sync_manager.spec.in > sync_manager.spec
+	rpmbuild -v -ba --define="_topdir $(RPMTOP)" \
+                        --define="_sourcedir $(RPMTOP)/SOURCES" \
+		./sync_manager.spec

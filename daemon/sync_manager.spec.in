@@ -1,0 +1,46 @@
+Name:		sync-manager
+Version:	0.1
+Release:	1.19700101git%{?dist}
+Summary:	Sync Manager is a tool to manage disk paxos base leases.
+
+Group:		Development/Tools
+License:	GPLv2+
+URL:		http://http://cleopatra.tlv.redhat.com/qumrawiki/Sync%20Manager
+Source0:	%{name}-%{version}.tar.gz
+BuildRoot: 	%{_tmppath}/%{name}-%{version}-%{release}
+
+BuildRequires:	gcc
+Requires:	libpthread.so.0
+Requires:	librt.so.1
+Requires:	libc.so.6
+
+%description
+Sync Manager is a program to manage disk paxos based leases.
+It helps synchronizing access to shared resource in a distributed system.
+
+%prep
+%setup -c -q
+
+%build
+make
+
+
+%install
+rm -rf $RPM_BUILD_ROOT
+make install DESTDIR=$RPM_BUILD_ROOT
+
+
+%clean
+rm -rf $RPM_BUILD_ROOT
+
+
+%files
+%defattr(-,root,root,-)
+/usr/libexec/sync_manager
+
+%doc
+
+
+
+%changelog
+
