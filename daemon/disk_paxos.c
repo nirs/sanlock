@@ -890,6 +890,19 @@ int disk_paxos_acquire(struct token *token, int force,
 		  (unsigned long long)dblock.inp,
 		  (unsigned long long)dblock.lver);
 
+	/* the inp value we commited wasn't us */
+
+	if (dblock.inp != options.our_host_id) {
+		log_error(token, "paxos contention our_host_id %u "
+			  "mbal %llu bal %llu inp %llu lver %llu",
+			  options.our_host_id,
+			  (unsigned long long)dblock.mbal,
+			  (unsigned long long)dblock.bal,
+			  (unsigned long long)dblock.inp,
+			  (unsigned long long)dblock.lver);
+		return DP_OTHER_INP;
+	}
+
 	/* dblock has the disk paxos result: consensus inp and lver */
 
 	new_leader.owner_id = dblock.inp;

@@ -27,6 +27,7 @@ enum {
 	DP_BAD_RESOURCEID = -21,
 	DP_BAD_NUMHOSTS = -22,
 	DP_BAD_CHECKSUM = -23,
+	DP_OTHER_INP = -24,
 };
 
 /* paxos_disk + offset:
