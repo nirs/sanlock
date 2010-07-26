@@ -93,6 +93,7 @@ int check_killscript_pid(void)
 int check_supervise_pid(void)
 {
 	int rv, status;
+	int waitpid_errno;
 
 	if (!supervise_pid && killing_supervise_pid)
 		return 0;
@@ -106,9 +107,16 @@ int check_supervise_pid(void)
 		/* pid exists, no state change */
 		return 1;
 	} else if (rv < 0) {
-		log_error(NULL, "waitpid errno %d supervise_pid %d", errno,
-			  supervise_pid);
-		return rv;
+		waitpid_errno = errno;
+
+		/* PID is not responding to singal 0. It is down */
+		rv = kill(supervise_pid, 0);
+		if (rv)
+			return 0;
+
+		log_error(NULL, "check_supervise_pid %d failed waitpid %d "
+			  "kill %d", supervise_pid, waitpid_errno, errno);
+		return -1;
 	} else {
 		/* pid has terminated */
 		log_debug(NULL, "waitpid success %d exited %d signaled %d",
@@ -363,9 +371,6 @@ int main_loop(void)
 				/* just killed pid, don't need to again */
 				notouch_watchdog();
 			}
-			/* PID is not responding to singal 0. It is down */
-			if (kill(supervise_pid, 0))
-				break;
 
 		} else if (pid_status > 0) {
 			/*
