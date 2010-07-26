@@ -12,7 +12,9 @@
 #include <string.h>
 #include <errno.h>
 #include <limits.h>
+#include <time.h>
 
+FILE *turn_file;
 char path[PATH_MAX];
 int our_hostid;
 int seconds;
@@ -112,7 +114,7 @@ void set_args(int argc, char *argv[])
 	}
 
 	while (cont) {
-		optchar = getopt(argc, argv, "d:i:s:v:q");
+		optchar = getopt(argc, argv, "d:i:s:v:qf:");
 
 		switch (optchar) {
 		case 'd':
@@ -130,6 +132,9 @@ void set_args(int argc, char *argv[])
 		case 'q':
 			quiet = 1;
 			break;
+		case 'f':
+			turn_file = fopen(optarg, "a");
+			break;
 		case EOF:
 			cont = 0;
 			break;
@@ -146,7 +151,7 @@ int main(int argc, char *argv[])
 {
 	char *rbuf, **p_rbuf, *wbuf, **p_wbuf, *vbuf, **p_vbuf;
 	struct entry *re, *max_re, *our_we;
-	int i, fd, rv, verify, max_i;
+	int i, fd, rv, max_i;
 	time_t start, now;
 	uint32_t our_pid = getpid();
 	uint32_t max_turn;
@@ -219,7 +224,7 @@ int main(int argc, char *argv[])
 	}
 
 	printf("max index %d turn %d count %llu\n", max_i, max_turn,
-		max_re->count);
+	       (unsigned long long)max_re->count);
 
 	memcpy(wbuf, rbuf, 512);
 
@@ -303,6 +308,16 @@ int main(int argc, char *argv[])
 	}
 
 	print_our_we(our_we);
+
+	if (turn_file) {
+		fprintf(turn_file, "turn %03u start %llu end %llu host %u pid %u\n",
+			our_we->turn,
+			(unsigned long long)(max_re->count + 1),
+			(unsigned long long)our_we->count,
+			our_hostid, our_pid);
+		fflush(turn_file);
+		fclose(turn_file);
+	}
 
 	return 0;
  fail:
