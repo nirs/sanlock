@@ -147,7 +147,7 @@ static int run_killscript(void)
 	}
 }
 
-static int run_command(char *command)
+static int run_command(void)
 {
 	int pid;
 
@@ -940,7 +940,7 @@ static int do_daemon(int token_count, struct token *token_args[])
 		goto out_leases;
 
 	if (command[0]) {
-		rv = run_command(command);
+		rv = run_command();
 		if (rv < 0)
 			goto out_leases;
 	}
