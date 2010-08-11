@@ -30,7 +30,6 @@
 #define NO_VAL 0
 
 extern int cluster_mode;
-extern struct sm_timeouts to;
 
 /* return number of opened disks */
 
