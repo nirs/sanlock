@@ -34,7 +34,7 @@ int token_id_counter = 1;
 
 /* return < 0 on error, 1 on success */
 
-int acquire_lease(struct token *token, struct leader_record *leader)
+static int acquire_lease(struct token *token, struct leader_record *leader)
 {
 	struct leader_record leader_ret;
 	int rv;
@@ -49,7 +49,7 @@ int acquire_lease(struct token *token, struct leader_record *leader)
 
 /* return < 0 on error, 1 on success */
 
-int renew_lease(struct token *token, struct leader_record *leader)
+static int renew_lease(struct token *token, struct leader_record *leader)
 {
 	struct leader_record leader_ret;
 	int rv;
@@ -64,7 +64,7 @@ int renew_lease(struct token *token, struct leader_record *leader)
 
 /* return < 0 on error, 1 on success */
 
-int release_lease(struct token *token, struct leader_record *leader)
+static int release_lease(struct token *token, struct leader_record *leader)
 {
 	struct leader_record leader_ret;
 	int rv;
@@ -77,7 +77,7 @@ int release_lease(struct token *token, struct leader_record *leader)
 	return 1;
 }
 
-void set_lease_status(int idx, int op, int r, uint64_t t)
+static void set_lease_status(int idx, int op, int r, uint64_t t)
 {
 	pthread_mutex_lock(&lease_status_mutex);
 	switch (op) {
@@ -115,7 +115,7 @@ uint64_t get_oldest_renewal_time(void)
 
 /* lease_status_mutex must be held */
 
-int _token_id_to_index(int token_id, int *idx)
+static int _token_id_to_index(int token_id, int *idx)
 {
 	int i;
 
@@ -291,7 +291,7 @@ void cleanup_stopped_lease(void)
 	tokens[i] = NULL;
 }
 
-void set_thread_running(int idx, int val)
+static void set_thread_running(int idx, int val)
 {
 	pthread_mutex_lock(&lease_status_mutex);
 	lease_status[idx].thread_running = val;
@@ -305,7 +305,7 @@ void set_thread_running(int idx, int val)
 	pthread_mutex_unlock(&lease_status_mutex);
 }
 
-void *lease_thread(void *arg)
+static void *lease_thread(void *arg)
 {
 	struct token *token = (struct token *)arg;
 	struct leader_record leader;

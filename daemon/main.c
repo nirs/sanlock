@@ -56,7 +56,7 @@ int killscript_pid;
 int killing_supervise_pid;
 int external_shutdown;
 
-void process_listener(void);
+static void process_listener(void);
 
 struct cmd_acquire_args {
 	int sock;
@@ -65,7 +65,7 @@ struct cmd_acquire_args {
 	struct sm_header h_recv;
 };
 
-int check_killscript_pid(void)
+static int check_killscript_pid(void)
 {
 	int rv, status;
 
@@ -90,7 +90,7 @@ int check_killscript_pid(void)
  * < 0 on a waitpid error, don't know what these conditions are
  */
 
-int check_supervise_pid(void)
+static int check_supervise_pid(void)
 {
 	int rv, status;
 	int waitpid_errno;
@@ -127,7 +127,7 @@ int check_supervise_pid(void)
 	}
 }
 
-int run_killscript(void)
+static int run_killscript(void)
 {
 	int pid;
 	char *av[2];
@@ -147,7 +147,7 @@ int run_killscript(void)
 	}
 }
 
-int run_command(char *command)
+static int run_command(char *command)
 {
 	int pid;
 
@@ -170,7 +170,7 @@ int run_command(char *command)
 /* TODO: limit repeated calls to killscript/kill() when this function
    is called repeatedly */
 
-void kill_supervise_pid(void)
+static void kill_supervise_pid(void)
 {
 	uint64_t expire_time, remaining_seconds;
 
@@ -233,7 +233,7 @@ void kill_supervise_pid(void)
    some value a little over lease_timeout_seconds, which is the longest
    that each lease_thread to should take to acquire the lease or fail. */
 
-int wait_acquire_results(int token_count, int *token_ids)
+static int wait_acquire_results(int token_count, int *token_ids)
 {
 	int i, rv, result;
 
@@ -273,7 +273,7 @@ int wait_acquire_results(int token_count, int *token_ids)
  * so it should be safe to unlink the watchdog files.
  */
 
-int main_loop(void)
+static int main_loop(void)
 {
 	struct pollfd pollfd[1];
 	int poll_timeout = to.unstable_poll_ms;
@@ -397,7 +397,7 @@ int main_loop(void)
 	return 0;
 }
 
-void *cmd_acquire_thread(void *args_in)
+static void *cmd_acquire_thread(void *args_in)
 {
 	struct cmd_acquire_args *args = args_in;
 	int i, sock, token_count, rv;
@@ -429,7 +429,7 @@ void *cmd_acquire_thread(void *args_in)
 	return NULL;
 }
 
-void cmd_acquire(int fd, struct sm_header *h_recv)
+static void cmd_acquire(int fd, struct sm_header *h_recv)
 {
 	pthread_t wait_thread;
 	pthread_attr_t attr;
@@ -542,7 +542,7 @@ void cmd_acquire(int fd, struct sm_header *h_recv)
 	close(fd);
 }
 
-void cmd_release(int fd, struct sm_header *h_recv)
+static void cmd_release(int fd, struct sm_header *h_recv)
 {
 	struct sm_header h;
 	char resource_name[NAME_ID_SIZE];
@@ -593,7 +593,7 @@ void cmd_release(int fd, struct sm_header *h_recv)
    struct sm_info +
    N * (struct sm_lease_info + (M * struct sm_disk_info)) */
 
-void cmd_status(int fd, struct sm_header *h_recv)
+static void cmd_status(int fd, struct sm_header *h_recv)
 {
 	struct lease_status ls;
 	struct token *t;
@@ -692,7 +692,7 @@ void cmd_status(int fd, struct sm_header *h_recv)
 	free(buf);
 }
 
-void cmd_log_dump(int fd, struct sm_header *h_recv)
+static void cmd_log_dump(int fd, struct sm_header *h_recv)
 {
 	struct sm_header h;
 
@@ -703,7 +703,7 @@ void cmd_log_dump(int fd, struct sm_header *h_recv)
 	write_log_dump(fd, &h);
 }
 
-void cmd_set_host_id(int fd, struct sm_header *h_recv)
+static void cmd_set_host_id(int fd, struct sm_header *h_recv)
 {
 	struct sm_header h;
 	int rv;
@@ -722,7 +722,7 @@ void cmd_set_host_id(int fd, struct sm_header *h_recv)
 	send(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
 }
 
-void process_listener(void)
+static void process_listener(void)
 {
 	struct sm_header h;
 	int fd, rv, auto_close = 1;
@@ -788,7 +788,7 @@ void process_listener(void)
 		close(fd);
 }
 
-int setup_listener(void)
+static int setup_listener(void)
 {
 	char path[PATH_MAX];
 	struct sockaddr_un addr;
@@ -826,16 +826,16 @@ int setup_listener(void)
 	return 0;
 }
 
-void sigterm_handler(int sig)
+static void sigterm_handler(int sig)
 {
 	external_shutdown = 1;
 }
 
-void sigchld_handler(int sig)
+static void sigchld_handler(int sig)
 {
 }
 
-int make_dirs(void)
+static int make_dirs(void)
 {
 	mode_t old_umask;
 	int rv;
@@ -871,7 +871,7 @@ int make_dirs(void)
 	return rv;
 }
 
-int do_daemon(int token_count, struct token *token_args[])
+static int do_daemon(int token_count, struct token *token_args[])
 {
 	int token_ids[MAX_LEASE_ARGS];
 	struct sigaction act;
@@ -958,7 +958,7 @@ int do_daemon(int token_count, struct token *token_args[])
 	return rv;
 }
 
-int send_header(int cmd, uint32_t data)
+static int send_header(int cmd, uint32_t data)
 {
 	char path[PATH_MAX];
 	struct sockaddr_un addr;
@@ -1005,8 +1005,8 @@ int send_header(int cmd, uint32_t data)
 	return sock;
 }
 
-int do_init(int token_count, struct token *token_args[],
-	    int init_num_hosts, int init_max_hosts)
+static int do_init(int token_count, struct token *token_args[],
+		   int init_num_hosts, int init_max_hosts)
 {
 	struct token *token;
 	int num_opened;
@@ -1032,7 +1032,7 @@ int do_init(int token_count, struct token *token_args[],
 	return rv;
 }
 
-int do_set_host_id(void)
+static int do_set_host_id(void)
 {
 	struct sm_header h;
 	int sock, rv;
@@ -1054,7 +1054,7 @@ int do_set_host_id(void)
 	return h.data;
 }
 
-int do_acquire(int token_count, struct token *token_args[])
+static int do_acquire(int token_count, struct token *token_args[])
 {
 	struct token *t;
 	struct sm_header h;
@@ -1112,7 +1112,7 @@ int do_acquire(int token_count, struct token *token_args[])
 	return rv;
 }
 
-int do_release(int token_count, struct token *token_args[])
+static int do_release(int token_count, struct token *token_args[])
 {
 	struct sm_header h;
 	int results[MAX_LEASE_ARGS];
@@ -1157,7 +1157,7 @@ int do_release(int token_count, struct token *token_args[])
 	return rv;
 }
 
-int do_shutdown(void)
+static int do_shutdown(void)
 {
 	struct sm_header h;
 	int fd, rv;
@@ -1176,7 +1176,7 @@ int do_shutdown(void)
 	return 0;
 }
 
-int do_supervise(uint32_t pid)
+static int do_supervise(uint32_t pid)
 {
 	struct sm_header h;
 	int fd, rv;
@@ -1195,7 +1195,7 @@ int do_supervise(uint32_t pid)
 	return 0;
 }
 
-int do_status(void)
+static int do_status(void)
 {
 	struct sm_header h;
 	char *buf;
@@ -1243,7 +1243,7 @@ int do_status(void)
 	return 0;
 }
 
-int do_log_dump(void)
+static int do_log_dump(void)
 {
 	struct sm_header h;
 	char *buf;
@@ -1280,7 +1280,7 @@ int do_log_dump(void)
 	return 0;
 }
 
-void print_usage(void)
+static void print_usage(void)
 {
 	printf("Usage:\n");
 	printf("sync_manager <action> [options]\n\n");
@@ -1326,7 +1326,7 @@ void print_usage(void)
 	printf("\n");
 }
 
-int add_resource_arg(char *arg, int *token_count, struct token *token_args[])
+static int add_resource_arg(char *arg, int *token_count, struct token *token_args[])
 {
 	struct token *token;
 	int rv;
@@ -1350,7 +1350,7 @@ int add_resource_arg(char *arg, int *token_count, struct token *token_args[])
 
 /* arg = <resource_name>:<path>:<offset>[:<path>:<offset>...] */
 
-int add_token_arg(char *arg, int *token_count, struct token *token_args[])
+static int add_token_arg(char *arg, int *token_count, struct token *token_args[])
 {
 	struct token *token;
 	char sub[DISK_PATH_LEN + 1];
@@ -1454,9 +1454,9 @@ int add_token_arg(char *arg, int *token_count, struct token *token_args[])
 
 #define RELEASE_VERSION "0.0"
 
-int read_args(int argc, char *argv[],
-	      int *token_count, struct token *token_args[],
-	      int *action, int *init_num_hosts, int *init_max_hosts)
+static int read_args(int argc, char *argv[],
+		     int *token_count, struct token *token_args[],
+		     int *action, int *init_num_hosts, int *init_max_hosts)
 {
 	char optchar;
 	char *optarg;

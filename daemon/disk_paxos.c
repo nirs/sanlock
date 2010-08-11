@@ -86,8 +86,8 @@ int majority_disks(struct token *token, int num)
 	return 0;
 }
 
-int write_block(struct token *token, struct paxos_disk *disk, int offset,
-		const char *data, int len, const char *blktype)
+static int write_block(struct token *token, struct paxos_disk *disk, int offset,
+		       const char *data, int len, const char *blktype)
 {
 	char *iobuf, **p_iobuf;
 	uint64_t off = offset + disk->offset;
@@ -130,8 +130,8 @@ int write_block(struct token *token, struct paxos_disk *disk, int offset,
 	return rv;
 }
 
-int write_dblock(struct token *token, struct paxos_disk *disk, int host_id,
-		 struct paxos_dblock *pd)
+static int write_dblock(struct token *token, struct paxos_disk *disk, int host_id,
+			struct paxos_dblock *pd)
 {
 	int blocknr, rv;
 
@@ -145,8 +145,8 @@ int write_dblock(struct token *token, struct paxos_disk *disk, int host_id,
 	return rv;
 }
 
-int write_request(struct token *token, struct paxos_disk *disk,
-		  struct request_record *rr)
+static int write_request(struct token *token, struct paxos_disk *disk,
+			 struct request_record *rr)
 {
 	int rv;
 
@@ -155,8 +155,8 @@ int write_request(struct token *token, struct paxos_disk *disk,
 	return rv;
 }
 
-int write_leader(struct token *token, struct paxos_disk *disk,
-		 struct leader_record *lr)
+static int write_leader(struct token *token, struct paxos_disk *disk,
+			struct leader_record *lr)
 {
 	int rv;
 
@@ -165,8 +165,8 @@ int write_leader(struct token *token, struct paxos_disk *disk,
 	return rv;
 }
 
-int read_dblock(struct token *token, struct paxos_disk *disk, int host_id,
-		struct paxos_dblock *pd)
+static int read_dblock(struct token *token, struct paxos_disk *disk, int host_id,
+		       struct paxos_dblock *pd)
 {
 	char *iobuf, **p_iobuf;
 	uint64_t off;
@@ -217,8 +217,8 @@ int read_dblock(struct token *token, struct paxos_disk *disk, int host_id,
 	return rv;
 }
 
-int read_dblocks(struct token *token, struct paxos_disk *disk, int num,
-		 struct paxos_dblock *pds)
+static int read_dblocks(struct token *token, struct paxos_disk *disk, int num,
+			struct paxos_dblock *pds)
 {
 	char *iobuf, **p_iobuf;
 	uint64_t off;
@@ -272,8 +272,8 @@ int read_dblocks(struct token *token, struct paxos_disk *disk, int num,
 	return rv;
 }
 
-int read_leader(struct token *token, struct paxos_disk *disk,
-		struct leader_record *lr)
+static int read_leader(struct token *token, struct paxos_disk *disk,
+		       struct leader_record *lr)
 {
 	char *iobuf, **p_iobuf;
 	uint64_t off;
@@ -319,8 +319,8 @@ int read_leader(struct token *token, struct paxos_disk *disk,
 	return rv;
 }
 
-int read_request(struct token *token, struct paxos_disk *disk,
-		 struct request_record *rr)
+static int read_request(struct token *token, struct paxos_disk *disk,
+			struct request_record *rr)
 {
 	char *iobuf, **p_iobuf;
 	uint64_t off;
@@ -368,9 +368,9 @@ int read_request(struct token *token, struct paxos_disk *disk,
 
 /* host_id and inp are both generally our_host_id */
 
-int run_disk_paxos(struct token *token, int host_id, uint64_t inp,
-		   int num_hosts, uint64_t lver,
-		   struct paxos_dblock *dblock_out)
+static int run_disk_paxos(struct token *token, int host_id, uint64_t inp,
+			  int num_hosts, uint64_t lver,
+			  struct paxos_dblock *dblock_out)
 {
 	struct paxos_dblock bk[num_hosts];
 	struct paxos_dblock bk_max;
@@ -583,7 +583,7 @@ int run_disk_paxos(struct token *token, int host_id, uint64_t inp,
 
 /* TODO: use a real checksum function */
 
-uint32_t leader_checksum(struct leader_record *lr)
+static uint32_t leader_checksum(struct leader_record *lr)
 {
 	char *data = (char *)lr;
 	uint32_t c = 0;
@@ -594,7 +594,7 @@ uint32_t leader_checksum(struct leader_record *lr)
 	return c;
 }
 
-int verify_leader(struct token *token, int d, struct leader_record *lr)
+static int verify_leader(struct token *token, int d, struct leader_record *lr)
 {
 	if (lr->magic != PAXOS_DISK_MAGIC) {
 		log_error(token, "disk %d leader has wrong magic number", d);
@@ -629,15 +629,15 @@ int verify_leader(struct token *token, int d, struct leader_record *lr)
 	return 0;
 }
 
-int leaders_match(struct leader_record *a, struct leader_record *b)
+static int leaders_match(struct leader_record *a, struct leader_record *b)
 {
 	if (!memcmp(a, b, LEADER_COMPARE_LEN))
 		return 1;
 	return 0;
 }
 
-int get_prev_leader(struct token *token, int force,
-		    struct leader_record *leader_out)
+static int get_prev_leader(struct token *token, int force,
+			   struct leader_record *leader_out)
 {
 	struct leader_record prev_leader;
 	struct leader_record tmp_leader;
@@ -824,7 +824,7 @@ int get_prev_leader(struct token *token, int force,
 	return error;
 }
 
-int write_new_leader(struct token *token, struct leader_record *nl)
+static int write_new_leader(struct token *token, struct leader_record *nl)
 {
 	int num_disks = token->num_disks;
 	int num_writes = 0;
