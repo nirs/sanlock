@@ -1459,10 +1459,10 @@ static int read_args(int argc, char *argv[],
 		     int *action, int *init_num_hosts, int *init_max_hosts)
 {
 	char optchar;
-	char *optarg;
+	char *optionarg;
 	char *p;
 	char *arg1 = argv[1];
-	int optarg_used;
+	int optionarg_used;
 	int i, j, len, rv;
 	int begin_command = 0;
 
@@ -1516,41 +1516,41 @@ static int read_args(int argc, char *argv[],
 		optchar = p[1];
 		i++;
 
-		optarg = argv[i];
-		optarg_used = 1;
+		optionarg = argv[i];
+		optionarg_used = 1;
 
 		switch (optchar) {
 		case 'D':
 			log_stderr_priority = LOG_DEBUG;
-			optarg_used = 0;
+			optionarg_used = 0;
 			break;
 		case 'L':
-			log_logfile_priority = atoi(optarg);
+			log_logfile_priority = atoi(optionarg);
 			break;
 		case 'S':
-			log_syslog_priority = atoi(optarg);
+			log_syslog_priority = atoi(optionarg);
 			break;
 
 		case 'h':
-			*init_num_hosts = atoi(optarg);
+			*init_num_hosts = atoi(optionarg);
 			break;
 		case 'H':
-			*init_max_hosts = atoi(optarg);
+			*init_max_hosts = atoi(optionarg);
 			break;
 		case 'm':
-			cluster_mode = atoi(optarg);
+			cluster_mode = atoi(optionarg);
 			break;
 		case 'n':
-			strncpy(options.sm_id, optarg, NAME_ID_SIZE);
+			strncpy(options.sm_id, optionarg, NAME_ID_SIZE);
 			break;
 		case 'i':
-			options.our_host_id = atoi(optarg);
+			options.our_host_id = atoi(optionarg);
 			break;
 		case 'r':
 			if ((*action) != ACT_RELEASE)
 				return -1;
 
-			rv = add_resource_arg(optarg, token_count, token_args);
+			rv = add_resource_arg(optionarg, token_count, token_args);
 			if (rv < 0)
 				return rv;
 			break;
@@ -1558,26 +1558,26 @@ static int read_args(int argc, char *argv[],
 			if ((*action) == ACT_RELEASE)
 				return -1;
 
-			rv = add_token_arg(optarg, token_count, token_args);
+			rv = add_token_arg(optionarg, token_count, token_args);
 			if (rv < 0)
 				return rv;
 			break;
 		case 'k':
-			strncpy(killscript, optarg, COMMAND_MAX - 1);
+			strncpy(killscript, optionarg, COMMAND_MAX - 1);
 			break;
 		case 'w':
-			options.opt_watchdog = atoi(optarg);
+			options.opt_watchdog = atoi(optionarg);
 			break;
 		case 'c':
 			begin_command = 1;
-			optarg_used = 0;
+			optionarg_used = 0;
 			break;
 		default:
 			log_tool("unknown option: %c", optchar);
 			exit(EXIT_FAILURE);
 		};
 
-		if (optarg_used)
+		if (optionarg_used)
 			i++;
 
 		if (begin_command)
