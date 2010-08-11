@@ -49,7 +49,7 @@ extern int log_logfile_priority;
 extern int log_syslog_priority;
 extern int log_stderr_priority;
 
-static void _log_save_dump(int level, int len)
+static void _log_save_dump(int level GNUC_UNUSED, int len)
 {
 	int i;
 

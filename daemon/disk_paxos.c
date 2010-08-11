@@ -959,9 +959,10 @@ int disk_paxos_release(struct token *token,
 	return error;
 }
 
-int disk_paxos_transfer(struct token *token, int hostid,
-			struct leader_record *leader_last,
-			struct leader_record *leader_ret)
+int disk_paxos_transfer(struct token *token GNUC_UNUSED,
+			int hostid GNUC_UNUSED,
+			struct leader_record *leader_last GNUC_UNUSED,
+			struct leader_record *leader_ret GNUC_UNUSED)
 {
 	/* what to change for a transfer?  new hostid in leader blocks,
 	   new dblocks?  new lver in leader and dblocks? */

@@ -826,12 +826,12 @@ static int setup_listener(void)
 	return 0;
 }
 
-static void sigterm_handler(int sig)
+static void sigterm_handler(int sig GNUC_UNUSED)
 {
 	external_shutdown = 1;
 }
 
-static void sigchld_handler(int sig)
+static void sigchld_handler(int sig GNUC_UNUSED)
 {
 }
 
