@@ -1,4 +1,22 @@
-CFLAGS := -D_GNU_SOURCE -Wall -g
+CFLAGS := -D_GNU_SOURCE -g \
+	-Wall \
+	-Wformat \
+	-Wformat-security \
+	-Wmissing-prototypes \
+	-Wnested-externs \
+	-Wpointer-arith \
+	-Wextra -Wshadow \
+	-Wcast-align \
+	-Wwrite-strings \
+	-Waggregate-return \
+	-Wstrict-prototypes \
+	-Winline \
+	-Wredundant-decls \
+	-Wno-sign-compare \
+	-Wp,-D_FORTIFY_SOURCE=2 \
+	-fexceptions \
+	-fasynchronous-unwind-tables \
+	-fdiagnostics-show-option
 
 INSTALL=$(shell which install)
 BINDIR=$(DESTDIR)/usr/libexec
