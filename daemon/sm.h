@@ -1,6 +1,10 @@
 #ifndef __SM_H__
 #define __SM_H__
 
+#ifndef GNUC_UNUSED
+#define GNUC_UNUSED __attribute__((__unused__))
+#endif
+
 #define PAXOS_DISK_MAGIC 0x06152010
 #define PAXOS_DISK_VERSION_MAJOR 0x00010000
 #define PAXOS_DISK_VERSION_MINOR 0x00000001

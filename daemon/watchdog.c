@@ -35,7 +35,7 @@ time_t wd_create_time;
 time_t wd_touch_last_time;
 time_t wd_touch_good_time;
 
-void *watchdog_thread(void *arg)
+static void *watchdog_thread(void *arg GNUC_UNUSED)
 {
 	int rv, fd, do_touch, do_unlink, do_create;
 	time_t t;
