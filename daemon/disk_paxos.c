@@ -318,6 +318,8 @@ static int read_leader(struct token *token, struct paxos_disk *disk,
 	return rv;
 }
 
+
+#if 0
 static int read_request(struct token *token, struct paxos_disk *disk,
 			struct request_record *rr)
 {
@@ -364,6 +366,7 @@ static int read_request(struct token *token, struct paxos_disk *disk,
  out:
 	return rv;
 }
+#endif
 
 /* host_id and inp are both generally our_host_id */
 
