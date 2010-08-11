@@ -87,7 +87,7 @@ int majority_disks(struct token *token, int num)
 }
 
 int write_block(struct token *token, struct paxos_disk *disk, int offset,
-		char *data, int len, char *blktype)
+		const char *data, int len, const char *blktype)
 {
 	char *iobuf, **p_iobuf;
 	uint64_t off = offset + disk->offset;

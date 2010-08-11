@@ -1,7 +1,7 @@
 #ifndef __LOG_H__
 #define __LOG_H__
 
-void log_level(struct token *token, int level, char *fmt, ...)
+void log_level(struct token *token, int level, const char *fmt, ...)
 	__attribute__((format(printf, 3, 4)));
 
 void setup_logging();

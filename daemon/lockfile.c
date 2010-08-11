@@ -19,7 +19,7 @@
 #include "lockfile.h"
 #include "log.h"
 
-int lockfile(struct token *token, char *dir, char *name)
+int lockfile(struct token *token, const char *dir, const char *name)
 {
 	char path[PATH_MAX];
 	char buf[16];
@@ -66,7 +66,7 @@ int lockfile(struct token *token, char *dir, char *name)
 	return -1;
 }
 
-void unlink_lockfile(int fd, char *dir, char *name)
+void unlink_lockfile(int fd, const char *dir, const char *name)
 {
 	char path[PATH_MAX];
 

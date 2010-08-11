@@ -90,7 +90,7 @@ static void _log_save_ent(int level, int len)
  *    logfile and/or syslog (so callers don't block writing messages to files)
  */
 
-void log_level(struct token *token, int level, char *fmt, ...)
+void log_level(struct token *token, int level, const char *fmt, ...)
 {
 	va_list ap;
 	char name[NAME_ID_SIZE + 1];
