@@ -4,7 +4,7 @@
 void log_level(struct token *token, int level, const char *fmt, ...)
 	__attribute__((format(printf, 3, 4)));
 
-void setup_logging(void);
+int setup_logging(void);
 void write_log_ents(void);
 void write_log_dump(int fd, struct sm_header *hd);
 
