@@ -25,7 +25,7 @@ struct lease_status {
 
 extern struct token *tokens[MAX_LEASES];
 
-uint64_t get_oldest_renewal_time();
+uint64_t get_oldest_renewal_time(void);
 int wait_acquire_result(int token_id, int *result);
 int get_lease_status(int token_id, struct lease_status *status);
 int check_leases_renewed(void);
