@@ -142,7 +142,7 @@ static int run_killscript(void)
 	} else {
 		av[0] = strdup(killscript);
 		av[1] = NULL;
-		execv(killscript, NULL);
+		execv(killscript, av);
 		return -1;
 	}
 }
