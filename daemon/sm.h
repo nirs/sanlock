@@ -37,7 +37,7 @@
 
 #define SM_LOG_DUMP_SIZE (1024*1024)
 
-#define COMMAND_MAX 1024
+#define COMMAND_MAX 4096
 
 #define SM_RUN_DIR "/var/run/sync_manager"
 #define SM_LOG_DIR "/var/log/sync_manager"
