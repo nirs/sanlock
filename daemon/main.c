@@ -1369,6 +1369,11 @@ static int add_token_arg(char *arg, int *token_count, struct token *token_args[]
 
 	colons = 0;
 	for (i = 0; i < strlen(arg); i++) {
+		if (arg[i] == '\\') {
+			i++;
+			continue;
+		}
+
 		if (arg[i] == ':')
 			colons++;
 	}
@@ -1398,6 +1403,16 @@ static int add_token_arg(char *arg, int *token_count, struct token *token_args[]
 	memset(sub, 0, sizeof(sub));
 
 	for (i = 0; i < len + 1; i++) {
+		if (arg[i] == '\\') {
+			if (i == (len - 1)) {
+				log_tool("Invalid lease string");
+				goto fail;
+			}
+
+			i++;
+			sub[j++] = arg[i];
+			continue;
+		}
 		if (i < len && arg[i] != ':') {
 			if (j >= DISK_PATH_LEN) {
 				log_tool("lease arg length error");
