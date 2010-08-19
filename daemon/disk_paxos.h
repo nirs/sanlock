@@ -66,8 +66,8 @@ struct token {
    repetitions of a leader block owned by a single host they should be
    counted together, so COMPARE_LEN should exclude timestamp. */
 
-#define LEADER_COMPARE_LEN 80
-#define LEADER_CHECKSUM_LEN 88
+#define LEADER_COMPARE_LEN 96
+#define LEADER_CHECKSUM_LEN 104
 
 struct leader_record {
 	uint32_t magic;
