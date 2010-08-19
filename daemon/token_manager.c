@@ -182,6 +182,11 @@ int check_leases_renewed(void)
 		if (!lease_status[i].renewal_good_time)
 			continue;
 
+		if (lease_status[i].renewal_last_result == DP_BAD_LEADER) {
+			log_error(tokens[i], "renewal fail bad leader");
+			fail_count++;
+		}
+
 		if (!oldest || (oldest < lease_status[i].renewal_good_time))
 			oldest = lease_status[i].renewal_good_time;
 

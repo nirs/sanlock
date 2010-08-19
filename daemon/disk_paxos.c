@@ -926,9 +926,23 @@ int disk_paxos_renew(struct token *token,
 		     struct leader_record *leader_ret)
 {
 	struct leader_record new_leader;
+	int rv, d;
 	int error;
 
-	memcpy(&new_leader, leader_last, sizeof(struct leader_record));
+	for (d = 0; d < token->num_disks; d++) {
+		memset(&new_leader, 0, sizeof(struct leader_record));
+
+		rv = read_leader(token, &token->disks[d], &new_leader);
+		if (rv < 0)
+			continue;
+
+		if (memcmp(&new_leader, leader_last,
+			   sizeof(struct leader_record))) {
+			log_error(token, "leader changed between renewals");
+			return DP_BAD_LEADER;
+		}
+	}
+
 	new_leader.timestamp = time(NULL);
 	new_leader.checksum = leader_checksum(&new_leader);
 
