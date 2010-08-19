@@ -712,6 +712,8 @@ static void cmd_set_host_id(int fd, struct sm_header *h_recv)
 		options.our_host_id = h_recv->data;
 		rv = 0;
 		log_debug(NULL, "host ID set to %d", options.our_host_id);
+	} else if (options.our_host_id == h_recv->data) {
+		rv = 0;
 	} else {
 		rv = 1;
 		log_error(NULL, "client tried to reset host ID");
