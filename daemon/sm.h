@@ -33,7 +33,7 @@
 
 /* does not include terminating null byte */
 
-#define NAME_ID_SIZE 32
+#define NAME_ID_SIZE 48
 
 #define SM_LOG_DUMP_SIZE (1024*1024)
 
