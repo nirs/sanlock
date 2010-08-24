@@ -12,6 +12,7 @@
 #include <syslog.h>
 #include <sys/types.h>
 #include <sys/time.h>
+#include <blkid/blkid.h>
 
 #include "sm.h"
 #include "sm_msg.h"
@@ -25,32 +26,47 @@
 
 #define LEASE_FREE 0
 
-#define BLOCK_SIZE 512
-
 #define NO_VAL 0
 
 extern int cluster_mode;
 
-/* return number of opened disks */
-
-int open_disks(struct token *token)
+static int set_disk_properties(struct token *token, struct paxos_disk *disk)
 {
-	struct paxos_disk *disk;
-	int num_opens = 0;
-	int d, fd;
+	blkid_probe pr;
+	blkid_topology tp;
+	uint32_t ss, ss_logical, ss_physical;
 
-	for (d = 0; d < token->num_disks; d++) {
-		disk = &token->disks[d];
-		fd = open(disk->path, O_RDWR | O_DIRECT | O_SYNC, 0);
-		if (fd < 0) {
-			log_error(NULL, "open error %d %s", fd, disk->path);
-			continue;
-		}
-
-		disk->fd = fd;
-		num_opens++;
+	pr = blkid_new_probe_from_filename(disk->path);
+	if (!pr) {
+		log_error(token, "cannot get blkid probe %s", disk->path);
+		return -1;
 	}
-	return num_opens;
+
+	tp = blkid_probe_get_topology(pr);
+	if (!tp) {
+		log_error(token, "cannot get blkid topology %s", disk->path);
+		blkid_free_probe(pr);
+		return -1;
+	}
+
+	ss = blkid_probe_get_sectorsize(pr);
+	ss_logical = blkid_topology_get_logical_sector_size(tp);
+	ss_physical = blkid_topology_get_physical_sector_size(tp);
+
+	blkid_free_probe(pr);
+
+	if ((ss != ss_logical) || (ss != ss_physical) || (ss % 512)) {
+		log_error(token, "invalid disk sector size %u logical %u "
+			  "physical %u %s", ss, ss_logical, ss_physical,
+			  disk->path);
+		return -1;
+	}
+
+	log_debug(token, "blkid ss %u logical %u physical %u %s",
+		  ss, ss_logical, ss_physical, disk->path);
+
+	disk->sector_size = ss;
+	return 0;
 }
 
 void close_disks(struct token *token)
@@ -62,6 +78,47 @@ void close_disks(struct token *token)
 		disk = &token->disks[d];
 		close(disk->fd);
 	}
+}
+
+/* return number of opened disks */
+
+int open_disks(struct token *token)
+{
+	struct paxos_disk *disk;
+	int num_opens = 0;
+	int d, fd, rv;
+	uint32_t ss = 0;
+
+	for (d = 0; d < token->num_disks; d++) {
+		disk = &token->disks[d];
+		fd = open(disk->path, O_RDWR | O_DIRECT | O_SYNC, 0);
+		if (fd < 0) {
+			log_error(token, "open error %d %s", fd, disk->path);
+			continue;
+		}
+
+		rv = set_disk_properties(token, disk);
+		if (rv < 0) {
+			close(fd);
+			continue;
+		}
+
+		if (!ss) {
+			ss = disk->sector_size;
+		} else if (ss != disk->sector_size) {
+			log_error(token, "inconsistent sector sizes %u %u %s",
+				  ss, disk->sector_size, disk->path);
+			goto fail;
+		}
+
+		disk->fd = fd;
+		num_opens++;
+	}
+	return num_opens;
+
+ fail:
+	close_disks(token);
+	return 0;
 }
 
 int majority_disks(struct token *token, int num)
@@ -103,7 +160,7 @@ static int write_block(struct token *token, struct paxos_disk *disk, int offset,
 
 	p_iobuf = &iobuf;
 
-	rv = posix_memalign((void *)p_iobuf, getpagesize(), BLOCK_SIZE);
+	rv = posix_memalign((void *)p_iobuf, getpagesize(), disk->sector_size);
 	if (rv) {
 		log_error(token, "write_block %s posix_memalign rv %d %s",
 			  blktype, rv, disk->path);
@@ -111,11 +168,11 @@ static int write_block(struct token *token, struct paxos_disk *disk, int offset,
 		goto out;
 	}
 
-	memset(iobuf, 0, BLOCK_SIZE);
+	memset(iobuf, 0, disk->sector_size);
 	memcpy(iobuf, data, len);
 
-	rv = write(disk->fd, iobuf, BLOCK_SIZE);
-	if (rv != BLOCK_SIZE) {
+	rv = write(disk->fd, iobuf, disk->sector_size);
+	if (rv != disk->sector_size) {
 		log_error(token, "write_block %s write errno %d off %llu %s",
 			  blktype, errno, (unsigned long long)off, disk->path);
 		rv = -1;
@@ -139,7 +196,7 @@ static int write_dblock(struct token *token, struct paxos_disk *disk, int host_i
 
 	blocknr = 2 + host_id - 1;
 
-	rv = write_block(token, disk, blocknr * BLOCK_SIZE, (char *)pd,
+	rv = write_block(token, disk, blocknr * disk->sector_size, (char *)pd,
 			 sizeof(struct paxos_dblock), "dblock");
 	return rv;
 }
@@ -149,7 +206,7 @@ static int write_request(struct token *token, struct paxos_disk *disk,
 {
 	int rv;
 
-	rv = write_block(token, disk, BLOCK_SIZE, (char *)rr,
+	rv = write_block(token, disk, disk->sector_size, (char *)rr,
 			 sizeof(struct request_record), "request");
 	return rv;
 }
@@ -175,8 +232,8 @@ static int read_dblock(struct token *token, struct paxos_disk *disk, int host_id
 	/* 1 leader block + 1 request block; host_id N is block offset N-1 */
 
 	blocknr = 2 + host_id - 1;
-	offset = blocknr * BLOCK_SIZE;
-	len = BLOCK_SIZE;
+	offset = blocknr * disk->sector_size;
+	len = disk->sector_size;
 	off = offset + disk->offset;
 
 	ret = lseek(disk->fd, off, SEEK_SET);
@@ -227,8 +284,8 @@ static int read_dblocks(struct token *token, struct paxos_disk *disk, int num,
 	/* 1 leader block + 1 request block */
 
 	blocknr = 2;
-	offset = blocknr * BLOCK_SIZE;
-	len = num * BLOCK_SIZE;
+	offset = blocknr * disk->sector_size;
+	len = num * disk->sector_size;
 	off = offset + disk->offset;
 
 	ret = lseek(disk->fd, off, SEEK_SET);
@@ -260,7 +317,7 @@ static int read_dblocks(struct token *token, struct paxos_disk *disk, int num,
 	}
 
 	for (i = 0; i < num; i++) {
-		memcpy(&pds[i], iobuf + (i * BLOCK_SIZE),
+		memcpy(&pds[i], iobuf + (i * disk->sector_size),
 		       sizeof(struct paxos_dblock));
 	}
 
@@ -291,7 +348,7 @@ static int read_leader(struct token *token, struct paxos_disk *disk,
 
 	p_iobuf = &iobuf;
 
-	rv = posix_memalign((void *)p_iobuf, getpagesize(), BLOCK_SIZE);
+	rv = posix_memalign((void *)p_iobuf, getpagesize(), disk->sector_size);
 	if (rv) {
 		log_error(token, "read_leader posix_memalign rv %d %s",
 			  rv, disk->path);
@@ -299,10 +356,10 @@ static int read_leader(struct token *token, struct paxos_disk *disk,
 		goto out;
 	}
 
-	memset(iobuf, 0, BLOCK_SIZE);
+	memset(iobuf, 0, disk->sector_size);
 
-	rv = read(disk->fd, iobuf, BLOCK_SIZE);
-	if (rv != BLOCK_SIZE) {
+	rv = read(disk->fd, iobuf, disk->sector_size);
+	if (rv != disk->sector_size) {
 		log_error(token, "read_leader read errno %d off %llu %s",
 			  errno, (unsigned long long)off, disk->path);
 		rv = -1;
@@ -328,7 +385,7 @@ static int read_request(struct token *token, struct paxos_disk *disk,
 	off_t ret;
 	int rv;
 
-	off = BLOCK_SIZE + disk->offset;
+	off = disk->sector_size + disk->offset;
 
 	ret = lseek(disk->fd, off, SEEK_SET);
 	if (ret != off) {
@@ -340,7 +397,7 @@ static int read_request(struct token *token, struct paxos_disk *disk,
 
 	p_iobuf = &iobuf;
 
-	rv = posix_memalign((void *)p_iobuf, getpagesize(), BLOCK_SIZE);
+	rv = posix_memalign((void *)p_iobuf, getpagesize(), disk->sector_size);
 	if (rv) {
 		log_error(token, "read_request posix_memalign rv %d %s",
 			  rv, disk->path);
@@ -348,10 +405,10 @@ static int read_request(struct token *token, struct paxos_disk *disk,
 		goto out;
 	}
 
-	memset(iobuf, 0, BLOCK_SIZE);
+	memset(iobuf, 0, disk->sector_size);
 
-	rv = read(disk->fd, iobuf, BLOCK_SIZE);
-	if (rv != BLOCK_SIZE) {
+	rv = read(disk->fd, iobuf, disk->sector_size);
+	if (rv != disk->sector_size) {
 		log_error(token, "read_request read errno %d off %llu %s",
 			  errno, (unsigned long long)off, disk->path);
 		rv = -1;
@@ -611,6 +668,11 @@ static int verify_leader(struct token *token, int d, struct leader_record *lr)
 	if (lr->cluster_mode != cluster_mode) {
 		log_error(token, "disk %d leader has wrong cluster mode", d);
 		return DP_BAD_CLUSTERMODE;
+	}
+
+	if (lr->sector_size != token->disks[0].sector_size) {
+		log_error(token, "disk %d leader has wrong sector size", d);
+		return DP_BAD_SECTORSIZE;
 	}
 
 	if (strncmp(lr->resource_name, token->resource_name, NAME_ID_SIZE)) {
@@ -999,6 +1061,7 @@ int disk_paxos_init(struct token *token, int num_hosts, int max_hosts)
 	leader.magic = PAXOS_DISK_MAGIC;
 	leader.version = PAXOS_DISK_VERSION_MAJOR | PAXOS_DISK_VERSION_MINOR;
 	leader.cluster_mode = cluster_mode;
+	leader.sector_size = token->disks[0].sector_size;
 	leader.num_hosts = num_hosts;
 	leader.max_hosts = max_hosts;
 	leader.timestamp = LEASE_FREE;

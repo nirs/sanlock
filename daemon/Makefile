@@ -29,7 +29,7 @@ TARBALL=sync-manger-$(rpmversion)-$(rpmrelease).tar.gz
 all: sync_manager
 
 sync_manager:	main.o disk_paxos.o log.o lockfile.o token_manager.o watchdog.o sm_options.o
-	gcc $(LDFLAGS) -o $@ $^ -lpthread -lrt
+	gcc $(LDFLAGS) -o $@ $^ -lpthread -lrt -lblkid
 
 main.o:	main.c
 	gcc $(CFLAGS) -c -o $@ $<

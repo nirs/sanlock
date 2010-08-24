@@ -29,6 +29,7 @@ enum {
 	DP_BAD_CHECKSUM = -23,
 	DP_BAD_LEADER = -24,
 	DP_OTHER_INP = -25,
+	DP_BAD_SECTORSIZE = -26,
 };
 
 /* paxos_disk + offset:
@@ -37,6 +38,7 @@ enum {
 
 struct paxos_disk {
 	int fd;
+	uint32_t sector_size;
 	uint64_t offset;
 	char path[DISK_PATH_LEN];
 };
@@ -74,7 +76,7 @@ struct leader_record {
 	uint32_t magic;
 	uint32_t version;
 	uint32_t cluster_mode;
-	uint32_t pad1;
+	uint32_t sector_size;
 	uint64_t num_hosts;
 	uint64_t max_hosts;
 	uint64_t owner_id; /* host_id of owner */
