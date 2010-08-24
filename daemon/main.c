@@ -733,6 +733,8 @@ static void process_listener(void)
 	if (fd < 0)
 		return;
 
+	//TODO : make sure that the connecting process is the managed process
+
 	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
 
 	if (rv != sizeof(h)) {
@@ -824,6 +826,12 @@ static int setup_listener(void)
 		return rv;
 	}
 
+	rv = fchmod(s, 666);
+	if (rv < 0) {
+		log_error(NULL, "permission change error %d %d", rv, errno);
+		close(s);
+		return rv;
+	}
 	listener_socket = s;
 	return 0;
 }

@@ -53,13 +53,13 @@ class SyncManager(object):
     def _compileLeaseArgs(self, leases):
         args = []
         for lease, disks in leases:
-            mangledDisks = ["%s:%d" % (os.path.abspath(disk), offset) for (disk, offset) in disks]
+            mangledDisks = ["%s:%d" % (os.path.abspath(disk).replace("\\", "\\\\").replace(":", "\\:"), offset) for (disk, offset) in disks]
             args.extend(["-l", "%s:%s" % (lease, ":".join(mangledDisks))])
 
         return args
 
     def _runToolAsync(self, command, args):
-        cmd = ["sudo", "-n", self.syncManagerPath] + [command, "-D"] + args
+        cmd = [self.syncManagerPath] + [command, "-D"] + args
         self._log.debug("Running syncmanager CMD:'%s'", subprocess.list2cmdline(cmd))
         mngr = subprocess.Popen(cmd,
                                 stdin = subprocess.PIPE,
