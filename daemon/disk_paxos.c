@@ -19,6 +19,7 @@
 #include "disk_paxos.h"
 #include "sm_options.h"
 #include "log.h"
+#include "crc32c.h"
 
 /*
  * largely copied from vdsm.git/sync_manager/
@@ -640,17 +641,9 @@ static int run_disk_paxos(struct token *token, int host_id, uint64_t inp,
 	return DP_OK;
 }
 
-/* TODO: use a real checksum function */
-
 static uint32_t leader_checksum(struct leader_record *lr)
 {
-	char *data = (char *)lr;
-	uint32_t c = 0;
-	int i;
-
-	for (i = 0; i < LEADER_CHECKSUM_LEN; i++)
-		c += data[i];
-	return c;
+	return crc32c((uint32_t)~1, (char *)lr, LEADER_CHECKSUM_LEN);
 }
 
 static int verify_leader(struct token *token, int d, struct leader_record *lr)
