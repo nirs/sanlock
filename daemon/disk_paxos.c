@@ -33,40 +33,39 @@ extern int cluster_mode;
 
 static int set_disk_properties(struct token *token, struct paxos_disk *disk)
 {
-	blkid_probe pr;
-	blkid_topology tp;
-	uint32_t ss, ss_logical, ss_physical;
+	blkid_probe probe;
+	blkid_topology topo;
+	uint32_t sector_size, ss_logical, ss_physical;
 
-	pr = blkid_new_probe_from_filename(disk->path);
-	if (!pr) {
+	probe = blkid_new_probe_from_filename(disk->path);
+	if (!probe) {
 		log_error(token, "cannot get blkid probe %s", disk->path);
 		return -1;
 	}
 
-	tp = blkid_probe_get_topology(pr);
-	if (!tp) {
+	topo = blkid_probe_get_topology(probe);
+	if (!topo) {
 		log_error(token, "cannot get blkid topology %s", disk->path);
-		blkid_free_probe(pr);
+		blkid_free_probe(probe);
 		return -1;
 	}
 
-	ss = blkid_probe_get_sectorsize(pr);
-	ss_logical = blkid_topology_get_logical_sector_size(tp);
-	ss_physical = blkid_topology_get_physical_sector_size(tp);
+	sector_size = blkid_probe_get_sectorsize(probe);
+	ss_logical = blkid_topology_get_logical_sector_size(topo);
+	ss_physical = blkid_topology_get_physical_sector_size(topo);
 
-	blkid_free_probe(pr);
+	blkid_free_probe(probe);
 
-	if ((ss != ss_logical) || (ss != ss_physical) || (ss % 512)) {
+	if ((sector_size != ss_logical) ||
+	    (sector_size != ss_physical) ||
+	    (sector_size % 512)) {
 		log_error(token, "invalid disk sector size %u logical %u "
-			  "physical %u %s", ss, ss_logical, ss_physical,
-			  disk->path);
+			  "physical %u %s", sector_size, ss_logical,
+			  ss_physical, disk->path);
 		return -1;
 	}
 
-	log_debug(token, "blkid ss %u logical %u physical %u %s",
-		  ss, ss_logical, ss_physical, disk->path);
-
-	disk->sector_size = ss;
+	disk->sector_size = sector_size;
 	return 0;
 }
 
@@ -654,32 +653,38 @@ static int verify_leader(struct token *token, int d, struct leader_record *lr)
 	}
 
 	if ((lr->version & 0xFFFF0000) != PAXOS_DISK_VERSION_MAJOR) {
-		log_error(token, "disk %d leader has wrong version", d);
+		log_error(token, "disk %d leader has wrong version %x", d,
+			  lr->version);
 		return DP_BAD_VERSION;
 	}
 
 	if (lr->cluster_mode != cluster_mode) {
-		log_error(token, "disk %d leader has wrong cluster mode", d);
+		log_error(token, "disk %d leader has wrong cluster mode %d", d,
+			  lr->cluster_mode);
 		return DP_BAD_CLUSTERMODE;
 	}
 
 	if (lr->sector_size != token->disks[0].sector_size) {
-		log_error(token, "disk %d leader has wrong sector size", d);
+		log_error(token, "disk %d leader has wrong sector size %d", d,
+			  lr->sector_size);
 		return DP_BAD_SECTORSIZE;
 	}
 
 	if (strncmp(lr->resource_name, token->resource_name, NAME_ID_SIZE)) {
-		log_error(token, "disk %d leader has wrong resource id", d);
+		log_error(token, "disk %d leader has wrong resource id %s", d,
+			  lr->resource_name);
 		return DP_BAD_RESOURCEID;
 	}
 
 	if (lr->num_hosts < options.our_host_id) {
-		log_error(token, "disk %d leader num_hosts too small", d);
+		log_error(token, "disk %d leader num_hosts too small %d", d,
+			  (int)lr->num_hosts);
 		return DP_BAD_NUMHOSTS;
 	}
 
 	if (leader_checksum(lr) != lr->checksum) {
-		log_error(token, "disk %d leader has wrong checksum", d);
+		log_error(token, "disk %d leader has wrong checksum %x", d,
+			   lr->checksum);
 		return DP_BAD_CHECKSUM;
 	}
 
