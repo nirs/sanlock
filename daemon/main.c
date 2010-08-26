@@ -738,13 +738,18 @@ static void process_listener(void)
 	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
 
 	if (rv != sizeof(h)) {
+		log_error(NULL, "header recv %d", rv);
 		return;
 	}
 
 	if (h.magic != SM_MAGIC) {
+		log_error(NULL, "header magic %x", h.magic);
+		return;
 	}
 
 	if (strcmp(options.sm_id, h.sm_id)) {
+		log_error(NULL, "header sm_id %s", h.sm_id);
+		return;
 	}
 
 	log_debug(NULL, "cmd %d fd %d", h.cmd, fd);
@@ -1001,9 +1006,10 @@ static int send_header(int cmd, uint32_t data)
 	header.magic = SM_MAGIC;
 	header.cmd = cmd;
 	header.data = data;
-	strncpy(&header.sm_id[1], options.sm_id, NAME_ID_SIZE);
+	strncpy(&header.sm_id[0], options.sm_id, NAME_ID_SIZE);
 
-	log_tool("send_header cmd %d data %u", cmd, data);
+	log_tool("send_header cmd %d data %u sm_id %s",
+		 cmd, data, header.sm_id);
 
 	rv = send(sock, (void *) &header, sizeof(struct sm_header), 0);
 	if (rv < 0) {
@@ -1208,9 +1214,12 @@ static int do_supervise(uint32_t pid)
 static int do_status(void)
 {
 	struct sm_header h;
-	char *buf;
+	char *buf, *li_begin;
 	struct sm_info *in;
-	int fd, rv, len;
+	struct sm_lease_info *li;
+	struct sm_disk_info *di;
+	int i, fd, rv, len, d;
+	int tokens_copied = 0, disks_copied = 0;
 
 	fd = send_header(SM_CMD_STATUS, 0);
 	if (fd < 0)
@@ -1242,11 +1251,52 @@ static int do_status(void)
 
 	in = (struct sm_info *)buf;
 
-	printf("our_host_id %llu\n", (unsigned long long)in->our_host_id);
-	printf("current_time %llu\n", (unsigned long long)in->current_time);
-	printf("lease count %d\n", in->lease_info_count);
+	printf("command               %s\n", in->command);
+	printf("killscript            %s\n", in->killscript);
+	printf("our_host_id           %llu\n", (unsigned long long)in->our_host_id);
+	printf("current_time          %llu\n", (unsigned long long)in->current_time);
+	printf("supervise_pid         %u\n", in->supervise_pid);
+	printf("killing_supervise_pid %u\n", in->killing_supervise_pid);
+	printf("external_shutdown     %u\n", in->external_shutdown);
+	printf("oldest_renewal_time   %llu\n", (unsigned long long)in->oldest_renewal_time);
+	printf("lease count           %d\n", in->lease_info_count);
 
-	/* TODO: decode and print all */
+	li_begin = buf + sizeof(struct sm_info);
+
+	for (i = 0; i < in->lease_info_count; i++) {
+		li = (struct sm_lease_info *)(li_begin +
+			(tokens_copied * sizeof(struct sm_lease_info)) +
+			(disks_copied * sizeof(struct sm_disk_info)));
+
+		printf("\n");
+		printf("lease                 %s:", li->resource_name);
+		for (d = 0; d < li->disk_info_count; d++) {
+			di = (struct sm_disk_info *)((char *)li +
+				sizeof(struct sm_lease_info) +
+				(d * sizeof(struct sm_disk_info)));
+
+			if (d)
+				printf(":");
+
+			printf("%s:%llu\n", di->path,
+			       (unsigned long long)di->offset);
+		}
+		tokens_copied++;
+		disks_copied += li->disk_info_count;
+
+		printf("token_id              %x\n", li->token_id);
+		printf("stop_thread           %d\n", li->stop_thread);
+		printf("thread_running        %d\n", li->thread_running);
+		printf("acquire_last_result   %d\n", li->acquire_last_result);
+		printf("renewal_last_result   %d\n", li->renewal_last_result);
+		printf("release_last_result   %d\n", li->release_last_result);
+		printf("acquire_last_time     %llu\n", (unsigned long long)li->acquire_last_time);
+		printf("acquire_good_time     %llu\n", (unsigned long long)li->acquire_good_time);
+		printf("renewal_last_time     %llu\n", (unsigned long long)li->renewal_last_time);
+		printf("renewal_good_time     %llu\n", (unsigned long long)li->renewal_good_time);
+		printf("release_last_time     %llu\n", (unsigned long long)li->release_last_time);
+		printf("release_good_time     %llu\n", (unsigned long long)li->release_good_time);
+	}
 
  out:
 	close(fd);
@@ -1300,6 +1350,8 @@ static void print_usage(void)
 	printf("  daemon		update leases and monitor pid\n");
 	printf("  acquire		acquire leases for a running pid\n");
 	printf("  release		release leases for a running pid\n");
+	printf("  status		print internal daemon state\n");
+	printf("  log_dump		print internal daemon debug buffer\n");
 
 	printf("\ninit [options] -h <num_hosts> -l LEASE\n");
 	printf("  -h <num_hosts>	max host id that will be able to acquire the lease\n");
@@ -1327,6 +1379,12 @@ static void print_usage(void)
 	printf("\nrelease -n <name> -r <resource_name>\n");
 	printf("  -n <name>		name of a running sync_manager instance\n");
 	printf("  -r <resource_name>	resource name of a previously acquired lease\n");
+
+	printf("\nstatus -n <name>\n");
+	printf("  -n <name>		name of a running sync_manager instance\n");
+
+	printf("\nlog_dump -n <name>\n");
+	printf("  -n <name>		name of a running sync_manager instance\n");
 
 	printf("\nLEASE = <resource_name>:<path>:<offset>[:<path>:<offset>...]\n");
 	printf("  <resource_name>	name of resource being leased\n");
