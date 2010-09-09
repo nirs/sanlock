@@ -25,7 +25,6 @@
 #include "sm_options.h"
 #include "token_manager.h"
 #include "lockfile.h"
-#include "watchdog.h"
 #include "log.h"
 
 /* priorities are LOG_* from syslog.h */
@@ -266,9 +265,6 @@ static int wait_acquire_results(int token_count, int *token_ids)
  * If we can't update a disk lease,
  * kill the vm pid and stop updating watchdog.
  *
- * If we can't update a watchdog file, kill the vm pid (SIGKILL or SIGTERM?)
- * (and release disk leases when the pid is gone if we run that long).
- *
  * failure to release disk leases shouldn't jeopardize any vm corruption,
  * so it should be safe to unlink the watchdog files.
  */
@@ -332,8 +328,8 @@ static int main_loop(void)
 		/*
 		 * The main running case (not stopping or starting).
 		 * We also continue to run through here after killing the pid,
-		 * until the pid has exited at which point we shift to
-		 * the stopping_all_leases mode.
+		 * until the pid has exited at which point we break.
+		 *
 		 * Watch the pid and renew its associated leases while it
 		 * continues to run.  The watchdog is one way to deal with
 		 * the error case where the pid continues running but we fail
@@ -403,12 +399,6 @@ static void *cmd_acquire_thread(void *args_in)
 	if (rv < 0)
 		goto fail;
 
-	for (i = 0; i < token_count; i++) {
-		rv = create_watchdog_file(token_ids[i]);
-		if (rv < 0)
-			goto fail;
-	}
-
 	h.length = sizeof(h) + (sizeof(int) * token_count);
 	h.data = token_count;
 	send(sock, &h, sizeof(struct sm_header), MSG_WAITALL);
@@ -419,10 +409,8 @@ static void *cmd_acquire_thread(void *args_in)
 	return NULL;
 
  fail:
-	for (i = 0; i < token_count; i++) {
-		unlink_watchdog_file(token_ids[i]);
+	for (i = 0; i < token_count; i++)
 		stop_token(token_ids[i]);
-	}
 
 	h.length = sizeof(h);
 	h.data = 0;
@@ -640,8 +628,6 @@ static void cmd_status(int fd, struct sm_header *h_recv)
 	in->supervise_pid = supervise_pid;
 	in->killing_supervise_pid = killing_supervise_pid;
 	in->external_shutdown = external_shutdown;
-
-	/* TODO: wd info */
 
 	in->current_time = time(NULL);
 	in->oldest_renewal_time = get_oldest_renewal_time();
@@ -913,8 +899,6 @@ static int do_daemon(int token_count, struct token *token_args[])
 	to.lease_renewal_warn_seconds = 30;
 	to.lease_renewal_fail_seconds = 40;
 	to.lease_renewal_seconds = 10;
-	to.wd_update_seconds = 4;
-	to.wd_reboot_seconds = 15;
 	to.script_shutdown_seconds = 10;
 	to.sigterm_shutdown_seconds = 10;
 	to.stable_poll_ms = 2000;
@@ -941,10 +925,6 @@ static int do_daemon(int token_count, struct token *token_args[])
 	if (rv < 0)
 		goto out_lockfile;
 
-	rv = start_watchdog_thread();
-	if (rv < 0)
-		goto out_lockfile;
-
 	for (i = 0; i < token_count; i++) {
 		rv = add_lease_thread(token_args[i], &token_ids[i]);
 		if (rv < 0)
@@ -954,12 +934,6 @@ static int do_daemon(int token_count, struct token *token_args[])
 	rv = wait_acquire_results(token_count, token_ids);
 	if (rv < 0)
 		goto out_leases;
-
-	for (i = 0; i < token_count; i++) {
-		rv = create_watchdog_file(token_ids[i]);
-		if (rv < 0)
-			goto out_watchdog;
-	}
 
 	if (command[0]) {
 		rv = run_command();
@@ -971,10 +945,7 @@ static int do_daemon(int token_count, struct token *token_args[])
 
 	rv = main_loop();
 
- out_watchdog:
-	unlink_all_watchdogs();
  out_leases:
-	stop_watchdog_thread();
 	stop_all_leases();
 	cleanup_all_leases();
  out_lockfile:
@@ -1395,6 +1366,9 @@ static void print_usage(void)
 	printf("  -n <name>		name of a running sync_manager instance\n");
 
 	printf("\nlog_dump -n <name>\n");
+	printf("  -n <name>		name of a running sync_manager instance\n");
+
+	printf("\nshutdown -n <name>\n");
 	printf("  -n <name>		name of a running sync_manager instance\n");
 
 	printf("\nLEASE = <resource_name>:<path>:<offset>[:<path>:<offset>...]\n");

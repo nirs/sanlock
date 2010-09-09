@@ -18,6 +18,7 @@
 #include "sm_msg.h"
 #include "disk_paxos.h"
 #include "token_manager.h"
+#include "watchdog.h"
 #include "sm_options.h"
 #include "lockfile.h"
 #include "log.h"
@@ -316,10 +317,10 @@ static void *lease_thread(void *arg)
 	struct leader_record leader;
 	struct timespec ts;
 	int idx = token->idx;
-	int fd, rv, stop, num_opened;
+	int lf_fd, wd_fd, rv, stop, num_opened;
 
-	fd = lockfile(token, RESOURCE_LOCKFILE_DIR, token->resource_name);
-	if (fd < 0) {
+	lf_fd = lockfile(token, RESOURCE_LOCKFILE_DIR, token->resource_name);
+	if (lf_fd < 0) {
 		set_lease_status(idx, OP_ACQUIRE, -EBADF, 0);
 		goto out_run;
 	}
@@ -342,6 +343,12 @@ static void *lease_thread(void *arg)
 	}
 	log_debug(token, "acquire at %llu",
 		  (unsigned long long)leader.timestamp);
+
+	wd_fd = create_watchdog_file(token->token_id, leader.timestamp);
+	if (wd_fd < 0) {
+		log_error(token, "create wd file failed %d", wd_fd);
+		goto out_lease;
+	}
 
 	while (1) {
 #if 0
@@ -368,22 +375,24 @@ static void *lease_thread(void *arg)
 
 		rv = renew_lease(token, &leader);
 		set_lease_status(idx, OP_RENEWAL, rv, leader.timestamp);
-		if (rv < 0)
+		if (rv < 0) {
 			log_error(token, "renewal failed %d", rv);
-		/*
-		else
-			log_debug(token, "renewal");
-		*/
+			continue;
+		}
+
+		/* log_debug(token, "renewal"); */
+		update_watchdog_file(wd_fd, leader.timestamp);
 	}
 
+	unlink_watchdog_file(token->token_id, wd_fd);
+ out_lease:
 	rv = release_lease(token, &leader);
 	set_lease_status(idx, OP_RELEASE, rv, leader.timestamp);
 	log_debug(token, "release rv %d", rv);
-
  out_disks:
 	close_disks(token);
  out_lockfile:
-	unlink_lockfile(fd, RESOURCE_LOCKFILE_DIR, token->resource_name);
+	unlink_lockfile(lf_fd, RESOURCE_LOCKFILE_DIR, token->resource_name);
  out_run:
 	set_thread_running(idx, 0);
 	return NULL;
