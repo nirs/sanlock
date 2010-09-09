@@ -411,6 +411,10 @@ int create_token(int num_disks, struct token **token_out)
 	return 0;
 }
 
+/* it's important that this is only called from the main thread because
+   of access to tokens[] and lease_threads[] which are not locked and
+   therefore only accessed by main thread. */
+
 int add_lease_thread(struct token *token, int *token_id_ret)
 {
 	pthread_attr_t attr;

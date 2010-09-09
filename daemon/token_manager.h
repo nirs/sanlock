@@ -20,6 +20,7 @@ struct lease_status {
 	int thread_running;
 
 	int token_id;
+	int token_idx;
 	char resource_name[NAME_ID_SIZE + 1];
 };
 

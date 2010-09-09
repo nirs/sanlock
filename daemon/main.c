@@ -277,7 +277,7 @@ static int main_loop(void)
 {
 	struct pollfd pollfd[1];
 	int poll_timeout = to.unstable_poll_ms;
-	int rv, pid_status, wd_status;
+	int rv, pid_status;
 
 	memset(&pollfd, 0, sizeof(pollfd));
 	pollfd[0].fd = listener_socket;
@@ -330,15 +330,6 @@ static int main_loop(void)
 		cleanup_stopped_lease();
 
 		/*
-		 * if watchdog is supposed to be updated (we haven't
-		 * called notouch), check that it's working.
-		 */
-
-		wd_status = check_watchdog_thread();
-		if (wd_status < 0)
-			kill_supervise_pid();
-
-		/*
 		 * The main running case (not stopping or starting).
 		 * We also continue to run through here after killing the pid,
 		 * until the pid has exited at which point we shift to
@@ -369,7 +360,6 @@ static int main_loop(void)
 			rv = check_leases_renewed();
 			if (rv < 0) {
 				/* just killed pid, don't need to again */
-				notouch_watchdog();
 			}
 
 		} else if (pid_status > 0) {
@@ -379,7 +369,6 @@ static int main_loop(void)
 			rv = check_leases_renewed();
 			if (rv < 0) {
 				kill_supervise_pid();
-				notouch_watchdog();
 			}
 		}
 
@@ -411,20 +400,35 @@ static void *cmd_acquire_thread(void *args_in)
 	memcpy(&h, &args->h_recv, sizeof(struct sm_header));
 
 	rv = wait_acquire_results(token_count, token_ids);
-	if (rv < 0) {
-		for (i = 0; i < token_count; i++)
-			stop_token(token_ids[i]);
-		h.length = sizeof(h);
-		h.data = 0;
-		send(sock, &h, sizeof(struct sm_header), MSG_WAITALL);
-	} else {
-		h.length = sizeof(h) + (sizeof(int) * token_count);
-		h.data = token_count;
-		send(sock, &h, sizeof(struct sm_header), MSG_WAITALL);
-		send(sock, token_ids, sizeof(int) * token_count, MSG_WAITALL);
-	}
-	close(sock);
+	if (rv < 0)
+		goto fail;
 
+	for (i = 0; i < token_count; i++) {
+		rv = create_watchdog_file(token_ids[i]);
+		if (rv < 0)
+			goto fail;
+	}
+
+	h.length = sizeof(h) + (sizeof(int) * token_count);
+	h.data = token_count;
+	send(sock, &h, sizeof(struct sm_header), MSG_WAITALL);
+	send(sock, token_ids, sizeof(int) * token_count, MSG_WAITALL);
+
+	close(sock);
+	free(args);
+	return NULL;
+
+ fail:
+	for (i = 0; i < token_count; i++) {
+		unlink_watchdog_file(token_ids[i]);
+		stop_token(token_ids[i]);
+	}
+
+	h.length = sizeof(h);
+	h.data = 0;
+	send(sock, &h, sizeof(struct sm_header), MSG_WAITALL);
+
+	close(sock);
 	free(args);
 	return NULL;
 }
@@ -909,9 +913,8 @@ static int do_daemon(int token_count, struct token *token_args[])
 	to.lease_renewal_warn_seconds = 30;
 	to.lease_renewal_fail_seconds = 40;
 	to.lease_renewal_seconds = 10;
-	to.wd_touch_seconds = 4;
+	to.wd_update_seconds = 4;
 	to.wd_reboot_seconds = 15;
-	to.wd_touch_fail_seconds = 10;
 	to.script_shutdown_seconds = 10;
 	to.sigterm_shutdown_seconds = 10;
 	to.stable_poll_ms = 2000;
@@ -938,11 +941,9 @@ static int do_daemon(int token_count, struct token *token_args[])
 	if (rv < 0)
 		goto out_lockfile;
 
-	if (token_count) {
-		rv = touch_watchdog();
-		if (rv < 0)
-			goto out_lockfile;
-	}
+	rv = start_watchdog_thread();
+	if (rv < 0)
+		goto out_lockfile;
 
 	for (i = 0; i < token_count; i++) {
 		rv = add_lease_thread(token_args[i], &token_ids[i]);
@@ -954,16 +955,26 @@ static int do_daemon(int token_count, struct token *token_args[])
 	if (rv < 0)
 		goto out_leases;
 
+	for (i = 0; i < token_count; i++) {
+		rv = create_watchdog_file(token_ids[i]);
+		if (rv < 0)
+			goto out_watchdog;
+	}
+
 	if (command[0]) {
 		rv = run_command();
 		if (rv < 0)
 			goto out_leases;
 	}
 
+	memset(&token_ids, 0, sizeof(token_ids));
+
 	rv = main_loop();
 
+ out_watchdog:
+	unlink_all_watchdogs();
  out_leases:
-	unlink_watchdog();
+	stop_watchdog_thread();
 	stop_all_leases();
 	cleanup_all_leases();
  out_lockfile:

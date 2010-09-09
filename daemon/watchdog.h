@@ -1,9 +1,10 @@
 #ifndef __WATCHDOG_H__
 #define __WATCHDOG_H__
 
-void unlink_watchdog(void);
-int check_watchdog_thread(void);
-void notouch_watchdog(void);
-int touch_watchdog(void);
+int create_watchdog_file(int token_id);
+void unlink_watchdog_file(int token_id);
+void unlink_all_watchdogs(void);
+void stop_watchdog_thread(void);
+int start_watchdog_thread(void);
 
 #endif
