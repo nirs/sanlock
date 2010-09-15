@@ -1334,6 +1334,7 @@ static void print_usage(void)
 	printf("  release		release leases for a running pid\n");
 	printf("  status		print internal daemon state\n");
 	printf("  log_dump		print internal daemon debug buffer\n");
+	printf("  shutdown		kill pid, release leases and exit\n");
 
 	printf("\ninit [options] -h <num_hosts> -l LEASE\n");
 	printf("  -h <num_hosts>	max host id that will be able to acquire the lease\n");
@@ -1351,7 +1352,7 @@ static void print_usage(void)
 	printf("  -i <num>		local host id\n");
 	printf("  -l LEASE		lease description, see below\n");
 	printf("  -k <path>		command to stop supervised process\n");
-	printf("  -w <num>		enable (1) or disable (0) using watchdog\n");
+	printf("  -w <num>		enable (1) or disable (0) writing watchdog files\n");
 	printf("  -c <path> <args>	run command with args, -c must be final option\n");
 
 	printf("\nacquire -n <name> -l LEASE\n");

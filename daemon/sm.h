@@ -37,6 +37,8 @@
 
 #define SM_LOG_DUMP_SIZE (1024*1024)
 
+/* this is just the path to the executable, not full command line */
+
 #define COMMAND_MAX 4096
 
 #define SM_RUN_DIR "/var/run/sync_manager"
