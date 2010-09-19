@@ -1,1 +1,1 @@
-syncManager.py
+../../python/syncManager.py

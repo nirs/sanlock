@@ -2,6 +2,7 @@ import unittest as ut
 import time
 
 from ruth import RuthTestCase
+import syncManager
 from syncManager import SyncManager
 from confUtils import Validate
 from testUtils import LeaderRecord, readState, nullTerminated, leasesValidator, getResources
@@ -12,6 +13,9 @@ MAXIMUM_NUMBER_OF_HOSTS = 10 #2000
 DEFAULT_NAME = "RUTH"
 DEFAULT_LEASES = "<ResourceDI>:<DRIVE>:<OFFSET>[<DRIVE>:<OFFSET>], ..."
 LEASES_CONFIG_DEFINITION = {"validator": leasesValidator, "default" : DEFAULT_LEASES}
+SYNCMANAGER_PATH="../sync_manager"
+
+syncManager.SYNCMANAGER_PATH = SYNCMANAGER_PATH
 
 class DriveInitialization(RuthTestCase):
     @classmethod

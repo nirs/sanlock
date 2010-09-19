@@ -109,7 +109,7 @@ class Dummy(object):
 
     def _logOutputThread(self):
         while self.process.poll() is None:
-            readyObjects = select([self.process.stdout, self.process.stderr], [], [])[0]
+            readyObjects = select([self.process.stdout, self.process.stderr], [], [], 1)[0]
             for obj in readyObjects:
                 line = obj.readline().replace("\n", "")
                 if line == "":

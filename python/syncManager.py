@@ -6,7 +6,7 @@ import logging
 from select import select
 from StringIO import StringIO
 
-SYNCMANAGER_PATH = "../sync_manager"
+SYNCMANAGER_PATH = "/usr/libexec/sync_manager"
 
 class SyncManagerException(Exception):
     def __init__(self, msg, errno, stdout, stderr):
