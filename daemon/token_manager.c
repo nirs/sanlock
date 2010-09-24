@@ -22,6 +22,7 @@
 #include "sm_options.h"
 #include "lockfile.h"
 #include "log.h"
+#include "diskio.h"
 
 struct token *tokens[MAX_LEASES];
 pthread_t lease_threads[MAX_LEASES];

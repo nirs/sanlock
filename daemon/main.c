@@ -26,6 +26,7 @@
 #include "token_manager.h"
 #include "lockfile.h"
 #include "log.h"
+#include "diskio.h"
 
 /* priorities are LOG_* from syslog.h */
 int log_logfile_priority = LOG_ERR;

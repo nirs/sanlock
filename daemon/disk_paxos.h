@@ -115,6 +115,4 @@ int disk_paxos_release(struct token *token,
 		       struct leader_record *leader_ret);
 int disk_paxos_init(struct token *token, int num_hosts, int max_hosts);
 
-void close_disks(struct token *token);
-int open_disks(struct token *token);
 #endif
