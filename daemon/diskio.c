@@ -12,6 +12,7 @@
 #include <syslog.h>
 #include <sys/types.h>
 #include <sys/time.h>
+#include <aio.h>
 #include <blkid/blkid.h>
 
 #include "sm.h"
@@ -115,6 +116,146 @@ int open_disks(struct sync_disk *disks, int num_disks)
 	return 0;
 }
 
+static int do_write(int fd, uint64_t offset, char *buf, int len)
+{
+	off_t ret;
+	int rv;
+
+	ret = lseek(fd, offset, SEEK_SET);
+	if (ret != offset)
+		return -errno;
+
+ retry:
+	rv = write(fd, buf, len);
+	if (rv == -1 && errno == EINTR)
+		goto retry;
+	if (rv < 0)
+		return -errno;
+
+	/* since we're writing one sector, I don't think partial
+	   writes (rv < len) are correct */
+
+	if (rv != len)
+		return -1;
+
+	return 0;
+}
+
+static int do_read(int fd, uint64_t offset, char *buf, int len)
+{
+	off_t ret;
+	int rv, pos = 0;
+
+	ret = lseek(fd, offset, SEEK_SET);
+	if (ret != offset)
+		return -errno;
+
+	while (pos < len) {
+		rv = read(fd, buf + pos, len - pos);
+		if (rv == 0)
+			return -1;
+		if (rv == -1 && errno == EINTR)
+			continue;
+		if (rv < 0)
+			return -errno;
+		pos += rv;
+	}
+
+	return 0;
+}
+
+static int do_write_aio(int fd, uint64_t offset, char *buf, int len)
+{
+	struct timespec ts;
+	struct aiocb cb;
+	struct aiocb const *p_cb;
+	int rv;
+
+	memset(&ts, 0, sizeof(struct timespec));
+	ts.tv_sec = to.io_timeout_seconds;
+
+	memset(&cb, 0, sizeof(struct aiocb));
+	p_cb = &cb;
+
+	cb.aio_fildes = fd;
+	cb.aio_buf = buf;
+	cb.aio_nbytes = len;
+	cb.aio_offset = offset;
+
+	rv = aio_write(&cb);
+	if (rv < 0)
+		return -errno;
+
+ wait_again:
+	rv = aio_suspend(&p_cb, 1, &ts);
+	if (!rv)
+		return 0;
+
+	/* the write timed out, try to cancel it... */
+
+	rv = aio_cancel(fd, &cb);
+	if (rv < 0)
+		return -errno;
+
+	if (rv == AIO_ALLDONE)
+		return 0;
+
+	if (rv == AIO_CANCELED)
+		return -EIO;
+	
+	if (rv == AIO_NOTCANCELED)
+		goto wait_again;
+
+	/* undefined error condition */
+	return -1;
+}
+
+static int do_read_aio(int fd, uint64_t offset, char *buf, int len)
+{
+	struct timespec ts;
+	struct aiocb cb;
+	struct aiocb const *p_cb;
+	int rv;
+
+	memset(&ts, 0, sizeof(struct timespec));
+	ts.tv_sec = to.io_timeout_seconds;
+
+	memset(&cb, 0, sizeof(struct aiocb));
+	p_cb = &cb;
+
+	cb.aio_fildes = fd;
+	cb.aio_buf = buf;
+	cb.aio_nbytes = len;
+	cb.aio_offset = offset;
+
+	rv = aio_read(&cb);
+	if (rv < 0)
+		return -errno;
+
+ wait_again:
+	rv = aio_suspend(&p_cb, 1, &ts);
+	if (!rv)
+		return 0;
+
+	/* the read timed out, try to cancel it... */
+
+	rv = aio_cancel(fd, &cb);
+	if (rv < 0)
+		return -errno;
+
+	if (rv == AIO_ALLDONE)
+		return 0;
+
+	if (rv == AIO_CANCELED)
+		return -EIO;
+
+	if (rv == AIO_NOTCANCELED)
+		goto wait_again;
+
+	/* undefined error condition */
+	return -1;
+}
+
 /* sector_nr is logical sector number within the sync_disk.
    the sync_disk itself begins at disk->offset (in bytes) from
    the start of the block device identified by disk->path */
@@ -124,7 +265,6 @@ int write_sector(struct sync_disk *disk, uint32_t sector_nr,
 {
 	char *iobuf, **p_iobuf;
 	uint64_t offset;
-	off_t ret;
 	int iobuf_len = disk->sector_size;
 	int rv;
 
@@ -150,28 +290,14 @@ int write_sector(struct sync_disk *disk, uint32_t sector_nr,
 	memset(iobuf, 0, iobuf_len);
 	memcpy(iobuf, data, data_len);
 
-#ifdef USE_AIO
-	rv = sm_aio_write(disk->fd, iobuf, iobuf_len);
-#else
-	ret = lseek(disk->fd, offset, SEEK_SET);
-	if (ret != offset) {
-		log_error(NULL, "write_sector %s lseek errno %d offset %llu %s",
-			  blktype, errno, (unsigned long long)offset, disk->path);
-		rv = -1;
-		goto out;
-	}
+	if (to.io_timeout_seconds < 0)
+		rv = do_write(disk->fd, offset, iobuf, iobuf_len);
+	else
+		rv = do_write_aio(disk->fd, offset, iobuf, iobuf_len);
 
-	rv = write(disk->fd, iobuf, iobuf_len);
-#endif
-	if (rv != iobuf_len) {
-		log_error(NULL, "write_sector %s write errno %d offset %llu %s",
-			  blktype, errno, (unsigned long long)offset, disk->path);
-		rv = -1;
-		goto out_free;
-	}
-
-	rv = 0;
- out_free:
+	if (rv < 0)
+		log_error(NULL, "write_sector %s offset %llu rv %d %s",
+			  blktype, (unsigned long long)offset, rv, disk->path);
 	free(iobuf);
  out:
 	return rv;
@@ -189,7 +315,6 @@ int read_sectors(struct sync_disk *disk, uint32_t sector_nr,
 {
 	char *iobuf, **p_iobuf;
 	uint64_t offset;
-	off_t ret;
 	int iobuf_len = sector_count * disk->sector_size;
 	int rv;
 
@@ -207,30 +332,18 @@ int read_sectors(struct sync_disk *disk, uint32_t sector_nr,
 
 	memset(iobuf, 0, iobuf_len);
 
-#ifdef USE_AIO
-	rv = sm_aio_read(disk->fd, iobuf, iobuf_len);
-#else
-	ret = lseek(disk->fd, offset, SEEK_SET);
-	if (ret != offset) {
-		log_error(NULL, "read_sectors %s lseek errno %d offset %llu %s",
-			  blktype, errno, (unsigned long long)offset, disk->path);
-		rv = -1;
-		goto out;
+	if (to.io_timeout_seconds < 0)
+		rv = do_read(disk->fd, offset, iobuf, iobuf_len);
+	else
+		rv = do_read_aio(disk->fd, offset, iobuf, iobuf_len);
+
+	if (!rv) {
+		memcpy(data, iobuf, data_len);
+	} else {
+		log_error(NULL, "read_sectors %s offset %llu rv %d %s",
+			  blktype, (unsigned long long)offset, rv, disk->path);
 	}
 
-	rv = read(disk->fd, iobuf, iobuf_len);
-#endif
-	if (rv != iobuf_len) {
-		log_error(NULL, "read_sectors %s read errno %d offset %llu %s",
-			  blktype, errno, (unsigned long long)offset, disk->path);
-		rv = -1;
-		goto out_free;
-	}
-
-	memcpy(data, iobuf, data_len);
-
-	rv = 0;
- out_free:
 	free(iobuf);
  out:
 	return rv;

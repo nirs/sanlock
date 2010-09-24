@@ -904,6 +904,7 @@ static int do_daemon(int token_count, struct token *token_args[])
 	to.sigterm_shutdown_seconds = 10;
 	to.stable_poll_ms = 2000;
 	to.unstable_poll_ms = 500;
+	to.io_timeout_seconds = 60;
 
 	memset(&act, 0, sizeof(act));
 	act.sa_handler = sigterm_handler;

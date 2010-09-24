@@ -83,6 +83,7 @@ struct sm_timeouts {
 	int sigterm_shutdown_seconds;
 	int stable_poll_ms;
 	int unstable_poll_ms;
+	int io_timeout_seconds;
 };
 
 #endif
