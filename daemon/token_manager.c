@@ -326,7 +326,7 @@ static void *lease_thread(void *arg)
 		goto out_run;
 	}
 
-	num_opened = open_disks(token);
+	num_opened = open_disks(token->disks, token->num_disks);
 	if (!majority_disks(token, num_opened)) {
 		log_error(token, "cannot open majority of disks");
 		set_lease_status(idx, OP_ACQUIRE, -ENODEV, 0);
@@ -391,7 +391,7 @@ static void *lease_thread(void *arg)
 	set_lease_status(idx, OP_RELEASE, rv, leader.timestamp);
 	log_debug(token, "release rv %d", rv);
  out_disks:
-	close_disks(token);
+	close_disks(token->disks, token->num_disks);
  out_lockfile:
 	unlink_lockfile(lf_fd, RESOURCE_LOCKFILE_DIR, token->resource_name);
  out_run:

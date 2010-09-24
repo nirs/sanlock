@@ -53,7 +53,7 @@ int majority_disks(struct token *token, int num)
 	return 0;
 }
 
-static int write_dblock(struct token *token, struct paxos_disk *disk, int host_id,
+static int write_dblock(struct paxos_disk *disk, int host_id,
 			struct paxos_dblock *pd)
 {
 	int rv;
@@ -61,45 +61,43 @@ static int write_dblock(struct token *token, struct paxos_disk *disk, int host_i
 	/* 1 leader block + 1 request block;
 	   host_id N is block offset N-1 */
 
-	rv = write_sector(token, disk, 2 + host_id - 1, (char *)pd,
+	rv = write_sector(disk, 2 + host_id - 1, (char *)pd,
 			  sizeof(struct paxos_dblock), "dblock");
 	return rv;
 }
 
-static int write_request(struct token *token, struct paxos_disk *disk,
-			 struct request_record *rr)
+static int write_request(struct paxos_disk *disk, struct request_record *rr)
 {
 	int rv;
 
-	rv = write_sector(token, disk, 1, (char *)rr,
+	rv = write_sector(disk, 1, (char *)rr,
 			  sizeof(struct request_record), "request");
 	return rv;
 }
 
-static int write_leader(struct token *token, struct paxos_disk *disk,
-			struct leader_record *lr)
+static int write_leader(struct paxos_disk *disk, struct leader_record *lr)
 {
 	int rv;
 
-	rv = write_sector(token, disk, 0, (char *)lr,
+	rv = write_sector(disk, 0, (char *)lr,
 			  sizeof(struct leader_record), "leader");
 	return rv;
 }
 
-static int read_dblock(struct token *token, struct paxos_disk *disk, int host_id,
+static int read_dblock(struct paxos_disk *disk, int host_id,
 		       struct paxos_dblock *pd)
 {
 	int rv;
 
 	/* 1 leader block + 1 request block; host_id N is block offset N-1 */
 
-	rv = read_sectors(token, disk, 2 + host_id - 1, 1, (char *)pd,
+	rv = read_sectors(disk, 2 + host_id - 1, 1, (char *)pd,
 			  sizeof(struct paxos_dblock), "dblock");
 	return rv;
 }
 
-static int read_dblocks(struct token *token, struct paxos_disk *disk,
-			struct paxos_dblock *pds, int pds_count)
+static int read_dblocks(struct paxos_disk *disk, struct paxos_dblock *pds,
+			int pds_count)
 {
 	char *data;
 	int data_len, rv, i;
@@ -108,7 +106,7 @@ static int read_dblocks(struct token *token, struct paxos_disk *disk,
 
 	data = malloc(data_len);
 	if (!data) {
-		log_error(token, "read_dblocks malloc %d %s",
+		log_error(NULL, "read_dblocks malloc %d %s",
 			  data_len, disk->path);
 		rv = -1;
 		goto out;
@@ -116,7 +114,7 @@ static int read_dblocks(struct token *token, struct paxos_disk *disk,
 
 	/* 2 = 1 leader block + 1 request block */
 
-	rv = read_sectors(token, disk, 2, pds_count, data, data_len, "dblocks");
+	rv = read_sectors(disk, 2, pds_count, data, data_len, "dblocks");
 	if (rv < 0)
 		goto out_free;
 
@@ -135,14 +133,13 @@ static int read_dblocks(struct token *token, struct paxos_disk *disk,
 	return rv;
 }
 
-static int read_leader(struct token *token, struct paxos_disk *disk,
-		       struct leader_record *lr)
+static int read_leader(struct paxos_disk *disk, struct leader_record *lr)
 {
 	int rv;
 
 	/* 0 = leader record is first sector */
 
-	rv = read_sectors(token, disk, 0, 1, (char *)lr,
+	rv = read_sectors(disk, 0, 1, (char *)lr,
 			  sizeof(struct leader_record), "leader");
 
 	return rv;
@@ -150,14 +147,13 @@ static int read_leader(struct token *token, struct paxos_disk *disk,
 
 
 #if 0
-static int read_request(struct token *token, struct paxos_disk *disk,
-			struct request_record *rr)
+static int read_request(struct paxos_disk *disk, struct request_record *rr)
 {
 	int rv;
 
 	/* 1 = request record is second sector */
 
-	rv = read_sectors(token, disk, 1, (char *)rr,
+	rv = read_sectors(disk, 1, (char *)rr,
 			  sizeof(struct request_record), "request");
 
 	return rv;
@@ -192,7 +188,7 @@ static int run_disk_paxos(struct token *token, int host_id, uint64_t inp,
 	memset(&dblock, 0, sizeof(struct paxos_dblock));
 
 	for (d = 0; d < num_disks; d++) {
-		rv = read_dblock(token, &token->disks[d], host_id, &dblock);
+		rv = read_dblock(&token->disks[d], host_id, &dblock);
 		if (rv < 0)
 			continue;
 		/* need only one dblock to get initial values */
@@ -237,7 +233,7 @@ static int run_disk_paxos(struct token *token, int host_id, uint64_t inp,
 	num_writes = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = write_dblock(token, &token->disks[d], host_id, &dblock);
+		rv = write_dblock(&token->disks[d], host_id, &dblock);
 		if (rv < 0)
 			continue;
 		num_writes++;
@@ -251,7 +247,7 @@ static int run_disk_paxos(struct token *token, int host_id, uint64_t inp,
 	num_reads = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = read_dblocks(token, &token->disks[d], bk, num_hosts);
+		rv = read_dblocks(&token->disks[d], bk, num_hosts);
 		if (rv < 0)
 			continue;
 		num_reads++;
@@ -324,7 +320,7 @@ static int run_disk_paxos(struct token *token, int host_id, uint64_t inp,
 	num_writes = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = write_dblock(token, &token->disks[d], host_id, &dblock);
+		rv = write_dblock(&token->disks[d], host_id, &dblock);
 		if (rv < 0)
 			continue;
 		num_writes++;
@@ -338,7 +334,7 @@ static int run_disk_paxos(struct token *token, int host_id, uint64_t inp,
 	num_reads = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = read_dblocks(token, &token->disks[d], bk, num_hosts);
+		rv = read_dblocks(&token->disks[d], bk, num_hosts);
 		if (rv < 0)
 			continue;
 		num_reads++;
@@ -477,7 +473,7 @@ static int get_prev_leader(struct token *token, int force,
 	num_reads = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = read_leader(token, &token->disks[d], &leaders[d]);
+		rv = read_leader(&token->disks[d], &leaders[d]);
 		if (rv < 0)
 			continue;
 
@@ -553,7 +549,7 @@ static int get_prev_leader(struct token *token, int force,
 	num_writes = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = write_request(token, &token->disks[d], &req);
+		rv = write_request(&token->disks[d], &req);
 		if (rv < 0)
 			continue;
 		num_writes++;
@@ -598,7 +594,7 @@ static int get_prev_leader(struct token *token, int force,
 		num_diff = 0;
 
 		for (d = 0; d < num_disks; d++) {
-			rv = read_leader(token, &token->disks[d], &tmp_leader);
+			rv = read_leader(&token->disks[d], &tmp_leader);
 			if (rv < 0)
 				continue;
 
@@ -633,7 +629,7 @@ static int write_new_leader(struct token *token, struct leader_record *nl)
 	int rv, d;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = write_leader(token, &token->disks[d], nl);
+		rv = write_leader(&token->disks[d], nl);
 		if (rv < 0)
 			continue;
 		num_writes++;
@@ -731,7 +727,7 @@ int disk_paxos_renew(struct token *token,
 	for (d = 0; d < token->num_disks; d++) {
 		memset(&new_leader, 0, sizeof(struct leader_record));
 
-		rv = read_leader(token, &token->disks[d], &new_leader);
+		rv = read_leader(&token->disks[d], &new_leader);
 		if (rv < 0)
 			continue;
 
@@ -806,10 +802,10 @@ int disk_paxos_init(struct token *token, int num_hosts, int max_hosts)
 	leader.checksum = leader_checksum(&leader);
 
 	for (d = 0; d < token->num_disks; d++) {
-		write_leader(token, &token->disks[d], &leader);
-		write_request(token, &token->disks[d], &req);
+		write_leader(&token->disks[d], &leader);
+		write_request(&token->disks[d], &req);
 		for (q = 0; q < max_hosts; q++)
-			write_dblock(token, &token->disks[d], q, &dblock);
+			write_dblock(&token->disks[d], q, &dblock);
 	}
 
 	/* TODO: return error if cannot initialize majority of disks */

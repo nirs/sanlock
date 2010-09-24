@@ -1014,7 +1014,7 @@ static int do_init(int token_count, struct token *token_args[],
 	for (i = 0; i < token_count; i++) {
 		token = token_args[i];
 
-		num_opened = open_disks(token);
+		num_opened = open_disks(token->disks, token->num_disks);
 		if (!majority_disks(token, num_opened)) {
 			log_tool("cannot open majority of disks");
 			rv = -1;
