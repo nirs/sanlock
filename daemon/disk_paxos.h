@@ -32,17 +32,6 @@ enum {
 	DP_BAD_SECTORSIZE = -26,
 };
 
-/* paxos_disk + offset:
-   points to 1 leader_record + 1 request_record + MAX_HOSTS paxos_dblock's =
-   256 blocks = 128KB, ref: lease_item_record */
-
-struct paxos_disk {
-	int fd;
-	uint32_t sector_size;
-	uint64_t offset;
-	char path[DISK_PATH_LEN];
-};
-
 /* Once token and token->disks are initialized by the main loop, the only
    fields that are modified are disk fd's by open_disks() in the lease
    threads. */
@@ -52,7 +41,7 @@ struct token {
 	int token_id;
 	int num_disks;
 	char resource_name[NAME_ID_SIZE];
-	struct paxos_disk *disks;
+	struct sync_disk *disks;
 };
 
 /* for all disk structures:

@@ -402,14 +402,14 @@ static void *lease_thread(void *arg)
 int create_token(int num_disks, struct token **token_out)
 {
 	struct token *token;
-	struct paxos_disk *disks;
+	struct sync_disk *disks;
 
 	token = malloc(sizeof(struct token));
 	if (!token)
 		return -ENOMEM;
 	memset(token, 0, sizeof(struct token));
 
-	disks = malloc(num_disks * sizeof(struct paxos_disk));
+	disks = malloc(num_disks * sizeof(struct sync_disk));
 	if (!disks) {
 		free(token);
 		return -ENOMEM;

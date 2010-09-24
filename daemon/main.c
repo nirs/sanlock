@@ -428,7 +428,7 @@ static void cmd_acquire(int fd, struct sm_header *h_recv)
 	pthread_attr_t attr;
 	struct sm_header h;
 	struct token *token = NULL;
-	struct paxos_disk *disks = NULL;
+	struct sync_disk *disks = NULL;
 	int token_ids[MAX_LEASE_ARGS];
 	int token_count = h_recv->data;
 	int added_count;
@@ -464,13 +464,13 @@ static void cmd_acquire(int fd, struct sm_header *h_recv)
 
 		num_disks = token->num_disks;
 
-		disks = malloc(num_disks * sizeof(struct paxos_disk));
+		disks = malloc(num_disks * sizeof(struct sync_disk));
 		if (!disks) {
 			rv = -ENOMEM;
 			goto fail;
 		}
 
-		disks_len = num_disks * sizeof(struct paxos_disk);
+		disks_len = num_disks * sizeof(struct sync_disk);
 		memset(disks, 0, disks_len);
 
 		rv = recv(fd, disks, disks_len, MSG_WAITALL);
@@ -1072,7 +1072,7 @@ static int do_acquire(int token_count, struct token *token_args[])
 			goto out;
 		}
 
-		rv = send(sock, t->disks, sizeof(struct paxos_disk) * t->num_disks, 0);
+		rv = send(sock, t->disks, sizeof(struct sync_disk) * t->num_disks, 0);
 		if (rv < 0) {
 			log_tool("send error %d %d", rv, errno);
 			goto out;

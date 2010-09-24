@@ -16,13 +16,12 @@
 
 #include "sm.h"
 #include "sm_msg.h"
-#include "disk_paxos.h"
 #include "sm_options.h"
+#include "token_manager.h"
 #include "log.h"
-#include "crc32c.h"
 #include "diskio.h"
 
-static int set_disk_properties(struct paxos_disk *disk)
+static int set_disk_properties(struct sync_disk *disk)
 {
 	blkid_probe probe;
 	blkid_topology topo;
@@ -60,7 +59,7 @@ static int set_disk_properties(struct paxos_disk *disk)
 	return 0;
 }
 
-void close_disks(struct paxos_disk *disks, int num_disks)
+void close_disks(struct sync_disk *disks, int num_disks)
 {
 	int d;
 
@@ -70,9 +69,9 @@ void close_disks(struct paxos_disk *disks, int num_disks)
 
 /* return number of opened disks */
 
-int open_disks(struct paxos_disk *disks, int num_disks)
+int open_disks(struct sync_disk *disks, int num_disks)
 {
-	struct paxos_disk *disk;
+	struct sync_disk *disk;
 	int num_opens = 0;
 	int d, fd, rv;
 	uint32_t ss = 0;
@@ -116,11 +115,11 @@ int open_disks(struct paxos_disk *disks, int num_disks)
 	return 0;
 }
 
-/* sector_nr is logical sector number within the paxos_disk.
-   the paxos_disk itself begins at disk->offset (in bytes) from
+/* sector_nr is logical sector number within the sync_disk.
+   the sync_disk itself begins at disk->offset (in bytes) from
    the start of the block device identified by disk->path */
 
-int write_sector(struct paxos_disk *disk, uint32_t sector_nr,
+int write_sector(struct sync_disk *disk, uint32_t sector_nr,
 		 const char *data, int data_len, const char *blktype)
 {
 	char *iobuf, **p_iobuf;
@@ -179,12 +178,12 @@ int write_sector(struct paxos_disk *disk, uint32_t sector_nr,
 }
 
 /* read sector_count sectors starting with sector_nr, where sector_nr
-   is a logical sector number within the paxos_disk.  the caller will
+   is a logical sector number within the sync_disk.  the caller will
    generally want to look at the first N bytes of each sector.
    when reading multiple sectors, data_len will generally equal iobuf_len,
    but when reading one sector, data_len may be less than iobuf_len. */
 
-int read_sectors(struct paxos_disk *disk, uint32_t sector_nr,
+int read_sectors(struct sync_disk *disk, uint32_t sector_nr,
 	 	 uint32_t sector_count, char *data, int data_len,
 		 const char *blktype)
 {

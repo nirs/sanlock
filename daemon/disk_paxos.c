@@ -12,7 +12,6 @@
 #include <syslog.h>
 #include <sys/types.h>
 #include <sys/time.h>
-#include <blkid/blkid.h>
 
 #include "sm.h"
 #include "sm_msg.h"
@@ -53,7 +52,7 @@ int majority_disks(struct token *token, int num)
 	return 0;
 }
 
-static int write_dblock(struct paxos_disk *disk, int host_id,
+static int write_dblock(struct sync_disk *disk, int host_id,
 			struct paxos_dblock *pd)
 {
 	int rv;
@@ -66,7 +65,7 @@ static int write_dblock(struct paxos_disk *disk, int host_id,
 	return rv;
 }
 
-static int write_request(struct paxos_disk *disk, struct request_record *rr)
+static int write_request(struct sync_disk *disk, struct request_record *rr)
 {
 	int rv;
 
@@ -75,7 +74,7 @@ static int write_request(struct paxos_disk *disk, struct request_record *rr)
 	return rv;
 }
 
-static int write_leader(struct paxos_disk *disk, struct leader_record *lr)
+static int write_leader(struct sync_disk *disk, struct leader_record *lr)
 {
 	int rv;
 
@@ -84,7 +83,7 @@ static int write_leader(struct paxos_disk *disk, struct leader_record *lr)
 	return rv;
 }
 
-static int read_dblock(struct paxos_disk *disk, int host_id,
+static int read_dblock(struct sync_disk *disk, int host_id,
 		       struct paxos_dblock *pd)
 {
 	int rv;
@@ -96,7 +95,7 @@ static int read_dblock(struct paxos_disk *disk, int host_id,
 	return rv;
 }
 
-static int read_dblocks(struct paxos_disk *disk, struct paxos_dblock *pds,
+static int read_dblocks(struct sync_disk *disk, struct paxos_dblock *pds,
 			int pds_count)
 {
 	char *data;
@@ -133,7 +132,7 @@ static int read_dblocks(struct paxos_disk *disk, struct paxos_dblock *pds,
 	return rv;
 }
 
-static int read_leader(struct paxos_disk *disk, struct leader_record *lr)
+static int read_leader(struct sync_disk *disk, struct leader_record *lr)
 {
 	int rv;
 
@@ -147,7 +146,7 @@ static int read_leader(struct paxos_disk *disk, struct leader_record *lr)
 
 
 #if 0
-static int read_request(struct paxos_disk *disk, struct request_record *rr)
+static int read_request(struct sync_disk *disk, struct request_record *rr)
 {
 	int rv;
 
