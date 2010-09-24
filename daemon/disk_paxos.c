@@ -111,6 +111,13 @@ int open_disks(struct token *token)
 			goto fail;
 		}
 
+		if (disk->offset % disk->sector_size) {
+			log_error(token, "invalid offset %lluu sector size %u %s",
+				  (unsigned long long)disk->offset,
+				  disk->sector_size, disk->path);
+			goto fail;
+		}
+
 		disk->fd = fd;
 		num_opens++;
 	}
@@ -142,42 +149,120 @@ int majority_disks(struct token *token, int num)
 	return 0;
 }
 
-static int write_block(struct token *token, struct paxos_disk *disk, int offset,
-		       const char *data, int len, const char *blktype)
+/* sector_nr is logical sector number within the paxos_disk.
+   the paxos_disk itself begins at disk->offset (in bytes) from
+   the start of the block device identified by disk->path */
+
+static int write_sector(struct token *token, struct paxos_disk *disk,
+		        uint32_t sector_nr, const char *data, int data_len,
+			const char *blktype)
 {
 	char *iobuf, **p_iobuf;
-	uint64_t off = offset + disk->offset;
+	uint64_t offset;
 	off_t ret;
+	int iobuf_len = disk->sector_size;
 	int rv;
 
-	ret = lseek(disk->fd, off, SEEK_SET);
-	if (ret != off) {
-		log_error(token, "write_block %s lseek errno %d off %llu %s",
-			  blktype, errno, (unsigned long long)off, disk->path);
+	if (data_len > iobuf_len) {
+		log_error(token, "write_sector %s data_len %d max %d %s",
+			  blktype, data_len, iobuf_len, disk->path);
 		rv = -1;
 		goto out;
 	}
 
+	offset = disk->offset + (sector_nr * disk->sector_size);
+
 	p_iobuf = &iobuf;
 
-	rv = posix_memalign((void *)p_iobuf, getpagesize(), disk->sector_size);
+	rv = posix_memalign((void *)p_iobuf, getpagesize(), iobuf_len);
 	if (rv) {
-		log_error(token, "write_block %s posix_memalign rv %d %s",
+		log_error(token, "write_sector %s posix_memalign rv %d %s",
 			  blktype, rv, disk->path);
 		rv = -1;
 		goto out;
 	}
 
-	memset(iobuf, 0, disk->sector_size);
-	memcpy(iobuf, data, len);
+	memset(iobuf, 0, iobuf_len);
+	memcpy(iobuf, data, data_len);
 
-	rv = write(disk->fd, iobuf, disk->sector_size);
-	if (rv != disk->sector_size) {
-		log_error(token, "write_block %s write errno %d off %llu %s",
-			  blktype, errno, (unsigned long long)off, disk->path);
+#ifdef USE_AIO
+	rv = sm_aio_write(disk->fd, iobuf, iobuf_len);
+#else
+	ret = lseek(disk->fd, offset, SEEK_SET);
+	if (ret != offset) {
+		log_error(token, "write_sector %s lseek errno %d offset %llu %s",
+			  blktype, errno, (unsigned long long)offset, disk->path);
+		rv = -1;
+		goto out;
+	}
+
+	rv = write(disk->fd, iobuf, iobuf_len);
+#endif
+	if (rv != iobuf_len) {
+		log_error(token, "write_sector %s write errno %d offset %llu %s",
+			  blktype, errno, (unsigned long long)offset, disk->path);
 		rv = -1;
 		goto out_free;
 	}
+
+	rv = 0;
+ out_free:
+	free(iobuf);
+ out:
+	return rv;
+}
+
+/* read sector_count sectors starting with sector_nr, where sector_nr
+   is a logical sector number within the paxos_disk.  the caller will
+   generally want to look at the first N bytes of each sector.
+   when reading multiple sectors, data_len will generally equal iobuf_len,
+   but when reading one sector, data_len may be less than iobuf_len. */
+
+static int read_sectors(struct token *token, struct paxos_disk *disk,
+			uint32_t sector_nr, uint32_t sector_count, char *data,
+			int data_len, const char *blktype)
+{
+	char *iobuf, **p_iobuf;
+	uint64_t offset;
+	off_t ret;
+	int iobuf_len = sector_count * disk->sector_size;
+	int rv;
+
+	offset = disk->offset + (sector_nr * disk->sector_size);
+
+	p_iobuf = &iobuf;
+
+	rv = posix_memalign((void *)p_iobuf, getpagesize(), iobuf_len);
+	if (rv) {
+		log_error(token, "read_sectors %s posix_memalign rv %d %s",
+			  blktype, rv, disk->path);
+		rv = -1;
+		goto out;
+	}
+
+	memset(iobuf, 0, iobuf_len);
+
+#ifdef USE_AIO
+	rv = sm_aio_read(disk->fd, iobuf, iobuf_len);
+#else
+	ret = lseek(disk->fd, offset, SEEK_SET);
+	if (ret != offset) {
+		log_error(token, "read_sectors %s lseek errno %d offset %llu %s",
+			  blktype, errno, (unsigned long long)offset, disk->path);
+		rv = -1;
+		goto out;
+	}
+
+	rv = read(disk->fd, iobuf, iobuf_len);
+#endif
+	if (rv != iobuf_len) {
+		log_error(token, "read_sectors %s read errno %d offset %llu %s",
+			  blktype, errno, (unsigned long long)offset, disk->path);
+		rv = -1;
+		goto out_free;
+	}
+
+	memcpy(data, iobuf, data_len);
 
 	rv = 0;
  out_free:
@@ -189,15 +274,13 @@ static int write_block(struct token *token, struct paxos_disk *disk, int offset,
 static int write_dblock(struct token *token, struct paxos_disk *disk, int host_id,
 			struct paxos_dblock *pd)
 {
-	int blocknr, rv;
+	int rv;
 
 	/* 1 leader block + 1 request block;
 	   host_id N is block offset N-1 */
 
-	blocknr = 2 + host_id - 1;
-
-	rv = write_block(token, disk, blocknr * disk->sector_size, (char *)pd,
-			 sizeof(struct paxos_dblock), "dblock");
+	rv = write_sector(token, disk, 2 + host_id - 1, (char *)pd,
+			  sizeof(struct paxos_dblock), "dblock");
 	return rv;
 }
 
@@ -206,8 +289,8 @@ static int write_request(struct token *token, struct paxos_disk *disk,
 {
 	int rv;
 
-	rv = write_block(token, disk, disk->sector_size, (char *)rr,
-			 sizeof(struct request_record), "request");
+	rv = write_sector(token, disk, 1, (char *)rr,
+			  sizeof(struct request_record), "request");
 	return rv;
 }
 
@@ -216,114 +299,56 @@ static int write_leader(struct token *token, struct paxos_disk *disk,
 {
 	int rv;
 
-	rv = write_block(token, disk, 0, (char *)lr,
-			 sizeof(struct leader_record), "leader");
+	rv = write_sector(token, disk, 0, (char *)lr,
+			  sizeof(struct leader_record), "leader");
 	return rv;
 }
 
 static int read_dblock(struct token *token, struct paxos_disk *disk, int host_id,
 		       struct paxos_dblock *pd)
 {
-	char *iobuf, **p_iobuf;
-	uint64_t off;
-	off_t ret;
-	int offset, blocknr, len, rv;
+	int rv;
 
 	/* 1 leader block + 1 request block; host_id N is block offset N-1 */
 
-	blocknr = 2 + host_id - 1;
-	offset = blocknr * disk->sector_size;
-	len = disk->sector_size;
-	off = offset + disk->offset;
-
-	ret = lseek(disk->fd, off, SEEK_SET);
-	if (ret != off) {
-		log_error(token, "read_dblock lseek errno %d off %llu %s",
-			  errno, (unsigned long long)off, disk->path);
-		rv = -1;
-		goto out;
-	}
-
-	p_iobuf = &iobuf;
-
-	rv = posix_memalign((void *)p_iobuf, getpagesize(), len);
-	if (rv) {
-		log_error(token, "read_dblock posix_memalign rv %d %s",
-			  rv, disk->path);
-		rv = -1;
-		goto out;
-	}
-
-	memset(iobuf, 0, len);
-
-	rv = read(disk->fd, iobuf, len);
-	if (rv != len) {
-		log_error(token, "read_dblock read errno %d off %llu %s",
-			  errno, (unsigned long long)off, disk->path);
-		rv = -1;
-		goto out_free;
-	}
-
-	memcpy(pd, iobuf, sizeof(struct paxos_dblock));
-
-	rv = 0;
- out_free:
-	free(iobuf);
- out:
+	rv = read_sectors(token, disk, 2 + host_id - 1, 1, (char *)pd,
+			  sizeof(struct paxos_dblock), "dblock");
 	return rv;
 }
 
-static int read_dblocks(struct token *token, struct paxos_disk *disk, int num,
-			struct paxos_dblock *pds)
+static int read_dblocks(struct token *token, struct paxos_disk *disk,
+			struct paxos_dblock *pds, int pds_count)
 {
-	char *iobuf, **p_iobuf;
-	uint64_t off;
-	off_t ret;
-	int offset, blocknr, len, rv, i;
+	char *data;
+	int data_len, rv, i;
 
-	/* 1 leader block + 1 request block */
+	data_len = pds_count * disk->sector_size;
 
-	blocknr = 2;
-	offset = blocknr * disk->sector_size;
-	len = num * disk->sector_size;
-	off = offset + disk->offset;
-
-	ret = lseek(disk->fd, off, SEEK_SET);
-	if (ret != off) {
-		log_error(token, "read_dblocks lseek errno %d off %llu %s",
-			  errno, (unsigned long long)off, disk->path);
+	data = malloc(data_len);
+	if (!data) {
+		log_error(token, "read_dblocks malloc %d %s",
+			  data_len, disk->path);
 		rv = -1;
 		goto out;
 	}
 
-	p_iobuf = &iobuf;
+	/* 2 = 1 leader block + 1 request block */
 
-	rv = posix_memalign((void *)p_iobuf, getpagesize(), len);
-	if (rv) {
-		log_error(token, "read_dlbocks posix_memalign rv %d %s",
-			  rv, disk->path);
-		rv = -1;
-		goto out;
-	}
-
-	memset(iobuf, 0, len);
-
-	rv = read(disk->fd, iobuf, len);
-	if (rv != len) {
-		log_error(token, "read_dblocks read errno %d off %llu %s",
-			  errno, (unsigned long long)off, disk->path);
-		rv = -1;
+	rv = read_sectors(token, disk, 2, pds_count, data, data_len, "dblocks");
+	if (rv < 0)
 		goto out_free;
-	}
 
-	for (i = 0; i < num; i++) {
-		memcpy(&pds[i], iobuf + (i * disk->sector_size),
+	/* copy the first N bytes from each sector, where N is size of
+	   paxos_dblock */
+
+	for (i = 0; i < pds_count; i++) {
+		memcpy(&pds[i], data + (i * disk->sector_size),
 		       sizeof(struct paxos_dblock));
 	}
 
 	rv = 0;
  out_free:
-	free(iobuf);
+	free(data);
  out:
 	return rv;
 }
@@ -331,47 +356,13 @@ static int read_dblocks(struct token *token, struct paxos_disk *disk, int num,
 static int read_leader(struct token *token, struct paxos_disk *disk,
 		       struct leader_record *lr)
 {
-	char *iobuf, **p_iobuf;
-	uint64_t off;
-	off_t ret;
 	int rv;
 
-	off = disk->offset;
+	/* 0 = leader record is first sector */
 
-	ret = lseek(disk->fd, off, SEEK_SET);
-	if (ret != off) {
-		log_error(token, "read_leader lseek errno %d off %llu %s",
-			  errno, (unsigned long long)off, disk->path);
-		rv = -1;
-		goto out;
-	}
+	rv = read_sectors(token, disk, 0, 1, (char *)lr,
+			  sizeof(struct leader_record), "leader");
 
-	p_iobuf = &iobuf;
-
-	rv = posix_memalign((void *)p_iobuf, getpagesize(), disk->sector_size);
-	if (rv) {
-		log_error(token, "read_leader posix_memalign rv %d %s",
-			  rv, disk->path);
-		rv = -1;
-		goto out;
-	}
-
-	memset(iobuf, 0, disk->sector_size);
-
-	rv = read(disk->fd, iobuf, disk->sector_size);
-	if (rv != disk->sector_size) {
-		log_error(token, "read_leader read errno %d off %llu %s",
-			  errno, (unsigned long long)off, disk->path);
-		rv = -1;
-		goto out_free;
-	}
-
-	memcpy(lr, iobuf, sizeof(struct leader_record));
-
-	rv = 0;
- out_free:
-	free(iobuf);
- out:
 	return rv;
 }
 
@@ -380,47 +371,13 @@ static int read_leader(struct token *token, struct paxos_disk *disk,
 static int read_request(struct token *token, struct paxos_disk *disk,
 			struct request_record *rr)
 {
-	char *iobuf, **p_iobuf;
-	uint64_t off;
-	off_t ret;
 	int rv;
 
-	off = disk->sector_size + disk->offset;
+	/* 1 = request record is second sector */
 
-	ret = lseek(disk->fd, off, SEEK_SET);
-	if (ret != off) {
-		log_error(token, "read_request lseek errno %d off %llu %s",
-			  errno, (unsigned long long)off, disk->path);
-		rv = -1;
-		goto out;
-	}
+	rv = read_sectors(token, disk, 1, (char *)rr,
+			  sizeof(struct request_record), "request");
 
-	p_iobuf = &iobuf;
-
-	rv = posix_memalign((void *)p_iobuf, getpagesize(), disk->sector_size);
-	if (rv) {
-		log_error(token, "read_request posix_memalign rv %d %s",
-			  rv, disk->path);
-		rv = -1;
-		goto out;
-	}
-
-	memset(iobuf, 0, disk->sector_size);
-
-	rv = read(disk->fd, iobuf, disk->sector_size);
-	if (rv != disk->sector_size) {
-		log_error(token, "read_request read errno %d off %llu %s",
-			  errno, (unsigned long long)off, disk->path);
-		rv = -1;
-		goto out_free;
-	}
-
-	memcpy(rr, iobuf, sizeof(struct request_record));
-
-	rv = 0;
- out_free:
-	free(iobuf);
- out:
 	return rv;
 }
 #endif
@@ -512,7 +469,7 @@ static int run_disk_paxos(struct token *token, int host_id, uint64_t inp,
 	num_reads = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = read_dblocks(token, &token->disks[d], num_hosts, bk);
+		rv = read_dblocks(token, &token->disks[d], bk, num_hosts);
 		if (rv < 0)
 			continue;
 		num_reads++;
@@ -599,7 +556,7 @@ static int run_disk_paxos(struct token *token, int host_id, uint64_t inp,
 	num_reads = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = read_dblocks(token, &token->disks[d], num_hosts, bk);
+		rv = read_dblocks(token, &token->disks[d], bk, num_hosts);
 		if (rv < 0)
 			continue;
 		num_reads++;
