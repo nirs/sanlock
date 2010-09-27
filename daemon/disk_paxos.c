@@ -61,7 +61,8 @@ static int write_dblock(struct sync_disk *disk, int host_id,
 	   host_id N is block offset N-1 */
 
 	rv = write_sector(disk, 2 + host_id - 1, (char *)pd,
-			  sizeof(struct paxos_dblock), "dblock");
+			  sizeof(struct paxos_dblock), to.io_timeout_seconds,
+			  "dblock");
 	return rv;
 }
 
@@ -69,8 +70,8 @@ static int write_request(struct sync_disk *disk, struct request_record *rr)
 {
 	int rv;
 
-	rv = write_sector(disk, 1, (char *)rr,
-			  sizeof(struct request_record), "request");
+	rv = write_sector(disk, 1, (char *)rr, sizeof(struct request_record),
+			  to.io_timeout_seconds, "request");
 	return rv;
 }
 
@@ -78,8 +79,8 @@ static int write_leader(struct sync_disk *disk, struct leader_record *lr)
 {
 	int rv;
 
-	rv = write_sector(disk, 0, (char *)lr,
-			  sizeof(struct leader_record), "leader");
+	rv = write_sector(disk, 0, (char *)lr, sizeof(struct leader_record),
+			  to.io_timeout_seconds, "leader");
 	return rv;
 }
 
@@ -91,7 +92,8 @@ static int read_dblock(struct sync_disk *disk, int host_id,
 	/* 1 leader block + 1 request block; host_id N is block offset N-1 */
 
 	rv = read_sectors(disk, 2 + host_id - 1, 1, (char *)pd,
-			  sizeof(struct paxos_dblock), "dblock");
+			  sizeof(struct paxos_dblock),
+			  to.io_timeout_seconds, "dblock");
 	return rv;
 }
 
@@ -113,7 +115,8 @@ static int read_dblocks(struct sync_disk *disk, struct paxos_dblock *pds,
 
 	/* 2 = 1 leader block + 1 request block */
 
-	rv = read_sectors(disk, 2, pds_count, data, data_len, "dblocks");
+	rv = read_sectors(disk, 2, pds_count, data, data_len,
+			  to.io_timeout_seconds, "dblocks");
 	if (rv < 0)
 		goto out_free;
 
@@ -139,7 +142,8 @@ static int read_leader(struct sync_disk *disk, struct leader_record *lr)
 	/* 0 = leader record is first sector */
 
 	rv = read_sectors(disk, 0, 1, (char *)lr,
-			  sizeof(struct leader_record), "leader");
+			  sizeof(struct leader_record),
+			  to.io_timeout_seconds, "leader");
 
 	return rv;
 }
@@ -152,8 +156,8 @@ static int read_request(struct sync_disk *disk, struct request_record *rr)
 
 	/* 1 = request record is second sector */
 
-	rv = read_sectors(disk, 1, (char *)rr,
-			  sizeof(struct request_record), "request");
+	rv = read_sectors(disk, 1, (char *)rr, sizeof(struct request_record),
+			  to.io_timeout_seconds, "request");
 
 	return rv;
 }

@@ -116,7 +116,7 @@ int open_disks(struct sync_disk *disks, int num_disks)
 	return 0;
 }
 
-static int do_write(int fd, uint64_t offset, char *buf, int len)
+static int do_write(int fd, uint64_t offset, const char *buf, int len)
 {
 	off_t ret;
 	int rv;
@@ -164,7 +164,8 @@ static int do_read(int fd, uint64_t offset, char *buf, int len)
 	return 0;
 }
 
-static int do_write_aio(int fd, uint64_t offset, char *buf, int len)
+static int do_write_aio(int fd, uint64_t offset, char *buf, int len,
+                        int io_timeout_seconds)
 {
 	struct timespec ts;
 	struct aiocb cb;
@@ -172,7 +173,7 @@ static int do_write_aio(int fd, uint64_t offset, char *buf, int len)
 	int rv;
 
 	memset(&ts, 0, sizeof(struct timespec));
-	ts.tv_sec = to.io_timeout_seconds;
+	ts.tv_sec = io_timeout_seconds;
 
 	memset(&cb, 0, sizeof(struct aiocb));
 	p_cb = &cb;
@@ -186,7 +187,6 @@ static int do_write_aio(int fd, uint64_t offset, char *buf, int len)
 	if (rv < 0)
 		return -errno;
 
- wait_again:
 	rv = aio_suspend(&p_cb, 1, &ts);
 	if (!rv)
 		return 0;
@@ -202,15 +202,19 @@ static int do_write_aio(int fd, uint64_t offset, char *buf, int len)
 
 	if (rv == AIO_CANCELED)
 		return -EIO;
-	
+
+	/* Functions that depend on the timeout might consider
+	 * the action failed even if it will complete if that
+	 * happened after the alloted time frame */
+
 	if (rv == AIO_NOTCANCELED)
-		goto wait_again;
+		return -EIO;
 
 	/* undefined error condition */
 	return -1;
 }
 
-static int do_read_aio(int fd, uint64_t offset, char *buf, int len)
+static int do_read_aio(int fd, uint64_t offset, char *buf, int len, int io_timeout_seconds)
 {
 	struct timespec ts;
 	struct aiocb cb;
@@ -218,7 +222,7 @@ static int do_read_aio(int fd, uint64_t offset, char *buf, int len)
 	int rv;
 
 	memset(&ts, 0, sizeof(struct timespec));
-	ts.tv_sec = to.io_timeout_seconds;
+	ts.tv_sec = io_timeout_seconds;
 
 	memset(&cb, 0, sizeof(struct aiocb));
 	p_cb = &cb;
@@ -232,7 +236,6 @@ static int do_read_aio(int fd, uint64_t offset, char *buf, int len)
 	if (rv < 0)
 		return -errno;
 
- wait_again:
 	rv = aio_suspend(&p_cb, 1, &ts);
 	if (!rv)
 		return 0;
@@ -250,7 +253,10 @@ static int do_read_aio(int fd, uint64_t offset, char *buf, int len)
 		return -EIO;
 
 	if (rv == AIO_NOTCANCELED)
-		goto wait_again;
+		/* Functions that depend on the timeout might consider
+		 * the action failed even if it will complete if that
+		 * happened apter the alloted time frame */
+		return -EIO;
 
 	/* undefined error condition */
 	return -1;
@@ -260,8 +266,9 @@ static int do_read_aio(int fd, uint64_t offset, char *buf, int len)
    the sync_disk itself begins at disk->offset (in bytes) from
    the start of the block device identified by disk->path */
 
-int write_sector(struct sync_disk *disk, uint32_t sector_nr,
-		 const char *data, int data_len, const char *blktype)
+int write_sector(const struct sync_disk *disk, uint32_t sector_nr,
+		 const char *data, int data_len, int io_timeout_seconds,
+		 const char *blktype)
 {
 	char *iobuf, **p_iobuf;
 	uint64_t offset;
@@ -290,10 +297,10 @@ int write_sector(struct sync_disk *disk, uint32_t sector_nr,
 	memset(iobuf, 0, iobuf_len);
 	memcpy(iobuf, data, data_len);
 
-	if (to.io_timeout_seconds < 0)
+	if (io_timeout_seconds < 0)
 		rv = do_write(disk->fd, offset, iobuf, iobuf_len);
 	else
-		rv = do_write_aio(disk->fd, offset, iobuf, iobuf_len);
+		rv = do_write_aio(disk->fd, offset, iobuf, iobuf_len, io_timeout_seconds);
 
 	if (rv < 0)
 		log_error(NULL, "write_sector %s offset %llu rv %d %s",
@@ -309,9 +316,9 @@ int write_sector(struct sync_disk *disk, uint32_t sector_nr,
    when reading multiple sectors, data_len will generally equal iobuf_len,
    but when reading one sector, data_len may be less than iobuf_len. */
 
-int read_sectors(struct sync_disk *disk, uint32_t sector_nr,
+int read_sectors(const struct sync_disk *disk, uint32_t sector_nr,
 	 	 uint32_t sector_count, char *data, int data_len,
-		 const char *blktype)
+		 int io_timeout_seconds, const char *blktype)
 {
 	char *iobuf, **p_iobuf;
 	uint64_t offset;
@@ -332,10 +339,10 @@ int read_sectors(struct sync_disk *disk, uint32_t sector_nr,
 
 	memset(iobuf, 0, iobuf_len);
 
-	if (to.io_timeout_seconds < 0)
+	if (io_timeout_seconds < 0)
 		rv = do_read(disk->fd, offset, iobuf, iobuf_len);
 	else
-		rv = do_read_aio(disk->fd, offset, iobuf, iobuf_len);
+		rv = do_read_aio(disk->fd, offset, iobuf, iobuf_len, io_timeout_seconds);
 
 	if (!rv) {
 		memcpy(data, iobuf, data_len);
