@@ -28,6 +28,18 @@
 #include "log.h"
 #include "diskio.h"
 
+struct client {
+	int fd;
+	void *workfn;
+	void *deadfn;
+};
+
+#define CLIENT_NALLOC 32 /* TODO: set lower to test more expanding */
+static int client_maxi;
+static int client_size = 0;
+static struct client *client = NULL;
+static struct pollfd *pollfd = NULL;
+
 /* priorities are LOG_* from syslog.h */
 int log_logfile_priority = LOG_ERR;
 int log_syslog_priority = LOG_ERR;
@@ -56,14 +68,75 @@ int killscript_pid;
 int killing_supervise_pid;
 int external_shutdown;
 
-static void process_listener(void);
-
 struct cmd_acquire_args {
 	int sock;
 	int token_count;
 	int token_ids[MAX_LEASE_ARGS];
 	struct sm_header h_recv;
 };
+
+static void client_alloc(void)
+{
+	int i;
+
+	if (!client) {
+		client = malloc(CLIENT_NALLOC * sizeof(struct client));
+		pollfd = malloc(CLIENT_NALLOC * sizeof(struct pollfd));
+	} else {
+		client = realloc(client, (client_size + CLIENT_NALLOC) *
+					 sizeof(struct client));
+		pollfd = realloc(pollfd, (client_size + CLIENT_NALLOC) *
+					 sizeof(struct pollfd));
+		if (!pollfd)
+			log_error(NULL, "can't alloc for pollfd");
+	}
+	if (!client || !pollfd)
+		log_error(NULL, "can't alloc for client array");
+
+	for (i = client_size; i < client_size + CLIENT_NALLOC; i++) {
+		client[i].workfn = NULL;
+		client[i].deadfn = NULL;
+		client[i].fd = -1;
+		pollfd[i].fd = -1;
+		pollfd[i].revents = 0;
+	}
+	client_size += CLIENT_NALLOC;
+}
+
+static void client_dead(int ci)
+{
+	close(client[ci].fd);
+	client[ci].workfn = NULL;
+	client[ci].fd = -1;
+	pollfd[ci].fd = -1;
+}
+
+static int client_add(int fd, void (*workfn)(int ci), void (*deadfn)(int ci))
+{
+	int i;
+
+	if (!client)
+		client_alloc();
+ again:
+	for (i = 0; i < client_size; i++) {
+		if (client[i].fd == -1) {
+			client[i].workfn = workfn;
+			if (deadfn)
+				client[i].deadfn = deadfn;
+			else
+				client[i].deadfn = client_dead;
+			client[i].fd = fd;
+			pollfd[i].fd = fd;
+			pollfd[i].events = POLLIN;
+			if (i > client_maxi)
+				client_maxi = i;
+			return i;
+		}
+	}
+
+	client_alloc();
+	goto again;
+}
 
 static int check_killscript_pid(void)
 {
@@ -272,13 +345,10 @@ static int wait_acquire_results(int token_count, int *token_ids)
 
 static int main_loop(void)
 {
-	struct pollfd pollfd[1];
 	int poll_timeout = to.unstable_poll_ms;
-	int rv, pid_status;
-
-	memset(&pollfd, 0, sizeof(pollfd));
-	pollfd[0].fd = listener_socket;
-	pollfd[0].events = POLLIN;
+	int i, rv, pid_status;
+	void (*workfn) (int ci);
+	void (*deadfn) (int ci);
 
 	while (1) {
 		/*
@@ -286,7 +356,7 @@ static int main_loop(void)
 		 * status, adding/deleting leases, etc.
 		 */
 
-		rv = poll(pollfd, 1, poll_timeout);
+		rv = poll(pollfd, client_maxi + 1, poll_timeout);
 		if (rv == -1 && errno == EINTR)
 			continue;
 		if (rv < 0) {
@@ -294,13 +364,18 @@ static int main_loop(void)
 			   i.e. kill pid / release leases, or continue
 			   running with no poll? */
 		}
-		if (rv > 0) {
-			if (pollfd[0].revents & POLLIN)
-				process_listener();
-			if (pollfd[0].revents & (POLLERR | POLLHUP | POLLNVAL)) {
-				close(pollfd[0].fd);
-				pollfd[0].fd = -1;
-				pollfd[0].events = 0;
+		for (i = 0; i <= client_maxi; i++) {
+			if (client[i].fd < 0)
+				continue;
+			if (pollfd[i].revents & POLLIN) {
+				workfn = client[i].workfn;
+				workfn(i);
+			}
+			if (pollfd[i].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+				deadfn = client[i].deadfn;
+				if (deadfn)
+					deadfn(i);
+				client_dead(i);
 			}
 		}
 
@@ -706,7 +781,7 @@ static void cmd_set_host_id(int fd, struct sm_header *h_recv)
 	send(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
 }
 
-static void process_listener(void)
+static void process_listener(int ci GNUC_UNUSED)
 {
 	struct sm_header h;
 	int fd, rv, auto_close = 1;
@@ -886,6 +961,7 @@ static int do_daemon(int token_count, struct token *token_args[])
 	rv = setup_listener();
 	if (rv < 0)
 		goto out_lockfile;
+	client_add(listener_socket, process_listener, NULL);
 
 	for (i = 0; i < token_count; i++) {
 		rv = add_lease_thread(token_args[i], &token_ids[i]);
