@@ -282,15 +282,6 @@ static int main_loop(void)
 
 	while (1) {
 		/*
-		 * Use this main thread to write log entries to logfile
-		 * and/or syslog.  There's some risk that writing could
-		 * block for longer than we want.. could dedicate a new
-		 * thread to writing log files if needed.
-		 */
-
-		write_log_ents();
-
-		/*
 		 * Poll events arrive from external tool(s) querying
 		 * status, adding/deleting leases, etc.
 		 */
@@ -922,7 +913,7 @@ static int do_daemon(int token_count, struct token *token_args[])
  out_lockfile:
 	unlink_lockfile(fd, DAEMON_LOCKFILE_DIR, options.sm_id);
  out:
-	write_log_ents();
+	close_logging();
 	return rv;
 }
 
