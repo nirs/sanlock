@@ -13,6 +13,7 @@ enum {
 	SM_CMD_SET_TIMEOUTS,
 	SM_CMD_SUPERVISE,
 	SM_CMD_SET_HOST_ID,
+	SM_CMD_REGISTER
 };
 
 struct sm_header {
@@ -74,5 +75,10 @@ struct sm_disk_info {
 	uint64_t offset;
 	char path[DISK_PATH_LEN];
 };
+
+int setup_listener_socket(const char* name, int length, int* listener_socket);
+int connect_socket(const char* name, int length, int* sock_fd);
+int send_header(int sock, int cmd, uint32_t data);
+int recv_header(int sock, struct sm_header* header);
 
 #endif

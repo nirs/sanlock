@@ -80,8 +80,8 @@ def readState(stream, numOfHosts = 0):
     return (leader, tuple(dblocks))
 
 
-DUMMY_CMD = ["/usr/bin/sudo", "-u", pwd.getpwuid(os.geteuid())[0], os.path.abspath("./dummy.py")]
-#DUMMY_CMD = [os.path.abspath("./dummy.py")]
+#DUMMY_CMD = ["/usr/bin/sudo", "-u", pwd.getpwuid(os.geteuid())[0], os.path.abspath("./dummy.py")]
+DUMMY_CMD = [os.path.abspath("./dummy.py")]
 
 class Dummy(object):
     _log = logging.getLogger("Dummy");

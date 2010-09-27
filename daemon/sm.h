@@ -48,6 +48,11 @@
 #define DAEMON_LOCKFILE_DIR "/var/run/sync_manager/daemon_lockfiles/"
 #define RESOURCE_LOCKFILE_DIR "/var/run/sync_manager/resource_lockfiles/"
 
+#define MAIN_SOCKET_NAME "main"
+
+#define DEFAULT_IO_TIMEOUT_SECONDS 60
+
+#define SMERR_UNREGISTERED -501;
 /*
  * lease_timeout_seconds
  * disk paxos takes over lease if it's not been renewed for this long

@@ -724,26 +724,10 @@ static void process_listener(void)
 	if (fd < 0)
 		return;
 
-	//TODO : make sure that the connecting process is the managed process
-
-	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
-
-	if (rv != sizeof(h)) {
-		log_error(NULL, "header recv %d", rv);
+	rv = recv_header(fd, &h);
+	if (rv < 0) {
 		return;
 	}
-
-	if (h.magic != SM_MAGIC) {
-		log_error(NULL, "header magic %x", h.magic);
-		return;
-	}
-
-	if (strcmp(options.sm_id, h.sm_id)) {
-		log_error(NULL, "header sm_id %s", h.sm_id);
-		return;
-	}
-
-	log_debug(NULL, "cmd %d fd %d", h.cmd, fd);
 
 	switch (h.cmd) {
 	case SM_CMD_ACQUIRE:
@@ -790,46 +774,8 @@ static void process_listener(void)
 
 static int setup_listener(void)
 {
-	char path[PATH_MAX];
-	struct sockaddr_un addr;
-	socklen_t addrlen;
-	int rv, s;
-
-	s = socket(AF_LOCAL, SOCK_STREAM, 0);
-	if (s < 0) {
-		log_error(NULL, "socket error %d %d", s, errno);
-		return s;
-	}
-
-	snprintf(path, PATH_MAX, "%s/%s", DAEMON_SOCKET_DIR, options.sm_id);
-
-	memset(&addr, 0, sizeof(struct sockaddr_un));
-	addr.sun_family = AF_LOCAL;
-	strncpy(&addr.sun_path[1], path, PATH_MAX - 1);
-	addrlen = sizeof(sa_family_t) + strlen(addr.sun_path+1) + 1;
-
-	rv = bind(s, (struct sockaddr *) &addr, addrlen);
-	if (rv < 0) {
-		log_error(NULL, "bind error %d %d", rv, errno);
-		close(s);
-		return rv;
-	}
-
-	rv = listen(s, 5);
-	if (rv < 0) {
-		log_error(NULL, "listen error %d %d", rv, errno);
-		close(s);
-		return rv;
-	}
-
-	rv = fchmod(s, 666);
-	if (rv < 0) {
-		log_error(NULL, "permission change error %d %d", rv, errno);
-		close(s);
-		return rv;
-	}
-	listener_socket = s;
-	return 0;
+	return setup_listener_socket(MAIN_SOCKET_NAME,
+                                sizeof(MAIN_SOCKET_NAME), &listener_socket);
 }
 
 static void sigterm_handler(int sig GNUC_UNUSED)
@@ -877,6 +823,29 @@ static int make_dirs(void)
 	return rv;
 }
 
+/* FIXME: temp func to let everything still work while I move
+ *        all the commands to the lib and create a cli util */
+
+static int send_command(int cmd, uint32_t data) {
+	int rv, sock;
+	rv = connect_socket(MAIN_SOCKET_NAME, sizeof(MAIN_SOCKET_NAME),
+	                    &sock);
+	if (rv < 0) {
+		return -1;
+	}
+
+	rv = send_header(sock, cmd, data);
+	if (rv < 0) {
+		goto clean;
+	}
+
+	return sock;
+
+ clean:
+	close(sock);
+	return rv;
+}
+
 static int do_daemon(int token_count, struct token *token_args[])
 {
 	int token_ids[MAX_LEASE_ARGS];
@@ -904,7 +873,7 @@ static int do_daemon(int token_count, struct token *token_args[])
 	to.sigterm_shutdown_seconds = 10;
 	to.stable_poll_ms = 2000;
 	to.unstable_poll_ms = 500;
-	to.io_timeout_seconds = 60;
+	to.io_timeout_seconds = DEFAULT_IO_TIMEOUT_SECONDS;
 
 	memset(&act, 0, sizeof(act));
 	act.sa_handler = sigterm_handler;
@@ -957,53 +926,6 @@ static int do_daemon(int token_count, struct token *token_args[])
 	return rv;
 }
 
-static int send_header(int cmd, uint32_t data)
-{
-	char path[PATH_MAX];
-	struct sockaddr_un addr;
-	socklen_t addrlen;
-	struct sm_header header;
-	int rv, sock;
-
-	sock = socket(AF_LOCAL, SOCK_STREAM, 0);
-	if (sock < 0) {
-		log_tool("socket error %d %d", sock, errno);
-		return sock;
-	}
-
-	snprintf(path, PATH_MAX, "%s/%s", DAEMON_SOCKET_DIR, options.sm_id);
-	log_tool("connecting to socket '%s'", path);
-
-	memset(&addr, 0, sizeof(struct sockaddr_un));
-	addr.sun_family = AF_LOCAL;
-	strncpy(&addr.sun_path[1], path, PATH_MAX - 1);
-	addrlen = sizeof(sa_family_t) + strlen(addr.sun_path+1) + 1;
-
-	rv = connect(sock, (struct sockaddr *) &addr, addrlen);
-	if (rv < 0) {
-		log_tool("connect error %d %d", rv, errno);
-		close(sock);
-		return rv;
-	}
-
-	memset(&header, 0, sizeof(struct sm_header));
-	header.magic = SM_MAGIC;
-	header.cmd = cmd;
-	header.data = data;
-	strncpy(&header.sm_id[0], options.sm_id, NAME_ID_SIZE);
-
-	log_tool("send_header cmd %d data %u sm_id %s",
-		 cmd, data, header.sm_id);
-
-	rv = send(sock, (void *) &header, sizeof(struct sm_header), 0);
-	if (rv < 0) {
-		log_tool("send error %d %d", rv, errno);
-		close(sock);
-		return rv;
-	}
-
-	return sock;
-}
 
 static int do_init(int token_count, struct token *token_args[],
 		   int init_num_hosts, int init_max_hosts)
@@ -1037,7 +959,7 @@ static int do_set_host_id(void)
 	struct sm_header h;
 	int sock, rv;
 
-	sock = send_header(SM_CMD_SET_HOST_ID, options.our_host_id);
+	sock = send_command(SM_CMD_SET_HOST_ID, options.our_host_id);
 	if (sock < 0)
 		return sock;
 
@@ -1061,7 +983,7 @@ static int do_acquire(int token_count, struct token *token_args[])
 	int token_ids[MAX_LEASE_ARGS];
 	int sock, rv, i;
 
-	sock = send_header(SM_CMD_ACQUIRE, token_count);
+	sock = send_command(SM_CMD_ACQUIRE, token_count);
 	if (sock < 0)
 		return sock;
 
@@ -1118,7 +1040,7 @@ static int do_release(int token_count, struct token *token_args[])
 	int results[MAX_LEASE_ARGS];
 	int sock, rv, i;
 
-	sock = send_header(SM_CMD_RELEASE, token_count);
+	sock = send_command(SM_CMD_RELEASE, token_count);
 	if (sock < 0)
 		return sock;
 
@@ -1161,8 +1083,7 @@ static int do_shutdown(void)
 {
 	struct sm_header h;
 	int fd, rv;
-
-	fd = send_header(SM_CMD_SHUTDOWN, 0);
+	fd = send_command(SM_CMD_SHUTDOWN, 0);
 	if (fd < 0)
 		return fd;
 
@@ -1181,7 +1102,7 @@ static int do_supervise(uint32_t pid)
 	struct sm_header h;
 	int fd, rv;
 
-	fd = send_header(SM_CMD_SUPERVISE, pid);
+	fd = send_command(SM_CMD_SUPERVISE, pid);
 	if (fd < 0)
 		return fd;
 
@@ -1205,7 +1126,7 @@ static int do_status(void)
 	int i, fd, rv, len, d;
 	int tokens_copied = 0, disks_copied = 0;
 
-	fd = send_header(SM_CMD_STATUS, 0);
+	fd = send_command(SM_CMD_STATUS, 0);
 	if (fd < 0)
 		return fd;
 
@@ -1293,7 +1214,7 @@ static int do_log_dump(void)
 	char *buf;
 	int fd, rv, len;
 
-	fd = send_header(SM_CMD_LOG_DUMP, 0);
+	fd = send_command(SM_CMD_LOG_DUMP, 0);
 	if (fd < 0)
 		return fd;
 
