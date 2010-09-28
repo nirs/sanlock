@@ -62,7 +62,6 @@ int cluster_mode;
 int cmd_argc;
 char **cmd_argv;
 
-int listener_socket;
 int supervise_pid;
 int killscript_pid;
 int killing_supervise_pid;
@@ -781,14 +780,11 @@ static void cmd_set_host_id(int fd, struct sm_header *h_recv)
 	send(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
 }
 
-static void process_listener(int ci GNUC_UNUSED)
+static void process_connection(int ci)
 {
 	struct sm_header h;
-	int fd, rv, auto_close = 1;
-
-	fd = accept(listener_socket, NULL, NULL);
-	if (fd < 0)
-		return;
+	int rv, auto_close = 1;
+	int fd = client[ci].fd;
 
 	rv = recv_header(fd, &h);
 	if (rv < 0) {
@@ -835,13 +831,31 @@ static void process_listener(int ci GNUC_UNUSED)
 	};
 
 	if (auto_close)
-		close(fd);
+		close(client[ci].fd);
+}
+
+static void process_listener(int ci GNUC_UNUSED)
+{
+	int fd;
+
+	fd = accept(client[ci].fd, NULL, NULL);
+	if (fd < 0)
+		return;
+
+	client_add(fd, process_connection, NULL);
 }
 
 static int setup_listener(void)
 {
-	return setup_listener_socket(MAIN_SOCKET_NAME,
-                                sizeof(MAIN_SOCKET_NAME), &listener_socket);
+	int rv, fd;
+
+	rv = setup_listener_socket(MAIN_SOCKET_NAME,
+				   sizeof(MAIN_SOCKET_NAME), &fd);
+	if (rv < 0)
+		return rv;
+
+	client_add(fd, process_listener, NULL);
+	return 0;
 }
 
 static void sigterm_handler(int sig GNUC_UNUSED)
@@ -961,7 +975,6 @@ static int do_daemon(int token_count, struct token *token_args[])
 	rv = setup_listener();
 	if (rv < 0)
 		goto out_lockfile;
-	client_add(listener_socket, process_listener, NULL);
 
 	for (i = 0; i < token_count; i++) {
 		rv = add_lease_thread(token_args[i], &token_ids[i]);
