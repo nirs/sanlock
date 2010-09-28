@@ -30,6 +30,7 @@
 
 struct client {
 	int fd;
+	int pid;
 	void *workfn;
 	void *deadfn;
 };
@@ -780,11 +781,83 @@ static void cmd_set_host_id(int fd, struct sm_header *h_recv)
 	send(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
 }
 
+static int recv_pid(int fd, int *pid)
+{
+	struct msghdr msg;
+	struct cmsghdr *cmsg;
+	struct iovec iov;
+	struct ucred cred;
+	char tmp[CMSG_SPACE(sizeof(struct ucred))];
+	char ch;
+	int n;
+
+	memset(&msg, 0, sizeof(msg));
+
+	iov.iov_base = &ch;
+	iov.iov_len = 1;
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+	msg.msg_control = tmp;
+	msg.msg_controllen = sizeof(tmp);
+
+	n = recvmsg(fd, &msg, 0);
+	if (n != 1)
+		return -1;
+
+	cmsg = CMSG_FIRSTHDR(&msg);
+
+	if (cmsg->cmsg_level == SOL_SOCKET &&
+	    cmsg->cmsg_type  == SCM_CREDENTIALS) {
+		memcpy(&cred, CMSG_DATA(cmsg), sizeof(struct ucred));
+		*pid = cred.pid;
+		return 0;
+	}
+
+	return -1;
+}
+
+static int send_pid(int fd)
+{
+	struct msghdr msg;
+	struct cmsghdr *cmsg;
+	struct iovec iov;
+	struct ucred cred;
+	char tmp[CMSG_SPACE(sizeof(int))];
+	char ch = '\0';
+	ssize_t n;
+
+	cred.pid = getpid();
+	cred.uid = getuid();
+	cred.gid = getgid();
+
+	memset(&msg, 0, sizeof(msg));
+
+	msg.msg_control = (caddr_t)tmp;
+	msg.msg_controllen = CMSG_LEN(sizeof(struct ucred));
+	cmsg = CMSG_FIRSTHDR(&msg);
+	cmsg->cmsg_level = SOL_SOCKET;
+	cmsg->cmsg_type = SCM_CREDENTIALS;
+	cmsg->cmsg_len = CMSG_LEN(sizeof(struct ucred));
+	memcpy(CMSG_DATA(cmsg), &cred, sizeof(struct ucred));
+
+	iov.iov_base = &ch;
+	iov.iov_len = 1;
+	msg.msg_iov = &iov;
+	msg.msg_iovlen = 1;
+
+	n = sendmsg(fd, &msg, 0);
+	if (n < 0)
+		return -1;
+
+	return 0;
+}
+
 static void process_connection(int ci)
 {
 	struct sm_header h;
 	int rv, auto_close = 1;
 	int fd = client[ci].fd;
+	int pid;
 
 	rv = recv_header(fd, &h);
 	if (rv < 0) {
@@ -805,6 +878,8 @@ static void process_connection(int ci)
 	case SM_CMD_SUPERVISE:
 		if (!supervise_pid)
 			supervise_pid = h.data;
+		recv_pid(fd, &pid);
+		client[ci].pid = pid;
 		break;
 	case SM_CMD_STATUS:
 		cmd_status(fd, &h);
@@ -837,10 +912,13 @@ static void process_connection(int ci)
 static void process_listener(int ci GNUC_UNUSED)
 {
 	int fd;
+	int on = 1;
 
 	fd = accept(client[ci].fd, NULL, NULL);
 	if (fd < 0)
 		return;
+
+	setsockopt(fd, SOL_SOCKET, SO_PASSCRED, &on, sizeof(on));
 
 	client_add(fd, process_connection, NULL);
 }
@@ -1185,6 +1263,8 @@ static int do_supervise(uint32_t pid)
 	fd = send_command(SM_CMD_SUPERVISE, pid);
 	if (fd < 0)
 		return fd;
+
+	send_pid(fd);
 
 	memset(&h, 0, sizeof(h));
 
