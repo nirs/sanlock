@@ -141,6 +141,32 @@ static int do_write(int fd, uint64_t offset, const char *buf, int len)
 	return 0;
 }
 
+static int do_write_loop(int fd, uint64_t offset, const char *buf, int len)
+{
+	off_t ret;
+	int rv;
+	int pos = 0;
+
+	ret = lseek(fd, offset, SEEK_SET);
+	if (ret != offset)
+		return -errno;
+
+ retry:
+	rv = write(fd, buf + pos, len);
+	if (rv == -1 && errno == EINTR)
+		goto retry;
+	if (rv < 0)
+		return -errno;
+
+	if (rv != len) {
+		len -= rv;
+		pos += rv;
+		goto retry;
+	}
+
+	return 0;
+}
+
 static int do_read(int fd, uint64_t offset, char *buf, int len)
 {
 	off_t ret;
@@ -264,7 +290,8 @@ static int do_read_aio(int fd, uint64_t offset, char *buf, int len, int io_timeo
 
 /* sector_nr is logical sector number within the sync_disk.
    the sync_disk itself begins at disk->offset (in bytes) from
-   the start of the block device identified by disk->path */
+   the start of the block device identified by disk->path,
+   data_len must be <= sector_size */
 
 int write_sector(const struct sync_disk *disk, uint32_t sector_nr,
 		 const char *data, int data_len, int io_timeout_seconds,
@@ -304,6 +331,51 @@ int write_sector(const struct sync_disk *disk, uint32_t sector_nr,
 
 	if (rv < 0)
 		log_error(NULL, "write_sector %s offset %llu rv %d %s",
+			  blktype, (unsigned long long)offset, rv, disk->path);
+	free(iobuf);
+ out:
+	return rv;
+}
+
+/* write multiple complete sectors, data_len must be multiple of sector size */
+
+int write_sectors(const struct sync_disk *disk, uint32_t sector_nr,
+		  uint32_t sector_count, const char *data, int data_len,
+		  int io_timeout_seconds, const char *blktype)
+{
+	char *iobuf, **p_iobuf;
+	uint64_t offset;
+	int iobuf_len = data_len;
+	int rv;
+
+	if (data_len != sector_count * disk->sector_size) {
+		log_error(NULL, "write_sectors %s data_len %d sector_count %d %s",
+			  blktype, data_len, sector_count, disk->path);
+		rv = -1;
+		goto out;
+	}
+
+	offset = disk->offset + (sector_nr * disk->sector_size);
+
+	p_iobuf = &iobuf;
+
+	rv = posix_memalign((void *)p_iobuf, getpagesize(), iobuf_len);
+	if (rv) {
+		log_error(NULL, "write_sectors %s posix_memalign rv %d %s",
+			  blktype, rv, disk->path);
+		rv = -1;
+		goto out;
+	}
+
+	memcpy(iobuf, data, data_len);
+
+	if (io_timeout_seconds < 0)
+		rv = do_write_loop(disk->fd, offset, iobuf, iobuf_len);
+	else
+		rv = do_write_aio(disk->fd, offset, iobuf, iobuf_len, io_timeout_seconds);
+
+	if (rv < 0)
+		log_error(NULL, "write_sectors %s offset %llu rv %d %s",
 			  blktype, (unsigned long long)offset, rv, disk->path);
 	free(iobuf);
  out:

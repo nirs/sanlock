@@ -19,6 +19,10 @@ int write_sector(const struct sync_disk *disk, uint32_t sector_nr,
 		 const char *data, int data_len, int io_timeout_seconds,
 		 const char *blktype);
 
+int write_sectors(const struct sync_disk *disk, uint32_t sector_nr,
+		  uint32_t sector_count, const char *data, int data_len,
+		  int io_timeout_seconds, const char *blktype);
+
 int read_sectors(const struct sync_disk *disk, uint32_t sector_nr,
 	 	 uint32_t sector_count, char *data, int data_len,
 		 int io_timeout_seconds, const char *blktype);
