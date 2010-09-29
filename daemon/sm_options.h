@@ -2,9 +2,9 @@
 #define __SM_OPTIONS_H__
 
 struct sm_options {
-	char sm_id[NAME_ID_SIZE + 1];
 	int opt_watchdog;
 	int our_host_id;
+	int pid;
 };
 
 extern struct sm_options options;

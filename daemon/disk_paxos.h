@@ -32,18 +32,6 @@ enum {
 	DP_BAD_SECTORSIZE = -26,
 };
 
-/* Once token and token->disks are initialized by the main loop, the only
-   fields that are modified are disk fd's by open_disks() in the lease
-   threads. */
-
-struct token {
-	int idx;
-	int token_id;
-	int num_disks;
-	char resource_name[NAME_ID_SIZE];
-	struct sync_disk *disks;
-};
-
 /* for all disk structures:
    uint64 aligned on 8 byte boundaries,
    uint32 aligned on 4 byte boundaries, etc */
@@ -89,6 +77,19 @@ struct paxos_dblock {
 	uint64_t lver; /* leader version */
 };
 
+/* Once token and token->disks are initialized by the main loop, the only
+   fields that are modified are disk fd's by open_disks() in the lease
+   threads. */
+
+struct token {
+	int idx;
+	int token_id;
+	int num_disks;
+	int acquire_result;
+	struct sync_disk *disks;
+	struct leader_record leader;
+	char resource_name[NAME_ID_SIZE];
+};
 
 int majority_disks(struct token *token, int num);
 int disk_paxos_acquire(struct token *token, int force,

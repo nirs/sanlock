@@ -50,21 +50,23 @@
 
 #define MAIN_SOCKET_NAME "main"
 
+#define DAEMON_NAME "daemon"
+
 #define DEFAULT_IO_TIMEOUT_SECONDS 60
 
 #define SMERR_UNREGISTERED -501;
 /*
- * lease_timeout_seconds
- * disk paxos takes over lease if it's not been renewed for this long
+ * host_timeout_seconds
+ * disk paxos takes over lease if host_id hasn't been renewed for this long
  *
- * lease_renewal_warn_seconds
- * sm emits a warning message if a lease hasn't renewed in this time
+ * host_renewal_warn_seconds
+ * sm emits a warning message if its host_id hasn't been renewed in this time
  *
- * lease_renewal_fail_seconds
- * sm starts recovery if one of its leases hasn't renewed in this time
+ * host_renewal_fail_seconds
+ * sm starts recovery if its host_id hasn't renewed in this time
  *
- * lease_renewal_seconds
- * sm tries to renew a lease this often
+ * host_renewal_seconds
+ * sm tries to renew its host_id this often
  *
  * script_shutdown_seconds
  * use killscript if this many seconds remain (or >) until lease can be taken
@@ -80,10 +82,10 @@
  */
 
 struct sm_timeouts {
-	int lease_timeout_seconds;
-	int lease_renewal_warn_seconds;
-	int lease_renewal_fail_seconds;
-	int lease_renewal_seconds;
+	int host_timeout_seconds;
+	int host_renewal_warn_seconds;
+	int host_renewal_fail_seconds;
+	int host_renewal_seconds;
 	int script_shutdown_seconds;
 	int sigterm_shutdown_seconds;
 	int stable_poll_ms;

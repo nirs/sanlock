@@ -436,16 +436,21 @@ static int leaders_match(struct leader_record *a, struct leader_record *b)
 	return 0;
 }
 
+/* TODO */
+static int host_id_alive(uint64_t host_id GNUC_UNUSED)
+{
+	return 1;
+}
+
 static int get_prev_leader(struct token *token, int force,
 			   struct leader_record *leader_out)
 {
 	struct leader_record prev_leader;
-	struct leader_record tmp_leader;
 	struct leader_record *leaders;
 	struct request_record req;
 	int *leader_reps;
 	int leaders_len, leader_reps_len;
-	int num_reads, num_writes, num_free, num_diff;
+	int num_reads, num_writes, num_free;
 	int num_disks = token->num_disks;
 	int rv, d, i, found;
 	int error;
@@ -586,34 +591,25 @@ static int get_prev_leader(struct token *token, int force,
 	}
 
 	/*
-	 * check if current leader fails to update lease
+	 * check if current leader fails to update its host_id lock
 	 */
 
-	log_debug(token, "wait lease_timeout_seconds %u",
-		  to.lease_timeout_seconds);
+	log_debug(token, "wait host_timeout_seconds %u",
+		  to.host_timeout_seconds);
 
-	for (i = 0; i < to.lease_timeout_seconds; i++) {
+	for (i = 0; i < to.host_timeout_seconds; i++) {
 		sleep(1);
-		num_diff = 0;
 
-		for (d = 0; d < num_disks; d++) {
-			rv = read_leader(&token->disks[d], &tmp_leader);
-			if (rv < 0)
-				continue;
-
-			if (memcmp(&leaders[d], &tmp_leader, sizeof(struct leader_record)))
-				num_diff++;
-		}
-
-		if (majority_disks(token, num_diff)) {
-			log_error(token, "lease renewed on majority %d disks",
-				  num_diff);
+		if (host_id_alive(prev_leader.owner_id)) {
+			log_error(token, "leader alive owner_id %llu",
+				  (unsigned long long)prev_leader.owner_id);
 			error = DP_LIVE_LEADER;
 			goto fail;
 		}
 	}
 
-	log_debug(token, "lease timeout on majority of disks");
+	log_debug(token, "leader timeout owner_id %llu",
+		  (unsigned long long)prev_leader.owner_id);
  out:
 	memcpy(leader_out, &prev_leader, sizeof(struct leader_record));
 	return DP_OK;

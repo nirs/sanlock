@@ -100,7 +100,7 @@ int create_watchdog_file(int token_id, uint64_t timestamp)
 	if (!options.opt_watchdog)
 		return 0;
 
-	snprintf(path, PATH_MAX, "%s/%s_%d", DAEMON_WATCHDOG_DIR, options.sm_id,
+	snprintf(path, PATH_MAX, "%s/%s_%d", DAEMON_WATCHDOG_DIR, DAEMON_NAME,
 		 token_id);
 
 	fd = open(path, O_WRONLY|O_CREAT|O_EXCL|O_NONBLOCK, 0666);
@@ -124,7 +124,7 @@ void unlink_watchdog_file(int token_id, int fd)
 	if (!options.opt_watchdog)
 		return;
 
-	snprintf(path, PATH_MAX, "%s/%s_%d", DAEMON_WATCHDOG_DIR, options.sm_id,
+	snprintf(path, PATH_MAX, "%s/%s_%d", DAEMON_WATCHDOG_DIR, DAEMON_NAME,
 		 token_id);
 
 	unlink(path);

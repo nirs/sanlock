@@ -107,8 +107,8 @@ void log_level(const struct token *token, int level, const char *fmt, ...)
 
 	pthread_mutex_lock(&log_mutex);
 
-	ret = snprintf(log_str + pos, len - pos, "%s %ld %s ",
-		       options.sm_id, time(NULL), name);
+	ret = snprintf(log_str + pos, len - pos, "%ld %s ",
+		       time(NULL), name);
 	pos += ret;
 
 	va_start(ap, fmt);
@@ -223,7 +223,7 @@ int setup_logging(void)
 {
 	int fd, rv;
 
-	snprintf(logfile_path, PATH_MAX, "%s/%s", SM_LOG_DIR, options.sm_id);
+	snprintf(logfile_path, PATH_MAX, "%s/%s", SM_LOG_DIR, DAEMON_NAME);
 
 	logfile_fp = fopen(logfile_path, "a+");
 	if (logfile_fp) {

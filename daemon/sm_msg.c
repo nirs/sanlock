@@ -121,10 +121,8 @@ int send_header(int sock, int cmd, uint32_t data)
 	header.magic = SM_MAGIC;
 	header.cmd = cmd;
 	header.data = data;
-	strncpy(&header.sm_id[0], options.sm_id, NAME_ID_SIZE);
 
-	log_tool("send_header cmd %d data %u sm_id %s",
-		 cmd, data, header.sm_id);
+	log_tool("send_header cmd %d data %u", cmd, data);
 
 	rv = send(sock, (void *) &header, sizeof(struct sm_header), 0);
 	if (rv < 0) {
@@ -141,8 +139,10 @@ int recv_header(int sock, struct sm_header *header)
 
 	rv = recv(sock, header, sizeof(struct sm_header), MSG_WAITALL);
 
+	log_debug(NULL, "recv_header rv %d", rv);
+
 	if (rv != sizeof(struct sm_header)) {
-		log_error(NULL, "header recv %d", rv);
+		log_error(NULL, "header recv %d %d", rv, errno);
 		return -1;
 	}
 
@@ -151,11 +151,5 @@ int recv_header(int sock, struct sm_header *header)
 		return -1;
 	}
 
-	if (strcmp(options.sm_id, header->sm_id)) {
-		log_error(NULL, "header sm_id %s", header->sm_id);
-		return -1;
-	}
-
-	log_debug(NULL, "cmd %d fd %d", header->cmd, sock);
 	return 0;
 }
