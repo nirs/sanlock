@@ -59,11 +59,12 @@ int log_stderr_priority = LOG_ERR;
 #define ACT_LOG_DUMP	7
 #define ACT_SET_HOST_ID	8
 
-char command[COMMAND_MAX];
 int cluster_mode;
-int cmd_argc;
-char **cmd_argv;
-int external_shutdown;
+static int no_daemon_fork;
+static char command[COMMAND_MAX];
+static int cmd_argc;
+static char **cmd_argv;
+static int external_shutdown;
 static int token_id_counter = 1;
 
 struct cmd_acquire_args {
@@ -678,10 +679,6 @@ static void sigterm_handler(int sig GNUC_UNUSED)
 	external_shutdown = 1;
 }
 
-static void sigchld_handler(int sig GNUC_UNUSED)
-{
-}
-
 static int make_dirs(void)
 {
 	mode_t old_umask;
@@ -723,7 +720,21 @@ static int do_daemon(void)
 	struct sigaction act;
 	int fd, rv;
 
-	/* TODO: daemonize */
+	/* TODO: copy comprehensive daemonization method from libvirtd */
+
+	if (!no_daemon_fork) {
+		if (daemon(0, 0) < 0) {
+			log_tool("cannot fork daemon\n");
+			exit(EXIT_FAILURE);
+		}
+		umask(0);
+	}
+
+	memset(&act, 0, sizeof(act));
+	act.sa_handler = sigterm_handler;
+	rv = sigaction(SIGTERM, &act, NULL);
+	if (rv < 0)
+		return -rv;
 
 	/*
 	 * after creating dirs and setting up logging the daemon can
@@ -737,19 +748,6 @@ static int do_daemon(void)
 	}
 
 	setup_logging();
-
-	memset(&act, 0, sizeof(act));
-	act.sa_handler = sigterm_handler;
-	rv = sigaction(SIGTERM, &act, NULL);
-	if (rv < 0)
-		return -rv;
-
-	memset(&act, 0, sizeof(act));
-	act.sa_handler = sigchld_handler;
-	act.sa_flags = SA_NOCLDSTOP;
-	rv = sigaction(SIGCHLD, &act, NULL);
-	if (rv < 0)
-		return -rv;
 
 	fd = lockfile(NULL, DAEMON_LOCKFILE_DIR, DAEMON_NAME);
 	if (fd < 0)
@@ -826,7 +824,7 @@ static void print_usage(void)
 	printf("  -l LEASE		lease description, see below\n");
 
 	printf("\ndaemon [options]\n");
-	printf("  -D			print all logging to stderr\n");
+	printf("  -D			don't fork and print all logging to stderr\n");
 	printf("  -L <level>		write logging at level and up to logfile (-1 none)\n");
 	printf("  -S <level>		write logging at level and up to syslog (-1 none)\n");
 	printf("  -m <num>		cluster mode of hosts (default 0)\n");
@@ -1063,6 +1061,7 @@ static int read_args(int argc, char *argv[],
 
 		switch (optchar) {
 		case 'D':
+			no_daemon_fork = 1;
 			log_stderr_priority = LOG_DEBUG;
 			optionarg_used = 0;
 			break;
