@@ -145,39 +145,16 @@ static int find_client_pid(int pid)
 	return -1;
 }
 
-static int recv_pid(int fd, int *pid)
+static int get_peer_pid(int fd, int *pid)
 {
-	struct msghdr msg;
-	struct cmsghdr *cmsg;
-	struct iovec iov;
 	struct ucred cred;
-	char tmp[CMSG_SPACE(sizeof(struct ucred))];
-	char ch;
-	int n;
+	unsigned int cl = sizeof(cred);
 
-	memset(&msg, 0, sizeof(msg));
-
-	iov.iov_base = &ch;
-	iov.iov_len = 1;
-	msg.msg_iov = &iov;
-	msg.msg_iovlen = 1;
-	msg.msg_control = tmp;
-	msg.msg_controllen = sizeof(tmp);
-
-	n = recvmsg(fd, &msg, 0);
-	if (n != 1)
+	if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &cl) != 0)
 		return -1;
 
-	cmsg = CMSG_FIRSTHDR(&msg);
-
-	if (cmsg->cmsg_level == SOL_SOCKET &&
-	    cmsg->cmsg_type  == SCM_CREDENTIALS) {
-		memcpy(&cred, CMSG_DATA(cmsg), sizeof(struct ucred));
-		*pid = cred.pid;
-		return 0;
-	}
-
-	return -1;
+	*pid = cred.pid;
+	return 0;
 }
 
 static void pid_dead(int ci)
@@ -475,9 +452,9 @@ static void cmd_release(int fd, struct sm_header *h_recv)
 	memset(results, 0, sizeof(results));
 	stopped_count = 0;
 
-	rv = recv_pid(fd, &pid);
+	rv = get_peer_pid(fd, &pid);
 	if (rv < 0) {
-		log_error(NULL, "cmd_release fd %d recv_pid %d", fd, rv);
+		log_error(NULL, "cmd_release fd %d get_peer_pid %d", fd, rv);
 		return;
 	}
 
@@ -601,7 +578,7 @@ static void process_connection(int ci)
 
 	switch (h.cmd) {
 	case SM_CMD_REGISTER:
-		rv = recv_pid(fd, &pid);
+		rv = get_peer_pid(fd, &pid);
 		if (rv < 0)
 			break;
 		log_debug(NULL, "cmd_register ci %d pid %d", ci, pid);

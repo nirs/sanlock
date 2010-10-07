@@ -31,43 +31,6 @@
 
 /* TODO: make this file a library */
 
-static int send_pid(int fd, int pid)
-{
-	struct msghdr msg;
-	struct cmsghdr *cmsg;
-	struct iovec iov;
-	struct ucred cred;
-	char tmp[CMSG_SPACE(sizeof(int))];
-	char ch = '\0';
-	ssize_t n;
-
-	memset(&cred, 0, sizeof(struct ucred));
-	cred.pid = pid;
-
-	memset(&msg, 0, sizeof(msg));
-
-	msg.msg_control = (caddr_t)tmp;
-	msg.msg_controllen = CMSG_LEN(sizeof(struct ucred));
-	cmsg = CMSG_FIRSTHDR(&msg);
-	cmsg->cmsg_level = SOL_SOCKET;
-	cmsg->cmsg_type = SCM_CREDENTIALS;
-	cmsg->cmsg_len = CMSG_LEN(sizeof(struct ucred));
-	memcpy(CMSG_DATA(cmsg), &cred, sizeof(struct ucred));
-
-	iov.iov_base = &ch;
-	iov.iov_len = 1;
-	msg.msg_iov = &iov;
-	msg.msg_iovlen = 1;
-
-	log_tool("send_pid %d", cred.pid);
-
-	n = sendmsg(fd, &msg, 0);
-	if (n < 0)
-		return -1;
-
-	return 0;
-}
-
 int sm_register(void)
 {
 	int sock, rv;
@@ -77,12 +40,6 @@ int sm_register(void)
 		return rv;
 
 	rv = send_header(sock, SM_CMD_REGISTER, 0);
-	if (rv < 0) {
-		close(sock);
-		return rv;
-	}
-
-	rv = send_pid(sock, getpid());
 	if (rv < 0) {
 		close(sock);
 		return rv;
@@ -137,7 +94,7 @@ int sm_acquire(int sock, int token_count, struct token *token_args[])
    I don't think the pid itself will usually tell sm to release leases,
    but it will be requested by a manager overseeing the pid */
 
-int sm_release(int pid, int token_count, struct token *token_args[])
+int sm_release(int pid GNUC_UNUSED, int token_count, struct token *token_args[])
 {
 	struct sm_header h;
 	int results[MAX_LEASE_ARGS];
@@ -147,11 +104,9 @@ int sm_release(int pid, int token_count, struct token *token_args[])
 	if (rv < 0)
 		return rv;
 
-	rv = send_header(sock, SM_CMD_RELEASE, token_count);
-	if (rv < 0)
-		goto out;
+	/* TODO: send pid in header or after */
 
-	rv = send_pid(sock, pid);
+	rv = send_header(sock, SM_CMD_RELEASE, token_count);
 	if (rv < 0)
 		goto out;
 
