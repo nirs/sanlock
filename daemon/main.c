@@ -30,12 +30,17 @@
 #include "sm_client.h"
 
 struct client {
+	int used;
 	int fd;
 	int pid;
+	int acquire_done;
+	int need_release;
+	int pid_dead;
+	pthread_mutex_t mutex;
 	void *workfn;
 	void *deadfn;
 	struct token *tokens[MAX_LEASES];
-	pthread_t lease_threads[MAX_LEASE_ARGS];
+	pthread_t acquire_threads[MAX_LEASE_ARGS];
 };
 
 #define CLIENT_NALLOC 32 /* TODO: differently */
@@ -70,6 +75,7 @@ static int token_id_counter = 1;
 struct cmd_acquire_args {
 	int ci;
 	int token_count;
+	int thread_count;
 	int token_ids[MAX_LEASE_ARGS];
 	struct sm_header h_recv;
 };
@@ -94,6 +100,7 @@ static void client_alloc(void)
 
 	for (i = client_size; i < client_size + CLIENT_NALLOC; i++) {
 		memset(&client[i], 0, sizeof(struct client));
+		pthread_mutex_init(&client[i].mutex, NULL);
 		client[i].fd = -1;
 		pollfd[i].fd = -1;
 		pollfd[i].revents = 0;
@@ -104,6 +111,7 @@ static void client_alloc(void)
 static void client_dead(int ci)
 {
 	close(client[ci].fd);
+	client[ci].used = 0;
 	memset(&client[ci], 0, sizeof(struct client));
 	client[ci].fd = -1;
 	pollfd[ci].fd = -1;
@@ -117,10 +125,10 @@ static int client_add(int fd, void (*workfn)(int ci), void (*deadfn)(int ci))
 		client_alloc();
  again:
 	for (i = 0; i < client_size; i++) {
-		if (client[i].fd == -1) {
+		if (!client[i].used) {
+			client[i].used = 1;
 			client[i].workfn = workfn;
-			if (deadfn)
-				client[i].deadfn = deadfn;
+			client[i].deadfn = deadfn ? deadfn : client_dead;
 			client[i].fd = fd;
 			pollfd[i].fd = fd;
 			pollfd[i].events = POLLIN;
@@ -139,7 +147,7 @@ static int find_client_pid(int pid)
 	int i;
 
 	for (i = 0; i < client_size; i++) {
-		if (client[i].pid == pid)
+		if (client[i].used && client[i].pid == pid)
 			return i;
 	}
 	return -1;
@@ -157,27 +165,47 @@ static int get_peer_pid(int fd, int *pid)
 	return 0;
 }
 
-static void pid_dead(int ci)
+static void client_pid_dead(int ci)
 {
 	struct token **tokens;
-	int i;
+	struct client *cl = &client[ci];
+	int delay_release = 0;
+	int i, pid;
 
-	log_debug(NULL, "pid_dead ci %d pid %d", ci, client[ci].pid);
+	log_debug(NULL, "client_pid_dead ci %d pid %d", ci, cl->pid);
 
-	if (client[ci].pid)
-		kill(SIGTERM, client[ci].pid);
+	/* cmd_acquire_thread may still be waiting for the tokens
+	   to be acquired.  if it is, tell it to release them when
+	   finished */
 
-	/* TODO: cmd_acquire_thread may still be waiting for these
-	   leases to be acquired... */
+	pthread_mutex_lock(&cl->mutex);
+	pid = cl->pid;
+	cl->pid = -1;
+	cl->pid_dead = 1;
+	if (!cl->acquire_done) {
+		cl->need_release = 1;
+		delay_release = 1;
+		/* client_dead() also delayed */
+	}
+	pthread_mutex_unlock(&cl->mutex);
 
-	tokens = client[ci].tokens;
+	if (pid > 0)
+		kill(SIGKILL, pid);
+
+	if (delay_release)
+		return;
+
+	/* cmd_acquire_thread is done so we can release tokens here */
+
+	tokens = cl->tokens;
 
 	for (i = 0; i < MAX_LEASES; i++) {
-		if (tokens[i] && tokens[i]->acquire_result == 1)
-			release_lease(tokens[i]);
+		if (tokens[i])
+			release_token_async(tokens[i]);
+		tokens[i] = NULL;
 	}
 
-	client[ci].pid = 0;
+	client_dead(ci);
 }
 
 static void kill_pids(void)
@@ -243,9 +271,7 @@ static int main_loop(void)
 			}
 			if (pollfd[i].revents & (POLLERR | POLLHUP | POLLNVAL)) {
 				deadfn = client[i].deadfn;
-				if (deadfn)
-					deadfn(i);
-				client_dead(i);
+				deadfn(i);
 			}
 		}
 
@@ -265,25 +291,41 @@ static void *cmd_acquire_thread(void *args_in)
 {
 	struct cmd_acquire_args *args = args_in;
 	struct token **tokens;
+	struct client *cl;
 	struct sm_header h;
-	int i, fd, ci, token_count;
+	int i, ci, fd, token_count;
+	int need_release, pid_dead;
 
 	ci = args->ci;
+	cl = &client[ci];
 	token_count = args->token_count;
-	tokens = client[ci].tokens;
-	fd = client[ci].fd;
-
 	memcpy(&h, &args->h_recv, sizeof(struct sm_header));
 
-	for (i = 0; i < token_count; i++)
-		pthread_join(client[ci].lease_threads[i], NULL);
+	for (i = 0; i < args->thread_count; i++)
+		pthread_join(cl->acquire_threads[i], NULL);
 
-	log_debug(NULL, "cmd_acquire_thread joined %d", token_count);
+	log_debug(NULL, "cmd_acquire_thread joined %d", args->thread_count);
+
+	/* pid may have died while waiting above,
+	   or cmd_acquire may have failed before creating all */
+
+	pthread_mutex_lock(&cl->mutex);
+	cl->acquire_done = 1;
+	need_release = cl->need_release;
+	pid_dead = cl->pid_dead;
+	tokens = cl->tokens;
+	fd = cl->fd;
+	pthread_mutex_unlock(&cl->mutex);
+
+	if (need_release)
+		goto do_release;
 
 	for (i = 0; i < token_count; i++) {
 		if (tokens[i]->acquire_result < 0)
-			goto fail;
+			goto do_release;
 	}
+
+	/* assert !pid_dead */
 
 	h.length = sizeof(h) + (sizeof(int) * token_count);
 	h.data = token_count;
@@ -292,25 +334,32 @@ static void *cmd_acquire_thread(void *args_in)
 	free(args);
 	return NULL;
 
- fail:
+ do_release:
 	for (i = 0; i < token_count; i++) {
-		if (tokens[i]->acquire_result == 1)
-			release_lease(tokens[i]);
+		if (tokens[i])
+			release_token_wait(tokens[i]);
+		tokens[i] = NULL;
 	}
 
-	/* TODO: close disks, free token->disks, free tokens */
-
-	h.length = sizeof(h);
-	h.data = 0;
-	send(fd, &h, sizeof(struct sm_header), MSG_NOSIGNAL);
+	if (pid_dead) {
+		client_dead(ci);
+	} else {
+		h.length = sizeof(h);
+		h.data = 0;
+		send(fd, &h, sizeof(struct sm_header), MSG_NOSIGNAL);
+	}
 
 	free(args);
 	return NULL;
 }
 
-/* 1. create a lease_thread to acquire the lease for each token
+/* 1. create an acquire_thread to acquire the lease for each token
  * 2. create cmd_acquire_thread to wait for the results of each
- * lease_thread and return the result */
+ * acquire_thread and return the result */
+
+/* TODO: if an error causes us to break from the recv loop,
+   do we need to recv the remaining data that was sent? or
+   will the connection just be closed? */
 
 static void cmd_acquire(int ci, struct sm_header *h_recv)
 {
@@ -318,42 +367,60 @@ static void cmd_acquire(int ci, struct sm_header *h_recv)
 	pthread_attr_t attr;
 	struct sm_header h;
 	struct token **tokens, *token;
+	struct client *cl;
 	struct sync_disk *disks;
 	int token_ids[MAX_LEASE_ARGS];
-	int token_count, added_count;
+	int token_count, added_count, thread_count;
 	int rv, fd, i, disks_len, num_disks;
 	struct cmd_acquire_args *args;
 	
+	cl = &client[ci];
+
+	/* ensure this connection has registered first */
+
+	if (cl->pid <= 0) {
+		rv = -1;
+		goto reply;
+	}
+
+	tokens = cl->tokens;
+	fd = cl->fd;
 	token_count = h_recv->data;
-	tokens = client[ci].tokens;
-	fd = client[ci].fd;
 
 	memset(token_ids, 0, sizeof(token_ids));
 	added_count = 0;
+	thread_count = 0;
+
+	token = NULL;
+	disks = NULL;
+	args = NULL;
 
 	if (token_count > MAX_LEASE_ARGS) {
 		log_error(NULL, "client asked for %d leases maximum is %d",
 			  token_count, MAX_LEASE_ARGS);
 		rv = -1;
-		goto fail;
+		goto reply;
+	}
+
+	args = malloc(sizeof(struct cmd_acquire_args));
+	if (!args) {
+		rv = -ENOMEM;
+		goto reply;
 	}
 
 	for (i = 0; i < token_count; i++) {
-		disks = NULL;
-
 		token = malloc(sizeof(struct token));
 		if (!token) {
 			rv = -ENOMEM;
-			goto fail;
+			goto reply;
 		}
 		memset(token, 0, sizeof(struct token));
-		client[ci].tokens[i] = token;
 
 		rv = recv(fd, token, sizeof(struct token), MSG_WAITALL);
 		if (rv != sizeof(struct token)) {
 			log_error(NULL, "cmd_acquire recv %d %d", rv, errno);
 			rv = -1;
-			goto fail;
+			goto reply;
 		}
 		log_debug(NULL, "cmd_acquire recv t %d %s", rv,
 			  token->resource_name);
@@ -363,7 +430,7 @@ static void cmd_acquire(int ci, struct sm_header *h_recv)
 		disks = malloc(num_disks * sizeof(struct sync_disk));
 		if (!disks) {
 			rv = -ENOMEM;
-			goto fail;
+			goto reply;
 		}
 
 		disks_len = num_disks * sizeof(struct sync_disk);
@@ -373,35 +440,48 @@ static void cmd_acquire(int ci, struct sm_header *h_recv)
 		if (rv != disks_len) {
 			log_error(NULL, "cmd_acquire recv %d %d", rv, errno);
 			rv = -1;
-			goto fail;
+			goto reply;
 		}
 		log_debug(NULL, "cmd_acquire recv d %d", rv);
-		token->disks = disks;
 
 		token->idx = i;
 		token->token_id = token_id_counter++;
 		token_ids[i] = token->token_id;
-
-		pthread_attr_init(&attr);
-		rv = pthread_create(&(client[ci].lease_threads[i]), &attr, lease_thread, token);
-		if (rv < 0)
-			goto fail;
-
+		token->disks = disks;
+		tokens[i] = token;
 		added_count++;
+
+		token = NULL;
+		disks = NULL;
 	}
 
-	log_debug(NULL, "cmd_acquire added %d", added_count);
+	/* TODO: check if any client holds a token for the same resource
+	 * as any of the new tokens, or if a release is pending for a
+	 * matching resource.  If so fail, if not add the new resource
+	 * name to the global list of resource names we're checking.
+	 * Remove when token is freed. */
 
-	/* lease_thread created for each token, new thread will wait for
-	   the results of the threads and send back a reply */
+	for (i = 0; i < token_count; i++) {
+		pthread_attr_init(&attr);
+		rv = pthread_create(&cl->acquire_threads[i], &attr, acquire_thread, tokens[i]);
+		if (rv < 0)
+			break;
+		thread_count++;
+	}
 
-	args = malloc(sizeof(struct cmd_acquire_args));
-	if (!args)
-		goto fail;
+	log_debug(NULL, "cmd_acquire token_count %d added_count %d thread_count %d",
+		  token_count, added_count, thread_count);
+
+	/* can't acquire all leases, tell cmd_acquire_thread to release
+	   any leases we have already started acquiring */
+
+	if (thread_count != token_count)
+		cl->need_release = 1;
 
 	memset(args, 0, sizeof(struct cmd_acquire_args));
 	args->ci = ci;
-	args->token_count = added_count;
+	args->token_count = token_count;
+	args->thread_count = thread_count;
 	memcpy(args->token_ids, token_ids, sizeof(int) * added_count);
 	memcpy(&args->h_recv, h_recv, sizeof(struct sm_header));
 
@@ -410,26 +490,29 @@ static void cmd_acquire(int ci, struct sm_header *h_recv)
 	rv = pthread_create(&wait_thread, &attr, cmd_acquire_thread, args);
 	pthread_attr_destroy(&attr);
 	if (rv < 0) {
-		log_error(NULL, "could not start monitor lease for request");
-		free(args);
-		goto fail;
+		/* TODO: not sure how to handle this case, should probably
+		   start cmd_acquire_thread before any acquire_threads,
+		   and then have it wait until we pass it args */
+
+		log_error(NULL, "cmd_acquire cannot create acquire_thread");
 	}
 
 	return;
 
- fail:
+ reply:
+	if (args)
+		free(args);
+	if (token)
+		free(token);
 	if (disks)
 		free(disks);
-
-	for (i = 0; i < added_count; i++)
-		pthread_join(client[ci].lease_threads[i], NULL);
-
 	for (i = 0; i < added_count; i++) {
-		if (client[ci].tokens[i]) {
-			if (client[ci].tokens[i]->acquire_result == 1)
-				release_lease(tokens[i]);
-			free(client[ci].tokens[i]);
-		}
+		token = tokens[i];
+		if (token && token->disks)
+			free(token->disks);
+		if (token)
+			free(token);
+		tokens[i] = NULL;
 	}
 
 	memcpy(&h, h_recv, sizeof(struct sm_header));
@@ -438,25 +521,30 @@ static void cmd_acquire(int ci, struct sm_header *h_recv)
 	send(fd, &h, sizeof(struct sm_header), MSG_NOSIGNAL);
 }
 
+/* TODO: do we need to wait for all the releases to complete
+ * before sending back a reply?  That would be rather more difficult,
+ * and would require keeping track of the set of released tokens
+ * instead of passing them individually off to the release_thread;
+ * similar to what we do with cmd_acquire_thread args. */
+
 static void cmd_release(int fd, struct sm_header *h_recv)
 {
 	struct token **tokens;
 	struct sm_header h;
+	struct client *cl;
 	char resource_name[NAME_ID_SIZE];
 	int results[MAX_LEASE_ARGS];
-	int lease_count = h_recv->data;
+	int lease_count;
 	int stopped_count;
 	int rv, i, j, found;
 	int pid, ci_release;
+	int acquire_done;
+
+	lease_count = h_recv->data;
+	pid = h_recv->data2;
 
 	memset(results, 0, sizeof(results));
 	stopped_count = 0;
-
-	rv = get_peer_pid(fd, &pid);
-	if (rv < 0) {
-		log_error(NULL, "cmd_release fd %d get_peer_pid %d", fd, rv);
-		return;
-	}
 
 	ci_release = find_client_pid(pid);
 	if (ci_release < 0) {
@@ -464,10 +552,21 @@ static void cmd_release(int fd, struct sm_header *h_recv)
 		return;
 	}
 
+	cl = &client[ci_release];
+
 	log_debug(NULL, "cmd_release fd %d pid %d ci %d lease_count %d",
 		  fd, pid, ci_release, lease_count);
 
-	tokens = client[ci_release].tokens;
+	pthread_mutex_lock(&cl->mutex);
+	acquire_done = cl->acquire_done;
+	pthread_mutex_unlock(&cl->mutex);
+
+	if (!acquire_done) {
+		log_error(NULL, "cmd_release acquire not done");
+		goto out;
+	}
+
+	tokens = cl->tokens;
 
 	for (i = 0; i < lease_count; i++) {
 		rv = recv(fd, resource_name, NAME_ID_SIZE, MSG_WAITALL);
@@ -482,19 +581,17 @@ static void cmd_release(int fd, struct sm_header *h_recv)
 		for (j = 0; j < MAX_LEASES; j++) {
 			if (!tokens[j])
 				continue;
-					
+
 			if (memcmp(tokens[j]->resource_name, resource_name, NAME_ID_SIZE))
 				continue;
 
-			rv = release_lease(tokens[j]);
-			free(tokens[j]->disks);
-			free(tokens[j]);
+			release_token_async(tokens[j]);
 			tokens[j] = NULL;
 			found = 1;
 			break;
 		}
 
-		if (found && rv == 1)
+		if (found)
 			stopped_count++;
 
 		if (found) {
@@ -506,6 +603,7 @@ static void cmd_release(int fd, struct sm_header *h_recv)
 		}
 	}
 
+ out:
 	log_debug(NULL, "cmd_release stopped %d", stopped_count);
 
 	/*
@@ -583,14 +681,16 @@ static void process_connection(int ci)
 			break;
 		log_debug(NULL, "cmd_register ci %d pid %d", ci, pid);
 		client[ci].pid = pid;
-		client[ci].deadfn = pid_dead;
+		client[ci].deadfn = client_pid_dead;
 		auto_close = 0;
 		break;
 	case SM_CMD_ACQUIRE:
+		/* must be done on a registered connection */
 		cmd_acquire(ci, &h);
 		auto_close = 0;
 		break;
 	case SM_CMD_RELEASE:
+		/* must specify the pid of a registered connection */
 		cmd_release(fd, &h);
 		break;
 	case SM_CMD_SHUTDOWN:

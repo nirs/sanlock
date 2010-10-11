@@ -43,7 +43,7 @@ static int acquire_lease(struct token *token, struct leader_record *leader)
 
 /* return < 0 on error, 1 on success */
 
-int release_lease(struct token *token)
+static int release_lease(struct token *token)
 {
 	struct leader_record leader_ret;
 	int rv;
@@ -60,7 +60,7 @@ int release_lease(struct token *token)
 	return 1;
 }
 
-void *lease_thread(void *arg)
+void *acquire_thread(void *arg)
 {
 	struct token *token = (struct token *)arg;
 	struct leader_record leader;
@@ -110,5 +110,28 @@ int create_token(int num_disks, struct token **token_out)
 	token->num_disks = num_disks;
 	*token_out = token;
 	return 0;
+}
+
+/* the caller can block on disk i/o */
+
+void release_token_wait(struct token *token)
+{
+	if (token->acquire_result == 1)
+		release_lease(token);
+
+	if (token->disks)
+		free(token->disks);
+	free(token);
+}
+
+/* the caller cannot block on disk i/o
+ * add token to list for a new release_thread to take
+ * release_thread calls release_lease() on it
+ * release_thread frees token/disks after release;
+ * if token->acquire_result != 1, then release_lease not needed */
+
+void release_token_async(struct token *token)
+{
+	release_token_wait(token);
 }
 

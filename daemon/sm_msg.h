@@ -24,7 +24,7 @@ struct sm_header {
 	uint32_t info_len;
 	uint32_t seq;
 	uint32_t data;
-	uint32_t unused;
+	uint32_t data2;
 	char sm_id[NAME_ID_SIZE];
 };
 
@@ -78,7 +78,7 @@ struct sm_disk_info {
 
 int setup_listener_socket(const char* name, int length, int* listener_socket);
 int connect_socket(const char* name, int length, int* sock_fd);
-int send_header(int sock, int cmd, uint32_t data);
+int send_header(int sock, int cmd, uint32_t data, uint32_t data2);
 int recv_header(int sock, struct sm_header* header);
 
 #endif

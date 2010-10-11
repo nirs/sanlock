@@ -39,7 +39,7 @@ int sm_register(void)
 	if (rv < 0)
 		return rv;
 
-	rv = send_header(sock, SM_CMD_REGISTER, 0);
+	rv = send_header(sock, SM_CMD_REGISTER, 0, 0);
 	if (rv < 0) {
 		close(sock);
 		return rv;
@@ -54,7 +54,7 @@ int sm_acquire(int sock, int token_count, struct token *token_args[])
 	struct sm_header h;
 	int rv, i;
 
-	rv = send_header(sock, SM_CMD_ACQUIRE, token_count);
+	rv = send_header(sock, SM_CMD_ACQUIRE, token_count, 0);
 	if (rv < 0)
 		return rv;
 
@@ -94,7 +94,7 @@ int sm_acquire(int sock, int token_count, struct token *token_args[])
    I don't think the pid itself will usually tell sm to release leases,
    but it will be requested by a manager overseeing the pid */
 
-int sm_release(int pid GNUC_UNUSED, int token_count, struct token *token_args[])
+int sm_release(int pid, int token_count, struct token *token_args[])
 {
 	struct sm_header h;
 	int results[MAX_LEASE_ARGS];
@@ -104,9 +104,7 @@ int sm_release(int pid GNUC_UNUSED, int token_count, struct token *token_args[])
 	if (rv < 0)
 		return rv;
 
-	/* TODO: send pid in header or after */
-
-	rv = send_header(sock, SM_CMD_RELEASE, token_count);
+	rv = send_header(sock, SM_CMD_RELEASE, token_count, pid);
 	if (rv < 0)
 		goto out;
 
@@ -152,7 +150,7 @@ static int send_command(int cmd, uint32_t data)
 	if (rv < 0)
 		return -1;
 
-	rv = send_header(sock, cmd, data);
+	rv = send_header(sock, cmd, data, 0);
 	if (rv < 0)
 		goto clean;
 
