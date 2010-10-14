@@ -370,7 +370,7 @@ static void cmd_acquire(int ci, struct sm_header *h_recv)
 	struct client *cl;
 	struct sync_disk *disks;
 	int token_ids[MAX_LEASE_ARGS];
-	int token_count, added_count, thread_count;
+	int token_count, alloc_count, added_count, thread_count;
 	int rv, fd, i, disks_len, num_disks;
 	struct cmd_acquire_args *args;
 	
@@ -388,6 +388,7 @@ static void cmd_acquire(int ci, struct sm_header *h_recv)
 	token_count = h_recv->data;
 
 	memset(token_ids, 0, sizeof(token_ids));
+	alloc_count = 0;
 	added_count = 0;
 	thread_count = 0;
 
@@ -449,17 +450,21 @@ static void cmd_acquire(int ci, struct sm_header *h_recv)
 		token_ids[i] = token->token_id;
 		token->disks = disks;
 		tokens[i] = token;
-		added_count++;
+		alloc_count++;
 
 		token = NULL;
 		disks = NULL;
 	}
 
-	/* TODO: check if any client holds a token for the same resource
-	 * as any of the new tokens, or if a release is pending for a
-	 * matching resource.  If so fail, if not add the new resource
-	 * name to the global list of resource names we're checking.
-	 * Remove when token is freed. */
+	/* add a resource record for each of the new resource names,
+	   checking if a resource already exists with the same name */
+
+	for (i = 0; i < token_count; i++) {
+		rv = add_resource(tokens[i], ci, cl->pid);
+		if (rv < 0)
+			goto reply;
+		added_count++;
+	}
 
 	for (i = 0; i < token_count; i++) {
 		pthread_attr_init(&attr);
@@ -469,8 +474,9 @@ static void cmd_acquire(int ci, struct sm_header *h_recv)
 		thread_count++;
 	}
 
-	log_debug(NULL, "cmd_acquire token_count %d added_count %d thread_count %d",
-		  token_count, added_count, thread_count);
+	log_debug(NULL, "cmd_acquire token_count %d alloc_count %d "
+		  "added_count %d thread_count %d",
+		  token_count, alloc_count, added_count, thread_count);
 
 	/* can't acquire all leases, tell cmd_acquire_thread to release
 	   any leases we have already started acquiring */
@@ -482,7 +488,7 @@ static void cmd_acquire(int ci, struct sm_header *h_recv)
 	args->ci = ci;
 	args->token_count = token_count;
 	args->thread_count = thread_count;
-	memcpy(args->token_ids, token_ids, sizeof(int) * added_count);
+	memcpy(args->token_ids, token_ids, sizeof(int) * alloc_count);
 	memcpy(&args->h_recv, h_recv, sizeof(struct sm_header));
 
 	pthread_attr_init(&attr);
@@ -506,12 +512,13 @@ static void cmd_acquire(int ci, struct sm_header *h_recv)
 		free(token);
 	if (disks)
 		free(disks);
-	for (i = 0; i < added_count; i++) {
+	for (i = 0; i < added_count; i++)
+		del_resource(tokens[i]);
+	for (i = 0; i < alloc_count; i++) {
 		token = tokens[i];
-		if (token && token->disks)
+		if (token->disks)
 			free(token->disks);
-		if (token)
-			free(token);
+		free(token);
 		tokens[i] = NULL;
 	}
 
@@ -834,6 +841,10 @@ static int do_daemon(void)
 	if (rv < 0)
 		goto out_lockfile;
 
+	setup_token_manager();
+	if (rv < 0)
+		goto out_lockfile;
+
 	/* TODO: create thread here that acquires and renews our host_id lock */
 
 	/* TODO: wait for host_id lock to be acquired */
@@ -842,6 +853,7 @@ static int do_daemon(void)
 
 	/* TODO: release host_id lock here */
 
+	close_token_manager();
  out_lockfile:
 	unlink_lockfile(fd, DAEMON_LOCKFILE_DIR, DAEMON_NAME);
  out:
