@@ -48,6 +48,10 @@ int sm_register(void)
 	return sock;
 }
 
+/* TODO: add an optional pid arg that is passed in the CMD_ACQUIRE message
+   (like CMD_RELEASE) so a manager can ask sm daemon to acquire more leases
+   for an already running pid */
+
 int sm_acquire(int sock, int token_count, struct token *token_args[])
 {
 	struct token *t;
