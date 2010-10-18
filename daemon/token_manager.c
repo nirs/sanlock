@@ -89,7 +89,7 @@ void *acquire_thread(void *arg)
 		return NULL;
 	}
 
-	log_debug(token, "lease_thread token_id %d acquire_lease...",
+	log_debug(token, "acquire_thread token_id %d acquire_lease...",
 		  token->token_id);
 
 	rv = acquire_lease(token, &leader);

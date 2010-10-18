@@ -48,29 +48,42 @@ int sm_register(void)
 	return sock;
 }
 
-/* TODO: add an optional pid arg that is passed in the CMD_ACQUIRE message
-   (like CMD_RELEASE) so a manager can ask sm daemon to acquire more leases
-   for an already running pid */
-
-int sm_acquire(int sock, int token_count, struct token *token_args[])
+static int do_acquire(int sock, int pid, int token_count, struct token *token_args[])
 {
 	struct token *t;
 	struct sm_header h;
-	int rv, i;
+	int rv, i, fd, data2;
 
-	rv = send_header(sock, SM_CMD_ACQUIRE, token_count, 0);
+	if (sock == -1) {
+		/* connect to daemon and ask it to acquire a lease for
+		   another registered pid */
+
+		data2 = pid;
+
+		rv = connect_socket(MAIN_SOCKET_NAME, sizeof(MAIN_SOCKET_NAME), &fd);
+		if (rv < 0)
+			return rv;
+	} else {
+		/* use our own existing registered connection and ask daemon
+		   to acquire a lease for self */
+
+		data2 = -1;
+		fd = sock;
+	}
+
+	rv = send_header(fd, SM_CMD_ACQUIRE, token_count, data2);
 	if (rv < 0)
 		return rv;
 
 	for (i = 0; i < token_count; i++) {
 		t = token_args[i];
-		rv = send(sock, t, sizeof(struct token), 0);
+		rv = send(fd, t, sizeof(struct token), 0);
 		if (rv < 0) {
 			rv = -errno;
 			goto out;
 		}
 
-		rv = send(sock, t->disks, sizeof(struct sync_disk) * t->num_disks, 0);
+		rv = send(fd, t->disks, sizeof(struct sync_disk) * t->num_disks, 0);
 		if (rv < 0) {
 			rv = -errno;
 			goto out;
@@ -79,7 +92,7 @@ int sm_acquire(int sock, int token_count, struct token *token_args[])
 
 	memset(&h, 0, sizeof(h));
 
-	rv = recv(sock, &h, sizeof(struct sm_header), MSG_WAITALL);
+	rv = recv(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
 	if (rv != sizeof(h)) {
 		rv = -errno;
 		goto out;
@@ -91,29 +104,54 @@ int sm_acquire(int sock, int token_count, struct token *token_args[])
 	}
 	rv = 0;
  out:
+	if (sock == -1)
+		close(fd);
 	return rv;
+}
+
+int sm_acquire_self(int sock, int token_count, struct token *token_args[])
+{
+	return do_acquire(sock, -1, token_count, token_args);
+}
+
+int sm_acquire_pid(int pid, int token_count, struct token *token_args[])
+{
+	return do_acquire(-1, pid, token_count, token_args);
 }
 
 /* tell daemon to release lease(s) for given pid.
    I don't think the pid itself will usually tell sm to release leases,
    but it will be requested by a manager overseeing the pid */
 
-int sm_release(int pid, int token_count, struct token *token_args[])
+static int do_release(int sock, int pid, int token_count, struct token *token_args[])
 {
 	struct sm_header h;
 	int results[MAX_LEASE_ARGS];
-	int sock, rv, i;
+	int fd, rv, i, data2;
 
-	rv = connect_socket(MAIN_SOCKET_NAME, sizeof(MAIN_SOCKET_NAME), &sock);
-	if (rv < 0)
-		return rv;
+	if (sock == -1) {
+		/* connect to daemon and ask it to acquire a lease for
+		   another registered pid */
 
-	rv = send_header(sock, SM_CMD_RELEASE, token_count, pid);
+		data2 = pid;
+
+		rv = connect_socket(MAIN_SOCKET_NAME, sizeof(MAIN_SOCKET_NAME), &fd);
+		if (rv < 0)
+			return rv;
+	} else {
+		/* use our own existing registered connection and ask daemon
+		   to acquire a lease for self */
+
+		data2 = -1;
+		fd = sock;
+	}
+
+	rv = send_header(fd, SM_CMD_RELEASE, token_count, data2);
 	if (rv < 0)
 		goto out;
 
 	for (i = 0; i < token_count; i++) {
-		rv = send(sock, token_args[i]->resource_name, NAME_ID_SIZE, 0);
+		rv = send(fd, token_args[i]->resource_name, NAME_ID_SIZE, 0);
 		if (rv < 0) {
 			rv = -errno;
 			goto out;
@@ -123,13 +161,13 @@ int sm_release(int pid, int token_count, struct token *token_args[])
 	memset(&h, 0, sizeof(h));
 	memset(&results, 0, sizeof(results));
 
-	rv = recv(sock, &h, sizeof(struct sm_header), MSG_WAITALL);
+	rv = recv(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
 	if (rv != sizeof(h)) {
 		rv = -errno;
 		goto out;
 	}
 
-	rv = recv(sock, &results, sizeof(int) * token_count, MSG_WAITALL);
+	rv = recv(fd, &results, sizeof(int) * token_count, MSG_WAITALL);
 	if (rv != sizeof(int) * token_count) {
 		rv = -errno;
 		goto out;
@@ -142,8 +180,19 @@ int sm_release(int pid, int token_count, struct token *token_args[])
 		}
 	}
  out:
-	close(sock);
+	if (sock == -1)
+		close(fd);
 	return rv;
+}
+
+int sm_release_self(int sock, int token_count, struct token *token_args[])
+{
+	return do_release(sock, -1, token_count, token_args);
+}
+
+int sm_release_pid(int pid, int token_count, struct token *token_args[])
+{
+	return do_release(-1, pid, token_count, token_args);
 }
 
 static int send_command(int cmd, uint32_t data)
