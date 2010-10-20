@@ -29,6 +29,7 @@ struct sm_timeouts to;
 
 static struct list_head resources;
 static struct list_head dispose_resources;
+static struct list_head deleted_resources;
 static pthread_mutex_t resource_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t resource_cond = PTHREAD_COND_INITIALIZER;
 static pthread_t release_thread;
@@ -38,18 +39,22 @@ struct resource {
 	struct list_head list;
 	char name[NAME_ID_SIZE+1];
 	struct token *token;
-	int client_idx;
+	struct leader_record leader;
 	int pid;
 };
 
+/* TODO: shift resource functions to beginning in separate commit */
+static void save_resource_leader(struct token *token);
+
 /* return < 0 on error, 1 on success */
 
-static int acquire_lease(struct token *token, struct leader_record *leader)
+static int acquire_lease(struct token *token, struct leader_record *leader,
+			 uint64_t reacquire_lver)
 {
 	struct leader_record leader_ret;
 	int rv;
 
-	rv = disk_paxos_acquire(token, 0, &leader_ret);
+	rv = disk_paxos_acquire(token, 0, &leader_ret, reacquire_lver);
 	if (rv < 0)
 		return rv;
 
@@ -80,6 +85,7 @@ void *acquire_thread(void *arg)
 {
 	struct token *token = (struct token *)arg;
 	struct leader_record leader;
+	uint64_t reacquire_lver = 0;
 	int rv, num_opened;
 
 	num_opened = open_disks(token->disks, token->num_disks);
@@ -89,16 +95,23 @@ void *acquire_thread(void *arg)
 		return NULL;
 	}
 
+	/* check that prev_lver != 0 ? */
+
+	if (token->reacquire)
+		reacquire_lver = token->prev_lver;
+
 	log_debug(token, "acquire_thread token_id %d acquire_lease...",
 		  token->token_id);
 
-	rv = acquire_lease(token, &leader);
+	rv = acquire_lease(token, &leader, reacquire_lver);
 
 	token->acquire_result = rv;
 	memcpy(&token->leader, &leader, sizeof(struct leader_record));
+	save_resource_leader(token);
 
-	log_debug(token, "acquire token_id %d rv %d at %llu",
+	log_debug(token, "acquire token_id %d rv %d lver %llu at %llu",
 		  token->token_id, rv,
+		  (unsigned long long)token->leader.lver,
 		  (unsigned long long)token->leader.timestamp);
 
 	if (rv < 0)
@@ -128,6 +141,13 @@ int create_token(int num_disks, struct token **token_out)
 	return 0;
 }
 
+void free_token(struct token *token)
+{
+	if (token->disks)
+		free(token->disks);
+	free(token);
+}
+
 static struct resource *find_resource(struct list_head *head, char *name)
 {
 	struct resource *r;
@@ -139,32 +159,76 @@ static struct resource *find_resource(struct list_head *head, char *name)
 	return NULL;
 }
 
-int add_resource(struct token *token, int ci, int pid)
+static void save_resource_leader(struct token *token)
 {
-	struct resource *r, *r2;
-
-	r = malloc(sizeof(struct resource));
-	if (!r)
-		return -ENOMEM;
-	memset(r, 0, sizeof(struct resource));
-
-	strncpy(r->name, token->resource_name, NAME_ID_SIZE);
-	r->token = token;
-	r->client_idx = ci;
-	r->pid = pid;
+	struct resource *r;
 
 	pthread_mutex_lock(&resource_mutex);
-	r2 = find_resource(&resources, token->resource_name);
-	if (!r2)
-		r2 = find_resource(&dispose_resources, token->resource_name);
-	if (r2) {
-		free(r);
-		pthread_mutex_unlock(&resource_mutex);
-		return -EEXIST;
-	}
-	list_add_tail(&r->list, &resources);
+	r = find_resource(&resources, token->resource_name);
+	if (r)
+		memcpy(&r->leader, &token->leader, sizeof(struct leader_record));
 	pthread_mutex_unlock(&resource_mutex);
-	return 0;
+}
+
+int add_resource(struct token *token, int pid)
+{
+	struct resource *r;
+	int rv;
+
+	pthread_mutex_lock(&resource_mutex);
+
+	if (find_resource(&resources, token->resource_name) ||
+	    find_resource(&dispose_resources, token->resource_name)) {
+		rv = -EEXIST;
+		goto out;
+	}
+
+	r = find_resource(&deleted_resources, token->resource_name);
+	if (r) {
+		list_del(&r->list);
+		goto add;
+	}
+
+	r = malloc(sizeof(struct resource));
+	if (!r) {
+		rv = -ENOMEM;
+		goto out;
+	}
+
+	memset(r, 0, sizeof(struct resource));
+	strncpy(r->name, token->resource_name, NAME_ID_SIZE);
+ add:
+	token->prev_lver = r->leader.lver;
+	r->token = token;
+	r->pid = pid;
+	list_add_tail(&r->list, &resources);
+	rv = 0;
+ out:
+	pthread_mutex_unlock(&resource_mutex);
+	return rv;
+}
+
+/* resource_mutex must be held */
+
+static void _del_resource(struct token *token, struct resource *r)
+{
+	r->token = NULL;
+	r->pid = -1;
+
+	if (token->keep_resource)
+		/* resources are kept on the deleted list when the token
+		   is released for a pid that's still running (e.g. vm paused)
+		   in case the leases need to be reacquired later with the same
+		   version (e.g. vm resumed) */
+
+		/* TODO: save pid in r and when pid dies purge any
+		   resources for it from deleted list */
+
+		list_move(&r->list, &deleted_resources);
+	else {
+		list_del(&r->list);
+		free(r);
+	}
 }
 
 void del_resource(struct token *token)
@@ -173,10 +237,8 @@ void del_resource(struct token *token)
 
 	pthread_mutex_lock(&resource_mutex);
 	r = find_resource(&resources, token->resource_name);
-	if (r) {
-		list_del(&r->list);
-		free(r);
-	}
+	if (r)
+		_del_resource(token, r);
 	pthread_mutex_unlock(&resource_mutex);
 }
 
@@ -188,15 +250,13 @@ void release_token_wait(struct token *token)
 		release_lease(token);
 
 	del_resource(token);
-
-	if (token->disks)
-		free(token->disks);
-	free(token);
+	free_token(token);
 }
 
 static void *async_release_thread(void *arg GNUC_UNUSED)
 {
 	struct resource *r;
+	struct token *token;
 
 	while (1) {
 		pthread_mutex_lock(&resource_mutex);
@@ -220,13 +280,10 @@ static void *async_release_thread(void *arg GNUC_UNUSED)
 		   the lease until after it's been released */
 
 		pthread_mutex_lock(&resource_mutex);
-		list_del(&r->list);
+		token = r->token;
+		_del_resource(token, r);
+		free_token(token);
 		pthread_mutex_unlock(&resource_mutex);
-
-		if (r->token->disks)
-			free(r->token->disks);
-		free(r->token);
-		free(r);
 	}
  out:
 	return NULL;
@@ -256,6 +313,7 @@ int setup_token_manager(void)
 
 	INIT_LIST_HEAD(&resources);
 	INIT_LIST_HEAD(&dispose_resources);
+	INIT_LIST_HEAD(&deleted_resources);
 
 	rv = pthread_create(&release_thread, NULL, async_release_thread, NULL);
 	if (rv)

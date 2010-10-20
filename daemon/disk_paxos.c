@@ -648,7 +648,8 @@ static int write_new_leader(struct token *token, struct leader_record *nl)
  */
 
 int disk_paxos_acquire(struct token *token, int force,
-		       struct leader_record *leader_ret)
+		       struct leader_record *leader_ret,
+		       uint64_t reacquire_lver)
 {
 	struct leader_record prev_leader;
 	struct leader_record new_leader;
@@ -663,6 +664,14 @@ int disk_paxos_acquire(struct token *token, int force,
 	error = get_prev_leader(token, force, &prev_leader);
 	if (error < 0) {
 		log_error(token, "get_prev_leader error %d", error);
+		goto out;
+	}
+
+	if (reacquire_lver && prev_leader.lver != reacquire_lver) {
+		error = DP_REACQUIRE_LVER;
+		log_error(token, "reacquire %llu prev_leader %llu",
+			  (unsigned long long)reacquire_lver,
+			  (unsigned long long)prev_leader.lver);
 		goto out;
 	}
 

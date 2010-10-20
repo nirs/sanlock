@@ -567,7 +567,7 @@ static void cmd_acquire(int ci_in, struct sm_header *h_recv)
 	   checking if a resource already exists with the same name */
 
 	for (i = 0; i < new_tokens_count; i++) {
-		rv = add_resource(new_tokens[i], ci_target, cl->pid);
+		rv = add_resource(new_tokens[i], cl->pid);
 		if (rv < 0)
 			goto reply;
 		added_count++;
@@ -630,10 +630,7 @@ static void cmd_acquire(int ci_in, struct sm_header *h_recv)
 	}
 	for (i = 0; i < alloc_count; i++) {
 		idx = new_tokens_idx[i];
-		token = new_tokens[i];
-		if (token->disks)
-			free(token->disks);
-		free(token);
+		free_token(new_tokens[i]);
 		cl->tokens[idx] = NULL;
 	}
 
@@ -720,6 +717,10 @@ static void cmd_release(int ci_in, struct sm_header *h_recv)
 
 			if (memcmp(cl->tokens[j]->resource_name, resource_name, NAME_ID_SIZE))
 				continue;
+
+			/* keep a record of this resource, with its version
+			   number, in case it needs to be reacquired */
+			cl->tokens[j]->keep_resource = 1;
 
 			release_token_async(cl->tokens[j]);
 			cl->tokens[j] = NULL;
@@ -1201,8 +1202,7 @@ static int add_token_arg(char *arg, int *token_count, struct token *token_args[]
 	return 0;
 
  fail:
-	free(token->disks);
-	free(token);
+	free_token(token);
 	return -1;
 }
 

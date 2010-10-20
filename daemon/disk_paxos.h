@@ -30,6 +30,7 @@ enum {
 	DP_BAD_LEADER = -24,
 	DP_OTHER_INP = -25,
 	DP_BAD_SECTORSIZE = -26,
+	DP_REACQUIRE_LVER = -27,
 };
 
 /* for all disk structures:
@@ -86,6 +87,9 @@ struct token {
 	int token_id;
 	int num_disks;
 	int acquire_result;
+	int keep_resource;
+	int reacquire;
+	uint64_t prev_lver;
 	struct sync_disk *disks;
 	struct leader_record leader;
 	char resource_name[NAME_ID_SIZE];
@@ -93,7 +97,8 @@ struct token {
 
 int majority_disks(struct token *token, int num);
 int disk_paxos_acquire(struct token *token, int force,
-		       struct leader_record *leader_ret);
+		       struct leader_record *leader_ret,
+		       uint64_t reacquire_lver);
 int disk_paxos_renew(struct token *token,
 		     struct leader_record *leader_last,
 		     struct leader_record *leader_ret);
