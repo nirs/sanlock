@@ -80,8 +80,18 @@ int add_resource(struct token *token, int pid)
 
 	r = find_resource(&deleted_resources, token->resource_name);
 	if (r) {
-		list_del(&r->list);
-		goto add;
+		if (r->pid == pid) {
+			/* the same pid is allowed to reacquire a resource */
+			list_del(&r->list);
+			goto add;
+		} else {
+			/* a different pid may not acquire a resource that
+			   was released by an existing (but paused) pid,
+			   because the paused pid may resume and expect to
+			   reacquire the lease unchanged */
+			rv = -EBUSY;
+			goto out;
+		}
 	}
 
 	r = malloc(sizeof(struct resource));
@@ -108,16 +118,14 @@ int add_resource(struct token *token, int pid)
 static void _del_resource(struct token *token, struct resource *r)
 {
 	r->token = NULL;
-	r->pid = -1;
 
 	if (token->keep_resource)
 		/* resources are kept on the deleted list when the token
 		   is released for a pid that's still running (e.g. vm paused)
 		   in case the leases need to be reacquired later with the same
-		   version (e.g. vm resumed) */
-
-		/* TODO: save pid in r and when pid dies purge any
-		   resources for it from deleted list */
+		   version (e.g. vm resumed).  r->pid is the only pid that
+		   will be allowed to reacquire this resource off the
+		   deleted_resources list */
 
 		list_move(&r->list, &deleted_resources);
 	else {
@@ -137,6 +145,19 @@ void del_resource(struct token *token)
 	pthread_mutex_unlock(&resource_mutex);
 }
 
+void purge_deleted_resources(int pid)
+{
+	struct resource *r, *r2;
+
+	pthread_mutex_lock(&resource_mutex);
+	list_for_each_entry_safe(r, r2, &deleted_resources, list) {
+		if (r->pid == pid) {
+			list_del(&r->list);
+			free(r);
+		}
+	}
+	pthread_mutex_unlock(&resource_mutex);
+}
 
 /* return < 0 on error, 1 on success */
 

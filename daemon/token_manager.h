@@ -8,6 +8,7 @@ void release_token_async(struct token *token);
 void *acquire_thread(void *arg);
 int add_resource(struct token *token, int pid);
 void del_resource(struct token *token);
+void purge_deleted_resources(int pid);
 int setup_token_manager(void);
 void close_token_manager(void);
 

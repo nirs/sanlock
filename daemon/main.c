@@ -195,6 +195,12 @@ static void client_pid_dead(int ci)
 	if (pid > 0)
 		kill(SIGKILL, pid);
 
+	/* the dead pid may have previously released some resources
+	   that are being kept on the deleted_resources list in case
+	   the pid wanted to reacquire them */
+
+	purge_deleted_resources(pid);
+
 	if (delay_release)
 		return;
 
