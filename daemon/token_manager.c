@@ -43,8 +43,100 @@ struct resource {
 	int pid;
 };
 
-/* TODO: shift resource functions to beginning in separate commit */
-static void save_resource_leader(struct token *token);
+static struct resource *find_resource(struct list_head *head, char *name)
+{
+	struct resource *r;
+
+	list_for_each_entry(r, head, list) {
+		if (!strncmp(r->name, name, NAME_ID_SIZE))
+			return r;
+	}
+	return NULL;
+}
+
+static void save_resource_leader(struct token *token)
+{
+	struct resource *r;
+
+	pthread_mutex_lock(&resource_mutex);
+	r = find_resource(&resources, token->resource_name);
+	if (r)
+		memcpy(&r->leader, &token->leader, sizeof(struct leader_record));
+	pthread_mutex_unlock(&resource_mutex);
+}
+
+int add_resource(struct token *token, int pid)
+{
+	struct resource *r;
+	int rv;
+
+	pthread_mutex_lock(&resource_mutex);
+
+	if (find_resource(&resources, token->resource_name) ||
+	    find_resource(&dispose_resources, token->resource_name)) {
+		rv = -EEXIST;
+		goto out;
+	}
+
+	r = find_resource(&deleted_resources, token->resource_name);
+	if (r) {
+		list_del(&r->list);
+		goto add;
+	}
+
+	r = malloc(sizeof(struct resource));
+	if (!r) {
+		rv = -ENOMEM;
+		goto out;
+	}
+
+	memset(r, 0, sizeof(struct resource));
+	strncpy(r->name, token->resource_name, NAME_ID_SIZE);
+ add:
+	token->prev_lver = r->leader.lver;
+	r->token = token;
+	r->pid = pid;
+	list_add_tail(&r->list, &resources);
+	rv = 0;
+ out:
+	pthread_mutex_unlock(&resource_mutex);
+	return rv;
+}
+
+/* resource_mutex must be held */
+
+static void _del_resource(struct token *token, struct resource *r)
+{
+	r->token = NULL;
+	r->pid = -1;
+
+	if (token->keep_resource)
+		/* resources are kept on the deleted list when the token
+		   is released for a pid that's still running (e.g. vm paused)
+		   in case the leases need to be reacquired later with the same
+		   version (e.g. vm resumed) */
+
+		/* TODO: save pid in r and when pid dies purge any
+		   resources for it from deleted list */
+
+		list_move(&r->list, &deleted_resources);
+	else {
+		list_del(&r->list);
+		free(r);
+	}
+}
+
+void del_resource(struct token *token)
+{
+	struct resource *r;
+
+	pthread_mutex_lock(&resource_mutex);
+	r = find_resource(&resources, token->resource_name);
+	if (r)
+		_del_resource(token, r);
+	pthread_mutex_unlock(&resource_mutex);
+}
+
 
 /* return < 0 on error, 1 on success */
 
@@ -146,100 +238,6 @@ void free_token(struct token *token)
 	if (token->disks)
 		free(token->disks);
 	free(token);
-}
-
-static struct resource *find_resource(struct list_head *head, char *name)
-{
-	struct resource *r;
-
-	list_for_each_entry(r, head, list) {
-		if (!strncmp(r->name, name, NAME_ID_SIZE))
-			return r;
-	}
-	return NULL;
-}
-
-static void save_resource_leader(struct token *token)
-{
-	struct resource *r;
-
-	pthread_mutex_lock(&resource_mutex);
-	r = find_resource(&resources, token->resource_name);
-	if (r)
-		memcpy(&r->leader, &token->leader, sizeof(struct leader_record));
-	pthread_mutex_unlock(&resource_mutex);
-}
-
-int add_resource(struct token *token, int pid)
-{
-	struct resource *r;
-	int rv;
-
-	pthread_mutex_lock(&resource_mutex);
-
-	if (find_resource(&resources, token->resource_name) ||
-	    find_resource(&dispose_resources, token->resource_name)) {
-		rv = -EEXIST;
-		goto out;
-	}
-
-	r = find_resource(&deleted_resources, token->resource_name);
-	if (r) {
-		list_del(&r->list);
-		goto add;
-	}
-
-	r = malloc(sizeof(struct resource));
-	if (!r) {
-		rv = -ENOMEM;
-		goto out;
-	}
-
-	memset(r, 0, sizeof(struct resource));
-	strncpy(r->name, token->resource_name, NAME_ID_SIZE);
- add:
-	token->prev_lver = r->leader.lver;
-	r->token = token;
-	r->pid = pid;
-	list_add_tail(&r->list, &resources);
-	rv = 0;
- out:
-	pthread_mutex_unlock(&resource_mutex);
-	return rv;
-}
-
-/* resource_mutex must be held */
-
-static void _del_resource(struct token *token, struct resource *r)
-{
-	r->token = NULL;
-	r->pid = -1;
-
-	if (token->keep_resource)
-		/* resources are kept on the deleted list when the token
-		   is released for a pid that's still running (e.g. vm paused)
-		   in case the leases need to be reacquired later with the same
-		   version (e.g. vm resumed) */
-
-		/* TODO: save pid in r and when pid dies purge any
-		   resources for it from deleted list */
-
-		list_move(&r->list, &deleted_resources);
-	else {
-		list_del(&r->list);
-		free(r);
-	}
-}
-
-void del_resource(struct token *token)
-{
-	struct resource *r;
-
-	pthread_mutex_lock(&resource_mutex);
-	r = find_resource(&resources, token->resource_name);
-	if (r)
-		_del_resource(token, r);
-	pthread_mutex_unlock(&resource_mutex);
 }
 
 /* the caller can block on disk i/o */
