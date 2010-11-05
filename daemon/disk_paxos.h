@@ -42,13 +42,18 @@ enum {
    LEADER_CHECKSUM_LEN should end just before the checksum field.
    LEADER_COMPARE_LEN should end just before timestamp.
    The checksum field should follow the timestamp field.
+
    The leader may be partially through updating the timestamp on
    multiple leader blocks in a lease, but for the purpose of counting
    repetitions of a leader block owned by a single host they should be
-   counted together, so COMPARE_LEN should exclude timestamp. */
+   counted together, so COMPARE_LEN should exclude timestamp.
+
+   The leader may also be partially through updating next_owner_id on
+   multiple leader blocks in a lease, but this potential inconsistency,
+   like timestamp, should not factor against the repetition count. */
 
 #define LEADER_COMPARE_LEN 96
-#define LEADER_CHECKSUM_LEN 104
+#define LEADER_CHECKSUM_LEN 112
 
 struct leader_record {
 	uint32_t magic;
@@ -61,6 +66,7 @@ struct leader_record {
 	uint64_t lver;
 	char resource_name[NAME_ID_SIZE]; /* resource being locked */
 	uint64_t timestamp;
+	uint64_t next_owner_id;
 	uint32_t checksum;
 	uint32_t pad2;
 };
@@ -82,29 +88,32 @@ struct paxos_dblock {
    fields that are modified are disk fd's by open_disks() in the lease
    threads. */
 
+#define OPT_ACQUIRE_PREV 1
+#define OPT_ACQUIRE_RECV 2
+
 struct token {
-	int idx;
+	int cmd_option;
 	int token_id;
 	int num_disks;
 	int acquire_result;
-	int keep_resource;
-	int reacquire;
+	int migrate_result;
+	int release_result;
+	int setowner_result;
 	uint64_t prev_lver;
-	struct sync_disk *disks;
-	struct leader_record leader;
+	struct leader_record leader; /* copy of last leader_record we wrote */
 	char resource_name[NAME_ID_SIZE];
+	struct sync_disk *disks;
 };
 
 int majority_disks(struct token *token, int num);
+int disk_paxos_leader_read(struct token *token, struct leader_record *leader_ret);
 int disk_paxos_acquire(struct token *token, int force,
 		       struct leader_record *leader_ret,
 		       uint64_t reacquire_lver);
-int disk_paxos_renew(struct token *token,
-		     struct leader_record *leader_last,
-		     struct leader_record *leader_ret);
-int disk_paxos_transfer(struct token *token, int hostid,
-			struct leader_record *leader_last,
-			struct leader_record *leader_ret);
+int disk_paxos_migrate(struct token *token,
+                       struct leader_record *leader_last,
+                       struct leader_record *leader_ret,
+                       uint64_t target_host_id);
 int disk_paxos_release(struct token *token,
 		       struct leader_record *leader_last,
 		       struct leader_record *leader_ret);

@@ -54,7 +54,7 @@ static struct resource *find_resource(struct list_head *head, char *name)
 	return NULL;
 }
 
-static void save_resource_leader(struct token *token)
+void save_resource_leader(struct token *token)
 {
 	struct resource *r;
 
@@ -115,23 +115,10 @@ int add_resource(struct token *token, int pid)
 
 /* resource_mutex must be held */
 
-static void _del_resource(struct token *token, struct resource *r)
+static void _del_resource(struct resource *r)
 {
-	r->token = NULL;
-
-	if (token->keep_resource)
-		/* resources are kept on the deleted list when the token
-		   is released for a pid that's still running (e.g. vm paused)
-		   in case the leases need to be reacquired later with the same
-		   version (e.g. vm resumed).  r->pid is the only pid that
-		   will be allowed to reacquire this resource off the
-		   deleted_resources list */
-
-		list_move(&r->list, &deleted_resources);
-	else {
-		list_del(&r->list);
-		free(r);
-	}
+	list_del(&r->list);
+	free(r);
 }
 
 void del_resource(struct token *token)
@@ -141,7 +128,26 @@ void del_resource(struct token *token)
 	pthread_mutex_lock(&resource_mutex);
 	r = find_resource(&resources, token->resource_name);
 	if (r)
-		_del_resource(token, r);
+		_del_resource(r);
+	pthread_mutex_unlock(&resource_mutex);
+}
+
+/* resources are kept on the deleted list when the token is released for a pid
+   that's still running (e.g. vm paused) in case the leases need to be
+   reacquired later with the same version (e.g. vm resumed).  r->pid is the
+   only pid that will be allowed to reacquire this resource off the
+   deleted_resources list */
+
+void save_resource(struct token *token)
+{
+	struct resource *r;
+
+	pthread_mutex_lock(&resource_mutex);
+	r = find_resource(&resources, token->resource_name);
+	if (r) {
+		r->token = NULL;
+		list_move(&r->list, &deleted_resources);
+	}
 	pthread_mutex_unlock(&resource_mutex);
 }
 
@@ -161,66 +167,14 @@ void purge_deleted_resources(int pid)
 
 /* return < 0 on error, 1 on success */
 
-static int acquire_lease(struct token *token, struct leader_record *leader,
-			 uint64_t reacquire_lver)
+int acquire_lease(struct token *token, uint64_t reacquire_lver)
 {
 	struct leader_record leader_ret;
 	int rv;
 
 	rv = disk_paxos_acquire(token, 0, &leader_ret, reacquire_lver);
-	if (rv < 0)
-		return rv;
-
-	memcpy(leader, &leader_ret, sizeof(struct leader_record));
-	return 1;
-}
-
-/* return < 0 on error, 1 on success */
-
-static int release_lease(struct token *token)
-{
-	struct leader_record leader_ret;
-	int rv;
-
-	rv = disk_paxos_release(token, &token->leader, &leader_ret);
-	if (rv < 0)
-		return rv;
-
-	memcpy(&token->leader, &leader_ret, sizeof(struct leader_record));
-
-	log_debug(token, "release token_id %d rv %d",
-		  token->token_id, rv);
-
-	return 1;
-}
-
-void *acquire_thread(void *arg)
-{
-	struct token *token = (struct token *)arg;
-	struct leader_record leader;
-	uint64_t reacquire_lver = 0;
-	int rv, num_opened;
-
-	num_opened = open_disks(token->disks, token->num_disks);
-	if (!majority_disks(token, num_opened)) {
-		log_error(token, "cannot open majority of disks");
-		token->acquire_result = -ENODEV;
-		return NULL;
-	}
-
-	/* check that prev_lver != 0 ? */
-
-	if (token->reacquire)
-		reacquire_lver = token->prev_lver;
-
-	log_debug(token, "acquire_thread token_id %d acquire_lease...",
-		  token->token_id);
-
-	rv = acquire_lease(token, &leader, reacquire_lver);
 
 	token->acquire_result = rv;
-	memcpy(&token->leader, &leader, sizeof(struct leader_record));
-	save_resource_leader(token);
 
 	log_debug(token, "acquire token_id %d rv %d lver %llu at %llu",
 		  token->token_id, rv,
@@ -228,8 +182,154 @@ void *acquire_thread(void *arg)
 		  (unsigned long long)token->leader.timestamp);
 
 	if (rv < 0)
-		close_disks(token->disks, token->num_disks);
-	return NULL;
+		return rv;
+
+	memcpy(&token->leader, &leader_ret, sizeof(struct leader_record));
+	return 1;
+}
+
+int setowner_lease(struct token *token)
+{
+	struct leader_record leader_ret;
+	int rv;
+
+	rv = disk_paxos_leader_read(token, &leader_ret);
+	if (rv < 0)
+		return rv;
+
+	if (memcmp(&token->leader, &leader_ret, sizeof(struct leader_record))) {
+		log_error(token, "setowner leader_read mismatch");
+		return -1;
+	}
+
+	/* we want the dblocks to reflect a full, proper ownership, so we
+	   do the full acquire rather than just writing a new leader_record */
+
+	rv = disk_paxos_acquire(token, 0, &leader_ret, 0);
+
+	token->setowner_result = rv;
+
+	log_debug(token, "setowner token_id %d rv %d lver %llu at %llu",
+		  token->token_id, rv,
+		  (unsigned long long)token->leader.lver,
+		  (unsigned long long)token->leader.timestamp);
+
+	if (rv < 0)
+		return rv;
+
+	memcpy(&token->leader, &leader_ret, sizeof(struct leader_record));
+	return 1;
+}
+
+/* return < 0 on error, 1 on success */
+
+int release_lease(struct token *token)
+{
+	struct leader_record leader_ret;
+	int rv;
+
+	if (token->leader.owner_id != options.our_host_id) {
+		/* this case occurs on the receiving side of migration, when
+		   the local host hasn't become the lease owner (just next_owner),
+		   and the pid fails, causing sm to clean up the pid's tokens */
+		log_debug(token, "release token_id %d we are not owner",
+			  token->token_id);
+		return 1;
+	}
+
+	rv = disk_paxos_release(token, &token->leader, &leader_ret);
+
+	token->release_result = rv;
+
+	log_debug(token, "release token_id %d rv %d",
+		  token->token_id, rv);
+
+	if (rv < 0)
+		return rv;
+
+	memcpy(&token->leader, &leader_ret, sizeof(struct leader_record));
+	return 1;
+}
+
+/* migration source: writes leader_record.next_owner_id = target_host_id */
+
+int migrate_lease(struct token *token, uint64_t target_host_id)
+{
+	struct leader_record leader_ret;
+	int rv;
+
+	rv = disk_paxos_migrate(token, &token->leader, &leader_ret, target_host_id);
+
+	token->migrate_result = rv;
+
+	log_debug(token, "migrate token_id %d rv %d", token->token_id, rv);
+
+	if (rv < 0)
+		return rv;
+
+	memcpy(&token->leader, &leader_ret, sizeof(struct leader_record));
+	return 1;
+}
+
+/* migration target: verifies that the source wrote us as the next_owner_id */
+
+int receive_lease(struct token *token)
+{
+	struct leader_record leader_ret;
+	int rv;
+
+	rv = disk_paxos_leader_read(token, &leader_ret);
+	if (rv < 0)
+		return rv;
+
+	/* TODO: uncomment this, assuming that the libvirt migration
+	 * protocol allows us to send the full leader record from source
+	 * to dest.  For now, it's not really practical for testing via
+	 * command line. */
+#if 0
+	/* token->leader is a copy of the leader_record that the source wrote
+	   in migrate_lease(); it should not have changed between then and when
+	   we read it here. */
+
+	if (memcmp(&token->leader, &leader_ret, sizeof(struct leader_record))) {
+		log_error(token, "receive leader_read mismatch");
+		return -1;
+	}
+#endif
+	
+	/* token->migrate_result is a copy of the disk_paxos_migrate() return
+	   value on the source; if it was successful on the source (1), then
+	   next_owner_id should equal our_host_id; if the source could not
+	   write to the lease, then next_owner_id should be 0, and we'll write
+	   next_owner_id = our_host_id for it. */
+
+	if (token->migrate_result == 1) {
+		if (leader_ret.next_owner_id != options.our_host_id) {
+			log_error(token, "receive wrong next_owner %llu",
+				  (unsigned long long)leader_ret.next_owner_id);
+			return -1;
+		}
+		goto out;
+	}
+
+	/* source failed to migrate this lease, so next_owner_id should still
+	   be zero */
+
+	if (leader_ret.next_owner_id != 0) {
+		log_error(token, "receive expect zero next_owner %llu",
+			  (unsigned long long)leader_ret.next_owner_id);
+		return -1;
+	}
+
+	/* TODO: not sure about this */
+	/* since the source failed to write next_owner_id to be us, we do it
+	   instead */
+
+	return migrate_lease(token, options.our_host_id);
+
+ out:
+	memcpy(&token->leader, &leader_ret, sizeof(struct leader_record));
+	return 1;
 }
 
 int create_token(int num_disks, struct token **token_out)
@@ -261,17 +361,6 @@ void free_token(struct token *token)
 	free(token);
 }
 
-/* the caller can block on disk i/o */
-
-void release_token_wait(struct token *token)
-{
-	if (token->acquire_result == 1)
-		release_lease(token);
-
-	del_resource(token);
-	free_token(token);
-}
-
 static void *async_release_thread(void *arg GNUC_UNUSED)
 {
 	struct resource *r;
@@ -290,8 +379,12 @@ static void *async_release_thread(void *arg GNUC_UNUSED)
 		r = list_first_entry(&dispose_resources, struct resource, list);
 		pthread_mutex_unlock(&resource_mutex);
 
-		if (r->token->acquire_result == 1)
-			release_lease(r->token);
+		token = r->token;
+
+		if (token->acquire_result == 1)
+			release_lease(token);
+
+		close_disks(token->disks, token->num_disks);
 
 		/* we don't want to remove r from dispose_list until after the
 		   lease is released because we don't want a new token for
@@ -299,10 +392,9 @@ static void *async_release_thread(void *arg GNUC_UNUSED)
 		   the lease until after it's been released */
 
 		pthread_mutex_lock(&resource_mutex);
-		token = r->token;
-		_del_resource(token, r);
-		free_token(token);
+		_del_resource(r);
 		pthread_mutex_unlock(&resource_mutex);
+		free_token(token);
 	}
  out:
 	return NULL;

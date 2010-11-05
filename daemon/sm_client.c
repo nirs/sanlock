@@ -119,6 +119,79 @@ int sm_acquire_pid(int pid, int token_count, struct token *token_args[])
 	return do_acquire(-1, pid, token_count, token_args);
 }
 
+static int do_migrate(int sock, int pid, uint64_t target_host_id)
+{
+	struct sm_header h;
+	char *tokens_reply;
+	int rv, fd, data2, len;
+
+	if (sock == -1) {
+		/* connect to daemon and ask it to acquire a lease for
+		   another registered pid */
+
+		data2 = pid;
+
+		rv = connect_socket(MAIN_SOCKET_NAME, sizeof(MAIN_SOCKET_NAME), &fd);
+		if (rv < 0)
+			return rv;
+	} else {
+		/* use our own existing registered connection and ask daemon
+		   to acquire a lease for self */
+
+		data2 = -1;
+		fd = sock;
+	}
+
+	rv = send_header(fd, SM_CMD_MIGRATE, 0, data2);
+	if (rv < 0)
+		return rv;
+
+	rv = send(fd, &target_host_id, sizeof(uint64_t), 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	memset(&h, 0, sizeof(h));
+
+	rv = recv(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
+	if (rv != sizeof(h)) {
+		rv = -errno;
+		goto out;
+	}
+
+	len = h.length = sizeof(h);
+	tokens_reply = malloc(len);
+	if (!tokens_reply)
+		goto out;
+
+	rv = recv(fd, tokens_reply, len, MSG_WAITALL);
+	if (rv != len) {
+		rv = -errno;
+		goto out;
+	}
+
+	if (h.data) {
+		rv = (int)h.data;
+		goto out;
+	}
+	rv = 0;
+ out:
+	if (sock == -1)
+		close(fd);
+	return rv;
+}
+
+int sm_migrate_self(int sock, uint64_t target_host_id)
+{
+	return do_migrate(sock, -1, target_host_id);
+}
+
+int sm_migrate_pid(int pid, uint64_t target_host_id)
+{
+	return do_migrate(-1, pid, target_host_id);
+}
+
 /* tell daemon to release lease(s) for given pid.
    I don't think the pid itself will usually tell sm to release leases,
    but it will be requested by a manager overseeing the pid */

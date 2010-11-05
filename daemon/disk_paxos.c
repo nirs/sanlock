@@ -442,15 +442,13 @@ static int host_id_alive(uint64_t host_id GNUC_UNUSED)
 	return 1;
 }
 
-static int get_prev_leader(struct token *token, int force,
-			   struct leader_record *leader_out)
+int disk_paxos_leader_read(struct token *token, struct leader_record *leader_ret)
 {
 	struct leader_record prev_leader;
 	struct leader_record *leaders;
-	struct request_record req;
 	int *leader_reps;
 	int leaders_len, leader_reps_len;
-	int num_reads, num_writes, num_free;
+	int num_reads;
 	int num_disks = token->num_disks;
 	int rv, d, i, found;
 	int error;
@@ -504,7 +502,7 @@ static int get_prev_leader(struct token *token, int force,
 	}
 
 	if (!majority_disks(token, num_reads)) {
-		log_error(token, "cannot read leader from majority of disks");
+		log_error(token, "dp_leader_read no majority reads");
 		error = DP_READ_LEADERS;
 		goto fail;
 	}
@@ -526,14 +524,14 @@ static int get_prev_leader(struct token *token, int force,
 	}
 
 	if (!found) {
-		log_error(token, "cannot find majority leader");
+		log_error(token, "dp_leader_read no majority reps");
 		error = DP_DIFF_LEADERS;
 		goto fail;
 	}
 
-	log_debug(token, "prev_leader d %u reps %u", d, leader_reps[d]);
+	log_debug(token, "leader_read d %u reps %u", d, leader_reps[d]);
 
-	log_debug(token, "prev_leader owner %llu lver %llu hosts %llu "
+	log_debug(token, "leader_read owner %llu lver %llu hosts %llu "
 		  "time %llu res %s",
 		  (unsigned long long)prev_leader.owner_id,
 		  (unsigned long long)prev_leader.lver,
@@ -541,77 +539,7 @@ static int get_prev_leader(struct token *token, int force,
 		  (unsigned long long)prev_leader.timestamp,
 		  prev_leader.resource_name);
 
-	/*
-	 * signal handover request to current leader (prev_leader);
-	 * write request with highest leader version found + 1
-	 * to at least one disk.
-	 */
-
-	memset(&req, 0, sizeof(struct request_record));
-	req.lver = prev_leader.lver + 1;
-	req.force_mode = force;
-
-	log_debug(token, "write request lver %llu force %u",
-		  (unsigned long long)req.lver, req.force_mode);
-
-	num_writes = 0;
-
-	for (d = 0; d < num_disks; d++) {
-		rv = write_request(&token->disks[d], &req);
-		if (rv < 0)
-			continue;
-		num_writes++;
-	}
-
-	if (!num_writes) {
-		log_error(token, "cannot write request to any disk");
-		error = DP_WRITE_REQUESTS;
-		goto fail;
-	}
-
-	/*
-	 * check if current leader has released leadership by
-	 * writing LEASE_FREE timestamp on majority of disks
-	 * ref: check_lease_state()
-	 */
-
-	num_free = 0;
-
-	for (d = 0; d < num_disks; d++) {
-		if (!leaders_match(&prev_leader, &leaders[d]))
-			continue;
-
-		if (leaders[d].timestamp == LEASE_FREE)
-			num_free++;
-	}
-
-	if (majority_disks(token, num_free)) {
-		log_debug(token, "lease free on majority %d disks", num_free);
-		goto out;
-	}
-
-	/*
-	 * check if current leader fails to update its host_id lock
-	 */
-
-	log_debug(token, "wait host_timeout_seconds %u",
-		  to.host_timeout_seconds);
-
-	for (i = 0; i < to.host_timeout_seconds; i++) {
-		sleep(1);
-
-		if (host_id_alive(prev_leader.owner_id)) {
-			log_error(token, "leader alive owner_id %llu",
-				  (unsigned long long)prev_leader.owner_id);
-			error = DP_LIVE_LEADER;
-			goto fail;
-		}
-	}
-
-	log_debug(token, "leader timeout owner_id %llu",
-		  (unsigned long long)prev_leader.owner_id);
- out:
-	memcpy(leader_out, &prev_leader, sizeof(struct leader_record));
+	memcpy(leader_ret, &prev_leader, sizeof(struct leader_record));
 	return DP_OK;
 
  fail:
@@ -635,7 +563,7 @@ static int write_new_leader(struct token *token, struct leader_record *nl)
 	}
 
 	if (!majority_disks(token, num_writes)) {
-		log_error(token, "cannot write leader to majority of disks");
+		log_error(token, "write_new_leader no majority writes");
 		error = DP_WRITE_LEADERS;
 	}
 
@@ -647,31 +575,58 @@ static int write_new_leader(struct token *token, struct leader_record *nl)
  * ref: obtain()
  */
 
-int disk_paxos_acquire(struct token *token, int force,
+int disk_paxos_acquire(struct token *token, int force GNUC_UNUSED,
 		       struct leader_record *leader_ret,
 		       uint64_t reacquire_lver)
 {
 	struct leader_record prev_leader;
 	struct leader_record new_leader;
 	struct paxos_dblock dblock;
-	int error;
+	int i, error;
 
-	/*
-	 * find a valid current/previous leader on which to base
-	 * the new leader
-	 */
+	log_debug(token, "dp_acquire begin");
 
-	error = get_prev_leader(token, force, &prev_leader);
-	if (error < 0) {
-		log_error(token, "get_prev_leader error %d", error);
+	error = disk_paxos_leader_read(token, &prev_leader);
+	if (error < 0)
 		goto out;
+
+	if (prev_leader.timestamp == LEASE_FREE) {
+		log_debug(token, "dp_acquire lease free");
+		goto run;
 	}
 
+	if (prev_leader.owner_id == options.our_host_id) {
+		log_debug(token, "dp_acquire already owner");
+		goto run;
+	}
+
+	/*
+	 * check if current leader fails to update its host_id lock
+	 */
+
+	log_debug(token, "dp_acquire wait host_timeout_seconds %u",
+		  to.host_timeout_seconds);
+
+	for (i = 0; i < to.host_timeout_seconds; i++) {
+		sleep(1);
+
+		if (host_id_alive(prev_leader.owner_id)) {
+			log_error(token, "dp_acquire leader alive owner_id %llu",
+				  (unsigned long long)prev_leader.owner_id);
+			error = DP_LIVE_LEADER;
+			goto out;
+		}
+	}
+
+	log_debug(token, "dp_acquire leader timeout owner_id %llu",
+		  (unsigned long long)prev_leader.owner_id);
+
+ run:
 	if (reacquire_lver && prev_leader.lver != reacquire_lver) {
-		error = DP_REACQUIRE_LVER;
-		log_error(token, "reacquire %llu prev_leader %llu",
+		log_error(token, "dp_acquire reacquire %llu prev_leader %llu",
 			  (unsigned long long)reacquire_lver,
 			  (unsigned long long)prev_leader.lver);
+		error = DP_REACQUIRE_LVER;
 		goto out;
 	}
 
@@ -685,11 +640,11 @@ int disk_paxos_acquire(struct token *token, int force,
 	error = run_disk_paxos(token, options.our_host_id, options.our_host_id,
 			       new_leader.num_hosts, new_leader.lver, &dblock);
 	if (error < 0) {
-		log_error(token, "run_disk_paxos error %d", error);
+		log_error(token, "dp_acquire paxos error %d", error);
 		goto out;
 	}
 
-	log_debug(token, "paxos result dblock mbal %llu bal %llu inp %llu lver %llu",
+	log_debug(token, "dp_acquire paxos result dblock mbal %llu bal %llu inp %llu lver %llu",
 		  (unsigned long long)dblock.mbal,
 		  (unsigned long long)dblock.bal,
 		  (unsigned long long)dblock.inp,
@@ -698,19 +653,21 @@ int disk_paxos_acquire(struct token *token, int force,
 	/* the inp value we commited wasn't us */
 
 	if (dblock.inp != options.our_host_id) {
-		log_error(token, "paxos contention our_host_id %u "
+		log_error(token, "dp_acquire paxos contention our_host_id %u "
 			  "mbal %llu bal %llu inp %llu lver %llu",
 			  options.our_host_id,
 			  (unsigned long long)dblock.mbal,
 			  (unsigned long long)dblock.bal,
 			  (unsigned long long)dblock.inp,
 			  (unsigned long long)dblock.lver);
-		return DP_OTHER_INP;
+		error = DP_OTHER_INP;
+		goto out;
 	}
 
 	/* dblock has the disk paxos result: consensus inp and lver */
 
 	new_leader.owner_id = dblock.inp;
+	new_leader.next_owner_id = 0;
 	new_leader.lver = dblock.lver;
 	new_leader.timestamp = time(NULL);
 	new_leader.checksum = leader_checksum(&new_leader);
@@ -721,9 +678,60 @@ int disk_paxos_acquire(struct token *token, int force,
 
 	memcpy(leader_ret, &new_leader, sizeof(struct leader_record));
  out:
+	log_debug(token, "dp_acquire done %d", error);
 	return error;
 }
 
+int disk_paxos_migrate(struct token *token,
+		       struct leader_record *leader_last,
+		       struct leader_record *leader_ret,
+		       uint64_t target_host_id)
+{
+	struct leader_record new_leader;
+	int rv, d;
+	int error;
+
+	log_debug(token, "dp_migrate begin");
+
+	/* TODO: is it really worth reading/verifying leader here? it's safer */
+
+	for (d = 0; d < token->num_disks; d++) {
+		memset(&new_leader, 0, sizeof(struct leader_record));
+
+		rv = read_leader(&token->disks[d], &new_leader);
+		if (rv < 0)
+			continue;
+
+		if (memcmp(&new_leader, leader_last,
+			   sizeof(struct leader_record))) {
+			log_error(token, "dp_migrate leader changed before migrate");
+			error = DP_BAD_LEADER;
+			goto out;
+		}
+	}
+
+	if (new_leader.num_hosts < target_host_id) {
+		log_error(token, "dp_migrate num_hosts %llu target_host_id %llu",
+			  (unsigned long long)new_leader.num_hosts,
+			  (unsigned long long)target_host_id);
+		return DP_BAD_NUMHOSTS;
+	}
+
+	new_leader.next_owner_id = target_host_id;
+	new_leader.timestamp = time(NULL);
+	new_leader.checksum = leader_checksum(&new_leader);
+
+	error = write_new_leader(token, &new_leader);
+	if (error < 0)
+		goto out;
+
+	memcpy(leader_ret, &new_leader, sizeof(struct leader_record));
+ out:
+	log_debug(token, "dp_migrate done %d", error);
+	return error;
+}
+
+#if 0
 int disk_paxos_renew(struct token *token,
 		     struct leader_record *leader_last,
 		     struct leader_record *leader_ret)
@@ -757,15 +765,32 @@ int disk_paxos_renew(struct token *token,
  out:
 	return error;
 }
+#endif
 
 int disk_paxos_release(struct token *token,
 		       struct leader_record *leader_last,
 		       struct leader_record *leader_ret)
 {
 	struct leader_record new_leader;
+	int rv, d;
 	int error;
 
-	memcpy(&new_leader, leader_last, sizeof(struct leader_record));
+	/* TODO: is it really worth reading/verifying leader here? it's safer */
+
+	for (d = 0; d < token->num_disks; d++) {
+		memset(&new_leader, 0, sizeof(struct leader_record));
+
+		rv = read_leader(&token->disks[d], &new_leader);
+		if (rv < 0)
+			continue;
+
+		if (memcmp(&new_leader, leader_last,
+			   sizeof(struct leader_record))) {
+			log_error(token, "leader changed before release");
+			return DP_BAD_LEADER;
+		}
+	}
+
 	new_leader.timestamp = LEASE_FREE;
 	new_leader.checksum = leader_checksum(&new_leader);
 
@@ -776,16 +801,6 @@ int disk_paxos_release(struct token *token,
 	memcpy(leader_ret, &new_leader, sizeof(struct leader_record));
  out:
 	return error;
-}
-
-int disk_paxos_transfer(struct token *token GNUC_UNUSED,
-			int hostid GNUC_UNUSED,
-			struct leader_record *leader_last GNUC_UNUSED,
-			struct leader_record *leader_ret GNUC_UNUSED)
-{
-	/* what to change for a transfer?  new hostid in leader blocks,
-	   new dblocks?  new lver in leader and dblocks? */
-	return -1;
 }
 
 int disk_paxos_init(struct token *token, int num_hosts, int max_hosts)

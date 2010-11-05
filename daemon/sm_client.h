@@ -9,6 +9,7 @@
 int sm_register(void);
 int sm_acquire_self(int sock, int token_count, struct token *tokens_args[]);
 int sm_release_self(int sock, int token_count, struct token *tokens_args[]);
+int sm_migrate_self(int sock, uint64_t target_host_id);
 
 /*
  * process asks daemon to acquire/release leases for another separately
@@ -17,6 +18,7 @@ int sm_release_self(int sock, int token_count, struct token *tokens_args[]);
 
 int sm_acquire_pid(int pid, int token_count, struct token *tokens_args[]);
 int sm_release_pid(int pid, int token_count, struct token *tokens_args[]);
+int sm_migrate_pid(int pid, uint64_t target_host_id);
 
 /*
  * daemon admin/managment

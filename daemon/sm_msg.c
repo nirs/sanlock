@@ -154,3 +154,4 @@ int recv_header(int sock, struct sm_header *header)
 
 	return 0;
 }
+
