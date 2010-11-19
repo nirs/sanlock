@@ -348,6 +348,30 @@ static int set_cmd_active(int ci_target, int cmd)
 	return 0;
 }
 
+/* clear the unreceived portion of an aborted command */
+
+static void client_recv_all(int ci, struct sm_header *h_recv, int pos)
+{
+	char trash[64];
+	int rem = h_recv->length - sizeof(struct sm_header) - pos;
+	int rv, total = 0;
+
+	if (!rem)
+		return;
+
+	while (1) {
+		rv = recv(client[ci].fd, trash, sizeof(trash), MSG_DONTWAIT);
+		if (rv <= 0)
+			break;
+		total += rv;
+
+		if (total > MAX_CLIENT_MSG)
+			break;
+	}
+
+	log_debug(NULL, "recv_all ci %d rem %d total %d", ci, rem, total);
+}
+
 static void *cmd_acquire_thread(void *args_in)
 {
 	struct cmd_args *ca = args_in;
@@ -359,7 +383,7 @@ static void *cmd_acquire_thread(void *args_in)
 	uint64_t reacquire_lver = 0;
 	int fd, rv, i, j, disks_len, num_disks, empty_slots, opened;
 	int alloc_count = 0, add_count = 0, open_count = 0, acquire_count = 0;
-	int need_setowner = 0, pid_dead = 0;
+	int pos = 0, need_setowner = 0, pid_dead = 0;
 	int new_tokens_count;
 
 	cl = &client[ca->ci_target];
@@ -408,6 +432,8 @@ static void *cmd_acquire_thread(void *args_in)
 		memset(token, 0, sizeof(struct token));
 
 		rv = recv(fd, token, sizeof(struct token), MSG_WAITALL);
+		if (rv > 0)
+			pos += rv;
 		if (rv != sizeof(struct token)) {
 			log_error(NULL, "cmd_acquire recv %d %d", rv, errno);
 			free(token);
@@ -436,6 +462,8 @@ static void *cmd_acquire_thread(void *args_in)
 		memset(disks, 0, disks_len);
 
 		rv = recv(fd, disks, disks_len, MSG_WAITALL);
+		if (rv > 0)
+			pos += rv;
 		if (rv != disks_len) {
 			log_error(NULL, "cmd_acquire recv %d %d", rv, errno);
 			free(disks);
@@ -454,6 +482,8 @@ static void *cmd_acquire_thread(void *args_in)
 		new_tokens[i] = token;
 		alloc_count++;
 	}
+
+	/* TODO: warn if header.length != sizeof(header) + pos ? */
 
 	for (i = 0; i < new_tokens_count; i++) {
 		token = new_tokens[i];
@@ -580,6 +610,8 @@ static void *cmd_acquire_thread(void *args_in)
 
  fail_reply:
 	set_cmd_active(ca->ci_target, 0);
+
+	client_recv_all(ca->ci_in, &ca->header, pos);
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
 	h.length = sizeof(h);
@@ -853,16 +885,17 @@ static void cmd_set_host_id(int fd, struct sm_header *h_recv)
 	send(fd, &h, sizeof(struct sm_header), MSG_NOSIGNAL);
 }
 
-static void process_cmd_thread(int ci_in, struct sm_header *h)
+static void process_cmd_thread(int ci_in, struct sm_header *h_recv)
 {
 	pthread_t cmd_thread;
 	pthread_attr_t attr;
 	struct cmd_args *ca;
+	struct sm_header h;
 	int rv, ci_target;
 
-	if (h->data2 != -1) {
+	if (h_recv->data2 != -1) {
 		/* lease for another registered client with pid specified by data2 */
-		ci_target = find_client_pid(h->data2);
+		ci_target = find_client_pid(h_recv->data2);
 		if (ci_target < 0) {
 			rv = -ENOENT;
 			goto fail;
@@ -879,7 +912,7 @@ static void process_cmd_thread(int ci_in, struct sm_header *h)
 		goto fail;
 	}
 
-	rv = set_cmd_active(ci_target, h->cmd);
+	rv = set_cmd_active(ci_target, h_recv->cmd);
 	if (rv < 0)
 		goto fail;
 
@@ -890,14 +923,14 @@ static void process_cmd_thread(int ci_in, struct sm_header *h)
 	}
 	ca->ci_in = ci_in;
 	ca->ci_target = ci_target;
-	memcpy(&ca->header, h, sizeof(struct sm_header));
+	memcpy(&ca->header, h_recv, sizeof(struct sm_header));
 
 	/* TODO: use a thread pool */
 
 	pthread_attr_init(&attr);
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 
-	switch (h->cmd) {
+	switch (h_recv->cmd) {
 	case SM_CMD_ACQUIRE:
 		rv = pthread_create(&cmd_thread, &attr, cmd_acquire_thread, ca);
 		break;
@@ -925,18 +958,21 @@ static void process_cmd_thread(int ci_in, struct sm_header *h)
  fail_active:
 	set_cmd_active(ci_target, 0);
  fail:
-	h->length = sizeof(struct sm_header);
-	h->data = rv;
-	send(client[ci_in].fd, h, sizeof(struct sm_header), MSG_NOSIGNAL);
+	client_recv_all(ci_in, h_recv, 0);
+
+	memcpy(&h, h_recv, sizeof(struct sm_header));
+	h.length = sizeof(h);
+	h.data = rv;
+	send(client[ci_in].fd, &h, sizeof(struct sm_header), MSG_NOSIGNAL);
 	client_back(ci_in, client[ci_in].fd);
 }
 
-static void process_cmd_daemon(int ci, struct sm_header *h)
+static void process_cmd_daemon(int ci, struct sm_header *h_recv)
 {
 	int rv, pid, auto_close = 1;
 	int fd = client[ci].fd;
 
-	switch (h->cmd) {
+	switch (h_recv->cmd) {
 	case SM_CMD_REGISTER:
 		rv = get_peer_pid(fd, &pid);
 		if (rv < 0)
@@ -950,13 +986,13 @@ static void process_cmd_daemon(int ci, struct sm_header *h)
 		external_shutdown = 1;
 		break;
 	case SM_CMD_STATUS:
-		cmd_status(fd, h);
+		cmd_status(fd, h_recv);
 		break;
 	case SM_CMD_LOG_DUMP:
-		cmd_log_dump(fd, h);
+		cmd_log_dump(fd, h_recv);
 		break;
 	case SM_CMD_SET_HOST_ID:
-		cmd_set_host_id(fd, h);
+		cmd_set_host_id(fd, h_recv);
 		break;
 	};
 

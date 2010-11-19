@@ -39,7 +39,7 @@ int sm_register(void)
 	if (rv < 0)
 		return rv;
 
-	rv = send_header(sock, SM_CMD_REGISTER, 0, 0);
+	rv = send_header(sock, SM_CMD_REGISTER, 0, 0, 0);
 	if (rv < 0) {
 		close(sock);
 		return rv;
@@ -53,6 +53,20 @@ static int do_acquire(int sock, int pid, int token_count, struct token *token_ar
 	struct token *t;
 	struct sm_header h;
 	int rv, i, fd, data2;
+	int datalen = 0;
+
+	if (token_count > MAX_LEASE_ARGS)
+		return -EINVAL;
+
+	for (i = 0; i < token_count; i++) {
+		t = token_args[i];
+		datalen += sizeof(struct token);
+
+		if (t->num_disks > MAX_DISKS)
+			return -EINVAL;
+
+		datalen += (t->num_disks * sizeof(struct sync_disk));
+	}
 
 	if (sock == -1) {
 		/* connect to daemon and ask it to acquire a lease for
@@ -71,7 +85,7 @@ static int do_acquire(int sock, int pid, int token_count, struct token *token_ar
 		fd = sock;
 	}
 
-	rv = send_header(fd, SM_CMD_ACQUIRE, token_count, data2);
+	rv = send_header(fd, SM_CMD_ACQUIRE, datalen, token_count, data2);
 	if (rv < 0)
 		return rv;
 
@@ -142,7 +156,7 @@ static int do_migrate(int sock, int pid, uint64_t target_host_id)
 		fd = sock;
 	}
 
-	rv = send_header(fd, SM_CMD_MIGRATE, 0, data2);
+	rv = send_header(fd, SM_CMD_MIGRATE, sizeof(uint64_t), 0, data2);
 	if (rv < 0)
 		return rv;
 
@@ -219,7 +233,8 @@ static int do_release(int sock, int pid, int token_count, struct token *token_ar
 		fd = sock;
 	}
 
-	rv = send_header(fd, SM_CMD_RELEASE, token_count, data2);
+	rv = send_header(fd, SM_CMD_RELEASE, token_count * NAME_ID_SIZE,
+			 token_count, data2);
 	if (rv < 0)
 		goto out;
 
@@ -276,7 +291,7 @@ static int send_command(int cmd, uint32_t data)
 	if (rv < 0)
 		return -1;
 
-	rv = send_header(sock, cmd, data, 0);
+	rv = send_header(sock, cmd, 0, data, 0);
 	if (rv < 0)
 		goto clean;
 
