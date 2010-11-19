@@ -27,6 +27,5 @@ struct sm_header {
 int setup_listener_socket(const char *name, int length, int *listener_socket);
 int connect_socket(const char *name, int length, int* sock_fd);
 int send_header(int sock, int cmd, uint32_t data, uint32_t data2);
-int recv_header(int sock, struct sm_header *header);
 
 #endif

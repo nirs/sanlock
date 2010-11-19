@@ -134,24 +134,3 @@ int send_header(int sock, int cmd, uint32_t data, uint32_t data2)
 	return 0;
 }
 
-int recv_header(int sock, struct sm_header *header)
-{
-	int rv;
-
-	rv = recv(sock, header, sizeof(struct sm_header), MSG_WAITALL);
-
-	log_debug(NULL, "recv_header fd %d rv %d", sock, rv);
-
-	if (rv != sizeof(struct sm_header)) {
-		log_error(NULL, "recv_header fd %d error %d %d", sock, rv, errno);
-		return -1;
-	}
-
-	if (header->magic != SM_MAGIC) {
-		log_error(NULL, "recv_header bad magic %x", header->magic);
-		return -1;
-	}
-
-	return 0;
-}
-

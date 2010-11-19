@@ -14,7 +14,7 @@ void release_token_async(struct token *token);
 int add_resource(struct token *token, int pid);
 void del_resource(struct token *token);
 void save_resource(struct token *token);
-void purge_deleted_resources(int pid);
+void purge_saved_resources(int pid);
 void save_resource_leader(struct token *token);
 
 int setup_token_manager(void);

@@ -127,6 +127,7 @@ static void client_dead(int ci)
 	memset(&client[ci], 0, sizeof(struct client));
 	client[ci].fd = -1;
 	pollfd[ci].fd = -1;
+	pollfd[ci].events = 0;
 }
 
 static int client_add(int fd, void (*workfn)(int ci), void (*deadfn)(int ci))
@@ -179,7 +180,6 @@ static int get_peer_pid(int fd, int *pid)
 
 static void client_pid_dead(int ci)
 {
-	struct token **tokens;
 	struct client *cl = &client[ci];
 	int delay_release = 0;
 	int i, pid;
@@ -194,7 +194,9 @@ static void client_pid_dead(int ci)
 	pid = cl->pid;
 	cl->pid = -1;
 	cl->pid_dead = 1;
-	if (!cl->acquire_done) {
+
+	/* TODO: handle other cmds in progress */
+	if ((cl->cmd_active == SM_CMD_ACQUIRE) && !cl->acquire_done) {
 		delay_release = 1;
 		/* client_dead() also delayed */
 	}
@@ -204,22 +206,21 @@ static void client_pid_dead(int ci)
 		kill(SIGKILL, pid);
 
 	/* the dead pid may have previously released some resources
-	   that are being kept on the deleted_resources list in case
+	   that are being kept on the saved_resources list in case
 	   the pid wanted to reacquire them */
 
-	purge_deleted_resources(pid);
+	purge_saved_resources(pid);
 
-	if (delay_release)
+	if (delay_release) {
+		log_debug(NULL, "client_pid_dead delay release");
 		return;
+	}
 
 	/* cmd_acquire_thread is done so we can release tokens here */
 
-	tokens = cl->tokens;
-
 	for (i = 0; i < MAX_LEASES; i++) {
-		if (tokens[i])
-			release_token_async(tokens[i]);
-		tokens[i] = NULL;
+		if (cl->tokens[i])
+			release_token_async(cl->tokens[i]);
 	}
 
 	client_dead(ci);
@@ -284,11 +285,13 @@ static int main_loop(void)
 				continue;
 			if (pollfd[i].revents & POLLIN) {
 				workfn = client[i].workfn;
-				workfn(i);
+				if (workfn)
+					workfn(i);
 			}
 			if (pollfd[i].revents & (POLLERR | POLLHUP | POLLNVAL)) {
 				deadfn = client[i].deadfn;
-				deadfn(i);
+				if (deadfn)
+					deadfn(i);
 			}
 		}
 
@@ -344,11 +347,6 @@ static int set_cmd_active(int ci_target, int cmd)
 
 	return 0;
 }
-
-
-/* TODO: if an error causes us to break from the recv loop,
-   do we need to recv the remaining data that was sent? or
-   will the connection just be closed? */
 
 static void *cmd_acquire_thread(void *args_in)
 {
@@ -541,8 +539,6 @@ static void *cmd_acquire_thread(void *args_in)
 	cl->need_setowner = need_setowner;
 	pthread_mutex_unlock(&cl->mutex);
 
-	client_back(ca->ci_in, fd);
-
 	log_debug(NULL, "cmd_acquire done %d", new_tokens_count);
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
@@ -550,6 +546,7 @@ static void *cmd_acquire_thread(void *args_in)
 	h.data = new_tokens_count;
 	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
 
+	client_back(ca->ci_in, fd);
 	free(ca);
 	return NULL;
 
@@ -592,6 +589,7 @@ static void *cmd_acquire_thread(void *args_in)
 	if (pid_dead)
 		client_dead(ca->ci_target);
 
+	client_back(ca->ci_in, fd);
 	free(ca);
 	return NULL;
 }
@@ -635,7 +633,7 @@ static void *cmd_release_thread(void *args_in)
 
 			rv = release_lease(token);
 			save_resource(token);
-
+			free_token(token);
 			cl->tokens[j] = NULL;
 			results[i] = rv;
 			found = 1;
@@ -651,8 +649,6 @@ static void *cmd_release_thread(void *args_in)
 
 	set_cmd_active(ca->ci_target, 0);
 
-	client_back(ca->ci_in, fd);
-
 	log_debug(NULL, "cmd_release done %d", rem_tokens_count);
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
@@ -660,6 +656,7 @@ static void *cmd_release_thread(void *args_in)
 	send(fd, &h, sizeof(struct sm_header), MSG_NOSIGNAL);
 	send(fd, &results, sizeof(int) * rem_tokens_count, MSG_NOSIGNAL);
 
+	client_back(ca->ci_in, fd);
 	free(ca);
 	return NULL;
 }
@@ -737,8 +734,6 @@ static void *cmd_migrate_thread(void *args_in)
 	if (result < 0)
 		set_cmd_active(ca->ci_target, 0);
 
-	client_back(ca->ci_in, fd);
-
 	log_debug(NULL, "cmd_migrate done %d", total);
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
@@ -748,6 +743,7 @@ static void *cmd_migrate_thread(void *args_in)
 	if (total)
 		send(fd, tokens_reply, tokens_len, MSG_NOSIGNAL);
 
+	client_back(ca->ci_in, fd);
 	free(ca);
 	return NULL;
 }
@@ -806,8 +802,6 @@ static void *cmd_setowner_thread(void *args_in)
  reply:
 	set_cmd_active(ca->ci_target, 0);
 
-	client_back(ca->ci_in, fd);
-
 	log_debug(NULL, "cmd_setowner done %d", total);
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
@@ -817,6 +811,7 @@ static void *cmd_setowner_thread(void *args_in)
 	if (total)
 		send(fd, tokens_reply, tokens_len, MSG_NOSIGNAL);
 
+	client_back(ca->ci_in, fd);
 	free(ca);
 	return NULL;
 }
@@ -933,6 +928,7 @@ static void process_cmd_thread(int ci_in, struct sm_header *h)
 	h->length = sizeof(struct sm_header);
 	h->data = rv;
 	send(client[ci_in].fd, h, sizeof(struct sm_header), MSG_NOSIGNAL);
+	client_back(ci_in, client[ci_in].fd);
 }
 
 static void process_cmd_daemon(int ci, struct sm_header *h)
@@ -945,7 +941,7 @@ static void process_cmd_daemon(int ci, struct sm_header *h)
 		rv = get_peer_pid(fd, &pid);
 		if (rv < 0)
 			break;
-		log_debug(NULL, "cmd_register ci %d pid %d", ci, pid);
+		log_debug(NULL, "cmd_register ci %d fd %d pid %d", ci, fd, pid);
 		client[ci].pid = pid;
 		client[ci].deadfn = client_pid_dead;
 		auto_close = 0;
@@ -971,11 +967,26 @@ static void process_cmd_daemon(int ci, struct sm_header *h)
 static void process_connection(int ci)
 {
 	struct sm_header h;
+	void (*deadfn)(int ci);
 	int rv;
 
-	rv = recv_header(client[ci].fd, &h);
-	if (rv < 0)
+	memset(&h, 0, sizeof(h));
+
+	rv = recv(client[ci].fd, &h, sizeof(h), MSG_WAITALL);
+	if (!rv)
 		return;
+	if (rv < 0) {
+		log_error(NULL, "ci %d recv error %d", ci, errno);
+		return;
+	}
+	if (rv != sizeof(h)) {
+		log_error(NULL, "ci %d recv size %d", ci, rv);
+		goto dead;
+	}
+	if (h.magic != SM_MAGIC) {
+		log_error(NULL, "ci %d recv %d magic %x", ci, rv, h.magic);
+		goto dead;
+	}
 
 	switch (h.cmd) {
 	case SM_CMD_REGISTER:
@@ -995,6 +1006,13 @@ static void process_connection(int ci)
 	default:
 		log_error(NULL, "ci %d cmd %d unknown", ci, h.cmd);
 	};
+
+	return;
+
+ dead:
+	deadfn = client[ci].deadfn;
+	if (deadfn)
+		deadfn(ci);
 }
 
 static void process_listener(int ci GNUC_UNUSED)

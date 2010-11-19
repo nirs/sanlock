@@ -29,7 +29,7 @@ struct sm_timeouts to;
 
 static struct list_head resources;
 static struct list_head dispose_resources;
-static struct list_head deleted_resources;
+static struct list_head saved_resources;
 static pthread_mutex_t resource_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t resource_cond = PTHREAD_COND_INITIALIZER;
 static pthread_t release_thread;
@@ -72,13 +72,23 @@ int add_resource(struct token *token, int pid)
 
 	pthread_mutex_lock(&resource_mutex);
 
-	if (find_resource(&resources, token->resource_name) ||
-	    find_resource(&dispose_resources, token->resource_name)) {
+	r = find_resource(&resources, token->resource_name);
+	if (r) {
+		log_error(token, "add_resource used token_id %d",
+			  r->token->token_id);
 		rv = -EEXIST;
 		goto out;
 	}
 
-	r = find_resource(&deleted_resources, token->resource_name);
+	r = find_resource(&dispose_resources, token->resource_name);
+	if (r) {
+		log_error(token, "add_resource disposed token_id %d",
+			  r->token->token_id);
+		rv = -EEXIST;
+		goto out;
+	}
+
+	r = find_resource(&saved_resources, token->resource_name);
 	if (r) {
 		if (r->pid == pid) {
 			/* the same pid is allowed to reacquire a resource */
@@ -89,6 +99,7 @@ int add_resource(struct token *token, int pid)
 			   was released by an existing (but paused) pid,
 			   because the paused pid may resume and expect to
 			   reacquire the lease unchanged */
+			log_error(token, "add_resource saved for %d", r->pid);
 			rv = -EBUSY;
 			goto out;
 		}
@@ -132,11 +143,11 @@ void del_resource(struct token *token)
 	pthread_mutex_unlock(&resource_mutex);
 }
 
-/* resources are kept on the deleted list when the token is released for a pid
+/* resources are kept on the saved list when the token is released for a pid
    that's still running (e.g. vm paused) in case the leases need to be
    reacquired later with the same version (e.g. vm resumed).  r->pid is the
    only pid that will be allowed to reacquire this resource off the
-   deleted_resources list */
+   saved_resources list */
 
 void save_resource(struct token *token)
 {
@@ -146,17 +157,17 @@ void save_resource(struct token *token)
 	r = find_resource(&resources, token->resource_name);
 	if (r) {
 		r->token = NULL;
-		list_move(&r->list, &deleted_resources);
+		list_move(&r->list, &saved_resources);
 	}
 	pthread_mutex_unlock(&resource_mutex);
 }
 
-void purge_deleted_resources(int pid)
+void purge_saved_resources(int pid)
 {
 	struct resource *r, *r2;
 
 	pthread_mutex_lock(&resource_mutex);
-	list_for_each_entry_safe(r, r2, &deleted_resources, list) {
+	list_for_each_entry_safe(r, r2, &saved_resources, list) {
 		if (r->pid == pid) {
 			list_del(&r->list);
 			free(r);
@@ -424,7 +435,7 @@ int setup_token_manager(void)
 
 	INIT_LIST_HEAD(&resources);
 	INIT_LIST_HEAD(&dispose_resources);
-	INIT_LIST_HEAD(&deleted_resources);
+	INIT_LIST_HEAD(&saved_resources);
 
 	rv = pthread_create(&release_thread, NULL, async_release_thread, NULL);
 	if (rv)
