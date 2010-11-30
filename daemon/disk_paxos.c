@@ -16,7 +16,6 @@
 #include "sm.h"
 #include "sm_msg.h"
 #include "disk_paxos.h"
-#include "sm_options.h"
 #include "log.h"
 #include "crc32c.h"
 #include "diskio.h"
@@ -25,11 +24,7 @@
  * largely copied from vdsm.git/sync_manager/
  */
 
-#define LEASE_FREE 0
-
 #define NO_VAL 0
-
-extern int cluster_mode;
 
 int majority_disks(struct token *token, int num)
 {
@@ -378,7 +373,7 @@ static int run_disk_paxos(struct token *token, int host_id, uint64_t inp,
 	return DP_OK;
 }
 
-static uint32_t leader_checksum(struct leader_record *lr)
+uint32_t leader_checksum(struct leader_record *lr)
 {
 	return crc32c((uint32_t)~1, (char *)lr, LEADER_CHECKSUM_LEN);
 }
@@ -396,7 +391,7 @@ static int verify_leader(struct token *token, int d, struct leader_record *lr)
 		return DP_BAD_VERSION;
 	}
 
-	if (lr->cluster_mode != cluster_mode) {
+	if (lr->cluster_mode != options.cluster_mode) {
 		log_error(token, "disk %d leader has wrong cluster mode %d", d,
 			  lr->cluster_mode);
 		return DP_BAD_CLUSTERMODE;
@@ -604,10 +599,10 @@ int disk_paxos_acquire(struct token *token, int force GNUC_UNUSED,
 	 * check if current leader fails to update its host_id lock
 	 */
 
-	log_debug(token, "dp_acquire wait host_timeout_seconds %u",
-		  to.host_timeout_seconds);
+	log_debug(token, "dp_acquire wait host_id_timeout_seconds %u",
+		  to.host_id_timeout_seconds);
 
-	for (i = 0; i < to.host_timeout_seconds; i++) {
+	for (i = 0; i < to.host_id_timeout_seconds; i++) {
 		sleep(1);
 
 		if (host_id_alive(prev_leader.owner_id)) {
@@ -809,6 +804,33 @@ int disk_paxos_init(struct token *token, int num_hosts, int max_hosts)
 	struct request_record req;
 	struct paxos_dblock dblock;
 	int d, q;
+	uint32_t offset, ss;
+	uint64_t bb, be, sb, se;
+
+	printf("initialize lease for resource %s\n", token->resource_name);
+	for (d = 0; d < token->num_disks; d++) {
+		printf("disk %s sector_size %d offset %llu\n",
+		       token->disks[d].path,
+		       token->disks[d].sector_size,
+		       (unsigned long long)token->disks[d].offset);
+	}
+
+	offset = token->disks[0].offset;
+	ss = token->disks[0].sector_size;
+	bb = offset;
+	be = offset + (ss * (max_hosts + 2) - 1);
+	sb = bb / ss;
+	se = be / ss;
+
+	printf("disk area %llu - %llu len %llu (bytes)\n",
+	       (unsigned long long)bb,
+	       (unsigned long long)be,
+	       (unsigned long long)be - bb);
+	printf("disk area %llu - %llu len %llu (sectors)\n",
+	       (unsigned long long)sb,
+	       (unsigned long long)se,
+	       (unsigned long long)se - sb);
+
 
 	memset(&leader, 0, sizeof(struct leader_record));
 	memset(&req, 0, sizeof(struct request_record));
@@ -816,7 +838,7 @@ int disk_paxos_init(struct token *token, int num_hosts, int max_hosts)
 
 	leader.magic = PAXOS_DISK_MAGIC;
 	leader.version = PAXOS_DISK_VERSION_MAJOR | PAXOS_DISK_VERSION_MINOR;
-	leader.cluster_mode = cluster_mode;
+	leader.cluster_mode = options.cluster_mode;
 	leader.sector_size = token->disks[0].sector_size;
 	leader.num_hosts = num_hosts;
 	leader.max_hosts = max_hosts;

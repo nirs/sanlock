@@ -17,7 +17,6 @@
 #include "sm.h"
 #include "sm_msg.h"
 #include "disk_paxos.h"
-#include "sm_options.h"
 #include "log.h"
 
 #define LOG_STR_LEN 256

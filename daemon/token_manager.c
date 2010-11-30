@@ -19,7 +19,6 @@
 #include "disk_paxos.h"
 #include "token_manager.h"
 #include "watchdog.h"
-#include "sm_options.h"
 #include "lockfile.h"
 #include "log.h"
 #include "diskio.h"

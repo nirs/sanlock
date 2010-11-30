@@ -19,15 +19,22 @@
 #include <sys/time.h>
 #include <sys/un.h>
 
+#define EXTERN
 #include "sm.h"
 #include "sm_msg.h"
 #include "disk_paxos.h"
-#include "sm_options.h"
 #include "token_manager.h"
 #include "lockfile.h"
 #include "log.h"
 #include "diskio.h"
 #include "sm_client.h"
+#include "host_id.h"
+#include "delta_lease.h"
+
+/* priorities are LOG_* from syslog.h */
+int log_logfile_priority = LOG_ERR;
+int log_syslog_priority = LOG_ERR;
+int log_stderr_priority = LOG_ERR;
 
 struct client {
 	int used;
@@ -49,11 +56,6 @@ static int client_size = 0;
 static struct client *client = NULL;
 static struct pollfd *pollfd = NULL;
 
-/* priorities are LOG_* from syslog.h */
-int log_logfile_priority = LOG_ERR;
-int log_syslog_priority = LOG_ERR;
-int log_stderr_priority = LOG_ERR;
-
 /* sync_manager <action>'s */
 #define ACT_INIT	1
 #define ACT_DAEMON	2
@@ -66,7 +68,6 @@ int log_stderr_priority = LOG_ERR;
 #define ACT_SET_HOST_ID	9
 #define ACT_MIGRATE	10
 
-int cluster_mode;
 static int no_daemon_fork;
 static char command[COMMAND_MAX];
 static int cmd_argc;
@@ -260,15 +261,11 @@ static int all_pids_dead(void)
 	return 1;
 }
 
-static int our_host_id_renewed(void)
-{
-	/* TODO: check if the thread renewing our host_id is still working */
-	return 1;
-}
+#define MAIN_POLL_MS 2000
 
 static int main_loop(void)
 {
-	int poll_timeout = to.unstable_poll_ms;
+	int poll_timeout = MAIN_POLL_MS;
 	void (*workfn) (int ci);
 	void (*deadfn) (int ci);
 	int i, rv, killing_pids = 0;
@@ -864,21 +861,41 @@ static void cmd_log_dump(int fd, struct sm_header *h_recv)
 	write_log_dump(fd, &h);
 }
 
+/* TODO: add host_id lease area that can be set along with our_host_id */
+
+/* Note: this can take a long time; do we want to block the main loop? */
+
 static void cmd_set_host_id(int fd, struct sm_header *h_recv)
 {
 	struct sm_header h;
 	int rv;
 
-	if (options.our_host_id < 0) {
-		options.our_host_id = h_recv->data;
+	if (options.our_host_id == h_recv->data) {
 		rv = 0;
-		log_debug(NULL, "host ID set to %d", options.our_host_id);
-	} else if (options.our_host_id == h_recv->data) {
-		rv = 0;
-	} else {
-		rv = 1;
-		log_error(NULL, "client tried to reset host ID");
+		goto reply;
 	}
+
+	if (options.our_host_id > 0) {
+		log_error(NULL, "cmd_set_host_id our_host_id already set %d",
+			  options.our_host_id);
+		rv = 1;
+		goto reply;
+	}
+
+	if (!h_recv->data) {
+		log_error(NULL, "cmd_set_host_id invalid host_id %d",
+			  h_recv->data);
+		rv = 1;
+		goto reply;
+	}
+
+	options.our_host_id = h_recv->data;
+
+	log_debug(NULL, "set our_host_id %d", options.our_host_id);
+
+	rv = start_host_id();
+
+ reply:
 	memcpy(&h, h_recv, sizeof(struct sm_header));
 	h.length = sizeof(h);
 	h.data = rv;
@@ -1023,6 +1040,10 @@ static void process_connection(int ci)
 		log_error(NULL, "ci %d recv %d magic %x", ci, rv, h.magic);
 		goto dead;
 	}
+	if ((options.our_host_id < 0) && (h.cmd != SM_CMD_SET_HOST_ID)) {
+		log_error(NULL, "host_id not set");
+		goto dead;
+	}
 
 	switch (h.cmd) {
 	case SM_CMD_REGISTER:
@@ -1165,14 +1186,16 @@ static int do_daemon(void)
 	if (rv < 0)
 		goto out_lockfile;
 
-	/* TODO: create thread here that acquires and renews our host_id lock */
+	if (options.our_host_id > 0) {
+		rv = start_host_id();
+		if (rv < 0)
+			goto out_token;
+	}
 
-	/* TODO: wait for host_id lock to be acquired */
+	main_loop();
 
-	rv = main_loop();
-
-	/* TODO: release host_id lock here */
-
+	stop_host_id();
+ out_token:
 	close_token_manager();
  out_lockfile:
 	unlink_lockfile(fd, DAEMON_LOCKFILE_DIR, DAEMON_NAME);
@@ -1185,27 +1208,46 @@ static int do_init(int token_count, struct token *token_args[],
 		   int init_num_hosts, int init_max_hosts)
 {
 	struct token *token;
+	struct sync_disk sd;
 	int num_opened;
 	int i, rv = 0;
 
+	if (!options.host_id_path[0])
+		goto tokens;
+
+	strncpy(sd.path, options.host_id_path, DISK_PATH_LEN);
+	sd.offset = options.host_id_offset;
+
+	num_opened = open_disks(&sd, 1);
+	if (num_opened != 1) {
+		log_tool("cannot open disk %s", sd.path);
+		return -1;
+	}
+
+	rv = delta_lease_init(&sd, init_num_hosts, init_max_hosts);
+	if (rv < 0) {
+		log_tool("cannot initialize host_id disk");
+		return -1;
+	}
+
+ tokens:
 	for (i = 0; i < token_count; i++) {
 		token = token_args[i];
 
 		num_opened = open_disks(token->disks, token->num_disks);
 		if (!majority_disks(token, num_opened)) {
 			log_tool("cannot open majority of disks");
-			rv = -1;
-			continue;
+			return -1;
 		}
 
 		rv = disk_paxos_init(token, init_num_hosts, init_max_hosts);
 		if (rv < 0) {
 			log_tool("cannot initialize disks");
-			rv = -1;
+			return -1;
 		}
 	}
 
-	return rv;
+	return 0;
 }
 
 static void print_usage(void)
@@ -1214,7 +1256,7 @@ static void print_usage(void)
 	printf("sync_manager <action> [options]\n\n");
 	printf("main actions:\n");
 	printf("  help			print usage\n");
-	printf("  init			initialize a lease disk area\n");
+	printf("  init			initialize disk areas for host_id and resource leases\n");
 	printf("  daemon		start daemon\n");
 	printf("\n");
 	printf("client actions:\n");
@@ -1224,6 +1266,7 @@ static void print_usage(void)
 	printf("  status		print internal daemon state\n");
 	printf("  log_dump		print internal daemon debug buffer\n");
 	printf("  shutdown		ask daemon to kill pids, release leases and exit\n");
+	printf("  set_host_id		set daemon host_id and host_id lease area\n");
 	printf("\n");
 
 	printf("\ninit [options] -h <num_hosts> -l LEASE\n");
@@ -1231,24 +1274,33 @@ static void print_usage(void)
 	printf("  -H <max_hosts>	max number of hosts the disk area will support\n");
 	printf("                        (default %d)\n", DEFAULT_MAX_HOSTS);
 	printf("  -m <num>		cluster mode of hosts (default 0)\n");
-	printf("  -l LEASE		lease description, see below\n");
+	printf("  -d <path>		disk path for host_id leases\n");
+	printf("  -o <num>		offset on disk for host_id leases\n");
+	printf("  -l LEASE		resource lease description, see below\n");
 
 	printf("\ndaemon [options]\n");
 	printf("  -D			don't fork and print all logging to stderr\n");
 	printf("  -L <level>		write logging at level and up to logfile (-1 none)\n");
 	printf("  -S <level>		write logging at level and up to syslog (-1 none)\n");
 	printf("  -m <num>		cluster mode of hosts (default 0)\n");
-	printf("  -i <num>		local host id\n");
 	printf("  -w <num>		enable (1) or disable (0) writing watchdog files\n");
 	printf("  -a <num>		io_timeout_seconds (-1 no aio)\n");
+	printf("  -i <num>		local host_id\n");
+	printf("  -d <path>		disk path for host_id leases\n");
+	printf("  -o <num>		offset on disk for host_id leases\n");
+
+	printf("\nset_host_id [options]\n");
+	printf("  -i <num>		local host_id\n");
+	printf("  -d <path>		disk path for host_id leases\n");
+	printf("  -o <num>		offset on disk for host_id leases\n");
 
 	printf("\ncommand -l LEASE -c <path> <args>\n");
-	printf("  -l LEASE		lease description, see below\n");
+	printf("  -l LEASE		resource lease description, see below\n");
 	printf("  -c <path> <args>	run command with args, -c must be final option\n");
 
 	printf("\nacquire -p <pid> -l LEASE\n");
 	printf("  -p <pid>		process that lease should be added for\n");
-	printf("  -l LEASE		lease description, see below\n");
+	printf("  -l LEASE		resource lease description, see below\n");
 
 	printf("\nrelease -p <pid> -r <resource_name>\n");
 	printf("  -p <pid>		process whose lease should be released\n");
@@ -1485,10 +1537,16 @@ static int read_args(int argc, char *argv[],
 			*init_max_hosts = atoi(optionarg);
 			break;
 		case 'm':
-			cluster_mode = atoi(optionarg);
+			options.cluster_mode = atoi(optionarg);
 			break;
 		case 'i':
 			options.our_host_id = atoi(optionarg);
+			break;
+		case 'd':
+			strncpy(options.host_id_path, optionarg, DISK_PATH_LEN);
+			break;
+		case 'o':
+			options.host_id_offset = atoi(optionarg);
 			break;
 		case 'a':
 			to.io_timeout_seconds = atoi(optionarg);
@@ -1519,7 +1577,7 @@ static int read_args(int argc, char *argv[],
 				return rv;
 			break;
 		case 'w':
-			options.opt_watchdog = atoi(optionarg);
+			options.use_watchdog = atoi(optionarg);
 			break;
 		case 'c':
 			begin_command = 1;
@@ -1592,6 +1650,11 @@ static int read_args(int argc, char *argv[],
 		}
 	}
 
+	if (!to.io_timeout_seconds) {
+		log_tool("invalid io_timeout_seconds %d", to.io_timeout_seconds);
+		return -EINVAL;
+	}
+
 	log_debug(NULL, "io_timeout_seconds %d", to.io_timeout_seconds);
 	return 0;
 }
@@ -1615,15 +1678,16 @@ int main(int argc, char *argv[])
 	int init_num_hosts = 0, init_max_hosts = DEFAULT_MAX_HOSTS;
 	int rv, fd;
 
-	to.host_timeout_seconds = 60;
-	to.host_renewal_warn_seconds = 30;
-	to.host_renewal_fail_seconds = 40;
-	to.host_renewal_seconds = 10;
-	to.script_shutdown_seconds = 10;
-	to.sigterm_shutdown_seconds = 10;
-	to.stable_poll_ms = 2000;
-	to.unstable_poll_ms = 500;
+	memset(&options, 0, sizeof(options));
+	options.use_watchdog = 1;
+	options.our_host_id = -1;
+	options.pid = -1;
+
+	/* TODO: derive others from io_timeout */
 	to.io_timeout_seconds = DEFAULT_IO_TIMEOUT_SECONDS;
+	to.host_id_timeout_seconds = 60;
+	to.host_id_renewal_seconds = 10;
+	to.host_id_renewal_fail_seconds = 40;
 
 	rv = read_args(argc, argv, &token_count, token_args,
 		       &action, &init_num_hosts, &init_max_hosts);

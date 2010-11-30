@@ -5,6 +5,13 @@
 #define GNUC_UNUSED __attribute__((__unused__))
 #endif
 
+#ifndef EXTERN
+#define EXTERN extern
+#else
+#undef EXTERN
+#define EXTERN
+#endif
+
 #define PAXOS_DISK_MAGIC 0x06152010
 #define PAXOS_DISK_VERSION_MAJOR 0x00020000
 #define PAXOS_DISK_VERSION_MINOR 0x00000001
@@ -55,6 +62,7 @@
 #define DEFAULT_IO_TIMEOUT_SECONDS 60
 
 #define SMERR_UNREGISTERED -501;
+
 /*
  * host_timeout_seconds
  * disk paxos takes over lease if host_id hasn't been renewed for this long
@@ -82,16 +90,25 @@
  */
 
 struct sm_timeouts {
-	int host_timeout_seconds;
-	int host_renewal_warn_seconds;
-	int host_renewal_fail_seconds;
-	int host_renewal_seconds;
-	int script_shutdown_seconds;
-	int sigterm_shutdown_seconds;
-	int stable_poll_ms;
-	int unstable_poll_ms;
 	int io_timeout_seconds;
+	int host_id_timeout_seconds;
+	int host_id_renewal_seconds;
+	int host_id_renewal_fail_seconds;
 };
+
+struct sm_options {
+	int use_watchdog;
+	int our_host_id;
+	uint32_t cluster_mode;
+	int pid;
+	int host_id;
+	int incoming;
+	char host_id_path[DISK_PATH_LEN];
+	int host_id_offset;
+};
+
+EXTERN struct sm_options options;
+EXTERN struct sm_timeouts to;
 
 #endif
 

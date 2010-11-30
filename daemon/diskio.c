@@ -17,7 +17,6 @@
 
 #include "sm.h"
 #include "sm_msg.h"
-#include "sm_options.h"
 #include "disk_paxos.h"
 #include "token_manager.h"
 #include "log.h"

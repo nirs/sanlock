@@ -15,7 +15,6 @@
 #include <sys/time.h>
 
 #include "sm.h"
-#include "sm_options.h"
 #include "watchdog.h"
 
 /* 
@@ -80,7 +79,7 @@ void update_watchdog_file(int fd, uint64_t timestamp)
 {
 	char buf[16];
 
-	if (!options.opt_watchdog)
+	if (!options.use_watchdog)
 		return;
 
 	memset(buf, 0, sizeof(buf));
@@ -97,7 +96,7 @@ int create_watchdog_file(int token_id, uint64_t timestamp)
 	char buf[16];
 	int rv, fd;
 
-	if (!options.opt_watchdog)
+	if (!options.use_watchdog)
 		return 0;
 
 	snprintf(path, PATH_MAX, "%s/%s_%d", DAEMON_WATCHDOG_DIR, DAEMON_NAME,
@@ -121,7 +120,7 @@ void unlink_watchdog_file(int token_id, int fd)
 {
 	char path[PATH_MAX];
 
-	if (!options.opt_watchdog)
+	if (!options.use_watchdog)
 		return;
 
 	snprintf(path, PATH_MAX, "%s/%s_%d", DAEMON_WATCHDOG_DIR, DAEMON_NAME,

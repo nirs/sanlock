@@ -28,7 +28,7 @@ TARBALL=sync-manger-$(rpmversion)-$(rpmrelease).tar.gz
 
 all: sync_manager
 
-sync_manager:	main.o disk_paxos.o log.o lockfile.o token_manager.o watchdog.o sm_options.o crc32c.o diskio.o sm_msg.o sm_client.o
+sync_manager:	main.o disk_paxos.o log.o lockfile.o token_manager.o watchdog.o crc32c.o diskio.o sm_msg.o sm_client.o host_id.o delta_lease.o
 	gcc $(LDFLAGS) -o $@ $^ -lpthread -lrt -lblkid
 
 main.o:	main.c
@@ -49,9 +49,6 @@ token_manager.o:	token_manager.c
 watchdog.o:	watchdog.c
 	gcc $(CFLAGS) -c -o $@ $<
 
-sm_options.o:	sm_options.c
-	gcc $(CFLAGS) -c -o $@ $<
-
 crc32c.o:	crc32c.c
 	gcc $(CFLAGS) -c -o $@ $<
 
@@ -63,6 +60,13 @@ sm_msg.o:	sm_msg.c
 
 sm_client.o:	sm_client.c
 	gcc $(CFLAGS) -c -o $@ $<
+
+host_id.o:	host_id.c
+	gcc $(CFLAGS) -c -o $@ $<
+
+delta_lease.o:	delta_lease.c
+	gcc $(CFLAGS) -c -o $@ $<
+
 clean:
 	rm -f *.o sync_manager
 

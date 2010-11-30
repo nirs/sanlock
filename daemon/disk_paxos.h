@@ -33,6 +33,8 @@ enum {
 	DP_REACQUIRE_LVER = -27,
 };
 
+#define LEASE_FREE 0
+
 /* for all disk structures:
    uint64 aligned on 8 byte boundaries,
    uint32 aligned on 4 byte boundaries, etc */
@@ -105,6 +107,7 @@ struct token {
 	struct sync_disk *disks;
 };
 
+uint32_t leader_checksum(struct leader_record *lr);
 int majority_disks(struct token *token, int num);
 int disk_paxos_leader_read(struct token *token, struct leader_record *leader_ret);
 int disk_paxos_acquire(struct token *token, int force,
