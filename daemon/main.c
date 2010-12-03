@@ -1216,6 +1216,7 @@ static int do_init(int token_count, struct token *token_args[],
 	if (!options.host_id_path[0])
 		goto tokens;
 
+	memset(&sd, 0, sizeof(struct sync_disk));
 	strncpy(sd.path, options.host_id_path, DISK_PATH_LEN);
 	sd.offset = options.host_id_offset;
 
@@ -1316,7 +1317,8 @@ static void print_usage(void)
 	printf("\nLEASE = <resource_name>:<path>:<offset>[:<path>:<offset>...]\n");
 	printf("  <resource_name>	name of resource being leased\n");
 	printf("  <path>		disk path\n");
-	printf("  <offset>		offset on disk\n");
+	printf("  <offset>[s|MB]	offset on disk, default unit bytes\n");
+	printf("                        optional s = disk sectors, MB = 1048576 bytes\n");
 	printf("  [:<path>:<offset>...] other disks in a multi-disk lease\n");
 	printf("\n");
 }
@@ -1349,6 +1351,7 @@ static int add_token_arg(char *arg, int *token_count, struct token *token_args[]
 {
 	struct token *token;
 	char sub[DISK_PATH_LEN + 1];
+	char unit[DISK_PATH_LEN + 1];
 	int sub_count;
 	int colons;
 	int num_disks;
@@ -1431,10 +1434,15 @@ static int add_token_arg(char *arg, int *token_count, struct token *token_args[]
 			}
 			strncpy(token->disks[d].path, sub, DISK_PATH_LEN - 1);
 		} else {
-			rv = sscanf(sub, "%llu", (unsigned long long *)&token->disks[d].offset);
-			if (rv != 1) {
+			memset(&unit, 0, sizeof(unit));
+			rv = sscanf(sub, "%llu%s", (unsigned long long *)&token->disks[d].offset, unit);
+			if (!rv || rv > 2) {
 				log_tool("lease arg offset error");
 				goto fail;
+			}
+			if (rv > 1) {
+				token->disks[d].unit[0] = unit[0];
+				token->disks[d].unit[1] = unit[1];
 			}
 			d++;
 		}

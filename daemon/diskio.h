@@ -9,6 +9,7 @@ struct sync_disk {
 	int fd;
 	uint32_t sector_size;
 	uint64_t offset;
+	char unit[2];
 	char path[DISK_PATH_LEN];
 };
 

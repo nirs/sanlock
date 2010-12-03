@@ -75,6 +75,7 @@ int open_disks(struct sync_disk *disks, int num_disks)
 	int num_opens = 0;
 	int d, fd, rv;
 	uint32_t ss = 0;
+	uint64_t orig_offset;
 
 	for (d = 0; d < num_disks; d++) {
 		disk = &disks[d];
@@ -98,8 +99,21 @@ int open_disks(struct sync_disk *disks, int num_disks)
 			goto fail;
 		}
 
+		if (disk->unit[0]) {
+			orig_offset = disk->offset;
+
+			if (disk->unit[0] == 's')
+				disk->offset = orig_offset * ss;
+			else if (disk->unit[0] == 'M' && disk->unit[1] == 'B')
+				disk->offset = orig_offset * 1024 * 1024;
+			else {
+				log_error(NULL, "invalid offset unit %s", disk->unit);
+				goto fail;
+			}
+		}
+
 		if (disk->offset % disk->sector_size) {
-			log_error(NULL, "invalid offset %lluu sector size %u %s",
+			log_error(NULL, "invalid offset %llu sector size %u %s",
 				  (unsigned long long)disk->offset,
 				  disk->sector_size, disk->path);
 			goto fail;
