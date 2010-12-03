@@ -16,12 +16,11 @@
 
 #include "sm.h"
 #include "sm_msg.h"
-#include "disk_paxos.h"
-#include "token_manager.h"
-#include "watchdog.h"
-#include "lockfile.h"
-#include "log.h"
 #include "diskio.h"
+#include "leader.h"
+#include "log.h"
+#include "paxos_lease.h"
+#include "token_manager.h"
 #include "list.h"
 
 struct sm_timeouts to;
@@ -182,7 +181,7 @@ int acquire_lease(struct token *token, uint64_t reacquire_lver)
 	struct leader_record leader_ret;
 	int rv;
 
-	rv = disk_paxos_acquire(token, 0, &leader_ret, reacquire_lver);
+	rv = paxos_lease_acquire(token, 0, &leader_ret, reacquire_lver);
 
 	token->acquire_result = rv;
 
@@ -203,7 +202,7 @@ int setowner_lease(struct token *token)
 	struct leader_record leader_ret;
 	int rv;
 
-	rv = disk_paxos_leader_read(token, &leader_ret);
+	rv = paxos_lease_leader_read(token, &leader_ret);
 	if (rv < 0)
 		return rv;
 
@@ -215,7 +214,7 @@ int setowner_lease(struct token *token)
 	/* we want the dblocks to reflect a full, proper ownership, so we
 	   do the full acquire rather than just writing a new leader_record */
 
-	rv = disk_paxos_acquire(token, 0, &leader_ret, 0);
+	rv = paxos_lease_acquire(token, 0, &leader_ret, 0);
 
 	token->setowner_result = rv;
 
@@ -247,7 +246,7 @@ int release_lease(struct token *token)
 		return 1;
 	}
 
-	rv = disk_paxos_release(token, &token->leader, &leader_ret);
+	rv = paxos_lease_release(token, &token->leader, &leader_ret);
 
 	token->release_result = rv;
 
@@ -268,7 +267,7 @@ int migrate_lease(struct token *token, uint64_t target_host_id)
 	struct leader_record leader_ret;
 	int rv;
 
-	rv = disk_paxos_migrate(token, &token->leader, &leader_ret, target_host_id);
+	rv = paxos_lease_migrate(token, &token->leader, &leader_ret, target_host_id);
 
 	token->migrate_result = rv;
 
@@ -288,7 +287,7 @@ int receive_lease(struct token *token)
 	struct leader_record leader_ret;
 	int rv;
 
-	rv = disk_paxos_leader_read(token, &leader_ret);
+	rv = paxos_lease_leader_read(token, &leader_ret);
 	if (rv < 0)
 		return rv;
 
@@ -307,7 +306,7 @@ int receive_lease(struct token *token)
 	}
 #endif
 	
-	/* token->migrate_result is a copy of the disk_paxos_migrate() return
+	/* token->migrate_result is a copy of the paxos_lease_migrate() return
 	   value on the source; if it was successful on the source (1), then
 	   next_owner_id should equal our_host_id; if the source could not
 	   write to the lease, then next_owner_id should be 0, and we'll write

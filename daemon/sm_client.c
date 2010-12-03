@@ -21,11 +21,9 @@
 
 #include "sm.h"
 #include "sm_msg.h"
-#include "disk_paxos.h"
-#include "token_manager.h"
-#include "lockfile.h"
-#include "log.h"
 #include "diskio.h"
+#include "leader.h"
+#include "log.h"
 #include "sm_client.h"
 
 /* TODO: make this file a library */

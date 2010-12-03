@@ -16,7 +16,8 @@
 
 #include "sm.h"
 #include "sm_msg.h"
-#include "disk_paxos.h"
+#include "diskio.h"
+#include "leader.h"
 #include "log.h"
 
 #define LOG_STR_LEN 256

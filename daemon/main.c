@@ -22,14 +22,15 @@
 #define EXTERN
 #include "sm.h"
 #include "sm_msg.h"
-#include "disk_paxos.h"
+#include "diskio.h"
+#include "leader.h"
+#include "log.h"
+#include "paxos_lease.h"
+#include "delta_lease.h"
+#include "host_id.h"
 #include "token_manager.h"
 #include "lockfile.h"
-#include "log.h"
-#include "diskio.h"
 #include "sm_client.h"
-#include "host_id.h"
-#include "delta_lease.h"
 
 /* priorities are LOG_* from syslog.h */
 int log_logfile_priority = LOG_ERR;
@@ -1240,7 +1241,7 @@ static int do_init(int token_count, struct token *token_args[],
 			return -1;
 		}
 
-		rv = disk_paxos_init(token, init_num_hosts, init_max_hosts);
+		rv = paxos_lease_init(token, init_num_hosts, init_max_hosts);
 		if (rv < 0) {
 			log_tool("cannot initialize disks");
 			return -1;

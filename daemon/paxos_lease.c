@@ -15,16 +15,30 @@
 
 #include "sm.h"
 #include "sm_msg.h"
-#include "disk_paxos.h"
+#include "diskio.h"
+#include "leader.h"
 #include "log.h"
 #include "crc32c.h"
-#include "diskio.h"
+#include "paxos_lease.h"
 
 /*
  * largely copied from vdsm.git/sync_manager/
  */
 
 #define NO_VAL 0
+
+struct request_record {
+	uint64_t lver;
+	uint8_t force_mode;
+};
+
+/* ref: ballot_ticket_record */
+struct paxos_dblock {
+	uint64_t mbal; /* aka curr_bal */
+	uint64_t bal;  /* aka inp_bal */
+	uint64_t inp;  /* aka inp_val */
+	uint64_t lver; /* leader version */
+};
 
 int majority_disks(struct token *token, int num)
 {
@@ -437,7 +451,7 @@ static int host_id_alive(uint64_t host_id GNUC_UNUSED)
 	return 1;
 }
 
-int disk_paxos_leader_read(struct token *token, struct leader_record *leader_ret)
+int paxos_lease_leader_read(struct token *token, struct leader_record *leader_ret)
 {
 	struct leader_record prev_leader;
 	struct leader_record *leaders;
@@ -570,9 +584,9 @@ static int write_new_leader(struct token *token, struct leader_record *nl)
  * ref: obtain()
  */
 
-int disk_paxos_acquire(struct token *token, int force GNUC_UNUSED,
-		       struct leader_record *leader_ret,
-		       uint64_t reacquire_lver)
+int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
+		        struct leader_record *leader_ret,
+		        uint64_t reacquire_lver)
 {
 	struct leader_record prev_leader;
 	struct leader_record new_leader;
@@ -581,7 +595,7 @@ int disk_paxos_acquire(struct token *token, int force GNUC_UNUSED,
 
 	log_debug(token, "dp_acquire begin");
 
-	error = disk_paxos_leader_read(token, &prev_leader);
+	error = paxos_lease_leader_read(token, &prev_leader);
 	if (error < 0)
 		goto out;
 
@@ -677,10 +691,10 @@ int disk_paxos_acquire(struct token *token, int force GNUC_UNUSED,
 	return error;
 }
 
-int disk_paxos_migrate(struct token *token,
-		       struct leader_record *leader_last,
-		       struct leader_record *leader_ret,
-		       uint64_t target_host_id)
+int paxos_lease_migrate(struct token *token,
+		        struct leader_record *leader_last,
+		        struct leader_record *leader_ret,
+		        uint64_t target_host_id)
 {
 	struct leader_record new_leader;
 	int rv, d;
@@ -727,9 +741,9 @@ int disk_paxos_migrate(struct token *token,
 }
 
 #if 0
-int disk_paxos_renew(struct token *token,
-		     struct leader_record *leader_last,
-		     struct leader_record *leader_ret)
+int paxos_lease_renew(struct token *token,
+		      struct leader_record *leader_last,
+		      struct leader_record *leader_ret)
 {
 	struct leader_record new_leader;
 	int rv, d;
@@ -762,9 +776,9 @@ int disk_paxos_renew(struct token *token,
 }
 #endif
 
-int disk_paxos_release(struct token *token,
-		       struct leader_record *leader_last,
-		       struct leader_record *leader_ret)
+int paxos_lease_release(struct token *token,
+		        struct leader_record *leader_last,
+		        struct leader_record *leader_ret)
 {
 	struct leader_record new_leader;
 	int rv, d;
@@ -798,7 +812,7 @@ int disk_paxos_release(struct token *token,
 	return error;
 }
 
-int disk_paxos_init(struct token *token, int num_hosts, int max_hosts)
+int paxos_lease_init(struct token *token, int num_hosts, int max_hosts)
 {
 	struct leader_record leader;
 	struct request_record req;

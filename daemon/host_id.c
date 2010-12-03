@@ -16,14 +16,11 @@
 
 #include "sm.h"
 #include "sm_msg.h"
-#include "disk_paxos.h"
-#include "token_manager.h"
-#include "watchdog.h"
-#include "lockfile.h"
-#include "log.h"
 #include "diskio.h"
-#include "host_id.h"
+#include "leader.h"
+#include "log.h"
 #include "delta_lease.h"
+#include "host_id.h"
 
 struct lease_status {
 	int acquire_last_result;

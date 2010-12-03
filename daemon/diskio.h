@@ -1,7 +1,7 @@
 #ifndef __DISKIO_H__
 #define __DISKIO_H__
 
-/* for disk_paxos.c, sync_disk + offset:
+/* for paxos_lease sync_disk + offset:
    points to 1 leader_record + 1 request_record + MAX_HOSTS paxos_dblock's =
    256 blocks = 128KB, ref: lease_item_record */
 

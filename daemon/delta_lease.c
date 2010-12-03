@@ -16,13 +16,10 @@
 
 #include "sm.h"
 #include "sm_msg.h"
-#include "disk_paxos.h"
-#include "token_manager.h"
-#include "watchdog.h"
-#include "lockfile.h"
-#include "log.h"
 #include "diskio.h"
-#include "host_id.h"
+#include "leader.h"
+#include "log.h"
+#include "paxos_lease.h"
 #include "delta_lease.h"
 
 int delta_lease_read_timestamp(struct sync_disk *disk, uint64_t host_id,

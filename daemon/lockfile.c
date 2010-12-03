@@ -15,9 +15,10 @@
 
 #include "sm.h"
 #include "sm_msg.h"
-#include "disk_paxos.h"
-#include "lockfile.h"
+#include "diskio.h"
+#include "leader.h"
 #include "log.h"
+#include "lockfile.h"
 
 int lockfile(struct token *token, const char *dir, const char *name)
 {
