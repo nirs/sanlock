@@ -69,7 +69,8 @@ int host_id_alive(uint64_t host_id)
 
 int our_host_id_renewed(void)
 {
-	uint64_t last_good, sec;
+	uint64_t last_good;
+	uint32_t sec;
 
 	pthread_mutex_lock(&host_id_mutex);
 	last_good = our_lease_status.renewal_last_time;
@@ -78,6 +79,7 @@ int our_host_id_renewed(void)
 	sec = time(NULL) - last_good;
 
 	if (sec >= to.host_id_renewal_fail_seconds) {
+		log_error(NULL, "our_host_id_renewed failed %u", sec);
 		return 0;
 	}
 
@@ -90,24 +92,26 @@ static void *host_id_thread(void *arg GNUC_UNUSED)
 	uint64_t t;
 	int rv, stop;
 
-	rv = delta_lease_acquire(&host_id_disk, options.our_host_id);
-
-	t = time(NULL);
+	rv = delta_lease_acquire(&host_id_disk, options.our_host_id, &t);
 
 	pthread_mutex_lock(&host_id_mutex);
 	our_lease_status.acquire_last_result = rv;
 	our_lease_status.acquire_last_time = t;
-	if (rv == 1)
+	if (rv == DP_OK)
 		our_lease_status.acquire_good_time = t;
 	our_lease_status.renewal_last_result = rv;
 	our_lease_status.renewal_last_time = t;
-	if (rv == 1)
+	if (rv == DP_OK)
 		our_lease_status.renewal_good_time = t;
 	pthread_cond_broadcast(&host_id_cond);
 	pthread_mutex_unlock(&host_id_mutex);
 
-	if (rv < 0)
+	if (rv < 0) {
+		log_error(NULL, "host_id acquire failed %d", rv);
 		goto out;
+	}
+
+	log_debug(NULL, "host_id acquire %llu", (unsigned long long)t);
 
 	/* create_watchdog_file(t); */
 
@@ -125,18 +129,21 @@ static void *host_id_thread(void *arg GNUC_UNUSED)
 		if (stop)
 			break;
 
-		rv = delta_lease_renew(&host_id_disk, options.our_host_id);
+		rv = delta_lease_renew(&host_id_disk, options.our_host_id, &t);
 
 		pthread_mutex_lock(&host_id_mutex);
 		our_lease_status.renewal_last_result = rv;
 		our_lease_status.renewal_last_time = t;
-		if (rv == 1)
+		if (rv == DP_OK)
 			our_lease_status.renewal_good_time = t;
 		pthread_mutex_unlock(&host_id_mutex);
 
 		if (rv < 0) {
+			log_error(NULL, "host_id renewal failed %d", rv);
 			continue;
 		}
+
+		log_debug(NULL, "host_id renewal %llu", (unsigned long long)t);
 
 		/* update_watchdog_file(t); */
 	}

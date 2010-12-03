@@ -22,25 +22,195 @@
 #include "paxos_lease.h"
 #include "delta_lease.h"
 
+struct leader_record our_last_leader;
+
+/* Based on "Light-Weight Leases for Storage-Centric Coordination"
+   by Gregory Chockler and Dahlia Malkhi */
+
+/* delta_leases are a series max_hosts leader_records, one leader per sector,
+   host N's delta_lease is the leader_record in sectors N-1 */
+
+static int delta_lease_leader_read(struct sync_disk *disk, uint64_t host_id,
+				   struct leader_record *leader_ret)
+{
+	char name[NAME_ID_SIZE];
+	int rv, error;
+
+	/* host_id N is block offset N-1 */
+
+	rv = read_sectors(disk, host_id - 1, 1, (char *)leader_ret,
+			  sizeof(struct leader_record),
+			  to.io_timeout_seconds, "delta_leader");
+	if (rv < 0)
+		return DP_READ_LEADERS;
+
+	snprintf(name, NAME_ID_SIZE, "host_id_%llu",
+		 (unsigned long long)host_id);
+
+	error = verify_leader(disk, name, leader_ret);
+
+	return error;
+}
+
+/* TODO: technically should be host_id+timestamp, although right now two different
+   hosts never try to acquire the same host_id lease */
+
 int delta_lease_read_timestamp(struct sync_disk *disk, uint64_t host_id,
 			       uint64_t *timestamp)
 {
-	return 0;
+	struct leader_record leader;
+	int error;
+
+	error = delta_lease_leader_read(disk, host_id, &leader);
+	if (error < 0)
+		return error;
+
+	*timestamp = leader.timestamp;
+	return DP_OK;
 }
 
-int delta_lease_acquire(struct sync_disk *disk, uint64_t host_id)
+int delta_lease_acquire(struct sync_disk *disk, uint64_t host_id,
+		        uint64_t *timestamp)
 {
-	return 1;
+	struct leader_record leader;
+	struct leader_record leader1;
+	uint64_t new_ts;
+	int error, delay;
+
+	error = delta_lease_leader_read(disk, host_id, &leader);
+	if (error < 0)
+		return error;
+
+ retry:
+	if (leader.timestamp == LEASE_FREE)
+		goto write_new;
+
+	while (1) {
+		memcpy(&leader1, &leader, sizeof(struct leader_record));
+
+		delay = to.host_id_renewal_seconds + (6 * to.io_timeout_seconds);
+		log_debug(NULL, "delta_acquire sleep D+6d %d", delay);
+		sleep(delay);
+
+		error = delta_lease_leader_read(disk, host_id, &leader);
+		if (error < 0)
+			return error;
+
+		if (!memcmp(&leader1, &leader, sizeof(struct leader_record)))
+			break;
+
+		if (leader.timestamp == LEASE_FREE)
+			break;
+	}
+
+ write_new:
+	new_ts = time(NULL);
+	leader.timestamp = new_ts;
+	leader.owner_id = options.our_host_id;
+	leader.checksum = leader_checksum(&leader);
+
+	log_debug(NULL, "delta_acquire write new %llu", (unsigned long long)new_ts);
+
+	error = write_sector(disk, host_id - 1, (char *)&leader,
+			     sizeof(struct leader_record),
+			     to.io_timeout_seconds, "delta_leader");
+	if (error < 0)
+		return error;
+
+	delay = 2 * to.io_timeout_seconds;
+	log_debug(NULL, "delta_acquire sleep 2d %d", delay);
+	sleep(delay);
+
+	error = delta_lease_leader_read(disk, host_id, &leader);
+	if (error < 0)
+		return error;
+
+	if ((leader.timestamp != new_ts) || (leader.owner_id != options.our_host_id))
+		goto retry;
+
+	if (host_id == options.our_host_id)
+		memcpy(&our_last_leader, &leader, sizeof(struct leader_record));
+	*timestamp = leader.timestamp;
+	return DP_OK;
 }
 
-int delta_lease_renew(struct sync_disk *disk, uint64_t host_id)
+int delta_lease_renew(struct sync_disk *disk, uint64_t host_id,
+		      uint64_t *timestamp)
 {
-	return 1;
+	struct leader_record leader;
+	uint64_t new_ts;
+	int error, delay;
+
+	if (host_id != options.our_host_id) {
+		/* TODO */
+		log_error(NULL, "delta_renew not impl for other host_id");
+		return DP_INVAL;
+	}
+
+	error = delta_lease_leader_read(disk, host_id, &leader);
+	if (error < 0)
+		return error;
+
+	if (leader.owner_id != host_id)
+		return DP_BAD_LEADER;
+
+	new_ts = time(NULL);
+
+	if (leader.timestamp >= new_ts) {
+		log_error(NULL, "delta_renew timestamp too small");
+	}
+
+	leader.timestamp = new_ts;
+	leader.owner_id = options.our_host_id;
+	leader.checksum = leader_checksum(&leader);
+
+	log_debug(NULL, "delta_renew write new %llu",
+		  (unsigned long long)new_ts);
+
+	error = write_sector(disk, host_id - 1, (char *)&leader,
+			     sizeof(struct leader_record),
+			     to.io_timeout_seconds, "delta_leader");
+	if (error < 0)
+		return error;
+
+	delay = 2 * to.io_timeout_seconds;
+	log_debug(NULL, "delta_renew sleep 2d %d", delay);
+	sleep(delay);
+
+	error = delta_lease_leader_read(disk, host_id, &leader);
+	if (error < 0)
+		return error;
+
+	if ((leader.timestamp != new_ts) || (leader.owner_id != options.our_host_id))
+		return DP_BAD_LEADER;
+
+	if (host_id == options.our_host_id)
+		memcpy(&our_last_leader, &leader, sizeof(struct leader_record));
+	*timestamp = leader.timestamp;
+	return DP_OK;
 }
 
 int delta_lease_release(struct sync_disk *disk, uint64_t host_id)
 {
-	return 1;
+	struct leader_record leader;
+	int error;
+
+	if (host_id == options.our_host_id) {
+		memcpy(&leader, &our_last_leader, sizeof(struct leader_record));
+		leader.timestamp = LEASE_FREE;
+	} else {
+		/* TODO: pass leader_record out of acquire and back in here */
+		log_error(NULL, "delta_release not impl for other host_id");
+		return DP_INVAL;
+	}
+
+	error = write_sector(disk, host_id - 1, (char *)&leader,
+			     sizeof(struct leader_record),
+			     to.io_timeout_seconds, "delta_leader");
+	if (error < 0)
+		return error;
+
+	return DP_OK;
 }
 
 /* the host_id lease area begins disk->offset bytes from the start of
@@ -90,10 +260,10 @@ int delta_lease_init(struct sync_disk *disk, int num_hosts, int max_hosts)
 
 		rv = write_sector(disk, i, (char *)&leader,
 				  sizeof(struct leader_record),
-				  to.io_timeout_seconds, "host_id_leader");
+				  to.io_timeout_seconds, "delta_leader");
 
 		if (rv < 0) {
-			log_error(NULL, "delta_lease_init write_sector %d rv %d", i, rv);
+			log_error(NULL, "delta_init write_sector %d rv %d", i, rv);
 			return rv;
 		}
 	}
