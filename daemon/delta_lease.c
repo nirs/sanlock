@@ -56,10 +56,9 @@ int delta_lease_init(struct sync_disk *disk, int num_hosts, int max_hosts)
 	uint64_t bb, be, sb, se;
 	uint32_t ss;
 
-	printf("initialize leases for host ids 1 - %d\n", max_hosts);
-	printf("disk %s sector_size %d offset %llu\n",
-	       disk->path, disk->sector_size,
-	       (unsigned long long)disk->offset);
+	printf("initialize leases for host_id 1 - %d\n", max_hosts);
+	printf("disk %s offset %llu sector_size %d\n",
+	       disk->path, (unsigned long long)disk->offset, disk->sector_size);
 
 	ss = disk->sector_size;
 	bb = disk->offset;
@@ -67,11 +66,10 @@ int delta_lease_init(struct sync_disk *disk, int num_hosts, int max_hosts)
 	sb = bb / ss;
 	se = be / ss;
 
-	printf("disk area %llu - %llu len %llu (bytes)\n",
+	printf("bytes %llu - %llu len %llu, sectors %llu - %llu len %llu\n",
 	       (unsigned long long)bb,
 	       (unsigned long long)be,
-	       (unsigned long long)be - bb);
-	printf("disk area %llu - %llu len %llu (sectors)\n",
+	       (unsigned long long)be - bb,
 	       (unsigned long long)sb,
 	       (unsigned long long)se,
 	       (unsigned long long)se - sb);

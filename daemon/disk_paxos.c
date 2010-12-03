@@ -809,10 +809,10 @@ int disk_paxos_init(struct token *token, int num_hosts, int max_hosts)
 
 	printf("initialize lease for resource %s\n", token->resource_name);
 	for (d = 0; d < token->num_disks; d++) {
-		printf("disk %s sector_size %d offset %llu\n",
+		printf("disk %s offset %llu sector_size %d\n",
 		       token->disks[d].path,
-		       token->disks[d].sector_size,
-		       (unsigned long long)token->disks[d].offset);
+		       (unsigned long long)token->disks[d].offset,
+		       token->disks[d].sector_size);
 	}
 
 	offset = token->disks[0].offset;
@@ -822,15 +822,13 @@ int disk_paxos_init(struct token *token, int num_hosts, int max_hosts)
 	sb = bb / ss;
 	se = be / ss;
 
-	printf("disk area %llu - %llu len %llu (bytes)\n",
+	printf("bytes %llu - %llu len %llu, sectors %llu - %llu len %llu\n",
 	       (unsigned long long)bb,
 	       (unsigned long long)be,
-	       (unsigned long long)be - bb);
-	printf("disk area %llu - %llu len %llu (sectors)\n",
+	       (unsigned long long)be - bb,
 	       (unsigned long long)sb,
 	       (unsigned long long)se,
 	       (unsigned long long)se - sb);
-
 
 	memset(&leader, 0, sizeof(struct leader_record));
 	memset(&req, 0, sizeof(struct request_record));
