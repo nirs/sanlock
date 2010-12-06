@@ -1317,8 +1317,8 @@ static void print_usage(void)
 	printf("\nLEASE = <resource_name>:<path>:<offset>[:<path>:<offset>...]\n");
 	printf("  <resource_name>	name of resource being leased\n");
 	printf("  <path>		disk path\n");
-	printf("  <offset>[s|MB]	offset on disk, default unit bytes\n");
-	printf("                        optional s = disk sectors, MB = 1048576 bytes\n");
+	printf("  <offset>[s|KB|MB]	offset on disk, default unit bytes\n");
+	printf("                        [s = sectors, KB = 1024 bytes, MB = 1024 KB]\n");
 	printf("  [:<path>:<offset>...] other disks in a multi-disk lease\n");
 	printf("\n");
 }

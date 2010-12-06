@@ -100,11 +100,14 @@ int open_disks(struct sync_disk *disks, int num_disks)
 		}
 
 		if (disk->unit[0]) {
+			int len = strlen(disk->unit);
 			orig_offset = disk->offset;
 
-			if (disk->unit[0] == 's')
+			if (len == 1 && disk->unit[0] == 's')
 				disk->offset = orig_offset * ss;
-			else if (disk->unit[0] == 'M' && disk->unit[1] == 'B')
+			else if (len == 2 && disk->unit[0] == 'K' && disk->unit[1] == 'B')
+				disk->offset = orig_offset * 1024;
+			else if (len == 2 && disk->unit[0] == 'M' && disk->unit[1] == 'B')
 				disk->offset = orig_offset * 1024 * 1024;
 			else {
 				log_error(NULL, "invalid offset unit %s", disk->unit);

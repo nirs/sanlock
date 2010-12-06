@@ -838,13 +838,15 @@ int paxos_lease_init(struct token *token, int num_hosts, int max_hosts)
 	sb = bb / ss;
 	se = be / ss;
 
-	printf("bytes %llu - %llu len %llu, sectors %llu - %llu len %llu\n",
+	printf("bytes %llu - %llu len %llu\n",
 	       (unsigned long long)bb,
 	       (unsigned long long)be,
-	       (unsigned long long)be - bb,
+	       (unsigned long long)be - bb + 1);
+
+	printf("sectors %llu - %llu len %llu\n",
 	       (unsigned long long)sb,
 	       (unsigned long long)se,
-	       (unsigned long long)se - sb);
+	       (unsigned long long)se - sb + 1);
 
 	memset(&leader, 0, sizeof(struct leader_record));
 	memset(&req, 0, sizeof(struct request_record));
