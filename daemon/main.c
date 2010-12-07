@@ -890,11 +890,16 @@ static void cmd_set_host_id(int fd, struct sm_header *h_recv)
 		goto reply;
 	}
 
-	log_debug(NULL, "set_host_id %d", h_recv->data);
+	options.our_host_id = h_recv->data;
 
-	rv = start_host_id(h_recv->data);
-	
-	/* start_host_id() sets options.our_host_id if successful */
+	log_debug(NULL, "set_host_id %d", options.our_host_id);
+
+	rv = start_host_id();
+	if (rv < 0) {
+		log_error(NULL, "cmd_set_host_id start_host_id %d error %d",
+			  options.our_host_id, rv);
+		options.our_host_id = -1;
+	}
 
  reply:
 	memcpy(&h, h_recv, sizeof(struct sm_header));
@@ -1188,8 +1193,10 @@ static int do_daemon(void)
 		goto out_lockfile;
 
 	if (options.our_host_id > 0) {
-		rv = start_host_id(options.our_host_id);
+		rv = start_host_id();
 		if (rv < 0) {
+			log_error(NULL, "start_host_id %d error %d",
+				  options.our_host_id, rv);
 			options.our_host_id = -1;
 			goto out_token;
 		}

@@ -77,6 +77,8 @@ int delta_lease_acquire(struct sync_disk *disk, uint64_t host_id,
 	uint64_t new_ts;
 	int error, delay;
 
+	log_debug(NULL, "delta_acquire %llu begin", (unsigned long long)host_id);
+
 	error = delta_lease_leader_read(disk, host_id, &leader);
 	if (error < 0)
 		return error;
@@ -141,6 +143,8 @@ int delta_lease_renew(struct sync_disk *disk, uint64_t host_id,
 	uint64_t new_ts;
 	int error, delay;
 
+	log_debug(NULL, "delta_renew %llu begin", (unsigned long long)host_id);
+
 	if (host_id != options.our_host_id) {
 		/* TODO */
 		log_error(NULL, "delta_renew not impl for other host_id");
@@ -194,6 +198,8 @@ int delta_lease_release(struct sync_disk *disk, uint64_t host_id)
 {
 	struct leader_record leader;
 	int error;
+
+	log_debug(NULL, "delta_release %llu begin", (unsigned long long)host_id);
 
 	if (host_id == options.our_host_id) {
 		memcpy(&leader, &our_last_leader, sizeof(struct leader_record));

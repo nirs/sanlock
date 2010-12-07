@@ -176,11 +176,20 @@ static void *host_id_thread(void *arg_in)
 }
 
 /* 
- * - create host_id_thread for our_host_id
- * - wait for host_id_thread delta_lease_acquire result
+ * options.our_host_id must be set prior to calling this, and the
+ * caller should set our_host_id back to -1 if this function returns
+ * an error; the delta_lease functions use options.our_host_id directly,
+ * so we can't wait an set options.our_host_id after this function
+ * returns success
+ *
+ * When this function returns, it needs to be safe to being processing lease
+ * requests and allowing pid's to run, so we need to own our host_id, and the
+ * watchdog needs to be active watching our host_id renewals.  start_host_id()
+ * blocks the main processing thread, so a lease request can be processed
+ * immediately when this returns, and it will check if options.our_host_id is > 0.
  */
 
-int start_host_id(int host_id_in)
+int start_host_id(void)
 {
 	int rv, result;
 	int *arg;
@@ -198,14 +207,14 @@ int start_host_id(int host_id_in)
 	}
 
 	log_debug(NULL, "start_host_id %d host_id_path %s offset %d",
-		  host_id_in, options.host_id_path, options.host_id_offset);
+		  options.our_host_id, options.host_id_path, options.host_id_offset);
 
 	arg = malloc(sizeof(int));
 	if (!arg) {
 		rv = -ENOMEM;
 		goto fail_close;
 	}
-	*arg = host_id_in;
+	*arg = options.our_host_id;
 
 	memset(&our_lease_status, 0, sizeof(struct lease_status));
 
@@ -222,20 +231,13 @@ int start_host_id(int host_id_in)
 	result = our_lease_status.acquire_last_result;
 	pthread_mutex_unlock(&host_id_mutex);
 
-	/* When this function returns, it needs to be safe to being processing
-	   lease requests and allowing pid's to run, so we need to own our
-	   host_id, and the watchdog needs to be active watching our host_id
-	   renewals.  start_host_id() blocks the main processing thread, so a
-	   lease request can be processed immediately when this returns, and it
-	   will check if options.our_host_id is > 0. */
-
 	if (result != DP_OK) {
 		/* the thread exits right away if acquire fails */
 		pthread_join(our_host_id_thread, NULL);
+		rv = result;
 		goto fail_close;
 	}
 
-	options.our_host_id = host_id_in;
 	return 0;
 
  fail_free:
