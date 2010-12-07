@@ -15,6 +15,10 @@
 #include <sys/time.h>
 
 #include "sm.h"
+#include "sm_msg.h"
+#include "diskio.h"
+#include "leader.h"
+#include "log.h"
 #include "watchdog.h"
 
 /* 
@@ -67,7 +71,7 @@ static int do_write(int fd, void *buf, size_t count)
 	if (rv == -1 && errno == EINTR)
 		goto retry;
 	if (rv < 0) {
-		return rv;
+		return -errno;
 	}
 
 	if (rv != count) {
@@ -104,15 +108,31 @@ int create_watchdog_file(uint64_t timestamp)
 	snprintf(watchdog_path, PATH_MAX, "%s/%s",
 		 DAEMON_WATCHDOG_DIR, DAEMON_NAME);
 
+	/* If this open fails with EEXIST I don't think it's safe to unlink
+	 * watchdog_path and try again.  If the daemon had failed while pid's
+	 * remained running, then the daemon is restarted (before watchdog
+	 * triggers) and we start renewing host_id again and get here.  If we
+	 * were to unlink the wd file right here, and then the daemon failed
+	 * again, we'd possibly be left with pid's running that had been
+	 * connected to the previous daemon instance, and the watchdog file
+	 * unlinked, so the watchdog won't reset us.
+	 *
+	 * If the open fails with EEXIST we could open the existing file and go
+	 * on, although there's currently no mechanism to reattach to any
+	 * running pid's we're supposed to be supervising. */
+
 	fd = open(watchdog_path, O_WRONLY|O_CREAT|O_EXCL|O_NONBLOCK, 0666);
-	if (fd < 0)
+	if (fd < 0) {
+		log_error(NULL, "create_watchdog_file open error %d", errno);
 		return fd;
+	}
 
 	memset(buf, 0, sizeof(buf));
 	snprintf(buf, sizeof(buf), "%llu", (unsigned long long)timestamp);
 
 	rv = do_write(fd, buf, sizeof(buf));
 	if (rv < 0) {
+		log_error(NULL, "create_watchdog_file write error %d", rv);
 		close(fd);
 		return rv;
 	}
