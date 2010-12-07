@@ -1299,6 +1299,11 @@ static void print_usage(void)
 	printf("  -i <num>		local host_id\n");
 	printf("  -d <path>		disk path for host_id leases\n");
 	printf("  -o <num>		offset on disk for host_id leases\n");
+	printf("  -s <key=n,key=n,...>	change default timeouts in seconds, key (default):\n");
+	printf("                        io_timeout (%d)\n", DEFAULT_IO_TIMEOUT_SECONDS);
+	printf("                        host_id_renewal (%d)\n", DEFAULT_HOST_ID_RENEWAL_SECONDS);
+	printf("                        host_id_renewal_fail (%d)\n", DEFAULT_HOST_ID_RENEWAL_FAIL_SECONDS);
+	printf("                        host_id_timeout (%d)\n", DEFAULT_HOST_ID_TIMEOUT_SECONDS);
 
 	printf("\nset_host_id [options]\n");
 	printf("  -i <num>		local host_id\n");
@@ -1468,6 +1473,74 @@ static int add_token_arg(char *arg, int *token_count, struct token *token_args[]
 	return -1;
 }
 
+static void set_timeout(char *key, char *val)
+{
+	if (!strcmp(key, "io_timeout")) {
+		to.io_timeout_seconds = atoi(val);
+		log_debug(NULL, "io_timeout_seconds %d", to.io_timeout_seconds);
+		return;
+	}
+
+	if (!strcmp(key, "host_id_timeout")) {
+		to.host_id_timeout_seconds = atoi(val);
+		log_debug(NULL, "host_id_timeout_seconds %d", to.host_id_timeout_seconds);
+		return;
+	}
+
+	if (!strcmp(key, "host_id_renewal")) {
+		to.host_id_renewal_seconds = atoi(val);
+		log_debug(NULL, "host_id_renewal_seconds %d", to.host_id_renewal_seconds);
+		return;
+	}
+
+	if (!strcmp(key, "host_id_renewal_fail")) {
+		to.host_id_renewal_fail_seconds = atoi(val);
+		log_debug(NULL, "host_id_renewal_fail_seconds %d", to.host_id_renewal_fail_seconds);
+		return;
+	}
+}
+
+static void parse_timeouts(char *optstr)
+{
+	int copy_key, copy_val, i, kvi;
+	char key[64], val[64];
+
+	copy_key = 1;
+	copy_val = 0;
+	kvi = 0;
+
+	for (i = 0; i < strlen(optstr); i++) {
+		if (optstr[i] == ',') {
+			set_timeout(key, val);
+			memset(key, 0, sizeof(key));
+			memset(val, 0, sizeof(val));
+			copy_key = 1;
+			copy_val = 0;
+			kvi = 0;
+			continue;
+		}
+
+		if (optstr[i] == '=') {
+			copy_key = 0;
+			copy_val = 1;
+			kvi = 0;
+			continue;
+		}
+
+		if (copy_key)
+			key[kvi++] = optstr[i];
+		else if (copy_val)
+			val[kvi++] = optstr[i];
+
+		if (kvi > 62) {
+			log_error(NULL, "invalid timeout parameter");
+			return;
+		}
+	}
+
+	set_timeout(key, val);
+}
+
 #define RELEASE_VERSION "0.0"
 
 static int read_args(int argc, char *argv[],
@@ -1556,6 +1629,9 @@ static int read_args(int argc, char *argv[],
 			break;
 		case 'm':
 			options.cluster_mode = atoi(optionarg);
+			break;
+		case 's':
+			parse_timeouts(optionarg);
 			break;
 		case 'i':
 			options.our_host_id = atoi(optionarg);
