@@ -55,6 +55,9 @@
  * watchdogd does not check unlinked wd file and does not reset host
  */
 
+static char watchdog_path[PATH_MAX];
+static int watchdog_fd;
+
 static int do_write(int fd, void *buf, size_t count)
 {
 	int rv, off = 0;
@@ -75,7 +78,7 @@ static int do_write(int fd, void *buf, size_t count)
 	return 0;
 }
 
-void update_watchdog_file(int fd, uint64_t timestamp)
+void update_watchdog_file(uint64_t timestamp)
 {
 	char buf[16];
 
@@ -85,24 +88,23 @@ void update_watchdog_file(int fd, uint64_t timestamp)
 	memset(buf, 0, sizeof(buf));
 	snprintf(buf, sizeof(buf), "%llu", (unsigned long long)timestamp);
 
-	lseek(fd, 0, SEEK_SET);
+	lseek(watchdog_fd, 0, SEEK_SET);
 
-	do_write(fd, buf, sizeof(buf));
+	do_write(watchdog_fd, buf, sizeof(buf));
 }
 
-int create_watchdog_file(int token_id, uint64_t timestamp)
+int create_watchdog_file(uint64_t timestamp)
 {
-	char path[PATH_MAX];
 	char buf[16];
 	int rv, fd;
 
 	if (!options.use_watchdog)
 		return 0;
 
-	snprintf(path, PATH_MAX, "%s/%s_%d", DAEMON_WATCHDOG_DIR, DAEMON_NAME,
-		 token_id);
+	snprintf(watchdog_path, PATH_MAX, "%s/%s",
+		 DAEMON_WATCHDOG_DIR, DAEMON_NAME);
 
-	fd = open(path, O_WRONLY|O_CREAT|O_EXCL|O_NONBLOCK, 0666);
+	fd = open(watchdog_path, O_WRONLY|O_CREAT|O_EXCL|O_NONBLOCK, 0666);
 	if (fd < 0)
 		return fd;
 
@@ -110,24 +112,21 @@ int create_watchdog_file(int token_id, uint64_t timestamp)
 	snprintf(buf, sizeof(buf), "%llu", (unsigned long long)timestamp);
 
 	rv = do_write(fd, buf, sizeof(buf));
-	if (rv < 0)
+	if (rv < 0) {
+		close(fd);
 		return rv;
+	}
 
-	return fd;
+	watchdog_fd = fd;
+	return 0;
 }
 
-void unlink_watchdog_file(int token_id, int fd)
+void unlink_watchdog_file(void)
 {
-	char path[PATH_MAX];
-
 	if (!options.use_watchdog)
 		return;
 
-	snprintf(path, PATH_MAX, "%s/%s_%d", DAEMON_WATCHDOG_DIR, DAEMON_NAME,
-		 token_id);
-
-	unlink(path);
-
-	close(fd);
+	unlink(watchdog_path);
+	close(watchdog_fd);
 }
 

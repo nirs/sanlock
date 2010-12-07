@@ -21,6 +21,7 @@
 #include "log.h"
 #include "delta_lease.h"
 #include "host_id.h"
+#include "watchdog.h"
 
 struct lease_status {
 	int acquire_last_result;
@@ -86,34 +87,51 @@ int our_host_id_renewed(void)
 	return 1;
 }
 
-static void *host_id_thread(void *arg GNUC_UNUSED)
+static void *host_id_thread(void *arg_in)
 {
 	struct timespec ts;
 	uint64_t t;
-	int rv, stop;
+	int *arg = (int *)arg_in;
+	int host_id_in = (int)(*arg);
+	int rv, stop, result, dl_result;
 
-	rv = delta_lease_acquire(&host_id_disk, options.our_host_id, &t);
+	free(arg);
+
+	result = delta_lease_acquire(&host_id_disk, host_id_in, &t);
+
+	dl_result = result;
+
+	/* we need to start the watchdog after we acquire the host_id but
+	   before we allow any pid's to begin running */
+
+	if (result == DP_OK) {
+		rv = create_watchdog_file(t);
+		if (rv < 0) {
+			log_error(NULL, "create_watchdog failed %d", rv);
+			result = DP_ERROR;
+		}
+	}
 
 	pthread_mutex_lock(&host_id_mutex);
-	our_lease_status.acquire_last_result = rv;
+	our_lease_status.acquire_last_result = result;
 	our_lease_status.acquire_last_time = t;
-	if (rv == DP_OK)
+	if (result == DP_OK)
 		our_lease_status.acquire_good_time = t;
-	our_lease_status.renewal_last_result = rv;
+	our_lease_status.renewal_last_result = result;
 	our_lease_status.renewal_last_time = t;
-	if (rv == DP_OK)
+	if (result == DP_OK)
 		our_lease_status.renewal_good_time = t;
 	pthread_cond_broadcast(&host_id_cond);
 	pthread_mutex_unlock(&host_id_mutex);
 
-	if (rv < 0) {
-		log_error(NULL, "host_id acquire failed %d", rv);
+	if (result < 0) {
+		log_error(NULL, "host_id %d acquire failed %d",
+			  host_id_in, result);
 		goto out;
 	}
 
-	log_debug(NULL, "host_id acquire %llu", (unsigned long long)t);
-
-	/* create_watchdog_file(t); */
+	log_debug(NULL, "host_id %d acquire %llu",
+		  host_id_in, (unsigned long long)t);
 
 	while (1) {
 		pthread_mutex_lock(&host_id_mutex);
@@ -129,29 +147,31 @@ static void *host_id_thread(void *arg GNUC_UNUSED)
 		if (stop)
 			break;
 
-		rv = delta_lease_renew(&host_id_disk, options.our_host_id, &t);
+		result = delta_lease_renew(&host_id_disk, host_id_in, &t);
 
 		pthread_mutex_lock(&host_id_mutex);
-		our_lease_status.renewal_last_result = rv;
+		our_lease_status.renewal_last_result = result;
 		our_lease_status.renewal_last_time = t;
-		if (rv == DP_OK)
+		if (result == DP_OK)
 			our_lease_status.renewal_good_time = t;
 		pthread_mutex_unlock(&host_id_mutex);
 
-		if (rv < 0) {
-			log_error(NULL, "host_id renewal failed %d", rv);
+		if (result < 0) {
+			log_error(NULL, "host_id %d renewal failed %d",
+				  host_id_in, result);
 			continue;
 		}
 
-		log_debug(NULL, "host_id renewal %llu", (unsigned long long)t);
+		log_debug(NULL, "host_id %d renewal %llu",
+			  host_id_in, (unsigned long long)t);
 
-		/* update_watchdog_file(t); */
+		update_watchdog_file(t);
 	}
 
-	/* unlink_watchdog_file(); */
-
-	delta_lease_release(&host_id_disk, options.our_host_id);
+	unlink_watchdog_file();
  out:
+	if (dl_result == DP_OK)
+		delta_lease_release(&host_id_disk, host_id_in);
 	return NULL;
 }
 
@@ -160,28 +180,40 @@ static void *host_id_thread(void *arg GNUC_UNUSED)
  * - wait for host_id_thread delta_lease_acquire result
  */
 
-int start_host_id(void)
+int start_host_id(int host_id_in)
 {
 	int rv, result;
+	int *arg;
 
 	memset(&host_id_disk, 0, sizeof(struct sync_disk));
-
 	strncpy(host_id_disk.path, options.host_id_path, DISK_PATH_LEN);
 	host_id_disk.offset = options.host_id_offset;
 
 	rv = open_disks(&host_id_disk, 1);
 	if (rv != 1) {
-		return -1;
+		log_error(NULL, "start_host_id open_disk failed %d %s",
+			  rv, options.host_id_path);
+		rv = -1;
+		goto fail;
 	}
+
+	log_debug(NULL, "start_host_id %d host_id_path %s offset %d",
+		  host_id_in, options.host_id_path, options.host_id_offset);
+
+	arg = malloc(sizeof(int));
+	if (!arg) {
+		rv = -ENOMEM;
+		goto fail_close;
+	}
+	*arg = host_id_in;
 
 	memset(&our_lease_status, 0, sizeof(struct lease_status));
 
-	log_debug(NULL, "start_host_id %d host_id_path %s offset %d",
-		  options.our_host_id, options.host_id_path, options.host_id_offset);
-
-	rv = pthread_create(&our_host_id_thread, NULL, host_id_thread, NULL);
-	if (rv)
-		return -1;
+	rv = pthread_create(&our_host_id_thread, NULL, host_id_thread, arg);
+	if (rv < 0) {
+		log_error(NULL, "start_host_id create thread failed");
+		goto fail_free;
+	}
 
 	pthread_mutex_lock(&host_id_mutex);
 	while (!our_lease_status.acquire_last_result) {
@@ -190,9 +222,28 @@ int start_host_id(void)
 	result = our_lease_status.acquire_last_result;
 	pthread_mutex_unlock(&host_id_mutex);
 
-	if (result == 1)
-		return 0;
-	return -1;
+	/* When this function returns, it needs to be safe to being processing
+	   lease requests and allowing pid's to run, so we need to own our
+	   host_id, and the watchdog needs to be active watching our host_id
+	   renewals.  start_host_id() blocks the main processing thread, so a
+	   lease request can be processed immediately when this returns, and it
+	   will check if options.our_host_id is > 0. */
+
+	if (result != DP_OK) {
+		/* the thread exits right away if acquire fails */
+		pthread_join(our_host_id_thread, NULL);
+		goto fail_close;
+	}
+
+	options.our_host_id = host_id_in;
+	return 0;
+
+ fail_free:
+	free(arg);
+ fail_close:
+	close_disks(&host_id_disk, 1);
+ fail:
+	return rv;
 }
 
 void stop_host_id(void)
@@ -201,6 +252,7 @@ void stop_host_id(void)
 	our_host_id_thread_stop = 1;
 	pthread_cond_broadcast(&host_id_cond);
 	pthread_mutex_unlock(&host_id_mutex);
+
 	pthread_join(our_host_id_thread, NULL);
 	close_disks(&host_id_disk, 1);
 }
