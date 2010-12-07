@@ -89,7 +89,7 @@ int our_host_id_renewed(void)
 
 static void *host_id_thread(void *arg_in)
 {
-	struct timespec ts;
+	struct timespec renew_time;
 	uint64_t t;
 	int *arg = (int *)arg_in;
 	int host_id_in = (int)(*arg);
@@ -133,19 +133,23 @@ static void *host_id_thread(void *arg_in)
 	log_debug(NULL, "host_id %d acquire %llu",
 		  host_id_in, (unsigned long long)t);
 
+	clock_gettime(CLOCK_REALTIME, &renew_time);
+
 	while (1) {
 		pthread_mutex_lock(&host_id_mutex);
-		clock_gettime(CLOCK_REALTIME, &ts);
-		ts.tv_sec += to.host_id_renewal_seconds;
+		renew_time.tv_sec += to.host_id_renewal_seconds;
 		rv = 0;
 		while (!our_host_id_thread_stop && rv == 0) {
 			rv = pthread_cond_timedwait(&host_id_cond,
-						    &host_id_mutex, &ts);
+						    &host_id_mutex,
+						    &renew_time);
 		}
 		stop = our_host_id_thread_stop;
 		pthread_mutex_unlock(&host_id_mutex);
 		if (stop)
 			break;
+
+		clock_gettime(CLOCK_REALTIME, &renew_time);
 
 		result = delta_lease_renew(&host_id_disk, host_id_in, &t);
 
@@ -168,7 +172,8 @@ static void *host_id_thread(void *arg_in)
 		update_watchdog_file(t);
 	}
 
-	unlink_watchdog_file();
+	/* called below to get it done ASAP */
+	/* unlink_watchdog_file(); */
  out:
 	if (dl_result == DP_OK)
 		delta_lease_release(&host_id_disk, host_id_in);
@@ -248,8 +253,19 @@ int start_host_id(void)
 	return rv;
 }
 
+/* 
+ * we call stop_host_id() when all pids are gone and we're in a safe state, so
+ * it's safe to unlink the watchdog right away here.  We want to do the unlink
+ * as soon as it's safe, so we can reduce the chance we get killed by the
+ * watchdog (we could actually call this in main_loop just before the break).
+ * Getting this unlink done quickly is more important than doing at the more
+ * "logical" point commented above in host_id_thread.
+ */
+
 void stop_host_id(void)
 {
+	unlink_watchdog_file();
+
 	pthread_mutex_lock(&host_id_mutex);
 	our_host_id_thread_stop = 1;
 	pthread_cond_broadcast(&host_id_cond);

@@ -40,7 +40,7 @@ static int delta_lease_leader_read(struct sync_disk *disk, uint64_t host_id,
 
 	rv = read_sectors(disk, host_id - 1, 1, (char *)leader_ret,
 			  sizeof(struct leader_record),
-			  to.io_timeout_seconds, "delta_leader");
+			  to.io_timeout_seconds, options.use_aio, "delta_leader");
 	if (rv < 0)
 		return DP_READ_LEADERS;
 
@@ -115,7 +115,7 @@ int delta_lease_acquire(struct sync_disk *disk, uint64_t host_id,
 
 	error = write_sector(disk, host_id - 1, (char *)&leader,
 			     sizeof(struct leader_record),
-			     to.io_timeout_seconds, "delta_leader");
+			     to.io_timeout_seconds, options.use_aio, "delta_leader");
 	if (error < 0)
 		return error;
 
@@ -173,7 +173,7 @@ int delta_lease_renew(struct sync_disk *disk, uint64_t host_id,
 
 	error = write_sector(disk, host_id - 1, (char *)&leader,
 			     sizeof(struct leader_record),
-			     to.io_timeout_seconds, "delta_leader");
+			     to.io_timeout_seconds, options.use_aio, "delta_leader");
 	if (error < 0)
 		return error;
 
@@ -212,7 +212,7 @@ int delta_lease_release(struct sync_disk *disk, uint64_t host_id)
 
 	error = write_sector(disk, host_id - 1, (char *)&leader,
 			     sizeof(struct leader_record),
-			     to.io_timeout_seconds, "delta_leader");
+			     to.io_timeout_seconds, options.use_aio, "delta_leader");
 	if (error < 0)
 		return error;
 
@@ -266,9 +266,8 @@ int delta_lease_init(struct sync_disk *disk, int num_hosts, int max_hosts)
 		snprintf(leader.resource_name, NAME_ID_SIZE, "host_id_%d", i+1);
 		leader.checksum = leader_checksum(&leader);
 
-		rv = write_sector(disk, i, (char *)&leader,
-				  sizeof(struct leader_record),
-				  to.io_timeout_seconds, "delta_leader");
+		rv = write_sector(disk, i, (char *)&leader, sizeof(struct leader_record),
+				  to.io_timeout_seconds, options.use_aio, "delta_leader");
 
 		if (rv < 0) {
 			log_error(NULL, "delta_init write_sector %d rv %d", i, rv);

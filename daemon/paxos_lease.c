@@ -71,8 +71,8 @@ static int write_dblock(struct sync_disk *disk, int host_id,
 	   host_id N is block offset N-1 */
 
 	rv = write_sector(disk, 2 + host_id - 1, (char *)pd,
-			  sizeof(struct paxos_dblock), to.io_timeout_seconds,
-			  "dblock");
+			  sizeof(struct paxos_dblock),
+			  to.io_timeout_seconds, options.use_aio, "dblock");
 	return rv;
 }
 
@@ -81,7 +81,7 @@ static int write_request(struct sync_disk *disk, struct request_record *rr)
 	int rv;
 
 	rv = write_sector(disk, 1, (char *)rr, sizeof(struct request_record),
-			  to.io_timeout_seconds, "request");
+			  to.io_timeout_seconds, options.use_aio, "request");
 	return rv;
 }
 
@@ -90,7 +90,7 @@ static int write_leader(struct sync_disk *disk, struct leader_record *lr)
 	int rv;
 
 	rv = write_sector(disk, 0, (char *)lr, sizeof(struct leader_record),
-			  to.io_timeout_seconds, "leader");
+			  to.io_timeout_seconds, options.use_aio, "leader");
 	return rv;
 }
 
@@ -103,7 +103,7 @@ static int read_dblock(struct sync_disk *disk, int host_id,
 
 	rv = read_sectors(disk, 2 + host_id - 1, 1, (char *)pd,
 			  sizeof(struct paxos_dblock),
-			  to.io_timeout_seconds, "dblock");
+			  to.io_timeout_seconds, options.use_aio, "dblock");
 	return rv;
 }
 
@@ -126,7 +126,7 @@ static int read_dblocks(struct sync_disk *disk, struct paxos_dblock *pds,
 	/* 2 = 1 leader block + 1 request block */
 
 	rv = read_sectors(disk, 2, pds_count, data, data_len,
-			  to.io_timeout_seconds, "dblocks");
+			  to.io_timeout_seconds, options.use_aio, "dblocks");
 	if (rv < 0)
 		goto out_free;
 
@@ -153,7 +153,7 @@ static int read_leader(struct sync_disk *disk, struct leader_record *lr)
 
 	rv = read_sectors(disk, 0, 1, (char *)lr,
 			  sizeof(struct leader_record),
-			  to.io_timeout_seconds, "leader");
+			  to.io_timeout_seconds, options.use_aio, "leader");
 
 	return rv;
 }
@@ -167,7 +167,7 @@ static int read_request(struct sync_disk *disk, struct request_record *rr)
 	/* 1 = request record is second sector */
 
 	rv = read_sectors(disk, 1, (char *)rr, sizeof(struct request_record),
-			  to.io_timeout_seconds, "request");
+			  to.io_timeout_seconds, options.use_aio, "request");
 
 	return rv;
 }

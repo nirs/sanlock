@@ -1295,7 +1295,7 @@ static void print_usage(void)
 	printf("  -S <level>		write logging at level and up to syslog (-1 none)\n");
 	printf("  -m <num>		cluster mode of hosts (default 0)\n");
 	printf("  -w <num>		enable (1) or disable (0) writing watchdog files\n");
-	printf("  -a <num>		io_timeout_seconds (-1 no aio)\n");
+	printf("  -a <num>		use async io (1 yes, 0 no)\n");
 	printf("  -i <num>		local host_id\n");
 	printf("  -d <path>		disk path for host_id leases\n");
 	printf("  -o <num>		offset on disk for host_id leases\n");
@@ -1567,7 +1567,7 @@ static int read_args(int argc, char *argv[],
 			options.host_id_offset = atoi(optionarg);
 			break;
 		case 'a':
-			to.io_timeout_seconds = atoi(optionarg);
+			options.use_aio = atoi(optionarg);
 			break;
 		case 'r':
 			if ((*action) != ACT_RELEASE)
@@ -1668,12 +1668,6 @@ static int read_args(int argc, char *argv[],
 		}
 	}
 
-	if (!to.io_timeout_seconds) {
-		log_tool("invalid io_timeout_seconds %d", to.io_timeout_seconds);
-		return -EINVAL;
-	}
-
-	log_debug(NULL, "io_timeout_seconds %d", to.io_timeout_seconds);
 	return 0;
 }
 
@@ -1697,15 +1691,15 @@ int main(int argc, char *argv[])
 	int rv, fd;
 
 	memset(&options, 0, sizeof(options));
+	options.use_aio = 1;
 	options.use_watchdog = 1;
 	options.our_host_id = -1;
 	options.pid = -1;
 
-	/* TODO: derive others from io_timeout */
 	to.io_timeout_seconds = DEFAULT_IO_TIMEOUT_SECONDS;
-	to.host_id_timeout_seconds = 60;
-	to.host_id_renewal_seconds = 10;
-	to.host_id_renewal_fail_seconds = 40;
+	to.host_id_renewal_seconds = DEFAULT_HOST_ID_RENEWAL_SECONDS;
+	to.host_id_renewal_fail_seconds = DEFAULT_HOST_ID_RENEWAL_FAIL_SECONDS;
+	to.host_id_timeout_seconds = DEFAULT_HOST_ID_TIMEOUT_SECONDS;
 
 	rv = read_args(argc, argv, &token_count, token_args,
 		       &action, &init_num_hosts, &init_max_hosts);

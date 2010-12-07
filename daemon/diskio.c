@@ -286,7 +286,7 @@ static int do_read_aio(int fd, uint64_t offset, char *buf, int len, int io_timeo
 static int _write_sectors(const struct sync_disk *disk, uint32_t sector_nr,
 			  uint32_t sector_count GNUC_UNUSED,
 			  const char *data, int data_len,
-			  int iobuf_len, int io_timeout_seconds,
+			  int iobuf_len, int io_timeout_seconds, int use_aio,
 			  const char *blktype)
 {
 	char *iobuf, **p_iobuf;
@@ -308,10 +308,10 @@ static int _write_sectors(const struct sync_disk *disk, uint32_t sector_nr,
 	memset(iobuf, 0, iobuf_len);
 	memcpy(iobuf, data, data_len);
 
-	if (io_timeout_seconds < 0)
-		rv = do_write(disk->fd, offset, iobuf, iobuf_len);
-	else
+	if (use_aio)
 		rv = do_write_aio(disk->fd, offset, iobuf, iobuf_len, io_timeout_seconds);
+	else
+		rv = do_write(disk->fd, offset, iobuf, iobuf_len);
 
 	if (rv < 0)
 		log_error(NULL, "write_sectors %s offset %llu rv %d %s",
@@ -328,7 +328,7 @@ static int _write_sectors(const struct sync_disk *disk, uint32_t sector_nr,
 
 int write_sector(const struct sync_disk *disk, uint32_t sector_nr,
 		 const char *data, int data_len, int io_timeout_seconds,
-		 const char *blktype)
+		 int use_aio, const char *blktype)
 {
 	int iobuf_len = disk->sector_size;
 
@@ -339,14 +339,14 @@ int write_sector(const struct sync_disk *disk, uint32_t sector_nr,
 	}
 
 	return _write_sectors(disk, sector_nr, 1, data, data_len,
-			      iobuf_len, io_timeout_seconds, blktype);
+			      iobuf_len, io_timeout_seconds, use_aio, blktype);
 }
 
 /* write multiple complete sectors, data_len must be multiple of sector size */
 
 int write_sectors(const struct sync_disk *disk, uint32_t sector_nr,
 		  uint32_t sector_count, const char *data, int data_len,
-		  int io_timeout_seconds, const char *blktype)
+		  int io_timeout_seconds, int use_aio, const char *blktype)
 {
 	int iobuf_len = data_len;
 
@@ -357,7 +357,7 @@ int write_sectors(const struct sync_disk *disk, uint32_t sector_nr,
 	}
 
 	return _write_sectors(disk, sector_nr, sector_count, data, data_len,
-			      iobuf_len, io_timeout_seconds, blktype);
+			      iobuf_len, io_timeout_seconds, use_aio, blktype);
 }
 
 /* read sector_count sectors starting with sector_nr, where sector_nr
@@ -368,7 +368,7 @@ int write_sectors(const struct sync_disk *disk, uint32_t sector_nr,
 
 int read_sectors(const struct sync_disk *disk, uint32_t sector_nr,
 	 	 uint32_t sector_count, char *data, int data_len,
-		 int io_timeout_seconds, const char *blktype)
+		 int io_timeout_seconds, int use_aio, const char *blktype)
 {
 	char *iobuf, **p_iobuf;
 	uint64_t offset;
@@ -389,10 +389,10 @@ int read_sectors(const struct sync_disk *disk, uint32_t sector_nr,
 
 	memset(iobuf, 0, iobuf_len);
 
-	if (io_timeout_seconds < 0)
-		rv = do_read(disk->fd, offset, iobuf, iobuf_len);
-	else
+	if (use_aio)
 		rv = do_read_aio(disk->fd, offset, iobuf, iobuf_len, io_timeout_seconds);
+	else
+		rv = do_read(disk->fd, offset, iobuf, iobuf_len);
 
 	if (!rv) {
 		memcpy(data, iobuf, data_len);

@@ -59,35 +59,50 @@
 
 #define DAEMON_NAME "daemon"
 
-#define DEFAULT_IO_TIMEOUT_SECONDS 60
-
 #define SMERR_UNREGISTERED -501;
 
 /*
- * host_timeout_seconds
- * disk paxos takes over lease if host_id hasn't been renewed for this long
+ * io_timeout_seconds - max time a single disk read or write can take to return
+ * (if -1 then non-async i/o is used and time is unlimited)
+ * (cf. safelease.c "max_op_ms")
+ * (cf. light weight leases paper small delta)
+ * (cf. delta_lease.c log message "d")
  *
- * host_renewal_warn_seconds
- * sm emits a warning message if its host_id hasn't been renewed in this time
+ * host_id_renewal_seconds - attempt a renewal once in each interval of this length
+ * (the sleeping time between each attempt will be this time minus the time spent
+ * in renewal) 
  *
- * host_renewal_fail_seconds
- * sm starts recovery if its host_id hasn't renewed in this time
+ * host_id_renewal_fail_seconds - daemon must renew lease once within this time
+ * period to keep the lease.  daemon enters recovery mode (kills supervised pids)
+ * if the lease is not renewed in this interval.
+ * (cf. safelease.c "lease_ms")
+ * (cf. light weight leases paper large delta)
+ * (cf. delta_lease.c log message "D")
  *
- * host_renewal_seconds
- * sm tries to renew its host_id this often
+ * host_id_timeout_seconds - one host considers another dead if the other's
+ * host_id lease is this old (or more), and will take ownership of any resource
+ * leases that the other host owned.
  *
- * script_shutdown_seconds
- * use killscript if this many seconds remain (or >) until lease can be taken
+ * Example of how host_id_timeout_seconds is derived (primarily from 
+ * host_id_renewal_fail_seconds).
+ * . host_id_renewal_fail_seconds 30
+ * . host_id_timeout_seconds 100
  *
- * sigterm_shutdown_seconds
- * use SIGTERM if this many seconds remain (or >) until lease can be taken
- *
- * stable_poll_ms
- * check pid and lease status this often when things appear to be stable
- *
- * unstable_poll_ms
- * check pid and lease status this often when things are changing
+ * - lease ages to 30 sec at which point daemon enters recovery mode
+ *   (kills pids) and stops updating wd file
+ * - 60 more seconds after we stop updating wd file, the wd fires
+ *   (assuming standard 60 wd timeout, and assuming we don't unlink wd file first)
+ * - this 90 seconds isn't quite right because of the intervals between
+ *   checks (daemon checking lease age, and watchdog daemon running checks), so
+ *   add 10 more seconds to deal with check intervals, e.g. the watchdog daemon
+ *   checks the status every 5 or 10 seconds, so the lease may be 30-40 sec
+ *   old when it stops petting the wd device
  */
+
+#define DEFAULT_IO_TIMEOUT_SECONDS 1
+#define DEFAULT_HOST_ID_RENEWAL_SECONDS 5
+#define DEFAULT_HOST_ID_RENEWAL_FAIL_SECONDS 30
+#define DEFAULT_HOST_ID_TIMEOUT_SECONDS 100
 
 struct sm_timeouts {
 	int io_timeout_seconds;
@@ -97,6 +112,7 @@ struct sm_timeouts {
 };
 
 struct sm_options {
+	int use_aio;
 	int use_watchdog;
 	int our_host_id;
 	uint32_t cluster_mode;
