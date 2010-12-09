@@ -1,5 +1,5 @@
-#ifndef __SM_H__
-#define __SM_H__
+#ifndef __SANLOCK_INTERNAL_H__
+#define __SANLOCK_INTERNAL_H__
 
 #ifndef GNUC_UNUSED
 #define GNUC_UNUSED __attribute__((__unused__))
@@ -11,6 +11,8 @@
 #undef EXTERN
 #define EXTERN
 #endif
+
+#include "sanlock.h"
 
 #define PAXOS_DISK_MAGIC 0x06152010
 #define PAXOS_DISK_VERSION_MAJOR 0x00020000
@@ -32,7 +34,7 @@
 
 /* includes terminating null byte */
 
-#define DISK_PATH_LEN 1024
+#define DISK_PATH_LEN SANLK_PATH_LEN
 
 /* default num_hosts and host_id range */
 
@@ -40,7 +42,7 @@
 
 /* does not include terminating null byte */
 
-#define NAME_ID_SIZE 48
+#define NAME_ID_SIZE SANLK_NAME_LEN
 
 #define SM_LOG_DUMP_SIZE (1024*1024)
 
@@ -48,18 +50,28 @@
 
 #define COMMAND_MAX 4096
 
-#define SM_RUN_DIR "/var/run/sync_manager"
-#define SM_LOG_DIR "/var/log/sync_manager"
-#define DAEMON_WATCHDOG_DIR "/var/run/sync_manager/watchdog"
-#define DAEMON_SOCKET_DIR "/var/run/sync_manager/sockets"
-#define DAEMON_LOCKFILE_DIR "/var/run/sync_manager/daemon_lockfiles/"
-#define RESOURCE_LOCKFILE_DIR "/var/run/sync_manager/resource_lockfiles/"
+#define SM_RUN_DIR "/var/run/sanlock"
+#define SM_LOG_DIR "/var/log/sanlock"
+#define DAEMON_WATCHDOG_DIR "/var/run/sanlock/watchdog"
+#define DAEMON_SOCKET_DIR "/var/run/sanlock/socket"
+#define DAEMON_LOCKFILE_DIR "/var/run/sanlock/lockfile/"
 
-#define MAIN_SOCKET_NAME "main"
+#define MAIN_SOCKET_NAME "sanlock-main"
 
-#define DAEMON_NAME "daemon"
+#define DAEMON_NAME "sanlock"
 
 #define SMERR_UNREGISTERED -501;
+
+struct sm_header {
+	uint32_t magic;
+	uint32_t version;
+	uint32_t cmd;
+	uint32_t length;
+	uint32_t seq;
+	uint32_t pad;
+	uint32_t data;
+	uint32_t data2;
+};
 
 /*
  * io_timeout_seconds - max time a single disk read or write can take to return
@@ -111,20 +123,34 @@ struct sm_timeouts {
 	int host_id_renewal_fail_seconds;
 };
 
+/* values used after processing command, while running */
+
 struct sm_options {
+	int no_daemon_fork;
 	int use_aio;
 	int use_watchdog;
 	int our_host_id;
 	uint32_t cluster_mode;
-	int pid;
-	int host_id;
-	int incoming;
 	char host_id_path[DISK_PATH_LEN];
 	int host_id_offset;
 };
 
+/* values used while processing command, not afterward */
+
+struct command_line {
+	int action;
+	int pid;
+	int host_id;
+	int incoming;
+	int num_hosts;
+	int max_hosts;
+	int res_count;
+	struct sanlk_resource *res_args[];
+};
+
 EXTERN struct sm_options options;
 EXTERN struct sm_timeouts to;
+EXTERN struct command_line com;
 
 #endif
 

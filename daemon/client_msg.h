@@ -1,5 +1,5 @@
-#ifndef __SM_MSG_H__
-#define __SM_MSG_H__
+#ifndef __CLIENT_MSG_H__
+#define __CLIENT_MSG_H__
 
 #define MAX_CLIENT_MSG (1024 * 1024) /* TODO: this is random */
 
@@ -15,19 +15,9 @@ enum {
 	SM_CMD_SETOWNER,
 };
 
-struct sm_header {
-	uint32_t magic;
-	uint32_t version;
-	uint32_t cmd;
-	uint32_t length;
-	uint32_t seq;
-	uint32_t pad;
-	uint32_t data;
-	uint32_t data2;
-};
-
 int setup_listener_socket(const char *name, int length, int *listener_socket);
 int connect_socket(const char *name, int length, int* sock_fd);
 int send_header(int sock, int cmd, int datalen, uint32_t data, uint32_t data2);
+int send_command(int cmd, uint32_t data);
 
 #endif

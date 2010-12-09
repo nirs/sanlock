@@ -6,11 +6,14 @@
    256 blocks = 128KB, ref: lease_item_record */
 
 struct sync_disk {
-	int fd;
-	uint32_t sector_size;
-	uint64_t offset;
-	char unit[3];
+	/* mirror external sanlk_disk */
 	char path[DISK_PATH_LEN];
+	uint64_t offset;
+	uint32_t units;
+
+	/* internal */
+	uint32_t sector_size;
+	int fd;
 };
 
 void close_disks(struct sync_disk *disks, int num_disks);

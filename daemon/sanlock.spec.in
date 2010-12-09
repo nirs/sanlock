@@ -1,7 +1,7 @@
-Name:		sync-manager
+Name:		sanlock
 Version:	0.1
 Release:	1.19700101git%{?dist}
-Summary:	Sync Manager is a tool to manage disk paxos base leases.
+Summary:	sanlock is a shared disk lock manager.
 
 Group:		Development/Tools
 License:	GPLv2+
@@ -13,8 +13,9 @@ BuildRequires:	gcc libblkid-devel
 Requires:	glibc libblkid
 
 %description
-Sync Manager is a program to manage disk paxos based leases.
-It helps synchronizing access to shared resource in a distributed system.
+sanlock uses disk paxos to manage leases on shared storage.
+Hosts connected to a common SAN can use this to synchronize their
+access to the shared disks.
 
 %prep
 %setup -c -q
@@ -34,7 +35,7 @@ rm -rf $RPM_BUILD_ROOT
 
 %files
 %defattr(-,root,root,-)
-/usr/libexec/sync_manager
+/usr/libexec/sanlock
 
 %doc
 

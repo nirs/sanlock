@@ -20,8 +20,7 @@
 #include <sys/un.h>
 
 #define EXTERN
-#include "sm.h"
-#include "sm_msg.h"
+#include "sanlock_internal.h"
 #include "diskio.h"
 #include "leader.h"
 #include "log.h"
@@ -30,7 +29,9 @@
 #include "host_id.h"
 #include "token_manager.h"
 #include "lockfile.h"
-#include "sm_client.h"
+#include "client_msg.h"
+#include "sanlock_resource.h"
+#include "sanlock_admin.h"
 
 /* priorities are LOG_* from syslog.h */
 int log_logfile_priority = LOG_ERR;
@@ -57,7 +58,7 @@ static int client_size = 0;
 static struct client *client = NULL;
 static struct pollfd *pollfd = NULL;
 
-/* sync_manager <action>'s */
+/* command line actions */
 #define ACT_INIT	1
 #define ACT_DAEMON	2
 #define ACT_COMMAND	3
@@ -69,7 +70,6 @@ static struct pollfd *pollfd = NULL;
 #define ACT_SET_HOST_ID	9
 #define ACT_MIGRATE	10
 
-static int no_daemon_fork;
 static char command[COMMAND_MAX];
 static int cmd_argc;
 static char **cmd_argv;
@@ -378,6 +378,9 @@ static void *cmd_acquire_thread(void *args_in)
 	struct sync_disk *disks = NULL;
 	struct token *token = NULL;
 	struct token *new_tokens[MAX_LEASE_ARGS];
+	struct sanlk_resource res;
+	struct sanlk_options opt;
+	char *opt_str;
 	uint64_t reacquire_lver = 0;
 	int fd, rv, i, j, disks_len, num_disks, empty_slots, opened;
 	int alloc_count = 0, add_count = 0, open_count = 0, acquire_count = 0;
@@ -418,7 +421,7 @@ static void *cmd_acquire_thread(void *args_in)
 	}
 
 	/*
-	 * read args and allocate tokens for each lease
+	 * read resource input and allocate tokens for each
 	 */
 
 	for (i = 0; i < new_tokens_count; i++) {
@@ -429,20 +432,39 @@ static void *cmd_acquire_thread(void *args_in)
 		}
 		memset(token, 0, sizeof(struct token));
 
-		rv = recv(fd, token, sizeof(struct token), MSG_WAITALL);
+
+		/*
+		 * receive sanlk_resource, copy into token
+		 */
+
+		rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
 		if (rv > 0)
 			pos += rv;
-		if (rv != sizeof(struct token)) {
+		if (rv != sizeof(struct sanlk_resource)) {
 			log_error(NULL, "cmd_acquire recv %d %d", rv, errno);
 			free(token);
 			rv = -EIO;
 			goto fail_free;
 		}
-		log_debug(NULL, "cmd_acquire recv t %d %s", rv,
-			  token->resource_name);
+
+		log_debug(NULL, "cmd_acquire recv r %d %s %d %u %llu", rv,
+			  res.name, res.num_disks, res.data32,
+			  (unsigned long long)res.data64);
+		strncpy(token->resource_name, res.name, SANLK_NAME_LEN);
+		token->num_disks = res.num_disks;
+		token->acquire_data32 = res.data32;
+		token->acquire_data64 = res.data64;
+
+
+		/*
+		 * receive sanlk_disk's / sync_disk's
+		 *
+		 * WARNING: as a shortcut, this requires that sync_disk and
+		 * sanlk_disk match; this is the reason for the pad fields
+		 * in sanlk_disk (TODO: let these differ)
+		 */
 
 		num_disks = token->num_disks;
-
 		if (num_disks > MAX_DISKS) {
 			free(token);
 			rv = -ERANGE;
@@ -471,9 +493,11 @@ static void *cmd_acquire_thread(void *args_in)
 		}
 		log_debug(NULL, "cmd_acquire recv d %d", rv);
 
-		/* token->cmd_option set by caller */
-		if (token->cmd_option == OPT_ACQUIRE_RECV)
-			need_setowner = 1;
+		/* zero out pad1 and pad2, see WARNING above */
+		for (j = 0; j < num_disks; j++) {
+			disks[j].sector_size = 0;
+			disks[j].fd = 0;
+		}
 
 		token->token_id = token_id_counter++;
 		token->disks = disks;
@@ -481,7 +505,54 @@ static void *cmd_acquire_thread(void *args_in)
 		alloc_count++;
 	}
 
+	/*
+	 * receive per-command sanlk_options and opt string (if any)
+	 */
+
+	rv = recv(fd, &opt, sizeof(struct sanlk_options), MSG_WAITALL);
+	if (rv > 0)
+		pos += rv;
+	if (rv != sizeof(struct sanlk_options)) {
+		log_error(NULL, "cmd_acquire recv %d %d", rv, errno);
+		rv = -EIO;
+		goto fail_free;
+	}
+
+	log_debug(NULL, "cmd_acquire recv o %d %x %u", rv, opt.flags, opt.len);
+
+	if (!opt.len)
+		goto skip_opt_str;
+
+	opt_str = malloc(opt.len);
+	if (!opt_str) {
+		rv = -ENOMEM;
+		goto fail_free;
+	}
+
+	rv = recv(fd, opt_str, opt.len, MSG_WAITALL);
+	if (rv > 0)
+		pos += rv;
+	if (rv != opt.len) {
+		log_error(NULL, "cmd_acquire recv %d %d", rv, errno);
+		free(opt_str);
+		rv = -EIO;
+		goto fail_free;
+	}
+
+	log_debug(NULL, "cmd_acquire recv s %d", rv);
+
 	/* TODO: warn if header.length != sizeof(header) + pos ? */
+
+	log_debug(NULL, "cmd_acquire command data done %d bytes", pos);
+
+
+	/*
+	 * all command input has been received, start doing the acquire
+	 */
+
+ skip_opt_str:
+	if (opt.flags & SANLK_FLG_INCOMING)
+		need_setowner = 1;
 
 	for (i = 0; i < new_tokens_count; i++) {
 		token = new_tokens[i];
@@ -506,10 +577,10 @@ static void *cmd_acquire_thread(void *args_in)
 
 	for (i = 0; i < new_tokens_count; i++) {
 		token = new_tokens[i];
-		if (token->cmd_option == OPT_ACQUIRE_RECV) {
-			rv = receive_lease(token);
+		if (opt.flags & SANLK_FLG_INCOMING) {
+			rv = receive_lease(token, opt_str);
 		} else {
-			if (token->cmd_option == OPT_ACQUIRE_PREV)
+			if (opt.flags & SANLK_FLG_REACQUIRE)
 				reacquire_lver = token->prev_lver;
 			rv = acquire_lease(token, reacquire_lver);
 		}
@@ -629,7 +700,7 @@ static void *cmd_release_thread(void *args_in)
 	struct cmd_args *ca = args_in;
 	struct sm_header h;
 	struct token *token;
-	char resource_name[NAME_ID_SIZE];
+	struct sanlk_resource res;
 	int results[MAX_LEASE_ARGS];
 	struct client *cl;
 	int fd, rv, i, j, found, rem_tokens_count;
@@ -644,8 +715,8 @@ static void *cmd_release_thread(void *args_in)
 	rem_tokens_count = ca->header.data;
 
 	for (i = 0; i < rem_tokens_count; i++) {
-		rv = recv(fd, resource_name, NAME_ID_SIZE, MSG_WAITALL);
-		if (rv != NAME_ID_SIZE) {
+		rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
+		if (rv != sizeof(struct sanlk_resource)) {
 			log_error(NULL, "cmd_release recv fd %d %d %d", fd, rv, errno);
 			results[i] = -1;
 			break;
@@ -658,7 +729,7 @@ static void *cmd_release_thread(void *args_in)
 			if (!token)
 				continue;
 
-			if (memcmp(token->resource_name, resource_name, NAME_ID_SIZE))
+			if (memcmp(token->resource_name, res.name, NAME_ID_SIZE))
 				continue;
 
 			rv = release_lease(token);
@@ -672,7 +743,7 @@ static void *cmd_release_thread(void *args_in)
 
 		if (!found) {
 			log_error(NULL, "cmd_release pid %d no resource %s",
-				  cl->pid, resource_name);
+				  cl->pid, res.name);
 			results[i] = -ENOENT;
 		}
 	}
@@ -765,6 +836,8 @@ static void *cmd_migrate_thread(void *args_in)
 		set_cmd_active(ca->ci_target, 0);
 
 	log_debug(NULL, "cmd_migrate done %d", total);
+
+	/* TODO: encode tokens_reply as a string to send back */
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
 	h.length = sizeof(h) + tokens_len;
@@ -862,10 +935,6 @@ static void cmd_log_dump(int fd, struct sm_header *h_recv)
 	write_log_dump(fd, &h);
 }
 
-/* TODO: add host_id lease area that can be set along with our_host_id */
-
-/* Note: this can take a long time; do we want to block the main loop? */
-
 static void cmd_set_host_id(int fd, struct sm_header *h_recv)
 {
 	struct sm_header h;
@@ -948,7 +1017,7 @@ static void process_cmd_thread(int ci_in, struct sm_header *h_recv)
 	ca->ci_target = ci_target;
 	memcpy(&ca->header, h_recv, sizeof(struct sm_header));
 
-	/* TODO: use a thread pool */
+	/* TODO: use a thread pool? */
 
 	pthread_attr_init(&attr);
 	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
@@ -1124,10 +1193,6 @@ static int make_dirs(void)
 	if (rv < 0 && errno != EEXIST)
 		goto out;
 
-	rv = mkdir(RESOURCE_LOCKFILE_DIR, 0777);
-	if (rv < 0 && errno != EEXIST)
-		goto out;
-
 	rv = mkdir(DAEMON_SOCKET_DIR, 0777);
 	if (rv < 0 && errno != EEXIST)
 		goto out;
@@ -1153,7 +1218,7 @@ static int do_daemon(void)
 
 	/* TODO: copy comprehensive daemonization method from libvirtd */
 
-	if (!no_daemon_fork) {
+	if (!options.no_daemon_fork) {
 		if (daemon(0, 0) < 0) {
 			log_tool("cannot fork daemon\n");
 			exit(EXIT_FAILURE);
@@ -1214,13 +1279,13 @@ static int do_daemon(void)
 	return rv;
 }
 
-static int do_init(int token_count, struct token *token_args[],
-		   int init_num_hosts, int init_max_hosts)
+static int do_init(void)
 {
+	struct sanlk_resource *res;
 	struct token *token;
 	struct sync_disk sd;
 	int num_opened;
-	int i, rv = 0;
+	int i, j, rv = 0;
 
 	if (!options.host_id_path[0])
 		goto tokens;
@@ -1235,15 +1300,32 @@ static int do_init(int token_count, struct token *token_args[],
 		return -1;
 	}
 
-	rv = delta_lease_init(&sd, init_num_hosts, init_max_hosts);
+	rv = delta_lease_init(&sd, com.num_hosts, com.max_hosts);
 	if (rv < 0) {
 		log_tool("cannot initialize host_id disk");
 		return -1;
 	}
 
  tokens:
-	for (i = 0; i < token_count; i++) {
-		token = token_args[i];
+	for (i = 0; i < com.res_count; i++) {
+		res = com.res_args[i];
+
+		rv = create_token(res->num_disks, &token);
+		if (rv < 0)
+			return rv;
+
+		strncpy(token->resource_name, res->name, NAME_ID_SIZE);
+
+		/* see WARNING above about sync_disk == sanlk_disk */
+
+		memcpy(token->disks, &res->disks,
+		       token->num_disks * sizeof(struct sync_disk));
+
+		/* zero out pad1 and pad2, see WARNING above */
+		for (j = 0; j < token->num_disks; j++) {
+			token->disks[j].sector_size = 0;
+			token->disks[j].fd = 0;
+		}
 
 		num_opened = open_disks(token->disks, token->num_disks);
 		if (!majority_disks(token, num_opened)) {
@@ -1251,11 +1333,13 @@ static int do_init(int token_count, struct token *token_args[],
 			return -1;
 		}
 
-		rv = paxos_lease_init(token, init_num_hosts, init_max_hosts);
+		rv = paxos_lease_init(token, com.num_hosts, com.max_hosts);
 		if (rv < 0) {
 			log_tool("cannot initialize disks");
 			return -1;
 		}
+
+		free_token(token);
 	}
 
 	return 0;
@@ -1264,7 +1348,7 @@ static int do_init(int token_count, struct token *token_args[],
 static void print_usage(void)
 {
 	printf("Usage:\n");
-	printf("sync_manager <action> [options]\n\n");
+	printf("sanlock <action> [options]\n\n");
 	printf("main actions:\n");
 	printf("  help			print usage\n");
 	printf("  init			initialize disk areas for host_id and resource leases\n");
@@ -1272,8 +1356,8 @@ static void print_usage(void)
 	printf("\n");
 	printf("client actions:\n");
 	printf("  command		ask daemon to acquire leases, then run command\n");
-	printf("  acquire		ask daemon to acquire leases for a given pid\n");
-	printf("  release		ask daemon to release leases for a given pid\n");
+	printf("  acquire		ask daemon to acquire leases for another pid\n");
+	printf("  release		ask daemon to release leases for another pid\n");
 	printf("  status		print internal daemon state\n");
 	printf("  log_dump		print internal daemon debug buffer\n");
 	printf("  shutdown		ask daemon to kill pids, release leases and exit\n");
@@ -1337,33 +1421,52 @@ static void print_usage(void)
 	printf("\n");
 }
 
-static int add_resource_arg(char *arg, int *token_count, struct token *token_args[])
+static int create_sanlk_resource(int num_disks, struct sanlk_resource **res_out)
 {
-	struct token *token;
+	struct sanlk_resource *res;
+	int len;
+
+	len = sizeof(struct sanlk_resource) +
+	      num_disks * sizeof(struct sanlk_disk);
+
+	res = malloc(sizeof(struct sanlk_resource) +
+		     (num_disks * sizeof(struct sanlk_disk)));
+	if (!res)
+		return -ENOMEM;
+	memset(res, 0, len);
+
+	res->num_disks = num_disks;
+	*res_out = res;
+        return 0;
+}
+
+static int add_res_name_to_com(char *arg)
+{
+	struct sanlk_resource *res;
 	int rv;
 
-	if (*token_count >= MAX_LEASE_ARGS) {
+	if (com.res_count >= MAX_LEASE_ARGS) {
 		log_tool("lease args over max %d", MAX_LEASE_ARGS);
 		return -1;
 	}
 
-	rv = create_token(0, &token);
+	rv = create_sanlk_resource(0, &res);
 	if (rv < 0) {
 		log_tool("resource arg create");
 		return rv;
 	}
 
-	strncpy(token->resource_name, arg, NAME_ID_SIZE);
-	token_args[*token_count] = token;
-	(*token_count)++;
+	strncpy(res->name, arg, NAME_ID_SIZE);
+	com.res_args[com.res_count] = res;
+	com.res_count++;
 	return rv;
 }
 
 /* arg = <resource_name>:<path>:<offset>[:<path>:<offset>...] */
 
-static int add_token_arg(char *arg, int *token_count, struct token *token_args[])
+static int add_lease_to_com(char *arg)
 {
-	struct token *token;
+	struct sanlk_resource *res;
 	char sub[DISK_PATH_LEN + 1];
 	char unit[DISK_PATH_LEN + 1];
 	int sub_count;
@@ -1372,7 +1475,7 @@ static int add_token_arg(char *arg, int *token_count, struct token *token_args[]
 	int rv, i, j, d;
 	int len = strlen(arg);
 
-	if (*token_count >= MAX_LEASE_ARGS) {
+	if (com.res_count >= MAX_LEASE_ARGS) {
 		log_tool("lease args over max %d", MAX_LEASE_ARGS);
 		return -1;
 	}
@@ -1398,14 +1501,14 @@ static int add_token_arg(char *arg, int *token_count, struct token *token_args[]
 		return -1;
 	}
 
-	rv = create_token(num_disks, &token);
+	rv = create_sanlk_resource(num_disks, &res);
 	if (rv < 0) {
 		log_tool("lease arg create num_disks %d", num_disks);
 		return rv;
 	}
 
-	token_args[*token_count] = token;
-	(*token_count)++;
+	com.res_args[com.res_count] = res;
+	com.res_count++;
 
 	d = 0;
 	sub_count = 0;
@@ -1440,23 +1543,31 @@ static int add_token_arg(char *arg, int *token_count, struct token *token_args[]
 				log_tool("lease arg id length error");
 				goto fail;
 			}
-			strncpy(token->resource_name, sub, NAME_ID_SIZE);
+			strncpy(res->name, sub, NAME_ID_SIZE);
 		} else if (sub_count % 2) {
 			if (strlen(sub) > DISK_PATH_LEN-1 || strlen(sub) < 1) {
 				log_tool("lease arg path length error");
 				goto fail;
 			}
-			strncpy(token->disks[d].path, sub, DISK_PATH_LEN - 1);
+			strncpy(res->disks[d].path, sub, DISK_PATH_LEN - 1);
 		} else {
 			memset(&unit, 0, sizeof(unit));
-			rv = sscanf(sub, "%llu%s", (unsigned long long *)&token->disks[d].offset, unit);
+			rv = sscanf(sub, "%llu%s", (unsigned long long *)&res->disks[d].offset, unit);
 			if (!rv || rv > 2) {
 				log_tool("lease arg offset error");
 				goto fail;
 			}
 			if (rv > 1) {
-				token->disks[d].unit[0] = unit[0];
-				token->disks[d].unit[1] = unit[1];
+				if (unit[0] == 's')
+					res->disks[d].units = SANLK_UNITS_SECTORS;
+				else if (unit[0] == 'K' && unit[1] == 'B')
+					res->disks[d].units = SANLK_UNITS_KB;
+				else if (unit[0] == 'M' && unit[1] == 'B')
+					res->disks[d].units = SANLK_UNITS_MB;
+				else {
+					log_tool("unit unknkown: %s", unit);
+					goto fail;
+				}
 			}
 			d++;
 		}
@@ -1469,7 +1580,7 @@ static int add_token_arg(char *arg, int *token_count, struct token *token_args[]
 	return 0;
 
  fail:
-	free_token(token);
+	free(res);
 	return -1;
 }
 
@@ -1543,9 +1654,7 @@ static void parse_timeouts(char *optstr)
 
 #define RELEASE_VERSION "0.0"
 
-static int read_args(int argc, char *argv[],
-		     int *token_count, struct token *token_args[],
-		     int *action, int *init_num_hosts, int *init_max_hosts)
+static int read_command_line(int argc, char *argv[])
 {
 	char optchar;
 	char *optionarg;
@@ -1568,25 +1677,25 @@ static int read_args(int argc, char *argv[],
 	}
 
 	if (!strcmp(arg1, "init"))
-		*action = ACT_INIT;
+		com.action = ACT_INIT;
 	else if (!strcmp(arg1, "daemon"))
-		*action = ACT_DAEMON;
+		com.action = ACT_DAEMON;
 	else if (!strcmp(arg1, "command"))
-		*action = ACT_COMMAND;
+		com.action = ACT_COMMAND;
 	else if (!strcmp(arg1, "acquire"))
-		*action = ACT_ACQUIRE;
+		com.action = ACT_ACQUIRE;
 	else if (!strcmp(arg1, "release"))
-		*action = ACT_RELEASE;
+		com.action = ACT_RELEASE;
 	else if (!strcmp(arg1, "migrate"))
-		*action = ACT_MIGRATE;
+		com.action = ACT_MIGRATE;
 	else if (!strcmp(arg1, "shutdown"))
-		*action = ACT_SHUTDOWN;
+		com.action = ACT_SHUTDOWN;
 	else if (!strcmp(arg1, "status"))
-		*action = ACT_STATUS;
+		com.action = ACT_STATUS;
 	else if (!strcmp(arg1, "log_dump"))
-		*action = ACT_LOG_DUMP;
+		com.action = ACT_LOG_DUMP;
 	else if (!strcmp(arg1, "set_host_id"))
-		*action = ACT_SET_HOST_ID;
+		com.action = ACT_SET_HOST_ID;
 	else {
 		log_tool("first arg is unknown action");
 		print_usage();
@@ -1611,7 +1720,7 @@ static int read_args(int argc, char *argv[],
 
 		switch (optchar) {
 		case 'D':
-			no_daemon_fork = 1;
+			options.no_daemon_fork = 1;
 			log_stderr_priority = LOG_DEBUG;
 			optionarg_used = 0;
 			break;
@@ -1622,10 +1731,10 @@ static int read_args(int argc, char *argv[],
 			log_syslog_priority = atoi(optionarg);
 			break;
 		case 'h':
-			*init_num_hosts = atoi(optionarg);
+			com.num_hosts = atoi(optionarg);
 			break;
 		case 'H':
-			*init_max_hosts = atoi(optionarg);
+			com.max_hosts = atoi(optionarg);
 			break;
 		case 'm':
 			options.cluster_mode = atoi(optionarg);
@@ -1646,27 +1755,27 @@ static int read_args(int argc, char *argv[],
 			options.use_aio = atoi(optionarg);
 			break;
 		case 'r':
-			if ((*action) != ACT_RELEASE)
+			if (com.action != ACT_RELEASE)
 				return -1;
 
-			rv = add_resource_arg(optionarg, token_count, token_args);
+			rv = add_res_name_to_com(optionarg);
 			if (rv < 0)
 				return rv;
 			break;
 		case 'p':
-			options.pid = atoi(optionarg);
+			com.pid = atoi(optionarg);
 			break;
 		case 't':
-			options.host_id = atoi(optionarg);
+			com.host_id = atoi(optionarg);
 			break;
 		case 'f':
-			options.incoming = atoi(optionarg);
+			com.incoming = atoi(optionarg);
 			break;
 		case 'l':
-			if ((*action) == ACT_RELEASE)
+			if (com.action == ACT_RELEASE)
 				return -1;
 
-			rv = add_token_arg(optionarg, token_count, token_args);
+			rv = add_lease_to_com(optionarg);
 			if (rv < 0)
 				return rv;
 			break;
@@ -1692,7 +1801,7 @@ static int read_args(int argc, char *argv[],
 	/*
 	 * the remaining args are for the command
 	 *
-	 * sync_manager -r foo -n 2 -d bar:0 -c /bin/cmd -X -Y -Z
+	 * sanlock -r foo -n 2 -d bar:0 -c /bin/cmd -X -Y -Z
 	 * argc = 12
 	 * loop above breaks with i = 8, argv[8] = "/bin/cmd"
 	 *
@@ -1727,23 +1836,6 @@ static int read_args(int argc, char *argv[],
 		strncpy(command, cmd_argv[0], COMMAND_MAX - 1);
 	}
 
-	if ((*action == ACT_DAEMON) && (options.our_host_id < 0) && (*token_count > 0)) {
-		log_tool("local host id required is you wish to acquire initial leases");
-		return -EINVAL;
-	}
-
-	if ((*action == ACT_SET_HOST_ID) && (options.our_host_id < 0)) {
-		log_tool("local host id parameter not set");
-		return -EINVAL;
-	}
-
-	if (options.incoming) {
-		for (i = 0; i < *token_count; i++) {
-			token_args[i]->cmd_option = OPT_ACQUIRE_RECV;
-			token_args[i]->migrate_result = 1;
-		}
-	}
-
 	return 0;
 }
 
@@ -1760,51 +1852,50 @@ static void exec_command(void)
 
 int main(int argc, char *argv[])
 {
-	struct token *token_args[MAX_LEASE_ARGS];
-	int token_count = 0;
-	int action = 0;
-	int init_num_hosts = 0, init_max_hosts = DEFAULT_MAX_HOSTS;
 	int rv, fd;
+	
+	memset(&com, 0, sizeof(com));
+	com.max_hosts = DEFAULT_MAX_HOSTS;
+	com.pid = -1;
 
 	memset(&options, 0, sizeof(options));
 	options.use_aio = 1;
 	options.use_watchdog = 1;
 	options.our_host_id = -1;
-	options.pid = -1;
 
+	memset(&to, 0, sizeof(to));
 	to.io_timeout_seconds = DEFAULT_IO_TIMEOUT_SECONDS;
 	to.host_id_renewal_seconds = DEFAULT_HOST_ID_RENEWAL_SECONDS;
 	to.host_id_renewal_fail_seconds = DEFAULT_HOST_ID_RENEWAL_FAIL_SECONDS;
 	to.host_id_timeout_seconds = DEFAULT_HOST_ID_TIMEOUT_SECONDS;
 
-	rv = read_args(argc, argv, &token_count, token_args,
-		       &action, &init_num_hosts, &init_max_hosts);
+	rv = read_command_line(argc, argv);
 	if (rv < 0)
 		goto out;
 
-	switch (action) {
+	switch (com.action) {
 	case ACT_DAEMON:
 		rv = do_daemon();
 		break;
+
 	case ACT_INIT:
-		rv = do_init(token_count, token_args,
-			     init_num_hosts, init_max_hosts);
+		rv = do_init();
 		break;
 
 	/* client actions that ask daemon to do something.
 	   we could split these into a separate command line
-	   utility (note that the token arg processing is shared
+	   utility (note that the lease arg processing is shared
 	   between init and acquire.  It would also be a pain
 	   to move init into a separate utility because it shares
 	   disk paxos code with the daemon. */
 
 	case ACT_COMMAND:
 		log_tool("register");
-		fd = sm_register();
+		fd = sanlock_register();
 		if (fd < 0)
 			goto out;
-		log_tool("acquire_self %d tokens", token_count);
-		rv = sm_acquire_self(fd, token_count, token_args);
+		log_tool("acquire_self %d resources", com.res_count);
+		rv = sanlock_acquire_self(fd, com.res_count, com.res_args, NULL);
 		if (rv < 0)
 			goto out;
 		log_tool("exec_command");
@@ -1815,35 +1906,34 @@ int main(int argc, char *argv[])
 		break;
 
 	case ACT_ACQUIRE:
-		log_tool("acquire_pid %d %d tokens", options.pid, token_count);
-		rv = sm_acquire_pid(options.pid, token_count, token_args);
+		log_tool("acquire_pid %d %d resources", com.pid, com.res_count);
+		rv = sanlock_acquire_pid(com.pid, com.res_count, com.res_args, NULL);
 		break;
 
 	case ACT_RELEASE:
-		log_tool("release_pid %d %d tokens", options.pid, token_count);
-		rv = sm_release_pid(options.pid, token_count, token_args);
+		log_tool("release_pid %d %d resources", com.pid, com.res_count);
+		rv = sanlock_release_pid(com.pid, com.res_count, com.res_args);
 		break;
 
 	case ACT_MIGRATE:
-		log_tool("migrate_pid %d to host_id %d", options.pid,
-			 options.host_id);
-		rv = sm_migrate_pid(options.pid, options.host_id);
+		log_tool("migrate_pid %d to host_id %d", com.pid, com.host_id);
+		rv = sanlock_migrate_pid(com.pid, com.host_id);
 		break;
 
 	case ACT_SHUTDOWN:
-		rv = sm_shutdown();
+		rv = sanlock_shutdown();
 		break;
 
 	case ACT_STATUS:
-		rv = sm_status();
+		rv = sanlock_status();
 		break;
 
 	case ACT_LOG_DUMP:
-		rv = sm_log_dump();
+		rv = sanlock_log_dump();
 		break;
 
 	case ACT_SET_HOST_ID:
-		rv = sm_set_host_id(options.our_host_id);
+		rv = sanlock_set_host_id(options.our_host_id);
 		break;
 
 	default:

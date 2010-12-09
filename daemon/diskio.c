@@ -15,8 +15,7 @@
 #include <aio.h>
 #include <blkid/blkid.h>
 
-#include "sm.h"
-#include "sm_msg.h"
+#include "sanlock_internal.h"
 #include "diskio.h"
 #include "leader.h"
 #include "log.h"
@@ -99,20 +98,23 @@ int open_disks(struct sync_disk *disks, int num_disks)
 			goto fail;
 		}
 
-		if (disk->unit[0]) {
-			int len = strlen(disk->unit);
-			orig_offset = disk->offset;
+		orig_offset = disk->offset;
 
-			if (len == 1 && disk->unit[0] == 's')
-				disk->offset = orig_offset * ss;
-			else if (len == 2 && disk->unit[0] == 'K' && disk->unit[1] == 'B')
-				disk->offset = orig_offset * 1024;
-			else if (len == 2 && disk->unit[0] == 'M' && disk->unit[1] == 'B')
-				disk->offset = orig_offset * 1024 * 1024;
-			else {
-				log_error(NULL, "invalid offset unit %s", disk->unit);
-				goto fail;
-			}
+		switch (disk->units) {
+		case SANLK_UNITS_BYTES:
+			break;
+		case SANLK_UNITS_SECTORS:
+			disk->offset = orig_offset * ss;
+			break;
+		case SANLK_UNITS_KB:
+			disk->offset = orig_offset * 1024;
+			break;
+		case SANLK_UNITS_MB:
+			disk->offset = orig_offset * 1024 * 1024;
+			break;
+		default:
+			log_error(NULL, "invalid offset units %d", disk->units);
+			goto fail;
 		}
 
 		if (disk->offset % disk->sector_size) {

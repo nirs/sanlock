@@ -76,21 +76,24 @@ struct leader_record {
    fields that are modified are disk fd's by open_disks() in the lease
    threads. */
 
-#define OPT_ACQUIRE_PREV 1
-#define OPT_ACQUIRE_RECV 2
-
 struct token {
-	int cmd_option;
-	int token_id;
+	/* mirror external sanlk_resource from acquire */
+	char resource_name[NAME_ID_SIZE];
 	int num_disks;
+	uint32_t acquire_data32;
+	uint64_t acquire_data64; 
+
+	/* disks from acquire */
+	struct sync_disk *disks;
+
+	/* internal */
+	int token_id;
 	int acquire_result;
 	int migrate_result;
 	int release_result;
 	int setowner_result;
-	uint64_t prev_lver;
+	uint64_t prev_lver; /* just used to pass a value between functions */
 	struct leader_record leader; /* copy of last leader_record we wrote */
-	char resource_name[NAME_ID_SIZE];
-	struct sync_disk *disks;
 };
 
 #endif

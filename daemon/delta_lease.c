@@ -14,8 +14,7 @@
 #include <sys/types.h>
 #include <sys/time.h>
 
-#include "sm.h"
-#include "sm_msg.h"
+#include "sanlock_internal.h"
 #include "diskio.h"
 #include "leader.h"
 #include "log.h"
@@ -204,6 +203,7 @@ int delta_lease_release(struct sync_disk *disk, uint64_t host_id)
 	if (host_id == options.our_host_id) {
 		memcpy(&leader, &our_last_leader, sizeof(struct leader_record));
 		leader.timestamp = LEASE_FREE;
+		leader.checksum = leader_checksum(&leader);
 	} else {
 		/* TODO: pass leader_record out of acquire and back in here */
 		log_error(NULL, "delta_release not impl for other host_id");

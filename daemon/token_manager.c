@@ -14,8 +14,7 @@
 #include <sys/types.h>
 #include <sys/time.h>
 
-#include "sm.h"
-#include "sm_msg.h"
+#include "sanlock_internal.h"
 #include "diskio.h"
 #include "leader.h"
 #include "log.h"
@@ -112,7 +111,14 @@ int add_resource(struct token *token, int pid)
 	memset(r, 0, sizeof(struct resource));
 	strncpy(r->name, token->resource_name, NAME_ID_SIZE);
  add:
+	/* leader.ver is the last lver we knew when we last held the lease.
+	 * we're sticking it in token->prev_lver just to pass it back to
+	 * cmd_acquire, so cmd_acquire can pass it into acquire_lease().
+	 * (it would probably be less confusing to pass leader.lver back to
+	 * cmd_acquire through a function param rather than using a token
+	 * field to pass it between functions) */
 	token->prev_lver = r->leader.lver;
+
 	r->token = token;
 	r->pid = pid;
 	list_add_tail(&r->list, &resources);
@@ -282,7 +288,7 @@ int migrate_lease(struct token *token, uint64_t target_host_id)
 
 /* migration target: verifies that the source wrote us as the next_owner_id */
 
-int receive_lease(struct token *token)
+int receive_lease(struct token *token, char *opt_str GNUC_UNUSED)
 {
 	struct leader_record leader_ret;
 	int rv;
@@ -291,10 +297,8 @@ int receive_lease(struct token *token)
 	if (rv < 0)
 		return rv;
 
-	/* TODO: uncomment this, assuming that the libvirt migration
-	 * protocol allows us to send the full leader record from source
-	 * to dest.  For now, it's not really practical for testing via
-	 * command line. */
+	/* TODO: opt_str will be an encoding of a bunch of lease state
+	 * (full leader_record?) from the migration source. */
 #if 0
 	/* token->leader is a copy of the leader_record that the source wrote
 	   in migrate_lease(); it should not have changed between then and when

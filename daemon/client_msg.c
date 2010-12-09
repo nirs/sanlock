@@ -19,11 +19,11 @@
 #include <sys/time.h>
 #include <sys/un.h>
 
-#include "sm.h"
-#include "sm_msg.h"
+#include "sanlock_internal.h"
 #include "diskio.h"
 #include "leader.h"
 #include "log.h"
+#include "client_msg.h"
 
 static int get_socket_address(const char *name, int length,
                               struct sockaddr_un *addr)
@@ -132,5 +132,23 @@ int send_header(int sock, int cmd, int datalen, uint32_t data, uint32_t data2)
 	}
 
 	return 0;
+}
+
+int send_command(int cmd, uint32_t data)
+{
+	int rv, sock;
+
+	rv = connect_socket(MAIN_SOCKET_NAME, sizeof(MAIN_SOCKET_NAME), &sock);
+	if (rv < 0)
+		return -1;
+
+	rv = send_header(sock, cmd, 0, data, 0);
+	if (rv < 0)
+		goto clean;
+
+	return sock;
+ clean:
+	close(sock);
+	return rv;
 }
 

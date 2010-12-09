@@ -13,8 +13,7 @@
 #include <sys/types.h>
 #include <sys/time.h>
 
-#include "sm.h"
-#include "sm_msg.h"
+#include "sanlock_internal.h"
 #include "diskio.h"
 #include "leader.h"
 #include "log.h"

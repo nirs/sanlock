@@ -19,16 +19,14 @@
 #include <sys/time.h>
 #include <sys/un.h>
 
-#include "sm.h"
-#include "sm_msg.h"
+#include "sanlock_internal.h"
 #include "diskio.h"
 #include "leader.h"
 #include "log.h"
-#include "sm_client.h"
+#include "client_msg.h"
+#include "sanlock_resource.h"
 
-/* TODO: make this file a library */
-
-int sm_register(void)
+int sanlock_register(void)
 {
 	int sock, rv;
 
@@ -45,24 +43,35 @@ int sm_register(void)
 	return sock;
 }
 
-static int do_acquire(int sock, int pid, int token_count, struct token *token_args[])
+static int do_acquire(int sock, int pid, int res_count,
+		      struct sanlk_resource *res_args[],
+		      struct sanlk_options *opt_in)
 {
-	struct token *t;
+	struct sanlk_resource *res;
+	struct sanlk_options opt;
 	struct sm_header h;
 	int rv, i, fd, data2;
 	int datalen = 0;
 
-	if (token_count > MAX_LEASE_ARGS)
+	if (res_count > MAX_LEASE_ARGS)
 		return -EINVAL;
 
-	for (i = 0; i < token_count; i++) {
-		t = token_args[i];
-		datalen += sizeof(struct token);
+	for (i = 0; i < res_count; i++) {
+		res = res_args[i];
+		datalen += sizeof(struct sanlk_resource);
 
-		if (t->num_disks > MAX_DISKS)
+		if (res->num_disks > MAX_DISKS)
 			return -EINVAL;
 
-		datalen += (t->num_disks * sizeof(struct sync_disk));
+		datalen += (res->num_disks * sizeof(struct sanlk_disk));
+	}
+
+	datalen += sizeof(struct sanlk_options);
+	if (opt_in) {
+		memcpy(&opt, opt_in, sizeof(struct sanlk_options));
+		datalen += opt_in->len;
+	} else {
+		memset(&opt, 0, sizeof(opt));
 	}
 
 	if (sock == -1) {
@@ -82,19 +91,33 @@ static int do_acquire(int sock, int pid, int token_count, struct token *token_ar
 		fd = sock;
 	}
 
-	rv = send_header(fd, SM_CMD_ACQUIRE, datalen, token_count, data2);
+	rv = send_header(fd, SM_CMD_ACQUIRE, datalen, res_count, data2);
 	if (rv < 0)
 		return rv;
 
-	for (i = 0; i < token_count; i++) {
-		t = token_args[i];
-		rv = send(fd, t, sizeof(struct token), 0);
+	for (i = 0; i < res_count; i++) {
+		res = res_args[i];
+		rv = send(fd, res, sizeof(struct sanlk_resource), 0);
 		if (rv < 0) {
 			rv = -errno;
 			goto out;
 		}
 
-		rv = send(fd, t->disks, sizeof(struct sync_disk) * t->num_disks, 0);
+		rv = send(fd, res->disks, sizeof(struct sanlk_disk) * res->num_disks, 0);
+		if (rv < 0) {
+			rv = -errno;
+			goto out;
+		}
+	}
+
+	rv = send(fd, &opt, sizeof(struct sanlk_options), 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	if (opt.len) {
+		rv = send(fd, opt.str, opt.len, 0);
 		if (rv < 0) {
 			rv = -errno;
 			goto out;
@@ -109,7 +132,7 @@ static int do_acquire(int sock, int pid, int token_count, struct token *token_ar
 		goto out;
 	}
 
-	if (h.data != token_count) {
+	if (h.data != res_count) {
 		rv = -1;
 		goto out;
 	}
@@ -120,20 +143,24 @@ static int do_acquire(int sock, int pid, int token_count, struct token *token_ar
 	return rv;
 }
 
-int sm_acquire_self(int sock, int token_count, struct token *token_args[])
+int sanlock_acquire_self(int sock, int res_count,
+			 struct sanlk_resource *res_args[],
+			 struct sanlk_options *opt_in)
 {
-	return do_acquire(sock, -1, token_count, token_args);
+	return do_acquire(sock, -1, res_count, res_args, opt_in);
 }
 
-int sm_acquire_pid(int pid, int token_count, struct token *token_args[])
+int sanlock_acquire_pid(int pid, int res_count,
+			struct sanlk_resource *res_args[],
+			struct sanlk_options *opt_in)
 {
-	return do_acquire(-1, pid, token_count, token_args);
+	return do_acquire(-1, pid, res_count, res_args, opt_in);
 }
 
 static int do_migrate(int sock, int pid, uint64_t target_host_id)
 {
 	struct sm_header h;
-	char *tokens_reply;
+	char *reply_str = NULL;
 	int rv, fd, data2, len;
 
 	if (sock == -1) {
@@ -172,11 +199,11 @@ static int do_migrate(int sock, int pid, uint64_t target_host_id)
 	}
 
 	len = h.length = sizeof(h);
-	tokens_reply = malloc(len);
-	if (!tokens_reply)
+	reply_str = malloc(len);
+	if (!reply_str)
 		goto out;
 
-	rv = recv(fd, tokens_reply, len, MSG_WAITALL);
+	rv = recv(fd, reply_str, len, MSG_WAITALL);
 	if (rv != len) {
 		rv = -errno;
 		goto out;
@@ -190,15 +217,17 @@ static int do_migrate(int sock, int pid, uint64_t target_host_id)
  out:
 	if (sock == -1)
 		close(fd);
+	if (reply_str)
+		free(reply_str);
 	return rv;
 }
 
-int sm_migrate_self(int sock, uint64_t target_host_id)
+int sanlock_migrate_self(int sock, uint64_t target_host_id)
 {
 	return do_migrate(sock, -1, target_host_id);
 }
 
-int sm_migrate_pid(int pid, uint64_t target_host_id)
+int sanlock_migrate_pid(int pid, uint64_t target_host_id)
 {
 	return do_migrate(-1, pid, target_host_id);
 }
@@ -207,11 +236,12 @@ int sm_migrate_pid(int pid, uint64_t target_host_id)
    I don't think the pid itself will usually tell sm to release leases,
    but it will be requested by a manager overseeing the pid */
 
-static int do_release(int sock, int pid, int token_count, struct token *token_args[])
+static int do_release(int sock, int pid, int res_count,
+		      struct sanlk_resource *res_args[])
 {
 	struct sm_header h;
 	int results[MAX_LEASE_ARGS];
-	int fd, rv, i, data2;
+	int fd, rv, i, data2, datalen;
 
 	if (sock == -1) {
 		/* connect to daemon and ask it to acquire a lease for
@@ -230,13 +260,14 @@ static int do_release(int sock, int pid, int token_count, struct token *token_ar
 		fd = sock;
 	}
 
-	rv = send_header(fd, SM_CMD_RELEASE, token_count * NAME_ID_SIZE,
-			 token_count, data2);
+	datalen = res_count * sizeof(struct sanlk_resource);
+
+	rv = send_header(fd, SM_CMD_RELEASE, datalen, res_count, data2);
 	if (rv < 0)
 		goto out;
 
-	for (i = 0; i < token_count; i++) {
-		rv = send(fd, token_args[i]->resource_name, NAME_ID_SIZE, 0);
+	for (i = 0; i < res_count; i++) {
+		rv = send(fd, res_args[i], sizeof(struct sanlk_resource), 0);
 		if (rv < 0) {
 			rv = -errno;
 			goto out;
@@ -252,14 +283,14 @@ static int do_release(int sock, int pid, int token_count, struct token *token_ar
 		goto out;
 	}
 
-	rv = recv(fd, &results, sizeof(int) * token_count, MSG_WAITALL);
-	if (rv != sizeof(int) * token_count) {
+	rv = recv(fd, &results, sizeof(int) * res_count, MSG_WAITALL);
+	if (rv != sizeof(int) * res_count) {
 		rv = -errno;
 		goto out;
 	}
 
 	rv = 0;
-	for (i = 0; i < token_count; i++) {
+	for (i = 0; i < res_count; i++) {
 		if (results[i] != 1) {
 			rv = -1;
 		}
@@ -270,121 +301,15 @@ static int do_release(int sock, int pid, int token_count, struct token *token_ar
 	return rv;
 }
 
-int sm_release_self(int sock, int token_count, struct token *token_args[])
+int sanlock_release_self(int sock, int res_count,
+			 struct sanlk_resource *res_args[])
 {
-	return do_release(sock, -1, token_count, token_args);
+	return do_release(sock, -1, res_count, res_args);
 }
 
-int sm_release_pid(int pid, int token_count, struct token *token_args[])
+int sanlock_release_pid(int pid, int res_count,
+			struct sanlk_resource *res_args[])
 {
-	return do_release(-1, pid, token_count, token_args);
-}
-
-static int send_command(int cmd, uint32_t data)
-{
-	int rv, sock;
-
-	rv = connect_socket(MAIN_SOCKET_NAME, sizeof(MAIN_SOCKET_NAME), &sock);
-	if (rv < 0)
-		return -1;
-
-	rv = send_header(sock, cmd, 0, data, 0);
-	if (rv < 0)
-		goto clean;
-
-	return sock;
- clean:
-	close(sock);
-	return rv;
-}
-
-int sm_shutdown(void)
-{
-	struct sm_header h;
-	int fd, rv;
-
-	fd = send_command(SM_CMD_SHUTDOWN, 0);
-	if (fd < 0)
-		return fd;
-
-	memset(&h, 0, sizeof(h));
-
-	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
-	if (rv != sizeof(h))
-		rv = -errno;
-	else
-		rv = 0;
-
-	close(fd);
-	return rv;
-}
-
-int sm_status(void)
-{
-	return 0;
-}
-
-int sm_log_dump(void)
-{
-	struct sm_header h;
-	char *buf;
-	int fd, rv, len;
-
-	fd = send_command(SM_CMD_LOG_DUMP, 0);
-	if (fd < 0)
-		return fd;
-
-	memset(&h, 0, sizeof(h));
-
-	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
-	if (rv != sizeof(h)) {
-		rv = -errno;
-		goto out;
-	}
-
-	len = h.length - sizeof(h);
-
-	buf = malloc(len);
-	if (!buf) {
-		rv = -ENOMEM;
-		goto out;
-	}
-	memset(buf, 0, len);
-
-	rv = recv(fd, buf, len, MSG_WAITALL);
-	if (rv != len) {
-		rv = -errno;
-		goto out;
-	}
-
-	rv = 0;
-	printf("%s\n", buf);
- out:
-	close(fd);
-	return rv;
-}
-
-int sm_set_host_id(uint32_t our_host_id)
-{
-	struct sm_header h;
-	int sock, rv;
-
-	sock = send_command(SM_CMD_SET_HOST_ID, our_host_id);
-	if (sock < 0)
-		return sock;
-
-	rv = recv(sock, &h, sizeof(struct sm_header), MSG_WAITALL);
-	if (rv != sizeof(h)) {
-		rv = -errno;
-		goto out;
-	}
-
-	if (!h.data)
-		rv = 0;
-	else
-		rv = -1;
- out:
-	close(sock);
-	return rv;
+	return do_release(-1, pid, res_count, res_args);
 }
 

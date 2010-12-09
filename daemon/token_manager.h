@@ -4,7 +4,7 @@
 int acquire_lease(struct token *token, uint64_t reacquire_lver);
 int release_lease(struct token *token);
 int migrate_lease(struct token *token, uint64_t target_host_id);
-int receive_lease(struct token *token);
+int receive_lease(struct token *token, char *opt_str);
 int setowner_lease(struct token *token);
 
 int create_token(int num_disks, struct token **token_out);
