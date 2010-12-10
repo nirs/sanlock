@@ -30,10 +30,8 @@ static int get_socket_address(const char *name, int length,
 {
 	char path[PATH_MAX];
 
-	if (strnlen(name, length) == length) {
-		log_error(NULL, "name parameter was not null terminated %d", errno);
-		return -1;
-	}
+	if (strnlen(name, length) == length)
+		return -EINVAL;
 
 	snprintf(path, PATH_MAX, "%s/%s", DAEMON_SOCKET_DIR, name);
 
@@ -49,34 +47,31 @@ int setup_listener_socket(const char* name, int length, int *listener_socket)
 	struct sockaddr_un addr;
 
 	s = socket(AF_LOCAL, SOCK_STREAM, 0);
-	if (s < 0) {
-		log_error(NULL, "socket error %d %d", s, errno);
-		return s;
-	}
+	if (s < 0)
+		return -errno;
 
 	rv = get_socket_address(name, length, &addr);
-	if (rv < 0) {
+	if (rv < 0)
 		return rv;
-	}
+
 	unlink(addr.sun_path);
 	rv = bind(s, (struct sockaddr *) &addr, sizeof(struct sockaddr_un));
 	if (rv < 0) {
-		log_error(NULL, "bind error %d %s %d %s", rv, addr.sun_path,
-		                                  errno, strerror(errno));
+		rv = -errno;
 		close(s);
 		return rv;
 	}
 
 	rv = listen(s, 5);
 	if (rv < 0) {
-		log_error(NULL, "listen error %d %d", rv, errno);
+		rv = -errno;
 		close(s);
 		return rv;
 	}
 
 	rv = fchmod(s, 666);
 	if (rv < 0) {
-		log_error(NULL, "permission change error %d %d", rv, errno);
+		rv = -errno;
 		close(s);
 		return rv;
 	}
@@ -90,19 +85,16 @@ int connect_socket(const char* name, int length, int *sock_fd)
 	struct sockaddr_un addr;
 
 	s = socket(AF_LOCAL, SOCK_STREAM, 0);
-	if (s < 0) {
-		log_error(NULL, "socket error %d %d", s, errno);
-		return s;
-	}
+	if (s < 0)
+		return -errno;
 
 	rv = get_socket_address(name, length, &addr);
-	if (rv < 0) {
+	if (rv < 0)
 		return rv;
-	}
 
 	rv = connect(s, (struct sockaddr *) &addr, sizeof(struct sockaddr_un));
 	if (rv < 0) {
-		log_tool("connect error %d %d", rv, errno);
+		rv = -errno;
 		close(s);
 		return rv;
 	}
@@ -122,14 +114,9 @@ int send_header(int sock, int cmd, int datalen, uint32_t data, uint32_t data2)
 	header.data = data;
 	header.data2 = data2;
 
-	log_tool("send_header cmd %d len %d data %u data2 %u", cmd,
-		 header.length, data, data2);
-
 	rv = send(sock, (void *) &header, sizeof(struct sm_header), 0);
-	if (rv < 0) {
-		log_tool("send error %d %d", rv, errno);
-		return rv;
-	}
+	if (rv < 0)
+		return -errno;
 
 	return 0;
 }
@@ -140,15 +127,14 @@ int send_command(int cmd, uint32_t data)
 
 	rv = connect_socket(MAIN_SOCKET_NAME, sizeof(MAIN_SOCKET_NAME), &sock);
 	if (rv < 0)
-		return -1;
+		return rv;
 
 	rv = send_header(sock, cmd, 0, data, 0);
-	if (rv < 0)
-		goto clean;
+	if (rv < 0) {
+		close(sock);
+		return rv;
+	}
 
 	return sock;
- clean:
-	close(sock);
-	return rv;
 }
 

@@ -1,6 +1,13 @@
-TARGET = sanlock
+CMD_TARGET = sanlock
 
-SOURCE = \
+LIB_TARGET = libsanlock
+
+SOMAJOR=1
+SOMINOR=1
+
+SHLIB_TARGET = $(LIB_TARGET).so.$(SOMAJOR).$(SOMINOR)
+
+CMD_SOURCE = \
 	client_admin.c \
 	client_msg.c \
 	client_resource.c \
@@ -14,6 +21,10 @@ SOURCE = \
 	paxos_lease.c \
 	token_manager.c \
 	watchdog.c
+
+LIB_SOURCE = \
+	client_msg.c \
+	client_resource.c \
 
 CFLAGS += -D_GNU_SOURCE -g \
 	-Wall \
@@ -35,29 +46,43 @@ CFLAGS += -D_GNU_SOURCE -g \
 	-fasynchronous-unwind-tables \
 	-fdiagnostics-show-option
 
-LDFLAGS = -lpthread -lrt -lblkid
+CMD_LDFLAGS = -lpthread -lrt -lblkid
+
+
+all: $(CMD_TARGET) $(SHLIB_TARGET)
+
+$(CMD_TARGET): $(CMD_SOURCE)
+	$(CC) $(CFLAGS) $(CMD_LDFLAGS) $(CMD_SOURCE) -o $@
+
+$(SHLIB_TARGET): $(LIB_SOURCE)
+	$(CC) -shared -fPIC -o $@ -Wl,-soname=$(LIB_TARGET).so.$(SOMAJOR) $^
+	ln -sf $(SHLIB_TARGET) $(LIB_TARGET).so
+	ln -sf $(SHLIB_TARGET) $(LIB_TARGET).so.$(SOMAJOR)
+
+
+clean:
+	rm -f *.o *.so *.so.* $(CMD_TARGET)
+
 
 INSTALL=$(shell which install)
 
-BINDIR=$(DESTDIR)/usr/libexec
+CMD_BINDIR=$(DESTDIR)/usr/libexec
+LIB_LIBDIR=$(DESTDIR)/usr/lib64
 
 RPMTOP=$(shell bash -c "pwd -P")/rpmbuild
 rpmversion:=0.1
 rpmrelease:=1.$(shell date +%Y%m%d)git
 TARBALL=sanlock-$(rpmversion)-$(rpmrelease).tar.gz
 
-all: $(TARGET)
-
-sanlock: $(SOURCE)
-	gcc $(CFLAGS) $(LDFLAGS) $(SOURCE) -o $@
-
-clean:
-	rm -f *.o $(TARGET)
 
 .PHONY: install
-install: $(TARGET)
-	mkdir -p $(BINDIR)
-	$(INSTALL) -c -m 755 $(TARGET) $(BINDIR)
+install: all
+	mkdir -p $(CMD_BINDIR)
+	mkdir -p $(LIB_LIBDIR)
+	$(INSTALL) -c -m 755 $(CMD_TARGET) $(CMD_BINDIR)
+	$(INSTALL) -c -m 755 $(SHLIB_TARGET) $(LIB_LIBDIR)
+	cp -a $(LIB_TARGET).so $(LIB_LIBDIR)
+	cp -a $(LIB_TARGET).so.$(SOMAJR) $(LIB_LIBDIR)
 
 rpm:
 	rm -rf $(RPMTOP)

@@ -22,7 +22,6 @@
 #include "sanlock_internal.h"
 #include "diskio.h"
 #include "leader.h"
-#include "log.h"
 #include "client_msg.h"
 #include "sanlock_resource.h"
 
