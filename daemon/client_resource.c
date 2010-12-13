@@ -52,7 +52,7 @@ static int do_acquire(int sock, int pid, int res_count,
 	int rv, i, fd, data2;
 	int datalen = 0;
 
-	if (res_count > MAX_LEASE_ARGS)
+	if (res_count > MAX_LEASES)
 		return -EINVAL;
 
 	for (i = 0; i < res_count; i++) {
@@ -239,7 +239,7 @@ static int do_release(int sock, int pid, int res_count,
 		      struct sanlk_resource *res_args[])
 {
 	struct sm_header h;
-	int results[MAX_LEASE_ARGS];
+	int results[MAX_LEASES];
 	int fd, rv, i, data2, datalen;
 
 	if (sock == -1) {

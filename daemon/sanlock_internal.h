@@ -20,17 +20,13 @@
 
 #define SM_MAGIC 0x04282010
 
-/* max leases that sm will manage */
+/* each pid can own this many leases */
 
 #define MAX_LEASES 8
 
 /* max disks in a single lease */
 
 #define MAX_DISKS 8
-
-/* max leases on the command line */
-
-#define MAX_LEASE_ARGS 50
 
 /* includes terminating null byte */
 

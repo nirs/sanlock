@@ -377,7 +377,7 @@ static void *cmd_acquire_thread(void *args_in)
 	struct client *cl;
 	struct sync_disk *disks = NULL;
 	struct token *token = NULL;
-	struct token *new_tokens[MAX_LEASE_ARGS];
+	struct token *new_tokens[MAX_LEASES];
 	struct sanlk_resource res;
 	struct sanlk_options opt;
 	char *opt_str;
@@ -398,9 +398,9 @@ static void *cmd_acquire_thread(void *args_in)
 	 */
 
 	new_tokens_count = ca->header.data;
-	if (new_tokens_count > MAX_LEASE_ARGS) {
+	if (new_tokens_count > MAX_LEASES) {
 		log_error(NULL, "cmd_acquire new_tokens_count %d max %d",
-			  new_tokens_count, MAX_LEASE_ARGS);
+			  new_tokens_count, MAX_LEASES);
 		rv = -E2BIG;
 		goto fail_reply;
 	}
@@ -701,7 +701,7 @@ static void *cmd_release_thread(void *args_in)
 	struct sm_header h;
 	struct token *token;
 	struct sanlk_resource res;
-	int results[MAX_LEASE_ARGS];
+	int results[MAX_LEASES];
 	struct client *cl;
 	int fd, rv, i, j, found, rem_tokens_count;
 
@@ -1445,8 +1445,8 @@ static int add_res_name_to_com(char *arg)
 	struct sanlk_resource *res;
 	int rv;
 
-	if (com.res_count >= MAX_LEASE_ARGS) {
-		log_tool("lease args over max %d", MAX_LEASE_ARGS);
+	if (com.res_count >= MAX_LEASES) {
+		log_tool("lease args over max %d", MAX_LEASES);
 		return -1;
 	}
 
@@ -1475,8 +1475,8 @@ static int add_lease_to_com(char *arg)
 	int rv, i, j, d;
 	int len = strlen(arg);
 
-	if (com.res_count >= MAX_LEASE_ARGS) {
-		log_tool("lease args over max %d", MAX_LEASE_ARGS);
+	if (com.res_count >= MAX_LEASES) {
+		log_tool("lease args over max %d", MAX_LEASES);
 		return -1;
 	}
 
