@@ -82,7 +82,7 @@ install: all
 	$(INSTALL) -c -m 755 $(CMD_TARGET) $(CMD_BINDIR)
 	$(INSTALL) -c -m 755 $(SHLIB_TARGET) $(LIB_LIBDIR)
 	cp -a $(LIB_TARGET).so $(LIB_LIBDIR)
-	cp -a $(LIB_TARGET).so.$(SOMAJR) $(LIB_LIBDIR)
+	cp -a $(LIB_TARGET).so.$(SOMAJOR) $(LIB_LIBDIR)
 
 rpm:
 	rm -rf $(RPMTOP)

@@ -27,13 +27,11 @@ CFLAGS += -D_GNU_SOURCE -g \
 	-fasynchronous-unwind-tables \
 	-fdiagnostics-show-option
 
-CMD_LDFLAGS = -lsanlock
-
-
 all: $(SHLIB_TARGET)
 
 $(SHLIB_TARGET): $(LIB_SOURCE)
-	$(CC) -shared -fPIC -o $@ -Wl,-soname=$(LIB_TARGET).so.$(SOMAJOR) $^
+	$(CC) -shared -fPIC -lsanlock -o $@ -Wl,-soname=$(LIB_TARGET).so.$(SOMAJOR) $^
+	ln -sf $(SHLIB_TARGET) $(LIB_TARGET).so
 
 clean:
 	rm -f *.o *.so *.so.*
@@ -46,4 +44,5 @@ LIB_LIBDIR=$(DESTDIR)/usr/lib64/libvirt/lock_manager/
 install: all
 	mkdir -p $(LIB_LIBDIR)
 	$(INSTALL) -c -m 755 $(SHLIB_TARGET) $(LIB_LIBDIR)
+	cp -a $(LIB_TARGET).so $(LIB_LIBDIR)
 

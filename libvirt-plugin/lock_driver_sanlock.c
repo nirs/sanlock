@@ -118,11 +118,15 @@ static int drv_snlk_add_resource(virLockManagerPtr man,
 	struct snlk_con *con = man->privateData;
 	int rv;
 
+	/* must be called before acquire_object */
+	if (con->sock)
+		return -1;
+
 	if (con->res_count == MAX_ADD_RESOURCES)
 		return -1;
 
 	if (type != VIR_LOCK_MANAGER_RESOURCE_TYPE_LEASE)
-		return -1;
+		return 0;
 
 	rv = add_con_resource(con, nparams, params);
 
@@ -136,11 +140,13 @@ static int drv_snlk_acquire_object(virLockManagerPtr man,
 	struct snlk_con *con = man->privateData;
 	struct sanlk_options *opt = NULL;
 	int i, rv, sock, len;
+	int pid = getpid();
 
+	/* acquire_object can be called only once */
 	if (con->sock)
 		return -1;
 
-	if (con->pid)
+	if (con->pid != pid)
 		return -1;
 
 	if (state) {
@@ -212,7 +218,7 @@ static int drv_snlk_acquire_resource(virLockManagerPtr man,
 		return -1;
 
 	if (type != VIR_LOCK_MANAGER_RESOURCE_TYPE_LEASE)
-		return -1;
+		return 0;
 
 	rv = add_con_resource(con, nparams, params);
 	if (rv < 0)

@@ -238,7 +238,7 @@ int setup_logging(void)
 	}
 	memset(log_ents, 0, log_num_ents * sizeof(struct entry));
 
-	openlog("sync_manager", LOG_CONS | LOG_PID, LOG_DAEMON);
+	openlog("sanlock", LOG_CONS | LOG_PID, LOG_DAEMON);
 
 	rv = pthread_create(&thread_handle, NULL, log_thread_fn, NULL);
 	if (rv)
