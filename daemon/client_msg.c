@@ -25,15 +25,11 @@
 #include "log.h"
 #include "client_msg.h"
 
-static int get_socket_address(const char *name, int length,
-                              struct sockaddr_un *addr)
+static int get_socket_address(struct sockaddr_un *addr)
 {
 	char path[PATH_MAX];
 
-	if (strnlen(name, length) == length)
-		return -EINVAL;
-
-	snprintf(path, PATH_MAX, "%s/%s", DAEMON_SOCKET_DIR, name);
+	snprintf(path, PATH_MAX, "%s/%s", SANLK_RUN_DIR, SANLK_SOCKET_NAME);
 
 	memset(addr, 0, sizeof(struct sockaddr_un));
 	addr->sun_family = AF_LOCAL;
@@ -41,7 +37,7 @@ static int get_socket_address(const char *name, int length,
 	return 0;
 }
 
-int setup_listener_socket(const char* name, int length, int *listener_socket)
+int setup_listener_socket(int *listener_socket)
 {
 	int rv, s;
 	struct sockaddr_un addr;
@@ -50,7 +46,7 @@ int setup_listener_socket(const char* name, int length, int *listener_socket)
 	if (s < 0)
 		return -errno;
 
-	rv = get_socket_address(name, length, &addr);
+	rv = get_socket_address(&addr);
 	if (rv < 0)
 		return rv;
 
@@ -79,7 +75,7 @@ int setup_listener_socket(const char* name, int length, int *listener_socket)
 	return 0;
 }
 
-int connect_socket(const char* name, int length, int *sock_fd)
+int connect_socket(int *sock_fd)
 {
 	int rv, s;
 	struct sockaddr_un addr;
@@ -88,7 +84,7 @@ int connect_socket(const char* name, int length, int *sock_fd)
 	if (s < 0)
 		return -errno;
 
-	rv = get_socket_address(name, length, &addr);
+	rv = get_socket_address(&addr);
 	if (rv < 0)
 		return rv;
 
@@ -125,7 +121,7 @@ int send_command(int cmd, uint32_t data)
 {
 	int rv, sock;
 
-	rv = connect_socket(MAIN_SOCKET_NAME, sizeof(MAIN_SOCKET_NAME), &sock);
+	rv = connect_socket(&sock);
 	if (rv < 0)
 		return rv;
 

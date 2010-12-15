@@ -29,7 +29,7 @@ int sanlock_register(void)
 {
 	int sock, rv;
 
-	rv = connect_socket(MAIN_SOCKET_NAME, sizeof(MAIN_SOCKET_NAME), &sock);
+	rv = connect_socket(&sock);
 	if (rv < 0)
 		return rv;
 
@@ -79,7 +79,7 @@ static int do_acquire(int sock, int pid, int res_count,
 
 		data2 = pid;
 
-		rv = connect_socket(MAIN_SOCKET_NAME, sizeof(MAIN_SOCKET_NAME), &fd);
+		rv = connect_socket(&fd);
 		if (rv < 0)
 			return rv;
 	} else {
@@ -168,7 +168,7 @@ static int do_migrate(int sock, int pid, uint64_t target_host_id)
 
 		data2 = pid;
 
-		rv = connect_socket(MAIN_SOCKET_NAME, sizeof(MAIN_SOCKET_NAME), &fd);
+		rv = connect_socket(&fd);
 		if (rv < 0)
 			return rv;
 	} else {
@@ -248,7 +248,7 @@ static int do_release(int sock, int pid, int res_count,
 
 		data2 = pid;
 
-		rv = connect_socket(MAIN_SOCKET_NAME, sizeof(MAIN_SOCKET_NAME), &fd);
+		rv = connect_socket(&fd);
 		if (rv < 0)
 			return rv;
 	} else {

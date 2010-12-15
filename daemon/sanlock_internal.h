@@ -46,13 +46,12 @@
 
 #define COMMAND_MAX 4096
 
-#define SM_RUN_DIR "/var/run/sanlock"
-#define SM_LOG_DIR "/var/log/sanlock"
-#define DAEMON_WATCHDOG_DIR "/var/run/sanlock/watchdog"
-#define DAEMON_SOCKET_DIR "/var/run/sanlock/socket"
-#define DAEMON_LOCKFILE_DIR "/var/run/sanlock/lockfile/"
-
-#define MAIN_SOCKET_NAME "sanlock-main"
+#define SANLK_RUN_DIR "/var/run/sanlock"
+#define SANLK_LOG_DIR "/var/log"
+#define SANLK_SOCKET_NAME "sanlock.sock"
+#define SANLK_LOGFILE_NAME "sanlock.log"
+#define SANLK_LOCKFILE_NAME "sanlock.pid"
+#define SANLK_WATCHDOG_NAME "sanlock.time"
 
 #define DAEMON_NAME "sanlock"
 

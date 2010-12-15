@@ -1165,8 +1165,7 @@ static int setup_listener(void)
 {
 	int rv, fd;
 
-	rv = setup_listener_socket(MAIN_SOCKET_NAME,
-				   sizeof(MAIN_SOCKET_NAME), &fd);
+	rv = setup_listener_socket(&fd);
 	if (rv < 0)
 		return rv;
 
@@ -1185,23 +1184,7 @@ static int make_dirs(void)
 	int rv;
 
 	old_umask = umask(0022);
-	rv = mkdir(SM_RUN_DIR, 0777);
-	if (rv < 0 && errno != EEXIST)
-		goto out;
-
-	rv = mkdir(DAEMON_LOCKFILE_DIR, 0777);
-	if (rv < 0 && errno != EEXIST)
-		goto out;
-
-	rv = mkdir(DAEMON_SOCKET_DIR, 0777);
-	if (rv < 0 && errno != EEXIST)
-		goto out;
-
-	rv = mkdir(DAEMON_WATCHDOG_DIR, 0777);
-	if (rv < 0 && errno != EEXIST)
-		goto out;
-
-	rv = mkdir(SM_LOG_DIR, 0777);
+	rv = mkdir(SANLK_RUN_DIR, 0777);
 	if (rv < 0 && errno != EEXIST)
 		goto out;
 
@@ -1245,7 +1228,7 @@ static int do_daemon(void)
 
 	setup_logging();
 
-	fd = lockfile(NULL, DAEMON_LOCKFILE_DIR, DAEMON_NAME);
+	fd = lockfile(NULL, SANLK_RUN_DIR, SANLK_LOCKFILE_NAME);
 	if (fd < 0)
 		goto out;
 
@@ -1273,7 +1256,7 @@ static int do_daemon(void)
  out_token:
 	close_token_manager();
  out_lockfile:
-	unlink_lockfile(fd, DAEMON_LOCKFILE_DIR, DAEMON_NAME);
+	unlink_lockfile(fd, SANLK_RUN_DIR, SANLK_LOCKFILE_NAME);
  out:
 	close_logging();
 	return rv;

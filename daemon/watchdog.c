@@ -89,7 +89,7 @@ void update_watchdog_file(uint64_t timestamp)
 		return;
 
 	memset(buf, 0, sizeof(buf));
-	snprintf(buf, sizeof(buf), "%llu", (unsigned long long)timestamp);
+	snprintf(buf, sizeof(buf), "%llu\n", (unsigned long long)timestamp);
 
 	lseek(watchdog_fd, 0, SEEK_SET);
 
@@ -105,7 +105,7 @@ int create_watchdog_file(uint64_t timestamp)
 		return 0;
 
 	snprintf(watchdog_path, PATH_MAX, "%s/%s",
-		 DAEMON_WATCHDOG_DIR, DAEMON_NAME);
+		 SANLK_RUN_DIR, SANLK_WATCHDOG_NAME);
 
 	/* If this open fails with EEXIST I don't think it's safe to unlink
 	 * watchdog_path and try again.  If the daemon had failed while pid's
@@ -122,12 +122,13 @@ int create_watchdog_file(uint64_t timestamp)
 
 	fd = open(watchdog_path, O_WRONLY|O_CREAT|O_EXCL|O_NONBLOCK, 0666);
 	if (fd < 0) {
-		log_error(NULL, "create_watchdog_file open error %d", errno);
+		log_error(NULL, "create_watchdog_file open %s error %d",
+			  watchdog_path, errno);
 		return fd;
 	}
 
 	memset(buf, 0, sizeof(buf));
-	snprintf(buf, sizeof(buf), "%llu", (unsigned long long)timestamp);
+	snprintf(buf, sizeof(buf), "%llu\n", (unsigned long long)timestamp);
 
 	rv = do_write(fd, buf, sizeof(buf));
 	if (rv < 0) {

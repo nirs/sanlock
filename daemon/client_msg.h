@@ -15,8 +15,8 @@ enum {
 	SM_CMD_SETOWNER,
 };
 
-int setup_listener_socket(const char *name, int length, int *listener_socket);
-int connect_socket(const char *name, int length, int* sock_fd);
+int setup_listener_socket(int *listener_socket);
+int connect_socket(int *sock_fd);
 int send_header(int sock, int cmd, int datalen, uint32_t data, uint32_t data2);
 int send_command(int cmd, uint32_t data);
 
