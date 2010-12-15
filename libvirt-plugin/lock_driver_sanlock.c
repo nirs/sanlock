@@ -270,7 +270,7 @@ static int drv_snlk_release_resource(virLockManagerPtr man,
 	return rv;
 }
 
-static virLockDriver virLockDriverImpl =
+virLockDriver virLockDriverImpl =
 {
 	.version = VIR_LOCK_MANAGER_VERSION,
 	.flags = VIR_LOCK_MANAGER_MODE_CONTENT,
