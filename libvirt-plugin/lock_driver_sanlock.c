@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
 #include <errno.h>
 
 #include <libvirt/plugins/lock_driver.h>
@@ -19,6 +20,17 @@ struct snlk_con {
 	int res_count;
 	struct sanlk_resource *res_args[MAX_ADD_RESOURCES];
 };
+
+static void copy_uuid_to_name(char *name, const unsigned char *uuid)
+{
+	snprintf(name, MAX_KV_LEN,
+		 "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+		 uuid[0], uuid[1], uuid[2], uuid[3],
+		 uuid[4], uuid[5], uuid[6], uuid[7],
+		 uuid[8], uuid[9], uuid[10], uuid[11],
+		 uuid[12], uuid[13], uuid[14], uuid[15]);
+	name[MAX_KV_LEN-1] = '\0';
+}
 
 /*
  * sanlock plugin for the libvirt virLockManager API
@@ -55,7 +67,7 @@ static int drv_snlk_new(virLockManagerPtr man,
 		param = &params[i];
 
 		if (!strcmp(param->key, "uuid"))
-			memcpy(con->uuid, param->value.uuid, 16);
+			copy_uuid_to_name(con->uuid, param->value.uuid);
 		else if (!strcmp(param->key, "name"))
 			strncpy(con->name, param->value.str, MAX_KV_LEN);
 		else if (!strcmp(param->key, "pid"))
@@ -96,7 +108,7 @@ static int add_con_resource(struct snlk_con *con,
 		param = &params[i];
 
 		if (!strcmp(param->key, "uuid"))
-			memcpy(res->name, param->value.uuid, 16);
+			copy_uuid_to_name(res->name, param->value.uuid);
 		else if (!strcmp(param->key, "path"))
 			strncpy(res->disks[0].path, param->value.str, SANLK_PATH_LEN-1);
 		else if (!strcmp(param->key, "offset"))
