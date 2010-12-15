@@ -447,7 +447,7 @@ static void *cmd_acquire_thread(void *args_in)
 			goto fail_free;
 		}
 
-		log_debug(NULL, "cmd_acquire recv r %d %s %d %u %llu", rv,
+		log_debug(NULL, "cmd_acquire recv res %d %s %d %u %llu", rv,
 			  res.name, res.num_disks, res.data32,
 			  (unsigned long long)res.data64);
 		strncpy(token->resource_name, res.name, SANLK_NAME_LEN);
@@ -491,12 +491,16 @@ static void *cmd_acquire_thread(void *args_in)
 			rv = -EIO;
 			goto fail_free;
 		}
-		log_debug(NULL, "cmd_acquire recv d %d", rv);
+		log_debug(NULL, "cmd_acquire recv disks %d", rv);
 
 		/* zero out pad1 and pad2, see WARNING above */
 		for (j = 0; j < num_disks; j++) {
 			disks[j].sector_size = 0;
 			disks[j].fd = 0;
+
+			log_debug(NULL, "cmd_acquire recv disk %s %llu",
+				  disks[j].path,
+				  (unsigned long long)disks[j].offset);
 		}
 
 		token->token_id = token_id_counter++;
@@ -518,7 +522,7 @@ static void *cmd_acquire_thread(void *args_in)
 		goto fail_free;
 	}
 
-	log_debug(NULL, "cmd_acquire recv o %d %x %u", rv, opt.flags, opt.len);
+	log_debug(NULL, "cmd_acquire recv opt %d %x %u", rv, opt.flags, opt.len);
 
 	if (!opt.len)
 		goto skip_opt_str;
@@ -539,7 +543,7 @@ static void *cmd_acquire_thread(void *args_in)
 		goto fail_free;
 	}
 
-	log_debug(NULL, "cmd_acquire recv s %d", rv);
+	log_debug(NULL, "cmd_acquire recv str %d", rv);
 
 	/* TODO: warn if header.length != sizeof(header) + pos ? */
 
