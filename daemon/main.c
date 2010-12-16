@@ -945,9 +945,21 @@ static void cmd_log_dump(int fd, struct sm_header *h_recv)
 static void cmd_set_host_id(int fd, struct sm_header *h_recv)
 {
 	struct sm_header h;
+	uint64_t host_id;
+	struct sanlk_disk sd;
 	int rv;
 
-	/* TODO: recv uint64_t our_host_id, uint64_t offset, SANLK_PATH_LEN path */
+	rv = recv(fd, &host_id, sizeof(uint64_t), MSG_WAITALL);
+	if (rv != sizeof(uint64_t)) {
+		rv = -EIO;
+		goto reply;
+	}
+
+	rv = recv(fd, &sd, sizeof(struct sanlk_disk), MSG_WAITALL);
+	if (rv != sizeof(struct sanlk_disk)) {
+		rv = -EIO;
+		goto reply;
+	}
 
 	if (options.our_host_id > 0) {
 		log_error(NULL, "cmd_set_host_id our_host_id already set %llu",
@@ -956,17 +968,21 @@ static void cmd_set_host_id(int fd, struct sm_header *h_recv)
 		goto reply;
 	}
 
-	if (options.our_host_id == h_recv->data) {
+	if (options.our_host_id == host_id) {
 		rv = 0;
 		goto reply;
 	}
 
-	if (!h_recv->data) {
-		log_error(NULL, "cmd_set_host_id invalid host_id %d",
-			  h_recv->data);
+	if (!host_id) {
+		log_error(NULL, "cmd_set_host_id invalid host_id %llu",
+			  (unsigned long long)host_id);
 		rv = 1;
 		goto reply;
 	}
+
+	options.our_host_id = host_id;
+	options.host_id_offset = sd.offset;
+	strncpy(options.host_id_path, sd.path, DISK_PATH_LEN);
 
 	rv = start_host_id();
 	if (rv < 0) {

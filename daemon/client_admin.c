@@ -95,15 +95,30 @@ int sanlock_log_dump(void)
 int sanlock_set_host_id(uint64_t host_id, char *path, uint64_t offset)
 {
 	struct sm_header h;
-	int sock, rv;
+	struct sanlk_disk sd;
+	int fd, rv;
 
-	sock = send_command(SM_CMD_SET_HOST_ID, host_id);
-	if (sock < 0)
-		return sock;
+	fd = send_command(SM_CMD_SET_HOST_ID, 0);
+	if (fd < 0)
+		return fd;
 
-	/* TODO: send host_id, offset, path */
+	rv = send(fd, &host_id, sizeof(uint64_t), 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
 
-	rv = recv(sock, &h, sizeof(struct sm_header), MSG_WAITALL);
+	memset(&sd, 0, sizeof(sd));
+	strncpy(sd.path, path, SANLK_PATH_LEN-1);
+	sd.offset = offset;
+
+	rv = send(fd, &sd, sizeof(sd), 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	rv = recv(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
 	if (rv != sizeof(h)) {
 		rv = -errno;
 		goto out;
@@ -114,7 +129,7 @@ int sanlock_set_host_id(uint64_t host_id, char *path, uint64_t offset)
 	else
 		rv = -1;
  out:
-	close(sock);
+	close(fd);
 	return rv;
 }
 
