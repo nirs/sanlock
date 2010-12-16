@@ -73,8 +73,12 @@ int our_host_id_renewed(void)
 	uint32_t sec;
 
 	pthread_mutex_lock(&host_id_mutex);
-	last_good = our_lease_status.renewal_last_time;
+	last_good = our_lease_status.renewal_good_time;
 	pthread_mutex_unlock(&host_id_mutex);
+
+	/* host_id hasn't been started yet */
+	if (!last_good)
+		return 1;
 
 	sec = time(NULL) - last_good;
 
