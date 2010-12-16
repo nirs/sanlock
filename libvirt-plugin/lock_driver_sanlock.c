@@ -7,29 +7,26 @@
 #include <libvirt/plugins/lock_driver.h>
 #include "../daemon/sanlock.h"
 
-#define MAX_KV_LEN 256
-
-#define MAX_ADD_RESOURCES 8
-
 struct snlk_con {
-	char uuid[MAX_KV_LEN];
-	char name[MAX_KV_LEN];
-	unsigned int pid;
+	char vm_name[SANLK_NAME_LEN];
+	char vm_uuid[16];
+	unsigned int vm_id;
+	unsigned int vm_pid;
 	unsigned int flags;
 	int sock;
 	int res_count;
-	struct sanlk_resource *res_args[MAX_ADD_RESOURCES];
+	struct sanlk_resource *res_args[SANLK_MAX_RESOURCES];
 };
 
-static void copy_uuid_to_name(char *name, const unsigned char *uuid)
+static void copy_uuid_to_str(const unsigned char *uuid, char *str, int len)
 {
-	snprintf(name, MAX_KV_LEN,
+	snprintf(str, len,
 		 "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
 		 uuid[0], uuid[1], uuid[2], uuid[3],
 		 uuid[4], uuid[5], uuid[6], uuid[7],
 		 uuid[8], uuid[9], uuid[10], uuid[11],
 		 uuid[12], uuid[13], uuid[14], uuid[15]);
-	name[MAX_KV_LEN-1] = '\0';
+	str[len-1] = '\0';
 }
 
 /*
@@ -67,11 +64,16 @@ static int drv_snlk_new(virLockManagerPtr man,
 		param = &params[i];
 
 		if (!strcmp(param->key, "uuid"))
-			copy_uuid_to_name(con->uuid, param->value.uuid);
+			memcpy(con->vm_uuid, param->value.uuid, 16);
+
 		else if (!strcmp(param->key, "name"))
-			strncpy(con->name, param->value.str, MAX_KV_LEN);
+			strncpy(con->vm_name, param->value.str, SANLK_NAME_LEN);
+
 		else if (!strcmp(param->key, "pid"))
-			con->pid = param->value.ui;
+			con->vm_pid = param->value.ui;
+
+		else if (!strcmp(param->key, "id"))
+			con->vm_id = param->value.ui;
 	}
 
 	man->privateData = con;
@@ -88,6 +90,7 @@ static void drv_snlk_free(virLockManagerPtr man)
 }
 
 static int add_con_resource(struct snlk_con *con,
+			    const char *name,
 			    size_t nparams,
 			    virLockManagerParamPtr params)
 {
@@ -103,14 +106,14 @@ static int add_con_resource(struct snlk_con *con,
 	memset(res, 0, len);
 
 	res->num_disks = 1;
+	strncpy(res->disks[0].path, name, SANLK_PATH_LEN-1);
 
 	for (i = 0; i < nparams; i++) {
 		param = &params[i];
 
 		if (!strcmp(param->key, "uuid"))
-			copy_uuid_to_name(res->name, param->value.uuid);
-		else if (!strcmp(param->key, "path"))
-			strncpy(res->disks[0].path, param->value.str, SANLK_PATH_LEN-1);
+			copy_uuid_to_str(param->value.uuid, res->name, SANLK_NAME_LEN);
+
 		else if (!strcmp(param->key, "offset"))
 			res->disks[0].offset = param->value.ul;
 	}
@@ -134,13 +137,13 @@ static int drv_snlk_add_resource(virLockManagerPtr man,
 	if (con->sock)
 		return -1;
 
-	if (con->res_count == MAX_ADD_RESOURCES)
+	if (con->res_count == SANLK_MAX_RESOURCES)
 		return -1;
 
 	if (type != VIR_LOCK_MANAGER_RESOURCE_TYPE_LEASE)
 		return 0;
 
-	rv = add_con_resource(con, nparams, params);
+	rv = add_con_resource(con, name, nparams, params);
 
 	return rv;
 }
@@ -158,26 +161,33 @@ static int drv_snlk_acquire_object(virLockManagerPtr man,
 	if (con->sock)
 		return -1;
 
-	if (con->pid != pid)
+	if (con->vm_pid != pid)
 		return -1;
 
+	len = sizeof(struct sanlk_options);
+	if (state)
+		len += strlen(state);
+
+	opt = malloc(len);
+	if (!opt)
+		return -ENOMEM;
+
+	memset(opt, 0, len);
+	strncpy(opt->owner_name, con->vm_name, SANLK_NAME_LEN);
+
 	if (state) {
-		len = sizeof(struct sanlk_options) + strlen(state);
-		opt = malloc(len);
-		if (!opt)
-			return -ENOMEM;
 		opt->flags = SANLK_FLG_INCOMING;
 		opt->len = len - sizeof(struct sanlk_options);
+		strcpy(opt->str, state);
 	}
 
 	sock = sanlock_register();
 
 	rv = sanlock_acquire_self(sock, con->res_count, con->res_args, opt);
 
+	free(opt);
 	for (i = 0; i < con->res_count; i++)
 		free(con->res_args[i]);
-	if (opt)
-		free(opt);
 
 	if (rv < 0)
 		close(sock);
@@ -226,26 +236,28 @@ static int drv_snlk_acquire_resource(virLockManagerPtr man,
 	if (con->sock)
 		return -1;
 
-	if (!con->pid)
+	if (!con->vm_pid)
 		return -1;
 
 	if (type != VIR_LOCK_MANAGER_RESOURCE_TYPE_LEASE)
 		return 0;
 
-	rv = add_con_resource(con, nparams, params);
+	rv = add_con_resource(con, name, nparams, params);
 	if (rv < 0)
 		return rv;
 
-	/* Setting REACQUIRE tells sanlock that if con->pid previously held and
-	   released the resource, we need to ensure no other host has acquired
-	   a lease on it in the mean time.  If this is a new resource that the
-	   pid hasn't held before, then REACQUIRE will have no effect since
-	   sanlock will have no memory of a previous version. */
+	/* Setting REACQUIRE tells sanlock that if con->vm_pid previously held
+	   and released the resource, we need to ensure no other host has
+	   acquired a lease on it in the mean time.  If this is a new resource
+	   that the pid hasn't held before, then REACQUIRE will have no effect
+	   since sanlock will have no memory of a previous version. */
 
 	memset(&opt, 0, sizeof(struct sanlk_options));
+	strncpy(opt.owner_name, con->vm_name, SANLK_NAME_LEN);
 	opt.flags = SANLK_FLG_REACQUIRE;
+	opt.len = 0;
 
-	rv = sanlock_acquire_pid(con->pid, con->res_count, con->res_args, &opt);
+	rv = sanlock_acquire_pid(con->vm_pid, con->res_count, con->res_args, &opt);
 
 	free(con->res_args[0]);
 
@@ -265,17 +277,17 @@ static int drv_snlk_release_resource(virLockManagerPtr man,
 	if (con->sock)
 		return -1;
 
-	if (!con->pid)
+	if (!con->vm_pid)
 		return -1;
 
 	if (type != VIR_LOCK_MANAGER_RESOURCE_TYPE_LEASE)
 		return -1;
 
-	rv = add_con_resource(con, nparams, params);
+	rv = add_con_resource(con, name, nparams, params);
 	if (rv < 0)
 		return rv;
 
-	rv = sanlock_release_pid(con->pid, con->res_count, con->res_args, NULL);
+	rv = sanlock_release_pid(con->vm_pid, con->res_count, con->res_args, NULL);
 
 	free(con->res_args[0]);
 
