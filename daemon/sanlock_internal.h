@@ -22,7 +22,7 @@
 
 /* each pid can own this many leases */
 
-#define MAX_LEASES 8
+#define MAX_LEASES SANLK_MAX_RESOURCES
 
 /* max disks in a single lease */
 

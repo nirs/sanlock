@@ -46,6 +46,7 @@ struct client {
 	int acquire_done;
 	int need_setowner;
 	int pid_dead;
+	char owner_name[SANLK_NAME_LEN+1];
 	pthread_mutex_t mutex;
 	void *workfn;
 	void *deadfn;
@@ -523,6 +524,8 @@ static void *cmd_acquire_thread(void *args_in)
 	}
 
 	log_debug(NULL, "cmd_acquire recv opt %d %x %u", rv, opt.flags, opt.len);
+
+	strcpy(cl->owner_name, opt.owner_name);
 
 	if (!opt.len)
 		goto skip_opt_str;
