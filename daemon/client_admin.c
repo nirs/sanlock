@@ -92,14 +92,16 @@ int sanlock_log_dump(void)
 	return rv;
 }
 
-int sanlock_set_host_id(uint32_t our_host_id)
+int sanlock_set_host_id(uint64_t host_id, char *path, uint64_t offset)
 {
 	struct sm_header h;
 	int sock, rv;
 
-	sock = send_command(SM_CMD_SET_HOST_ID, our_host_id);
+	sock = send_command(SM_CMD_SET_HOST_ID, host_id);
 	if (sock < 0)
 		return sock;
+
+	/* TODO: send host_id, offset, path */
 
 	rv = recv(sock, &h, sizeof(struct sm_header), MSG_WAITALL);
 	if (rv != sizeof(h)) {

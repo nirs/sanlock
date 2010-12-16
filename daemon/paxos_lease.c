@@ -61,7 +61,7 @@ int majority_disks(struct token *token, int num)
 	return 0;
 }
 
-static int write_dblock(struct sync_disk *disk, int host_id,
+static int write_dblock(struct sync_disk *disk, uint64_t host_id,
 			struct paxos_dblock *pd)
 {
 	int rv;
@@ -93,7 +93,7 @@ static int write_leader(struct sync_disk *disk, struct leader_record *lr)
 	return rv;
 }
 
-static int read_dblock(struct sync_disk *disk, int host_id,
+static int read_dblock(struct sync_disk *disk, uint64_t host_id,
 		       struct paxos_dblock *pd)
 {
 	int rv;
@@ -174,7 +174,7 @@ static int read_request(struct sync_disk *disk, struct request_record *rr)
 
 /* host_id and inp are both generally our_host_id */
 
-static int run_disk_paxos(struct token *token, int host_id, uint64_t inp,
+static int run_disk_paxos(struct token *token, uint64_t host_id, uint64_t inp,
 			  int num_hosts, uint64_t lver,
 			  struct paxos_dblock *dblock_out)
 {
@@ -663,9 +663,9 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 	/* the inp value we commited wasn't us */
 
 	if (dblock.inp != options.our_host_id) {
-		log_error(token, "paxos_acquire paxos contention our_host_id %u "
+		log_error(token, "paxos_acquire paxos contention our_host_id %llu "
 			  "mbal %llu bal %llu inp %llu lver %llu",
-			  options.our_host_id,
+			  (unsigned long long)options.our_host_id,
 			  (unsigned long long)dblock.mbal,
 			  (unsigned long long)dblock.bal,
 			  (unsigned long long)dblock.inp,

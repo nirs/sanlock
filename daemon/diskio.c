@@ -285,7 +285,7 @@ static int do_read_aio(int fd, uint64_t offset, char *buf, int len, int io_timeo
 	return -1;
 }
 
-static int _write_sectors(const struct sync_disk *disk, uint32_t sector_nr,
+static int _write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 			  uint32_t sector_count GNUC_UNUSED,
 			  const char *data, int data_len,
 			  int iobuf_len, int io_timeout_seconds, int use_aio,
@@ -328,7 +328,7 @@ static int _write_sectors(const struct sync_disk *disk, uint32_t sector_nr,
    the start of the block device identified by disk->path,
    data_len must be <= sector_size */
 
-int write_sector(const struct sync_disk *disk, uint32_t sector_nr,
+int write_sector(const struct sync_disk *disk, uint64_t sector_nr,
 		 const char *data, int data_len, int io_timeout_seconds,
 		 int use_aio, const char *blktype)
 {
@@ -346,7 +346,7 @@ int write_sector(const struct sync_disk *disk, uint32_t sector_nr,
 
 /* write multiple complete sectors, data_len must be multiple of sector size */
 
-int write_sectors(const struct sync_disk *disk, uint32_t sector_nr,
+int write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 		  uint32_t sector_count, const char *data, int data_len,
 		  int io_timeout_seconds, int use_aio, const char *blktype)
 {
@@ -368,7 +368,7 @@ int write_sectors(const struct sync_disk *disk, uint32_t sector_nr,
    when reading multiple sectors, data_len will generally equal iobuf_len,
    but when reading one sector, data_len may be less than iobuf_len. */
 
-int read_sectors(const struct sync_disk *disk, uint32_t sector_nr,
+int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 	 	 uint32_t sector_count, char *data, int data_len,
 		 int io_timeout_seconds, int use_aio, const char *blktype)
 {

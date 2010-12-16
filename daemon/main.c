@@ -947,15 +947,17 @@ static void cmd_set_host_id(int fd, struct sm_header *h_recv)
 	struct sm_header h;
 	int rv;
 
-	if (options.our_host_id == h_recv->data) {
-		rv = 0;
+	/* TODO: recv uint64_t our_host_id, uint64_t offset, SANLK_PATH_LEN path */
+
+	if (options.our_host_id > 0) {
+		log_error(NULL, "cmd_set_host_id our_host_id already set %llu",
+			  (unsigned long long)options.our_host_id);
+		rv = 1;
 		goto reply;
 	}
 
-	if (options.our_host_id > 0) {
-		log_error(NULL, "cmd_set_host_id our_host_id already set %d",
-			  options.our_host_id);
-		rv = 1;
+	if (options.our_host_id == h_recv->data) {
+		rv = 0;
 		goto reply;
 	}
 
@@ -966,15 +968,13 @@ static void cmd_set_host_id(int fd, struct sm_header *h_recv)
 		goto reply;
 	}
 
-	options.our_host_id = h_recv->data;
-
-	log_debug(NULL, "set_host_id %d", options.our_host_id);
-
 	rv = start_host_id();
 	if (rv < 0) {
-		log_error(NULL, "cmd_set_host_id start_host_id %d error %d",
-			  options.our_host_id, rv);
-		options.our_host_id = -1;
+		log_error(NULL, "cmd_set_host_id start_host_id %llu error %d",
+			  (unsigned long long)options.our_host_id, rv);
+		options.our_host_id = 0;
+		options.host_id_offset = 0;
+		memset(options.host_id_path, 0, DISK_PATH_LEN);
 	}
 
  reply:
@@ -1122,7 +1122,7 @@ static void process_connection(int ci)
 		log_error(NULL, "ci %d recv %d magic %x", ci, rv, h.magic);
 		goto dead;
 	}
-	if ((options.our_host_id < 0) && (h.cmd != SM_CMD_SET_HOST_ID)) {
+	if (!options.our_host_id && (h.cmd != SM_CMD_SET_HOST_ID)) {
 		log_error(NULL, "host_id not set");
 		goto dead;
 	}
@@ -1250,9 +1250,9 @@ static int do_daemon(void)
 	if (options.our_host_id > 0) {
 		rv = start_host_id();
 		if (rv < 0) {
-			log_error(NULL, "start_host_id %d error %d",
-				  options.our_host_id, rv);
-			options.our_host_id = -1;
+			log_error(NULL, "start_host_id %llu error %d",
+				  (unsigned long long)options.our_host_id, rv);
+			options.our_host_id = 0;
 			goto out_token;
 		}
 	}
@@ -1379,7 +1379,7 @@ static void print_usage(void)
 	printf("                        host_id_renewal_fail (%d)\n", DEFAULT_HOST_ID_RENEWAL_FAIL_SECONDS);
 	printf("                        host_id_timeout (%d)\n", DEFAULT_HOST_ID_TIMEOUT_SECONDS);
 
-	printf("\nset_host_id [options]\n");
+	printf("\nset_host_id -i <num> -d <path> -o <num>\n");
 	printf("  -i <num>		local host_id\n");
 	printf("  -d <path>		disk path for host_id leases\n");
 	printf("  -o <num>		offset on disk for host_id leases\n");
@@ -1733,13 +1733,13 @@ static int read_command_line(int argc, char *argv[])
 			parse_timeouts(optionarg);
 			break;
 		case 'i':
-			options.our_host_id = atoi(optionarg);
+			options.our_host_id = atoll(optionarg);
 			break;
 		case 'd':
 			strncpy(options.host_id_path, optionarg, DISK_PATH_LEN);
 			break;
 		case 'o':
-			options.host_id_offset = atoi(optionarg);
+			options.host_id_offset = atoll(optionarg);
 			break;
 		case 'a':
 			options.use_aio = atoi(optionarg);
@@ -1756,7 +1756,7 @@ static int read_command_line(int argc, char *argv[])
 			com.pid = atoi(optionarg);
 			break;
 		case 't':
-			com.host_id = atoi(optionarg);
+			com.host_id = atoll(optionarg);
 			break;
 		case 'f':
 			com.incoming = atoi(optionarg);
@@ -1851,7 +1851,6 @@ int main(int argc, char *argv[])
 	memset(&options, 0, sizeof(options));
 	options.use_aio = 1;
 	options.use_watchdog = 1;
-	options.our_host_id = -1;
 
 	memset(&to, 0, sizeof(to));
 	to.io_timeout_seconds = DEFAULT_IO_TIMEOUT_SECONDS;
@@ -1906,7 +1905,8 @@ int main(int argc, char *argv[])
 		break;
 
 	case ACT_MIGRATE:
-		log_tool("migrate_pid %d to host_id %d", com.pid, com.host_id);
+		log_tool("migrate_pid %d to host_id %llu",
+			 com.pid, (unsigned long long)com.host_id);
 		rv = sanlock_migrate_pid(com.pid, com.host_id);
 		break;
 
@@ -1923,7 +1923,9 @@ int main(int argc, char *argv[])
 		break;
 
 	case ACT_SET_HOST_ID:
-		rv = sanlock_set_host_id(options.our_host_id);
+		rv = sanlock_set_host_id(options.our_host_id,
+					 options.host_id_path,
+					 options.host_id_offset);
 		break;
 
 	default:

@@ -94,8 +94,8 @@ static void *host_id_thread(void *arg_in)
 {
 	struct timespec renew_time;
 	uint64_t t;
-	int *arg = (int *)arg_in;
-	int host_id_in = (int)(*arg);
+	uint64_t *arg = (uint64_t *)arg_in;
+	uint64_t host_id_in = (uint64_t)(*arg);
 	int rv, stop, result, dl_result;
 
 	free(arg);
@@ -128,13 +128,13 @@ static void *host_id_thread(void *arg_in)
 	pthread_mutex_unlock(&host_id_mutex);
 
 	if (result < 0) {
-		log_error(NULL, "host_id %d acquire failed %d",
-			  host_id_in, result);
+		log_error(NULL, "host_id %llu acquire failed %d",
+			  (unsigned long long)host_id_in, result);
 		goto out;
 	}
 
-	log_debug(NULL, "host_id %d acquire %llu",
-		  host_id_in, (unsigned long long)t);
+	log_debug(NULL, "host_id %llu acquire %llu",
+		  (unsigned long long)host_id_in, (unsigned long long)t);
 
 	clock_gettime(CLOCK_REALTIME, &renew_time);
 
@@ -164,13 +164,13 @@ static void *host_id_thread(void *arg_in)
 		pthread_mutex_unlock(&host_id_mutex);
 
 		if (result < 0) {
-			log_error(NULL, "host_id %d renewal failed %d",
-				  host_id_in, result);
+			log_error(NULL, "host_id %llu renewal failed %d",
+				  (unsigned long long)host_id_in, result);
 			continue;
 		}
 
-		log_debug(NULL, "host_id %d renewal %llu",
-			  host_id_in, (unsigned long long)t);
+		log_debug(NULL, "host_id %llu renewal %llu",
+			  (unsigned long long)host_id_in, (unsigned long long)t);
 
 		update_watchdog_file(t);
 	}
@@ -185,7 +185,7 @@ static void *host_id_thread(void *arg_in)
 
 /* 
  * options.our_host_id must be set prior to calling this, and the
- * caller should set our_host_id back to -1 if this function returns
+ * caller should set our_host_id back to 0 if this function returns
  * an error; the delta_lease functions use options.our_host_id directly,
  * so we can't wait an set options.our_host_id after this function
  * returns success
@@ -200,7 +200,7 @@ static void *host_id_thread(void *arg_in)
 int start_host_id(void)
 {
 	int rv, result;
-	int *arg;
+	uint64_t *arg;
 
 	memset(&host_id_disk, 0, sizeof(struct sync_disk));
 	strncpy(host_id_disk.path, options.host_id_path, DISK_PATH_LEN);
@@ -214,10 +214,12 @@ int start_host_id(void)
 		goto fail;
 	}
 
-	log_debug(NULL, "start_host_id %d host_id_path %s offset %d",
-		  options.our_host_id, options.host_id_path, options.host_id_offset);
+	log_debug(NULL, "start_host_id %llu host_id_path %s offset %llu",
+		  (unsigned long long)options.our_host_id,
+		  options.host_id_path,
+		  (unsigned long long)options.host_id_offset);
 
-	arg = malloc(sizeof(int));
+	arg = malloc(sizeof(uint64_t));
 	if (!arg) {
 		rv = -ENOMEM;
 		goto fail_close;

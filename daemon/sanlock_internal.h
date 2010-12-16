@@ -124,10 +124,10 @@ struct sm_options {
 	int no_daemon_fork;
 	int use_aio;
 	int use_watchdog;
-	int our_host_id;
 	uint32_t cluster_mode;
+	uint64_t our_host_id;
+	uint64_t host_id_offset;
 	char host_id_path[DISK_PATH_LEN];
-	int host_id_offset;
 };
 
 /* values used while processing command, not afterward */
@@ -135,7 +135,7 @@ struct sm_options {
 struct command_line {
 	int action;
 	int pid;
-	int host_id;
+	uint64_t host_id;
 	int incoming;
 	int num_hosts;
 	int max_hosts;
