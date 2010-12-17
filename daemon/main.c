@@ -74,6 +74,7 @@ static struct pollfd *pollfd = NULL;
 static char command[COMMAND_MAX];
 static int cmd_argc;
 static char **cmd_argv;
+static int killing_pids;
 static int external_shutdown;
 static int token_id_counter = 1;
 
@@ -206,7 +207,7 @@ static void client_pid_dead(int ci)
 	pthread_mutex_unlock(&cl->mutex);
 
 	if (pid > 0)
-		kill(SIGKILL, pid);
+		kill(pid, SIGKILL);
 
 	/* the dead pid may have previously released some resources
 	   that are being kept on the saved_resources list in case
@@ -231,32 +232,71 @@ static void client_pid_dead(int ci)
 
 static void kill_pids(void)
 {
-	int ci;
+	int ci, found = 0;
 
 	/* TODO: try killscript first if one is provided */
 
-	for (ci = 0; ci < client_maxi; ci++) {
-		if (client[ci].pid)
-			kill(SIGTERM, client[ci].pid);
+	if (killing_pids == 1)
+		log_error(NULL, "killing all connected pids");
+
+	if (killing_pids > 11)
+		return;
+
+	if (killing_pids > 10)
+		goto do_dump;
+
+	if (killing_pids > 1)
+		goto do_sigkill;
+
+
+	for (ci = 0; ci <= client_maxi; ci++) {
+		if (client[ci].used && client[ci].pid) {
+			kill(client[ci].pid, SIGTERM);
+			found++;
+		}
 	}
 
-	/* TODO: go back to poll loop in an attempt to clean up some pids
-	   from killscript or SIGTERM before calling here again again to
-	   use SIGKILL */
-
-	sleep(2);
-
-	for (ci = 0; ci < client_maxi; ci++) {
-		if (client[ci].pid)
-			kill(SIGTERM, client[ci].pid);
+	if (found) {
+		log_debug(NULL, "kill_pids SIGTERM found %d pids", found);
+		usleep(500000);
 	}
+
+	killing_pids++;
+	return;
+
+ do_sigkill:
+
+	for (ci = 0; ci <= client_maxi; ci++) {
+		if (client[ci].used && client[ci].pid) {
+			kill(client[ci].pid, SIGKILL);
+			found++;
+		}
+	}
+
+	if (found) {
+		log_debug(NULL, "kill_pids SIGKILL found %d pids", found);
+		usleep(500000);
+	}
+
+	killing_pids++;
+	return;
+
+ do_dump:
+	for (ci = 0; ci <= client_maxi; ci++) {
+		if (client[ci].pid) {
+			log_error(NULL, "kill_pids %d stuck", client[ci].pid);
+			found++;
+		}
+	}
+
+	killing_pids++;
 }
 
 static int all_pids_dead(void)
 {
 	int ci;
 
-	for (ci = 0; ci < client_maxi; ci++) {
+	for (ci = 0; ci <= client_maxi; ci++) {
 		if (client[ci].pid)
 			return 0;
 	}
@@ -270,7 +310,7 @@ static int main_loop(void)
 	int poll_timeout = MAIN_POLL_MS;
 	void (*workfn) (int ci);
 	void (*deadfn) (int ci);
-	int i, rv, killing_pids = 0;
+	int i, rv;
 
 	while (1) {
 		rv = poll(pollfd, client_maxi + 1, poll_timeout);
@@ -294,12 +334,16 @@ static int main_loop(void)
 			}
 		}
 
-		if (killing_pids && all_pids_dead())
-			break;
-
-		if (external_shutdown || !our_host_id_renewed()) {
-			kill_pids();
-			killing_pids = 1;
+		if (killing_pids) {
+			if (all_pids_dead())
+				break;
+			else
+				kill_pids();
+		} else {
+			if (external_shutdown || !our_host_id_renewed()) {
+				killing_pids = 1;
+				kill_pids();
+			}
 		}
 	}
 
@@ -319,6 +363,14 @@ static int set_cmd_active(int ci_target, int cmd)
 			  ci_target, cmd);
 		pthread_mutex_unlock(&cl->mutex);
 		return -EBUSY;
+	}
+
+	/* TODO: do we want to exclude other cmd's when killing_pids? */
+	if (killing_pids && cmd == SM_CMD_ACQUIRE) {
+		log_error(NULL, "set_cmd_active ci %d cmd %d killing_pids",
+			  ci_target, cmd);
+		pthread_mutex_unlock(&cl->mutex);
+		return -ESTALE;
 	}
 
 	cmd_active = cl->cmd_active;
@@ -1186,13 +1238,14 @@ static void process_listener(int ci GNUC_UNUSED)
 
 static int setup_listener(void)
 {
-	int rv, fd;
+	int rv, fd, ci;
 
 	rv = setup_listener_socket(&fd);
 	if (rv < 0)
 		return rv;
 
-	client_add(fd, process_listener, NULL);
+	ci = client_add(fd, process_listener, NULL);
+	strcpy(client[ci].owner_name, "listener");
 	return 0;
 }
 
@@ -1293,6 +1346,16 @@ static int do_init(void)
 	int num_opened;
 	int i, j, rv = 0;
 
+	if (!com.num_hosts) {
+		log_tool("num_hosts option (-h) required");
+		return -1;
+	}
+
+	if (com.num_hosts > com.max_hosts) {
+		log_tool("num_hosts must be less than max_hosts");
+		return -1;
+	}
+
 	if (!options.host_id_path[0])
 		goto tokens;
 
@@ -1370,8 +1433,9 @@ static void print_usage(void)
 	printf("  set_host_id		set daemon host_id and host_id lease area\n");
 	printf("\n");
 
-	printf("\ninit [options] -h <num_hosts> -l LEASE\n");
-	printf("  -h <num_hosts>	max host id that will be able to acquire the lease\n");
+	printf("\ninit [options] [-h <num_hosts> -d <path> -o <offset>] [-l LEASE ...]\n");
+	printf("  -h <num_hosts>	max host id that will be able to acquire the lease,\n");
+	printf("                        and number of sectors that are read when paxos is run\n");
 	printf("  -H <max_hosts>	max number of hosts the disk area will support\n");
 	printf("                        (default %d)\n", DEFAULT_MAX_HOSTS);
 	printf("  -m <num>		cluster mode of hosts (default 0)\n");
@@ -1666,7 +1730,6 @@ static int read_command_line(int argc, char *argv[])
 	char *optionarg;
 	char *p;
 	char *arg1 = argv[1];
-	int optionarg_used;
 	int i, j, rv, len, begin_command = 0;
 
 	if (argc < 2 || !strcmp(arg1, "help") || !strcmp(arg1, "--help") ||
@@ -1721,15 +1784,21 @@ static int read_command_line(int argc, char *argv[])
 		optchar = p[1];
 		i++;
 
-		optionarg = argv[i];
-		optionarg_used = 1;
-
-		switch (optchar) {
-		case 'D':
+		/* the only option that does not have optionarg */
+		if (optchar == 'D') {
 			options.no_daemon_fork = 1;
 			log_stderr_priority = LOG_DEBUG;
-			optionarg_used = 0;
-			break;
+			continue;
+		}
+
+		if (i >= argc) {
+			log_tool("option '%c' requires arg", optchar);
+			exit(EXIT_FAILURE);
+		}
+
+		optionarg = argv[i];
+
+		switch (optchar) {
 		case 'L':
 			log_logfile_priority = atoi(optionarg);
 			break;
@@ -1790,19 +1859,25 @@ static int read_command_line(int argc, char *argv[])
 			break;
 		case 'c':
 			begin_command = 1;
-			optionarg_used = 0;
 			break;
 		default:
 			log_tool("unknown option: %c", optchar);
 			exit(EXIT_FAILURE);
 		};
 
-		if (optionarg_used)
-			i++;
 
 		if (begin_command)
 			break;
+
+		i++;
 	}
+
+	if ((com.action == ACT_DAEMON) || (com.action == ACT_SET_HOST_ID)) {
+		if (options.our_host_id && !options.host_id_path[0]) {
+			log_tool("host_id_path option (-d) required");
+			exit(EXIT_FAILURE);
+		}
+	}	
 
 	/*
 	 * the remaining args are for the command
