@@ -21,6 +21,7 @@
 #include "delta_lease.h"
 #include "host_id.h"
 #include "watchdog.h"
+#include "client_msg.h"
 
 struct lease_status {
 	int acquire_last_result;
@@ -40,6 +41,33 @@ static pthread_mutex_t host_id_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t host_id_cond = PTHREAD_COND_INITIALIZER;
 static int our_host_id_thread_stop;
 static struct sync_disk host_id_disk;
+
+
+int print_hostid_state(char *str)
+{
+	memset(str, 0, SANLK_STATE_MAXSTR);
+
+	snprintf(str, SANLK_STATE_MAXSTR-1,
+		 "path=%s offset=%llu "
+		 "acquire_last_result=%d renewal_last_result=%d "
+		 "release_last_result=%d acquire_last_time=%llu "
+		 "acquire_good_time=%llu renewal_last_time=%llu "
+		 "renewal_good_time=%llu release_last_time=%llu "
+		 "release_good_time=%llu",
+		 options.host_id_path,
+		 (unsigned long long)options.host_id_offset,
+		 our_lease_status.acquire_last_result,
+		 our_lease_status.renewal_last_result,
+		 our_lease_status.release_last_result,
+		 (unsigned long long)our_lease_status.acquire_last_time,
+		 (unsigned long long)our_lease_status.acquire_good_time,
+		 (unsigned long long)our_lease_status.renewal_last_time,
+		 (unsigned long long)our_lease_status.renewal_good_time,
+		 (unsigned long long)our_lease_status.release_last_time,
+		 (unsigned long long)our_lease_status.release_good_time);
+
+	return strlen(str);
+}
 
 /*
  * read lease of host_id, see if it has been renewed within timeout

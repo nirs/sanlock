@@ -600,6 +600,8 @@ static void *cmd_acquire_thread(void *args_in)
 
 	log_debug(NULL, "cmd_acquire recv str %d", rv);
 
+
+ skip_opt_str:
 	/* TODO: warn if header.length != sizeof(header) + pos ? */
 
 	log_debug(NULL, "cmd_acquire command data done %d bytes", pos);
@@ -609,7 +611,6 @@ static void *cmd_acquire_thread(void *args_in)
 	 * all command input has been received, start doing the acquire
 	 */
 
- skip_opt_str:
 	if (opt.flags & SANLK_FLG_INCOMING)
 		need_setowner = 1;
 
@@ -978,9 +979,204 @@ static void *cmd_setowner_thread(void *args_in)
 	return NULL;
 }
 
+static int count_pids(void)
+{
+	int ci, count = 0;
+
+	for (ci = 0; ci <= client_maxi; ci++) {
+		if (client[ci].used && client[ci].pid)
+			count++;
+	}
+	return count;
+}
+
+static int count_tokens(struct client *cl)
+{
+	int i, count = 0;
+
+	for (i = 0; i < MAX_LEASES; i++) {
+		if (cl->tokens[i])
+			count++;
+	}
+	return count;
+}
+
+static int print_daemon_state(char *str)
+{
+	memset(str, 0, SANLK_STATE_MAXSTR);
+
+	snprintf(str, SANLK_STATE_MAXSTR-1,
+		 "io_timeout=%d host_id_timeout=%d "
+		 "host_id_renewal=%d host_id_renewal_fail=%d "
+		 "killing_pids=%d",
+		 to.io_timeout_seconds,
+		 to.host_id_timeout_seconds,
+		 to.host_id_renewal_seconds,
+		 to.host_id_renewal_fail_seconds,
+		 killing_pids);
+
+	return strlen(str) + 1;
+}
+
+static int print_client_state(struct client *cl, char *str)
+{
+	memset(str, 0, SANLK_STATE_MAXSTR);
+
+	snprintf(str, SANLK_STATE_MAXSTR-1,
+		 "cmd_active=%d acquire_done=%d need_setowner=%d pid_dead=%d",
+		 cl->cmd_active,
+		 cl->acquire_done,
+		 cl->need_setowner,
+		 cl->pid_dead);
+
+	return strlen(str) + 1;
+}
+
+static int print_token_state(struct token *t, char *str)
+{
+	memset(str, 0, SANLK_STATE_MAXSTR);
+
+	snprintf(str, SANLK_STATE_MAXSTR-1,
+		 "token_id=%d acquire_result=%d migrate_result=%d "
+		 "release_result=%d setowner_result=%d "
+		 "leader.lver=%llu leader.timestamp=%llu "
+		 "leader.next_owner_id=%llu",
+		 t->token_id,
+		 t->acquire_result,
+		 t->migrate_result,
+		 t->release_result,
+		 t->setowner_result,
+		 (unsigned long long)t->leader.lver,
+		 (unsigned long long)t->leader.timestamp,
+		 (unsigned long long)t->leader.next_owner_id);
+
+	return strlen(str) + 1;
+}
+
+/*
+ * 0. header
+ * 1. dst (sanlk_state DAEMON)
+ * 2. dst.str (dst.len)
+ * 3. hst (sanlk_state HOSTID)
+ * 4. hst.str (hst.len)
+ * 5. cst (sanlk_state CLIENT)
+ * 6. cst.str (cst.len)
+ * 7. rst (sanlk_state RESOURCE)
+ * 8. rst.str (rst.len)
+ * 9. res (sanlk_resource)
+ * 10. disks (sanlk_disk * res.num_disks)
+ * 11. [repeat 7-9 cst.next_count (res_count)]
+ * 12. [repeat 5-11 dst.next_count (cli_count)]
+ */
+
 static void cmd_status(int fd, struct sm_header *h_recv)
 {
-	send(fd, h_recv, sizeof(struct sm_header), MSG_NOSIGNAL);
+	struct sm_header h;
+	struct sanlk_state dst;
+	struct sanlk_state hst;
+	struct sanlk_state cst;
+	struct sanlk_state rst;
+	struct sanlk_resource res;
+	char str[SANLK_STATE_MAXSTR];
+	struct token *token;
+	struct client *cl;
+	int ci, i, j, str_len, pid_count, tok_count;
+
+	/*
+	 * send header and daemon state: h, dst, dst.str
+	 */
+
+	memset(&h, 0, sizeof(h));
+	memcpy(&h, h_recv, sizeof(struct sm_header));
+	h.length = sizeof(h) + sizeof(dst);
+	h.data = 0;
+
+	memset(&dst, 0, sizeof(dst));
+	pid_count = count_pids();
+	str_len = print_daemon_state(str);
+	dst.type = SANLK_STATE_DAEMON;
+	dst.count = pid_count;
+	dst.data64 = options.our_host_id;
+	dst.len = str_len;
+
+	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
+	send(fd, &dst, sizeof(dst), MSG_NOSIGNAL);
+	if (str_len)
+		send(fd, str, str_len, MSG_NOSIGNAL);
+
+	if (h_recv->data == SANLK_STATE_DAEMON)
+		return;
+
+	memset(&hst, 0, sizeof(hst));
+	str_len = print_hostid_state(str);
+	hst.type = SANLK_STATE_HOSTID;
+	hst.data64 = options.our_host_id;
+	hst.len = str_len;
+
+	send(fd, &hst, sizeof(hst), MSG_NOSIGNAL);
+	if (str_len)
+		send(fd, str, str_len, MSG_NOSIGNAL);
+
+	if (h_recv->data == SANLK_STATE_HOSTID)
+		return;
+
+	/*
+	 * send client and resource state
+	 */
+
+	for (ci = 0; ci <= client_maxi; ci++) {
+		cl = &client[ci];
+
+		if (!cl->used || !cl->pid)
+			continue;
+
+		memset(&cst, 0, sizeof(cst));
+		tok_count = count_tokens(cl);
+		str_len = print_client_state(cl, str);
+		cst.type = SANLK_STATE_CLIENT;
+		cst.count = tok_count;
+		cst.data32 = cl->pid;
+		strncpy(cst.name, cl->owner_name, SANLK_NAME_LEN);
+		cst.len = str_len;
+
+		/*
+		 * send client state: cst, cst.str
+		 */
+
+		send(fd, &cst, sizeof(cst), MSG_NOSIGNAL);
+		if (str_len)
+			send(fd, str, str_len, MSG_NOSIGNAL);
+
+		for (i = 0; i < MAX_LEASES; i++) {
+			token = cl->tokens[i];
+			if (!token)
+				continue;
+
+			memset(&rst, 0, sizeof(rst));
+			str_len = print_token_state(token, str);
+			rst.type = SANLK_STATE_RESOURCE;
+			strncpy(rst.name, token->resource_name, SANLK_NAME_LEN);
+			rst.len = str_len;
+
+			/*
+			 * send resource state: rst, rst.str, res, res.disks
+			 */
+
+			send(fd, &rst, sizeof(rst), MSG_NOSIGNAL);
+			if (str_len)
+				send(fd, str, str_len, MSG_NOSIGNAL);
+
+			memset(&res, 0, sizeof(res));
+			strncpy(res.name, token->resource_name, SANLK_NAME_LEN);
+			res.num_disks = token->num_disks;
+
+			send(fd, &res, sizeof(res), MSG_NOSIGNAL);
+
+			for (j = 0; j < token->num_disks; j++) {
+				send(fd, &token->disks[j], sizeof(struct sanlk_disk), MSG_NOSIGNAL);
+			}
+		}
+	}
 }
 
 static void cmd_log_dump(int fd, struct sm_header *h_recv)
@@ -1444,7 +1640,7 @@ static void print_usage(void)
 	printf("  -l LEASE		resource lease description, see below\n");
 
 	printf("\ndaemon [options]\n");
-	printf("  -D			don't fork and print all logging to stderr\n");
+	printf("  -D			debug: no fork and print all logging to stderr\n");
 	printf("  -L <level>		write logging at level and up to logfile (-1 none)\n");
 	printf("  -S <level>		write logging at level and up to syslog (-1 none)\n");
 	printf("  -m <num>		cluster mode of hosts (default 0)\n");
@@ -1476,7 +1672,8 @@ static void print_usage(void)
 	printf("  -p <pid>		process whose lease should be released\n");
 	printf("  -r <resource_name>	resource name of a previously acquired lease\n");
 
-	printf("\nstatus\n");
+	printf("\nstatus [options]\n");
+	printf("  -D			debug: print extra internal state for debugging\n");
 
 	printf("\nlog_dump\n");
 
@@ -2006,7 +2203,7 @@ int main(int argc, char *argv[])
 		break;
 
 	case ACT_STATUS:
-		rv = sanlock_status();
+		rv = sanlock_status(options.no_daemon_fork);
 		break;
 
 	case ACT_LOG_DUMP:
