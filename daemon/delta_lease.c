@@ -29,6 +29,52 @@ struct leader_record our_last_leader;
 /* delta_leases are a series max_hosts leader_records, one leader per sector,
    host N's delta_lease is the leader_record in sectors N-1 */
 
+static int verify_leader(struct sync_disk *disk, char *resource,
+			 struct leader_record *lr)
+{
+	uint32_t sum;
+
+	if (lr->magic != DELTA_DISK_MAGIC) {
+		log_error(NULL, "verify_leader wrong magic %x %s",
+			  lr->magic, disk->path);
+		return DP_BAD_MAGIC;
+	}
+
+	if ((lr->version & 0xFFFF0000) != DELTA_DISK_VERSION_MAJOR) {
+		log_error(NULL, "verify_leader wrong version %x %s",
+			  lr->version, disk->path);
+		return DP_BAD_VERSION;
+	}
+
+	if (lr->cluster_mode != options.cluster_mode) {
+		log_error(NULL, "verify_leader wrong cluster mode %d %d %s",
+			  lr->cluster_mode, options.cluster_mode, disk->path);
+		return DP_BAD_CLUSTERMODE;
+	}
+
+	if (lr->sector_size != disk->sector_size) {
+		log_error(NULL, "verify_leader wrong sector size %d %d %s",
+			  lr->sector_size, disk->sector_size, disk->path);
+		return DP_BAD_SECTORSIZE;
+	}
+
+	if (strncmp(lr->resource_name, resource, NAME_ID_SIZE)) {
+		log_error(NULL, "verify_leader wrong resource name %s %s %s",
+			  lr->resource_name, resource, disk->path);
+		return DP_BAD_RESOURCEID;
+	}
+
+	sum = leader_checksum(lr);
+
+	if (lr->checksum != sum) {
+		log_error(NULL, "verify_leader wrong checksum %x %x %s",
+			  lr->checksum, sum, disk->path);
+		return DP_BAD_CHECKSUM;
+	}
+
+	return DP_OK;
+}
+
 static int delta_lease_leader_read(struct sync_disk *disk, uint64_t host_id,
 				   struct leader_record *leader_ret)
 {
@@ -69,7 +115,7 @@ int delta_lease_read_timestamp(struct sync_disk *disk, uint64_t host_id,
 }
 
 int delta_lease_acquire(struct sync_disk *disk, uint64_t host_id,
-		        uint64_t *timestamp)
+			uint64_t *timestamp)
 {
 	struct leader_record leader;
 	struct leader_record leader1;
@@ -222,7 +268,7 @@ int delta_lease_release(struct sync_disk *disk, uint64_t host_id)
 /* the host_id lease area begins disk->offset bytes from the start of
    block device disk->path */
 
-int delta_lease_init(struct sync_disk *disk, int num_hosts, int max_hosts)
+int delta_lease_init(struct sync_disk *disk, int max_hosts)
 {
 	struct leader_record leader;
 	int i, rv;
@@ -251,12 +297,11 @@ int delta_lease_init(struct sync_disk *disk, int num_hosts, int max_hosts)
 
 	memset(&leader, 0, sizeof(struct leader_record));
 
-	leader.magic = PAXOS_DISK_MAGIC;
-	leader.version = PAXOS_DISK_VERSION_MAJOR | PAXOS_DISK_VERSION_MINOR;
+	leader.magic = DELTA_DISK_MAGIC;
+	leader.version = DELTA_DISK_VERSION_MAJOR | DELTA_DISK_VERSION_MINOR;
 	leader.cluster_mode = options.cluster_mode;
 	leader.sector_size = disk->sector_size;
-	leader.num_hosts = num_hosts;
-	leader.max_hosts = max_hosts;
+	leader.max_hosts = 1;
 	leader.timestamp = LEASE_FREE;
 
 	/* host_id N is block offset N-1 */

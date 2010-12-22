@@ -392,7 +392,8 @@ uint32_t leader_checksum(struct leader_record *lr)
 	return crc32c((uint32_t)~1, (char *)lr, LEADER_CHECKSUM_LEN);
 }
 
-int verify_leader(struct sync_disk *disk, char *resource, struct leader_record *lr)
+static int verify_leader(struct sync_disk *disk, char *resource,
+			 struct leader_record *lr)
 {
 	uint32_t sum;
 

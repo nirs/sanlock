@@ -18,6 +18,10 @@
 #define PAXOS_DISK_VERSION_MAJOR 0x00020000
 #define PAXOS_DISK_VERSION_MINOR 0x00000001
 
+#define DELTA_DISK_MAGIC 0x12212010
+#define DELTA_DISK_VERSION_MAJOR 0x00010000
+#define DELTA_DISK_VERSION_MINOR 0x00000001
+
 #define SM_MAGIC 0x04282010
 
 /* each pid can own this many leases */
@@ -32,7 +36,7 @@
 
 #define DISK_PATH_LEN SANLK_PATH_LEN
 
-/* default num_hosts and host_id range */
+/* default max number of hosts supported */
 
 #define DEFAULT_MAX_HOSTS 2000
 

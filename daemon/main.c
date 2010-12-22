@@ -1542,16 +1542,6 @@ static int do_init(void)
 	int num_opened;
 	int i, j, rv = 0;
 
-	if (!com.num_hosts) {
-		log_tool("num_hosts option (-h) required");
-		return -1;
-	}
-
-	if (com.num_hosts > com.max_hosts) {
-		log_tool("num_hosts must be less than max_hosts");
-		return -1;
-	}
-
 	if (!options.host_id_path[0])
 		goto tokens;
 
@@ -1565,13 +1555,26 @@ static int do_init(void)
 		return -1;
 	}
 
-	rv = delta_lease_init(&sd, com.num_hosts, com.max_hosts);
+	rv = delta_lease_init(&sd, com.max_hosts);
 	if (rv < 0) {
 		log_tool("cannot initialize host_id disk");
 		return -1;
 	}
 
  tokens:
+	if (!com.res_count)
+		return 0;
+
+	if (!com.num_hosts) {
+		log_tool("num_hosts option (-h) required for paxos lease init");
+		return -1;
+	}
+
+	if (com.num_hosts > com.max_hosts) {
+		log_tool("num_hosts cannot be greater than max_hosts");
+		return -1;
+	}
+
 	for (i = 0; i < com.res_count; i++) {
 		res = com.res_args[i];
 
