@@ -42,6 +42,7 @@ struct sanlk_resource {
 
 #define SANLK_FLG_REACQUIRE	0x1
 #define SANLK_FLG_INCOMING	0x2
+#define SANLK_FLG_NUM_HOSTS	0x4
 
 struct sanlk_options {
 	char owner_name[SANLK_NAME_LEN]; /* optional user friendly name */

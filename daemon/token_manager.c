@@ -182,12 +182,14 @@ void purge_saved_resources(int pid)
 
 /* return < 0 on error, 1 on success */
 
-int acquire_lease(struct token *token, uint64_t reacquire_lver)
+int acquire_lease(struct token *token, uint64_t reacquire_lver,
+		  int new_num_hosts)
 {
 	struct leader_record leader_ret;
 	int rv;
 
-	rv = paxos_lease_acquire(token, 0, &leader_ret, reacquire_lver);
+	rv = paxos_lease_acquire(token, 0, &leader_ret, reacquire_lver,
+				 new_num_hosts);
 
 	token->acquire_result = rv;
 
@@ -220,7 +222,7 @@ int setowner_lease(struct token *token)
 	/* we want the dblocks to reflect a full, proper ownership, so we
 	   do the full acquire rather than just writing a new leader_record */
 
-	rv = paxos_lease_acquire(token, 0, &leader_ret, 0);
+	rv = paxos_lease_acquire(token, 0, &leader_ret, 0, 0);
 
 	token->setowner_result = rv;
 

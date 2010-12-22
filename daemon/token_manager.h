@@ -1,7 +1,8 @@
 #ifndef	__TOKEN_MANAGER_H__
 #define __TOKEN_MANAGER_H__
 
-int acquire_lease(struct token *token, uint64_t reacquire_lver);
+int acquire_lease(struct token *token, uint64_t reacquire_lver,
+		  int new_num_hosts);
 int release_lease(struct token *token);
 int migrate_lease(struct token *token, uint64_t target_host_id);
 int receive_lease(struct token *token, char *opt_str);

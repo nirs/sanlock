@@ -423,6 +423,58 @@ static void client_recv_all(int ci, struct sm_header *h_recv, int pos)
 	log_debug(NULL, "recv_all ci %d rem %d total %d", ci, rem, total);
 }
 
+/* optstr format: "abc=123 def=456 ghi=780" */
+
+static int parse_key_val(char *optstr, const char *key_arg, char *val_arg,
+			 int len)
+{
+	int copy_key, copy_val, i, kvi;
+	char key[64], val[64];
+
+	copy_key = 1;
+	copy_val = 0;
+	kvi = 0;
+
+	for (i = 0; i < strlen(optstr); i++) {
+		if (optstr[i] == ' ') {
+			if (!strcmp(key, key_arg)) {
+				strncpy(val_arg, val, len);
+				return 0;
+			}
+			memset(key, 0, sizeof(key));
+			memset(val, 0, sizeof(val));
+			copy_key = 1;
+			copy_val = 0;
+			kvi = 0;
+			continue;
+		}
+
+		if (optstr[i] == '=') {
+			copy_key = 0;
+			copy_val = 1;
+			kvi = 0;
+			continue;
+		}
+
+		if (copy_key)
+			key[kvi++] = optstr[i];
+		else if (copy_val)
+			val[kvi++] = optstr[i];
+
+		if (kvi > 62) {
+			log_error(NULL, "invalid timeout parameter");
+			return -1;
+		}
+	}
+
+	if (!strcmp(key, key_arg)) {
+		strncpy(val_arg, val, len);
+		return 0;
+	}
+
+	return -1;
+}
+
 static void *cmd_acquire_thread(void *args_in)
 {
 	struct cmd_args *ca = args_in;
@@ -434,7 +486,9 @@ static void *cmd_acquire_thread(void *args_in)
 	struct sanlk_resource res;
 	struct sanlk_options opt;
 	char *opt_str;
+	char num_hosts_str[16];
 	uint64_t reacquire_lver = 0;
+	int new_num_hosts = 0;
 	int fd, rv, i, j, disks_len, num_disks, empty_slots, opened;
 	int alloc_count = 0, add_count = 0, open_count = 0, acquire_count = 0;
 	int pos = 0, need_setowner = 0, pid_dead = 0;
@@ -614,6 +668,21 @@ static void *cmd_acquire_thread(void *args_in)
 	if (opt.flags & SANLK_FLG_INCOMING)
 		need_setowner = 1;
 
+	if (opt.flags & SANLK_FLG_NUM_HOSTS) {
+		if (!opt_str)
+			goto fail_free;
+
+		memset(num_hosts_str, 0, sizeof(num_hosts_str));
+
+		rv = parse_key_val(opt_str, "num_hosts", num_hosts_str, 15);
+		if (rv < 0) {
+			log_error(NULL, "cmd_acquire num_hosts error");
+			goto fail_free;
+		}
+
+		new_num_hosts = atoi(num_hosts_str);
+	}
+
 	for (i = 0; i < new_tokens_count; i++) {
 		token = new_tokens[i];
 		rv = add_resource(token, cl->pid);
@@ -642,7 +711,7 @@ static void *cmd_acquire_thread(void *args_in)
 		} else {
 			if (opt.flags & SANLK_FLG_REACQUIRE)
 				reacquire_lver = token->prev_lver;
-			rv = acquire_lease(token, reacquire_lver);
+			rv = acquire_lease(token, reacquire_lver, new_num_hosts);
 		}
 		save_resource_leader(token);
 
@@ -1663,7 +1732,8 @@ static void print_usage(void)
 	printf("  -d <path>		disk path for host_id leases\n");
 	printf("  -o <num>		offset on disk for host_id leases\n");
 
-	printf("\ncommand -l LEASE -c <path> <args>\n");
+	printf("\ncommand [options] -l LEASE -c <path> <args>\n");
+	printf("  -h <num_hosts>	change num_hosts in leases when acquired\n");
 	printf("  -l LEASE		resource lease description, see below\n");
 	printf("  -c <path> <args>	run command with args, -c must be final option\n");
 
@@ -1880,6 +1950,8 @@ static void set_timeout(char *key, char *val)
 		return;
 	}
 }
+
+/* optstr format "abc=123,def=456,ghi=789" */
 
 static void parse_timeouts(char *optstr)
 {
@@ -2133,6 +2205,7 @@ static void exec_command(void)
 
 int main(int argc, char *argv[])
 {
+	struct sanlk_options *opt;
 	int rv, fd;
 	
 	memset(&com, 0, sizeof(com));
@@ -2174,10 +2247,23 @@ int main(int argc, char *argv[])
 		fd = sanlock_register();
 		if (fd < 0)
 			goto out;
+
 		log_tool("acquire_self %d resources", com.res_count);
-		rv = sanlock_acquire_self(fd, com.res_count, com.res_args, NULL);
+
+		if (com.num_hosts) {
+			opt = malloc(sizeof(struct sanlk_options) + 16);
+			memset(opt, 0, sizeof(struct sanlk_options) + 16);
+			snprintf(opt->str, 15, "num_hosts=%d", com.num_hosts);
+			opt->flags = SANLK_FLG_NUM_HOSTS;
+			opt->len = strlen(opt->str);
+		}
+
+		rv = sanlock_acquire_self(fd, com.res_count, com.res_args, opt);
 		if (rv < 0)
 			goto out;
+
+		if (opt)
+			free(opt);
 		log_tool("exec_command");
 		exec_command();
 

@@ -116,7 +116,7 @@ static int do_acquire(int sock, int pid, int res_count,
 	}
 
 	if (opt.len) {
-		rv = send(fd, opt.str, opt.len, 0);
+		rv = send(fd, opt_in->str, opt.len, 0);
 		if (rv < 0) {
 			rv = -errno;
 			goto out;

@@ -588,7 +588,8 @@ static int write_new_leader(struct token *token, struct leader_record *nl)
 
 int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 		        struct leader_record *leader_ret,
-		        uint64_t reacquire_lver)
+		        uint64_t reacquire_lver,
+		        int new_num_hosts)
 {
 	struct leader_record prev_leader;
 	struct leader_record new_leader;
@@ -681,6 +682,8 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 	new_leader.next_owner_id = 0;
 	new_leader.lver = dblock.lver;
 	new_leader.timestamp = time(NULL);
+	if (new_num_hosts)
+		new_leader.num_hosts = new_num_hosts;
 	new_leader.checksum = leader_checksum(&new_leader);
 
 	error = write_new_leader(token, &new_leader);

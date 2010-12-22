@@ -6,7 +6,8 @@ int majority_disks(struct token *token, int num);
 int paxos_lease_leader_read(struct token *token, struct leader_record *leader_ret);
 int paxos_lease_acquire(struct token *token, int force,
 		        struct leader_record *leader_ret,
-		        uint64_t reacquire_lver);
+		        uint64_t reacquire_lver,
+		        int new_num_hosts);
 int paxos_lease_migrate(struct token *token,
                         struct leader_record *leader_last,
                         struct leader_record *leader_ret,
