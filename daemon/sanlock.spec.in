@@ -1,5 +1,5 @@
 Name:		sanlock
-Version:	0.1
+Version:	1.0
 Release:	1.19700101git%{?dist}
 Summary:	sanlock is a shared disk lock manager.
 

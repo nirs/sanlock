@@ -1,7 +1,7 @@
 LIB_TARGET = lock_driver_sanlock
 
 SOMAJOR=1
-SOMINOR=1
+SOMINOR=0
 
 SHLIB_TARGET = $(LIB_TARGET).so.$(SOMAJOR).$(SOMINOR)
 

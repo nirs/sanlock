@@ -1919,7 +1919,7 @@ static void parse_timeouts(char *optstr)
 	set_timeout(key, val);
 }
 
-#define RELEASE_VERSION "0.0"
+#define RELEASE_VERSION "1.0"
 
 static int read_command_line(int argc, char *argv[])
 {
