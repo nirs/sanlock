@@ -70,6 +70,7 @@ static struct pollfd *pollfd = NULL;
 #define ACT_LOG_DUMP	8
 #define ACT_SET_HOST_ID	9
 #define ACT_MIGRATE	10
+#define ACT_DUMP	11
 
 static char command[COMMAND_MAX];
 static int cmd_argc;
@@ -1542,7 +1543,7 @@ static int do_daemon(void)
 
 	/* TODO: copy comprehensive daemonization method from libvirtd */
 
-	if (!options.no_daemon_fork) {
+	if (!options.debug) {
 		if (daemon(0, 0) < 0) {
 			log_tool("cannot fork daemon\n");
 			exit(EXIT_FAILURE);
@@ -1682,6 +1683,68 @@ static int do_init(void)
 	return 0;
 }
 
+/* TODO: if this and daemon use aio, running this will cause i/o errors
+ * in the daemon renewals.  This was using a virtual device (/dev/vdb)
+ * backed by a file in the host.  Try using a real sda on hosts.
+ * Problem in guest didn't appear with -a 0 (to disable aio). */
+
+static void do_dump(void)
+{
+	char *data;
+	struct leader_record *lr;
+	struct sync_disk sd;
+	int num_opened, rv;
+	uint64_t sector_nr;
+
+	memset(&sd, 0, sizeof(struct sync_disk));
+	strncpy(sd.path, options.host_id_path, DISK_PATH_LEN);
+	sd.offset = options.host_id_offset;
+
+	num_opened = open_disks(&sd, 1);
+	if (num_opened != 1) {
+		log_tool("cannot open disk %s", sd.path);
+		return;
+	}
+
+	data = malloc(sd.sector_size);
+	if (!data)
+		return;
+	lr = (struct leader_record *)data;
+
+	sector_nr = 0;
+	while (1) {
+		memset(data, 0, sd.sector_size);
+
+		rv = read_sectors(&sd, sector_nr, 1, data, sd.sector_size,
+			  	  to.io_timeout_seconds, options.use_aio,
+				  "dump");
+
+		if (lr->magic == DELTA_DISK_MAGIC) {
+			printf("%08llu %24s owner %4llu time %010llu\n",
+			       (unsigned long long)sector_nr,
+			       lr->resource_name,
+			       (unsigned long long)lr->owner_id,
+			       (unsigned long long)lr->timestamp);
+			sector_nr += 1;
+		} else if (lr->magic == PAXOS_DISK_MAGIC) {
+			printf("%08llu %24s owner %4llu time %010llu lver %llu\n",
+			       (unsigned long long)sector_nr,
+			       lr->resource_name,
+			       (unsigned long long)lr->owner_id,
+			       (unsigned long long)lr->timestamp,
+			       (unsigned long long)lr->lver);
+			sector_nr += lr->max_hosts + 2;
+		} else {
+			printf("%08llu %24s\n",
+			       (unsigned long long)sector_nr,
+			       "uninitialized");
+			break;
+		}
+	}
+
+	free(data);
+}
+
 static void print_usage(void)
 {
 	printf("Usage:\n");
@@ -1689,6 +1752,7 @@ static void print_usage(void)
 	printf("main actions:\n");
 	printf("  help			print usage\n");
 	printf("  init			initialize disk areas for host_id and resource leases\n");
+	printf("  dump			print initialized disk areas\n");
 	printf("  daemon		start daemon\n");
 	printf("\n");
 	printf("client actions:\n");
@@ -1701,7 +1765,8 @@ static void print_usage(void)
 	printf("  set_host_id		set daemon host_id and host_id lease area\n");
 	printf("\n");
 
-	printf("\ninit [options] [-h <num_hosts> -d <path> -o <offset>] [-l LEASE ...]\n");
+	printf("\ninit [options] [-h <num_hosts> -d <path> -o <num>] [-l LEASE ...]\n");
+	printf("  -a <num>		use async io (1 yes, 0 no)\n");
 	printf("  -h <num_hosts>	max host id that will be able to acquire the lease,\n");
 	printf("                        and number of sectors that are read when paxos is run\n");
 	printf("  -H <max_hosts>	max number of hosts the disk area will support\n");
@@ -1710,6 +1775,11 @@ static void print_usage(void)
 	printf("  -d <path>		disk path for host_id leases\n");
 	printf("  -o <num>		offset on disk for host_id leases\n");
 	printf("  -l LEASE		resource lease description, see below\n");
+
+	printf("\ndump [options] -d <path> -o <num>\n");
+	printf("  -a <num>		use async io (1 yes, 0 no)\n");
+	printf("  -d <path>		disk path\n");
+	printf("  -o <num>		offset on disk to begin reading\n");
 
 	printf("\ndaemon [options]\n");
 	printf("  -D			debug: no fork and print all logging to stderr\n");
@@ -2019,6 +2089,8 @@ static int read_command_line(int argc, char *argv[])
 
 	if (!strcmp(arg1, "init"))
 		com.action = ACT_INIT;
+	else if (!strcmp(arg1, "dump"))
+		com.action = ACT_DUMP;
 	else if (!strcmp(arg1, "daemon"))
 		com.action = ACT_DAEMON;
 	else if (!strcmp(arg1, "command"))
@@ -2038,8 +2110,7 @@ static int read_command_line(int argc, char *argv[])
 	else if (!strcmp(arg1, "set_host_id"))
 		com.action = ACT_SET_HOST_ID;
 	else {
-		log_tool("first arg is unknown action");
-		print_usage();
+		log_tool("command \"%s\" is unknown", arg1);
 		exit(EXIT_FAILURE);
 	}
 
@@ -2058,7 +2129,7 @@ static int read_command_line(int argc, char *argv[])
 
 		/* the only option that does not have optionarg */
 		if (optchar == 'D') {
-			options.no_daemon_fork = 1;
+			options.debug = 1;
 			log_stderr_priority = LOG_DEBUG;
 			continue;
 		}
@@ -2235,6 +2306,10 @@ int main(int argc, char *argv[])
 		rv = do_init();
 		break;
 
+	case ACT_DUMP:
+		do_dump();
+		break;
+
 	/* client actions that ask daemon to do something.
 	   we could split these into a separate command line
 	   utility (note that the lease arg processing is shared
@@ -2292,7 +2367,7 @@ int main(int argc, char *argv[])
 		break;
 
 	case ACT_STATUS:
-		rv = sanlock_status(options.no_daemon_fork);
+		rv = sanlock_status(options.debug);
 		break;
 
 	case ACT_LOG_DUMP:

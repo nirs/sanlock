@@ -125,7 +125,7 @@ struct sm_timeouts {
 /* values used after processing command, while running */
 
 struct sm_options {
-	int no_daemon_fork;
+	int debug;
 	int use_aio;
 	int use_watchdog;
 	uint32_t cluster_mode;
