@@ -27,12 +27,14 @@ struct lease_status {
 	int acquire_last_result;
 	int renewal_last_result;
 	int release_last_result;
+	int max_renewal_interval;
 	uint64_t acquire_last_time;
 	uint64_t acquire_good_time;
 	uint64_t renewal_last_time;
 	uint64_t renewal_good_time;
 	uint64_t release_last_time;
 	uint64_t release_good_time;
+	uint64_t max_renewal_time;
 };
 
 static struct lease_status our_lease_status;
@@ -42,18 +44,23 @@ static pthread_cond_t host_id_cond = PTHREAD_COND_INITIALIZER;
 static int our_host_id_thread_stop;
 static struct sync_disk host_id_disk;
 
-
 int print_hostid_state(char *str)
 {
 	memset(str, 0, SANLK_STATE_MAXSTR);
 
 	snprintf(str, SANLK_STATE_MAXSTR-1,
 		 "path=%s offset=%llu "
-		 "acquire_last_result=%d renewal_last_result=%d "
-		 "release_last_result=%d acquire_last_time=%llu "
-		 "acquire_good_time=%llu renewal_last_time=%llu "
-		 "renewal_good_time=%llu release_last_time=%llu "
-		 "release_good_time=%llu",
+		 "acquire_last_result=%d "
+		 "renewal_last_result=%d "
+		 "release_last_result=%d "
+		 "acquire_last_time=%llu "
+		 "acquire_good_time=%llu "
+		 "renewal_last_time=%llu "
+		 "renewal_good_time=%llu "
+		 "release_last_time=%llu "
+		 "release_good_time=%llu "
+		 "max_renewal_time=%llu "
+		 "max_renewal_interval=%d",
 		 options.host_id_path,
 		 (unsigned long long)options.host_id_offset,
 		 our_lease_status.acquire_last_result,
@@ -64,7 +71,9 @@ int print_hostid_state(char *str)
 		 (unsigned long long)our_lease_status.renewal_last_time,
 		 (unsigned long long)our_lease_status.renewal_good_time,
 		 (unsigned long long)our_lease_status.release_last_time,
-		 (unsigned long long)our_lease_status.release_good_time);
+		 (unsigned long long)our_lease_status.release_good_time,
+		 (unsigned long long)our_lease_status.max_renewal_time,
+		 our_lease_status.max_renewal_interval);
 
 	return strlen(str);
 }
@@ -75,16 +84,17 @@ int print_hostid_state(char *str)
 
 int host_id_alive(uint64_t host_id)
 {
-	uint64_t last_good, sec;
+	uint64_t good_time;
+	int good_diff;
 	int rv;
 
-	rv = delta_lease_read_timestamp(&host_id_disk, host_id, &last_good);
+	rv = delta_lease_read_timestamp(&host_id_disk, host_id, &good_time);
 	if (rv < 0)
 		return rv;
 
-	sec = time(NULL) - last_good;
+	good_diff = time(NULL) - good_time;
 
-	if (sec >= to.host_id_timeout_seconds) {
+	if (good_diff >= to.host_id_timeout_seconds) {
 		return 0;
 	}
 
@@ -97,22 +107,28 @@ int host_id_alive(uint64_t host_id)
 
 int our_host_id_renewed(void)
 {
-	uint64_t last_good;
-	uint32_t sec;
+	uint64_t good_time;
+	int good_diff;
 
 	pthread_mutex_lock(&host_id_mutex);
-	last_good = our_lease_status.renewal_good_time;
+	good_time = our_lease_status.renewal_good_time;
 	pthread_mutex_unlock(&host_id_mutex);
 
 	/* host_id hasn't been started yet */
-	if (!last_good)
+	if (!good_time)
 		return 1;
 
-	sec = time(NULL) - last_good;
+	good_diff = time(NULL) - good_time;
 
-	if (sec >= to.host_id_renewal_fail_seconds) {
-		log_error(NULL, "our_host_id_renewed failed %u", sec);
+	if (good_diff >= to.host_id_renewal_fail_seconds) {
+		log_error(NULL, "our_host_id_renewed failed %d", good_diff);
 		return 0;
+	}
+
+	if (good_diff >= to.host_id_renewal_warn_seconds) {
+		log_error(NULL, "our_host_id_renewed warning %d last good %llu",
+			  good_diff,
+			  (unsigned long long)good_time);
 	}
 
 	return 1;
@@ -121,9 +137,11 @@ int our_host_id_renewed(void)
 static void *host_id_thread(void *arg_in)
 {
 	struct timespec renew_time;
-	uint64_t t;
 	uint64_t *arg = (uint64_t *)arg_in;
 	uint64_t host_id_in = (uint64_t)(*arg);
+	uint64_t t;
+       	uint64_t good_time;
+	int good_diff;
 	int rv, stop, result, dl_result;
 
 	free(arg);
@@ -164,7 +182,9 @@ static void *host_id_thread(void *arg_in)
 	log_debug(NULL, "host_id %llu acquire %llu",
 		  (unsigned long long)host_id_in, (unsigned long long)t);
 
-	clock_gettime(CLOCK_REALTIME, &renew_time);
+	good_time = t;
+	good_diff = 0;
+	renew_time.tv_sec = t;
 
 	while (1) {
 		pthread_mutex_lock(&host_id_mutex);
@@ -187,20 +207,31 @@ static void *host_id_thread(void *arg_in)
 		pthread_mutex_lock(&host_id_mutex);
 		our_lease_status.renewal_last_result = result;
 		our_lease_status.renewal_last_time = t;
-		if (result == DP_OK)
+
+		if (result == DP_OK) {
 			our_lease_status.renewal_good_time = t;
+
+			good_diff = t - good_time;
+			good_time = t;
+
+			if (good_diff > our_lease_status.max_renewal_interval) {
+				our_lease_status.max_renewal_interval = good_diff;
+				our_lease_status.max_renewal_time = t;
+			}
+		}
 		pthread_mutex_unlock(&host_id_mutex);
 
 		if (result < 0) {
-			log_error(NULL, "host_id %llu renewal failed %d",
-				  (unsigned long long)host_id_in, result);
-			continue;
+			log_error(NULL, "host_id %llu renewal error %d last good %llu",
+				  (unsigned long long)host_id_in, result,
+				  (unsigned long long)our_lease_status.renewal_good_time);
+		} else {
+			log_debug(NULL, "host_id %llu renewal %llu interval %d",
+				  (unsigned long long)host_id_in,
+				  (unsigned long long)t, good_diff);
+
+			update_watchdog_file(t);
 		}
-
-		log_debug(NULL, "host_id %llu renewal %llu",
-			  (unsigned long long)host_id_in, (unsigned long long)t);
-
-		update_watchdog_file(t);
 	}
 
 	/* called below to get it done ASAP */

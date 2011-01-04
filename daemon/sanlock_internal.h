@@ -113,6 +113,7 @@ struct sm_header {
 #define DEFAULT_IO_TIMEOUT_SECONDS 1
 #define DEFAULT_HOST_ID_RENEWAL_SECONDS 5
 #define DEFAULT_HOST_ID_RENEWAL_FAIL_SECONDS 30
+#define DEFAULT_HOST_ID_RENEWAL_WARN_SECONDS 25
 #define DEFAULT_HOST_ID_TIMEOUT_SECONDS 100
 
 struct sm_timeouts {
@@ -120,6 +121,7 @@ struct sm_timeouts {
 	int host_id_timeout_seconds;
 	int host_id_renewal_seconds;
 	int host_id_renewal_fail_seconds;
+	int host_id_renewal_warn_seconds;
 };
 
 /* values used after processing command, while running */

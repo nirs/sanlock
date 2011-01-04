@@ -1794,6 +1794,7 @@ static void print_usage(void)
 	printf("  -s <key=n,key=n,...>	change default timeouts in seconds, key (default):\n");
 	printf("                        io_timeout (%d)\n", DEFAULT_IO_TIMEOUT_SECONDS);
 	printf("                        host_id_renewal (%d)\n", DEFAULT_HOST_ID_RENEWAL_SECONDS);
+	printf("                        host_id_renewal_warn (%d)\n", DEFAULT_HOST_ID_RENEWAL_WARN_SECONDS);
 	printf("                        host_id_renewal_fail (%d)\n", DEFAULT_HOST_ID_RENEWAL_FAIL_SECONDS);
 	printf("                        host_id_timeout (%d)\n", DEFAULT_HOST_ID_TIMEOUT_SECONDS);
 
@@ -2014,11 +2015,18 @@ static void set_timeout(char *key, char *val)
 		return;
 	}
 
+	if (!strcmp(key, "host_id_renewal_warn")) {
+		to.host_id_renewal_warn_seconds = atoi(val);
+		log_debug(NULL, "host_id_renewal_warn_seconds %d", to.host_id_renewal_warn_seconds);
+		return;
+	}
+
 	if (!strcmp(key, "host_id_renewal_fail")) {
 		to.host_id_renewal_fail_seconds = atoi(val);
 		log_debug(NULL, "host_id_renewal_fail_seconds %d", to.host_id_renewal_fail_seconds);
 		return;
 	}
+
 }
 
 /* optstr format "abc=123,def=456,ghi=789" */
@@ -2291,6 +2299,7 @@ int main(int argc, char *argv[])
 	to.io_timeout_seconds = DEFAULT_IO_TIMEOUT_SECONDS;
 	to.host_id_renewal_seconds = DEFAULT_HOST_ID_RENEWAL_SECONDS;
 	to.host_id_renewal_fail_seconds = DEFAULT_HOST_ID_RENEWAL_FAIL_SECONDS;
+	to.host_id_renewal_warn_seconds = DEFAULT_HOST_ID_RENEWAL_WARN_SECONDS;
 	to.host_id_timeout_seconds = DEFAULT_HOST_ID_TIMEOUT_SECONDS;
 
 	rv = read_command_line(argc, argv);
