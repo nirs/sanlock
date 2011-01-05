@@ -32,6 +32,7 @@
 #include "client_msg.h"
 #include "sanlock_resource.h"
 #include "sanlock_admin.h"
+#include "sanlock_direct.h"
 
 /* priorities are LOG_* from syslog.h */
 int log_logfile_priority = LOG_ERR;
@@ -58,19 +59,6 @@ static int client_maxi;
 static int client_size = 0;
 static struct client *client = NULL;
 static struct pollfd *pollfd = NULL;
-
-/* command line actions */
-#define ACT_INIT	1
-#define ACT_DAEMON	2
-#define ACT_COMMAND	3
-#define ACT_ACQUIRE	4
-#define ACT_RELEASE	5
-#define ACT_SHUTDOWN	6
-#define ACT_STATUS	7
-#define ACT_LOG_DUMP	8
-#define ACT_SET_HOST_ID	9
-#define ACT_MIGRATE	10
-#define ACT_DUMP	11
 
 static char command[COMMAND_MAX];
 static int cmd_argc;
@@ -1127,7 +1115,7 @@ static int print_token_state(struct token *t, char *str)
  * 0. header
  * 1. dst (sanlk_state DAEMON)
  * 2. dst.str (dst.len)
- * 3. hst (sanlk_state HOSTID)
+ * 3. hst (sanlk_state HOST)
  * 4. hst.str (hst.len)
  * 5. cst (sanlk_state CLIENT)
  * 6. cst.str (cst.len)
@@ -1179,7 +1167,7 @@ static void cmd_status(int fd, struct sm_header *h_recv)
 
 	memset(&hst, 0, sizeof(hst));
 	str_len = print_hostid_state(str);
-	hst.type = SANLK_STATE_HOSTID;
+	hst.type = SANLK_STATE_HOST;
 	hst.data64 = options.our_host_id;
 	hst.len = str_len;
 
@@ -1187,7 +1175,7 @@ static void cmd_status(int fd, struct sm_header *h_recv)
 	if (str_len)
 		send(fd, str, str_len, MSG_NOSIGNAL);
 
-	if (h_recv->data == SANLK_STATE_HOSTID)
+	if (h_recv->data == SANLK_STATE_HOST)
 		return;
 
 	/*
@@ -1260,7 +1248,7 @@ static void cmd_log_dump(int fd, struct sm_header *h_recv)
 	write_log_dump(fd, &h);
 }
 
-static void cmd_set_host_id(int fd, struct sm_header *h_recv)
+static void cmd_set_host(int fd, struct sm_header *h_recv)
 {
 	struct sm_header h;
 	uint64_t host_id;
@@ -1280,7 +1268,7 @@ static void cmd_set_host_id(int fd, struct sm_header *h_recv)
 	}
 
 	if (options.our_host_id > 0) {
-		log_error(NULL, "cmd_set_host_id our_host_id already set %llu",
+		log_error(NULL, "cmd_set_host our_host_id already set %llu",
 			  (unsigned long long)options.our_host_id);
 		rv = 1;
 		goto reply;
@@ -1292,7 +1280,7 @@ static void cmd_set_host_id(int fd, struct sm_header *h_recv)
 	}
 
 	if (!host_id) {
-		log_error(NULL, "cmd_set_host_id invalid host_id %llu",
+		log_error(NULL, "cmd_set_host invalid host_id %llu",
 			  (unsigned long long)host_id);
 		rv = 1;
 		goto reply;
@@ -1304,7 +1292,7 @@ static void cmd_set_host_id(int fd, struct sm_header *h_recv)
 
 	rv = start_host_id();
 	if (rv < 0) {
-		log_error(NULL, "cmd_set_host_id start_host_id %llu error %d",
+		log_error(NULL, "cmd_set_host start_host_id %llu error %d",
 			  (unsigned long long)options.our_host_id, rv);
 		options.our_host_id = 0;
 		options.host_id_offset = 0;
@@ -1424,8 +1412,8 @@ static void process_cmd_daemon(int ci, struct sm_header *h_recv)
 	case SM_CMD_LOG_DUMP:
 		cmd_log_dump(fd, h_recv);
 		break;
-	case SM_CMD_SET_HOST_ID:
-		cmd_set_host_id(fd, h_recv);
+	case SM_CMD_SET_HOST:
+		cmd_set_host(fd, h_recv);
 		break;
 	};
 
@@ -1456,7 +1444,7 @@ static void process_connection(int ci)
 		log_error(NULL, "ci %d recv %d magic %x", ci, rv, h.magic);
 		goto dead;
 	}
-	if (!options.our_host_id && (h.cmd != SM_CMD_SET_HOST_ID)) {
+	if (!options.our_host_id && (h.cmd != SM_CMD_SET_HOST)) {
 		log_error(NULL, "host_id not set");
 		goto dead;
 	}
@@ -1466,7 +1454,7 @@ static void process_connection(int ci)
 	case SM_CMD_SHUTDOWN:
 	case SM_CMD_STATUS:
 	case SM_CMD_LOG_DUMP:
-	case SM_CMD_SET_HOST_ID:
+	case SM_CMD_SET_HOST:
 		process_cmd_daemon(ci, &h);
 		break;
 	case SM_CMD_ACQUIRE:
@@ -1602,234 +1590,6 @@ static int do_daemon(void)
  out:
 	close_logging();
 	return rv;
-}
-
-static int do_init(void)
-{
-	struct sanlk_resource *res;
-	struct token *token;
-	struct sync_disk sd;
-	int num_opened;
-	int i, j, rv = 0;
-
-	if (!options.host_id_path[0])
-		goto tokens;
-
-	memset(&sd, 0, sizeof(struct sync_disk));
-	strncpy(sd.path, options.host_id_path, DISK_PATH_LEN);
-	sd.offset = options.host_id_offset;
-
-	num_opened = open_disks(&sd, 1);
-	if (num_opened != 1) {
-		log_tool("cannot open disk %s", sd.path);
-		return -1;
-	}
-
-	rv = delta_lease_init(&sd, com.max_hosts);
-	if (rv < 0) {
-		log_tool("cannot initialize host_id disk");
-		return -1;
-	}
-
- tokens:
-	if (!com.res_count)
-		return 0;
-
-	if (!com.num_hosts) {
-		log_tool("num_hosts option (-h) required for paxos lease init");
-		return -1;
-	}
-
-	if (com.num_hosts > com.max_hosts) {
-		log_tool("num_hosts cannot be greater than max_hosts");
-		return -1;
-	}
-
-	for (i = 0; i < com.res_count; i++) {
-		res = com.res_args[i];
-
-		rv = create_token(res->num_disks, &token);
-		if (rv < 0)
-			return rv;
-
-		strncpy(token->resource_name, res->name, NAME_ID_SIZE);
-
-		/* see WARNING above about sync_disk == sanlk_disk */
-
-		memcpy(token->disks, &res->disks,
-		       token->num_disks * sizeof(struct sync_disk));
-
-		/* zero out pad1 and pad2, see WARNING above */
-		for (j = 0; j < token->num_disks; j++) {
-			token->disks[j].sector_size = 0;
-			token->disks[j].fd = 0;
-		}
-
-		num_opened = open_disks(token->disks, token->num_disks);
-		if (!majority_disks(token, num_opened)) {
-			log_tool("cannot open majority of disks");
-			return -1;
-		}
-
-		rv = paxos_lease_init(token, com.num_hosts, com.max_hosts);
-		if (rv < 0) {
-			log_tool("cannot initialize disks");
-			return -1;
-		}
-
-		free_token(token);
-	}
-
-	return 0;
-}
-
-/* TODO: if this and daemon use aio, running this will cause i/o errors
- * in the daemon renewals.  This was using a virtual device (/dev/vdb)
- * backed by a file in the host.  Try using a real sda on hosts.
- * Problem in guest didn't appear with -a 0 (to disable aio). */
-
-static void do_dump(void)
-{
-	char *data;
-	struct leader_record *lr;
-	struct sync_disk sd;
-	int num_opened, rv;
-	uint64_t sector_nr;
-
-	memset(&sd, 0, sizeof(struct sync_disk));
-	strncpy(sd.path, options.host_id_path, DISK_PATH_LEN);
-	sd.offset = options.host_id_offset;
-
-	num_opened = open_disks(&sd, 1);
-	if (num_opened != 1) {
-		log_tool("cannot open disk %s", sd.path);
-		return;
-	}
-
-	data = malloc(sd.sector_size);
-	if (!data)
-		return;
-	lr = (struct leader_record *)data;
-
-	sector_nr = 0;
-	while (1) {
-		memset(data, 0, sd.sector_size);
-
-		rv = read_sectors(&sd, sector_nr, 1, data, sd.sector_size,
-			  	  to.io_timeout_seconds, options.use_aio,
-				  "dump");
-
-		if (lr->magic == DELTA_DISK_MAGIC) {
-			printf("%08llu %24s owner %4llu time %010llu\n",
-			       (unsigned long long)sector_nr,
-			       lr->resource_name,
-			       (unsigned long long)lr->owner_id,
-			       (unsigned long long)lr->timestamp);
-			sector_nr += 1;
-		} else if (lr->magic == PAXOS_DISK_MAGIC) {
-			printf("%08llu %24s owner %4llu time %010llu lver %llu\n",
-			       (unsigned long long)sector_nr,
-			       lr->resource_name,
-			       (unsigned long long)lr->owner_id,
-			       (unsigned long long)lr->timestamp,
-			       (unsigned long long)lr->lver);
-			sector_nr += lr->max_hosts + 2;
-		} else {
-			printf("%08llu %24s\n",
-			       (unsigned long long)sector_nr,
-			       "uninitialized");
-			break;
-		}
-	}
-
-	free(data);
-}
-
-static void print_usage(void)
-{
-	printf("Usage:\n");
-	printf("sanlock <action> [options]\n\n");
-	printf("main actions:\n");
-	printf("  help			print usage\n");
-	printf("  init			initialize disk areas for host_id and resource leases\n");
-	printf("  dump			print initialized disk areas\n");
-	printf("  daemon		start daemon\n");
-	printf("\n");
-	printf("client actions:\n");
-	printf("  command		ask daemon to acquire leases, then run command\n");
-	printf("  acquire		ask daemon to acquire leases for another pid\n");
-	printf("  release		ask daemon to release leases for another pid\n");
-	printf("  status		print internal daemon state\n");
-	printf("  log_dump		print internal daemon debug buffer\n");
-	printf("  shutdown		ask daemon to kill pids, release leases and exit\n");
-	printf("  set_host_id		set daemon host_id and host_id lease area\n");
-	printf("\n");
-
-	printf("\ninit [options] [-h <num_hosts> -d <path> -o <num>] [-l LEASE ...]\n");
-	printf("  -a <num>		use async io (1 yes, 0 no)\n");
-	printf("  -h <num_hosts>	max host id that will be able to acquire the lease,\n");
-	printf("                        and number of sectors that are read when paxos is run\n");
-	printf("  -H <max_hosts>	max number of hosts the disk area will support\n");
-	printf("                        (default %d)\n", DEFAULT_MAX_HOSTS);
-	printf("  -m <num>		cluster mode of hosts (default 0)\n");
-	printf("  -d <path>		disk path for host_id leases\n");
-	printf("  -o <num>		offset on disk for host_id leases\n");
-	printf("  -l LEASE		resource lease description, see below\n");
-
-	printf("\ndump [options] -d <path> -o <num>\n");
-	printf("  -a <num>		use async io (1 yes, 0 no)\n");
-	printf("  -d <path>		disk path\n");
-	printf("  -o <num>		offset on disk to begin reading\n");
-
-	printf("\ndaemon [options]\n");
-	printf("  -D			debug: no fork and print all logging to stderr\n");
-	printf("  -L <level>		write logging at level and up to logfile (-1 none)\n");
-	printf("  -S <level>		write logging at level and up to syslog (-1 none)\n");
-	printf("  -m <num>		cluster mode of hosts (default 0)\n");
-	printf("  -w <num>		enable (1) or disable (0) writing watchdog files\n");
-	printf("  -a <num>		use async io (1 yes, 0 no)\n");
-	printf("  -i <num>		local host_id\n");
-	printf("  -d <path>		disk path for host_id leases\n");
-	printf("  -o <num>		offset on disk for host_id leases\n");
-	printf("  -s <key=n,key=n,...>	change default timeouts in seconds, key (default):\n");
-	printf("                        io_timeout (%d)\n", DEFAULT_IO_TIMEOUT_SECONDS);
-	printf("                        host_id_renewal (%d)\n", DEFAULT_HOST_ID_RENEWAL_SECONDS);
-	printf("                        host_id_renewal_warn (%d)\n", DEFAULT_HOST_ID_RENEWAL_WARN_SECONDS);
-	printf("                        host_id_renewal_fail (%d)\n", DEFAULT_HOST_ID_RENEWAL_FAIL_SECONDS);
-	printf("                        host_id_timeout (%d)\n", DEFAULT_HOST_ID_TIMEOUT_SECONDS);
-
-	printf("\nset_host_id -i <num> -d <path> -o <num>\n");
-	printf("  -i <num>		local host_id\n");
-	printf("  -d <path>		disk path for host_id leases\n");
-	printf("  -o <num>		offset on disk for host_id leases\n");
-
-	printf("\ncommand [options] -l LEASE -c <path> <args>\n");
-	printf("  -h <num_hosts>	change num_hosts in leases when acquired\n");
-	printf("  -l LEASE		resource lease description, see below\n");
-	printf("  -c <path> <args>	run command with args, -c must be final option\n");
-
-	printf("\nacquire -p <pid> -l LEASE\n");
-	printf("  -p <pid>		process that lease should be added for\n");
-	printf("  -l LEASE		resource lease description, see below\n");
-
-	printf("\nrelease -p <pid> -r <resource_name>\n");
-	printf("  -p <pid>		process whose lease should be released\n");
-	printf("  -r <resource_name>	resource name of a previously acquired lease\n");
-
-	printf("\nstatus [options]\n");
-	printf("  -D			debug: print extra internal state for debugging\n");
-
-	printf("\nlog_dump\n");
-
-	printf("\nshutdown\n");
-
-	printf("\nLEASE = <resource_name>:<path>:<offset>[:<path>:<offset>...]\n");
-	printf("  <resource_name>	name of resource being leased\n");
-	printf("  <path>		disk path\n");
-	printf("  <offset>[s|KB|MB]	offset on disk, default unit bytes\n");
-	printf("                        [s = sectors, KB = 1024 bytes, MB = 1024 KB]\n");
-	printf("  [:<path>:<offset>...] other disks in a multi-disk lease\n");
-	printf("\n");
 }
 
 static int create_sanlk_resource(int num_disks, struct sanlk_resource **res_out)
@@ -2074,12 +1834,138 @@ static void parse_timeouts(char *optstr)
 
 #define RELEASE_VERSION "1.0"
 
+/* 
+ * daemon: acquires leases for the local host_id, associates them with a local
+ * pid, and releases them when the associated pid exits.
+ *
+ * client: ask daemon to acquire/release leases associated with a given pid.
+ *
+ * direct: acquires and releases leases directly for the local host_id by
+ * reading and writing storage directly.
+ */
+
+static void print_usage(void)
+{
+	printf("Usage:\n");
+	printf("sanlock <type> <action> [options]\n\n");
+
+	printf("types:\n");
+	printf("  version		print version\n");
+	printf("  help			print usage\n");
+	printf("  daemon		start daemon\n");
+	printf("  client		send request to daemon (default type if none given)\n");
+	printf("  direct		access storage directly (no coordination with daemon)\n");
+	printf("\n");
+	printf("client actions:		ask daemon to:\n");
+	printf("  status		send internal state\n");
+	printf("  log_dump		send internal debug buffer\n");
+	printf("  shutdown		kill pids, release leases and exit\n");
+	printf("  set_host		set the local host_id and host_id lease area\n");
+	printf("  command		acquire leases for the calling pid, then run command\n");
+	printf("  acquire		acquire leases for a given pid\n");
+	printf("  release		release leases for a given pid\n");
+	printf("  migrate		migrate leases for a given pid\n");
+	printf("  setowner		set owner in leases for a given pid\n");
+#if 0
+	printf("  acquire_id		acquire a host_id lease\n");
+	printf("  release_id		release a host_id lease\n");
+	printf("  renew_id		renew a host_id lease\n");
+#endif
+	printf("\n");
+	printf("direct actions:		read/write storage directly to:\n");
+	printf("  init			initialize disk areas for host_id and resource leases\n");
+	printf("  dump			print initialized leases\n");
+	printf("  acquire		acquire leases\n");
+	printf("  release		release leases\n");
+	printf("  migrate		migrate leases\n");
+	printf("  acquire_id		acquire a host_id lease\n");
+	printf("  release_id		release a host_id lease\n");
+	printf("  renew_id		renew a host_id lease\n");
+	printf("\n");
+	printf("daemon\n");
+	printf("  -D			debug: no fork and print all logging to stderr\n");
+	printf("  -L <level>		write logging at level and up to logfile (-1 none)\n");
+	printf("  -S <level>		write logging at level and up to syslog (-1 none)\n");
+	printf("  -m <num>		cluster mode of hosts (default 0)\n");
+	printf("  -w <num>		enable (1) or disable (0) writing watchdog files\n");
+	printf("  -a <num>		use async io (1 yes, 0 no)\n");
+	printf("  -i <num>		local host_id\n");
+	printf("  -d <path>		disk path for host_id leases\n");
+	printf("  -o <num>		offset on disk for host_id leases\n");
+	printf("  -s <key=n,key=n,...>	change default timeouts in seconds, key (default):\n");
+	printf("                        io_timeout (%d)\n", DEFAULT_IO_TIMEOUT_SECONDS);
+	printf("                        host_id_renewal (%d)\n", DEFAULT_HOST_ID_RENEWAL_SECONDS);
+	printf("                        host_id_renewal_warn (%d)\n", DEFAULT_HOST_ID_RENEWAL_WARN_SECONDS);
+	printf("                        host_id_renewal_fail (%d)\n", DEFAULT_HOST_ID_RENEWAL_FAIL_SECONDS);
+	printf("                        host_id_timeout (%d)\n", DEFAULT_HOST_ID_TIMEOUT_SECONDS);
+	printf("\n");
+	printf("client status\n");
+	printf("  -D			debug: print extra internal state for debugging\n");
+	printf("client log_dump\n");
+	printf("client shutdown\n");
+	printf("client set_host -i <num> -d <path> -o <num>\n");
+	printf("  -i <num>		local host_id\n");
+	printf("  -d <path>		disk path for host_id leases\n");
+	printf("  -o <num>		offset on disk for host_id leases\n");
+	printf("client command -l LEASE -c <path> <args>\n");
+	printf("  -h <num_hosts>	change num_hosts in leases when acquired\n");
+	printf("  -l LEASE		resource lease description, see below\n");
+	printf("  -c <path> <args>	run command with args, -c must be final option\n");
+	printf("client acquire -p <pid> -l LEASE\n");
+	printf("  -p <pid>		process that lease should be added for\n");
+	printf("  -l LEASE		resource lease description, see below\n");
+	printf("client release -p <pid> -r <resource_name>\n");
+	printf("  -p <pid>		process whose lease should be released\n");
+	printf("  -r <resource_name>	resource name of a previously acquired lease\n");
+	printf("client migrate -p <pid> -t <num>\n");
+	printf("  -p <pid>		process whose leases should be migrated\n");
+	printf("  -t <num>		target host_id\n");
+	printf("client setowner -p <pid>\n");
+	printf("  -p <pid>		process whose leases should be owned\n");
+	printf("\n");
+	printf("direct init [-h <num_hosts> -d <path> -o <num>] [-l LEASE ...]\n");
+	printf("  -a <num>		use async io (1 yes, 0 no)\n");
+	printf("  -h <num_hosts>	max host id that will be able to acquire the lease,\n");
+	printf("                        and number of sectors that are read when paxos is run\n");
+	printf("  -H <max_hosts>	max number of hosts the disk area will support\n");
+	printf("                        (default %d)\n", DEFAULT_MAX_HOSTS);
+	printf("  -m <num>		cluster mode of hosts (default 0)\n");
+	printf("  -d <path>		disk path for host_id leases\n");
+	printf("  -o <num>		offset on disk for host_id leases\n");
+	printf("  -l LEASE		resource lease description, see below\n");
+	printf("direct dump -d <path> -o <num>\n");
+	printf("  -a <num>		use async io (1 yes, 0 no)\n");
+	printf("  -d <path>		disk path\n");
+	printf("  -o <num>		offset on disk to begin reading\n");
+	printf("direct acquire|release|migrate -i <num> -l LEASE ...\n");
+	printf("  -i <num>		local host_id\n");
+	printf("  -a <num>		use async io (1 yes, 0 no)\n");
+	printf("  -m <num>		cluster mode of hosts (default 0)\n");
+	printf("  -t <num>		target host_id\n");
+	printf("  -l LEASE		resource lease description, see below\n");
+	printf("direct acquire_id|release_id -i <num> -d <path> -o <num> -t <num>\n");
+	printf("  -i <num>		local host_id\n");
+	printf("  -d <path>		disk path for host_id leases\n");
+	printf("  -o <num>		offset on disk for host_id leases\n");
+	printf("  -t <num>		target host_id\n");
+	printf("  -a <num>		use async io (1 yes, 0 no)\n");
+	printf("\n");
+	printf("LEASE = <resource_name>:<path>:<offset>[:<path>:<offset>...]\n");
+	printf("  <resource_name>	name of resource being leased\n");
+	printf("  <path>		disk path\n");
+	printf("  <offset>[s|KB|MB]	offset on disk, default unit bytes\n");
+	printf("                        [s = sectors, KB = 1024 bytes, MB = 1024 KB]\n");
+	printf("  [:<path>:<offset>...] other disks in a multi-disk lease\n");
+	printf("\n");
+}
+
 static int read_command_line(int argc, char *argv[])
 {
 	char optchar;
 	char *optionarg;
 	char *p;
 	char *arg1 = argv[1];
+	char *act;
 	int i, j, rv, len, begin_command = 0;
 
 	if (argc < 2 || !strcmp(arg1, "help") || !strcmp(arg1, "--help") ||
@@ -2095,40 +1981,88 @@ static int read_command_line(int argc, char *argv[])
 		exit(EXIT_SUCCESS);
 	}
 
-	if (!strcmp(arg1, "init"))
-		com.action = ACT_INIT;
-	else if (!strcmp(arg1, "dump"))
-		com.action = ACT_DUMP;
-	else if (!strcmp(arg1, "daemon"))
-		com.action = ACT_DAEMON;
-	else if (!strcmp(arg1, "command"))
-		com.action = ACT_COMMAND;
-	else if (!strcmp(arg1, "acquire"))
-		com.action = ACT_ACQUIRE;
-	else if (!strcmp(arg1, "release"))
-		com.action = ACT_RELEASE;
-	else if (!strcmp(arg1, "migrate"))
-		com.action = ACT_MIGRATE;
-	else if (!strcmp(arg1, "shutdown"))
-		com.action = ACT_SHUTDOWN;
-	else if (!strcmp(arg1, "status"))
-		com.action = ACT_STATUS;
-	else if (!strcmp(arg1, "log_dump"))
-		com.action = ACT_LOG_DUMP;
-	else if (!strcmp(arg1, "set_host_id"))
-		com.action = ACT_SET_HOST_ID;
-	else {
-		log_tool("command \"%s\" is unknown", arg1);
-		exit(EXIT_FAILURE);
+	if (!strcmp(arg1, "daemon")) {
+		com.type = COM_DAEMON;
+		i = 2;
+	} else if (!strcmp(arg1, "direct")) {
+		com.type = COM_DIRECT;
+		act = argv[2];
+		i = 3;
+	} else if (!strcmp(arg1, "client")) {
+		com.type = COM_CLIENT;
+		act = argv[2];
+		i = 3;
+	} else {
+		com.type = COM_CLIENT;
+		act = argv[1];
+		i = 2;
 	}
 
-	for (i = 2; i < argc; ) {
+	switch (com.type) {
+	case COM_DAEMON:
+		break;
+
+	case COM_CLIENT:
+		if (!strcmp(act, "status"))
+			com.action = ACT_STATUS;
+		else if (!strcmp(act, "log_dump"))
+			com.action = ACT_LOG_DUMP;
+		else if (!strcmp(act, "shutdown"))
+			com.action = ACT_SHUTDOWN;
+		else if (!strcmp(act, "set_host"))
+			com.action = ACT_SET_HOST;
+		else if (!strcmp(act, "command"))
+			com.action = ACT_COMMAND;
+		else if (!strcmp(act, "acquire"))
+			com.action = ACT_ACQUIRE;
+		else if (!strcmp(act, "release"))
+			com.action = ACT_RELEASE;
+		else if (!strcmp(act, "migrate"))
+			com.action = ACT_MIGRATE;
+		else if (!strcmp(act, "setowner"))
+			com.action = ACT_SETOWNER;
+		else if (!strcmp(act, "acquire_id"))
+			com.action = ACT_ACQUIRE_ID;
+		else if (!strcmp(act, "release_id"))
+			com.action = ACT_RELEASE_ID;
+		else if (!strcmp(act, "renew_id"))
+			com.action = ACT_RENEW_ID;
+		else {
+			log_tool("client action \"%s\" is unknown", act);
+			exit(EXIT_FAILURE);
+		}
+		break;
+
+	case COM_DIRECT:
+		if (!strcmp(act, "init"))
+			com.action = ACT_INIT;
+		else if (!strcmp(act, "dump"))
+			com.action = ACT_DUMP;
+		else if (!strcmp(act, "acquire"))
+			com.action = ACT_ACQUIRE;
+		else if (!strcmp(act, "release"))
+			com.action = ACT_RELEASE;
+		else if (!strcmp(act, "migrate"))
+			com.action = ACT_MIGRATE;
+		else if (!strcmp(act, "acquire_id"))
+			com.action = ACT_ACQUIRE_ID;
+		else if (!strcmp(act, "release_id"))
+			com.action = ACT_RELEASE_ID;
+		else if (!strcmp(act, "renew_id"))
+			com.action = ACT_RENEW_ID;
+		else {
+			log_tool("direct action \"%s\" is unknown", act);
+			exit(EXIT_FAILURE);
+		}
+		break;
+	};
+
+	for (; i < argc; ) {
 		p = argv[i];
 
 		if ((p[0] != '-') || (strlen(p) != 2)) {
 			log_tool("unknown option %s", p);
 			log_tool("space required before option value");
-			print_usage();
 			exit(EXIT_FAILURE);
 		}
 
@@ -2223,7 +2157,7 @@ static int read_command_line(int argc, char *argv[])
 		i++;
 	}
 
-	if ((com.action == ACT_DAEMON) || (com.action == ACT_SET_HOST_ID)) {
+	if ((com.type == COM_DAEMON) || (com.action == ACT_SET_HOST)) {
 		if (options.our_host_id && !options.host_id_path[0]) {
 			log_tool("host_id_path option (-d) required");
 			exit(EXIT_FAILURE);
@@ -2271,21 +2205,152 @@ static int read_command_line(int argc, char *argv[])
 	return 0;
 }
 
-static void exec_command(void)
+static int do_client(void)
 {
-	if (!command[0]) {
-		while (1)
-			sleep(10);
+	struct sanlk_options *opt = NULL;
+	int fd, rv = 0;
+
+	switch (com.action) {
+	case ACT_STATUS:
+		rv = sanlock_status(options.debug);
+		break;
+
+	case ACT_LOG_DUMP:
+		rv = sanlock_log_dump();
+		break;
+
+	case ACT_SHUTDOWN:
+		rv = sanlock_shutdown();
+		break;
+
+	case ACT_SET_HOST:
+		rv = sanlock_set_host(options.our_host_id,
+				      options.host_id_path,
+				      options.host_id_offset);
+		break;
+
+	case ACT_COMMAND:
+		log_tool("register");
+
+		fd = sanlock_register();
+		if (fd < 0)
+			goto out;
+
+		log_tool("acquire %d resources", com.res_count);
+
+		if (com.num_hosts) {
+			opt = malloc(sizeof(struct sanlk_options) + 16);
+			memset(opt, 0, sizeof(struct sanlk_options) + 16);
+			snprintf(opt->str, 15, "num_hosts=%d", com.num_hosts);
+			opt->flags = SANLK_FLG_NUM_HOSTS;
+			opt->len = strlen(opt->str);
+		}
+
+		rv = sanlock_acquire(fd, -1, com.res_count, com.res_args, opt);
+		if (rv < 0)
+			goto out;
+		if (opt)
+			free(opt);
+
+		if (!command[0]) {
+			while (1)
+				sleep(10);
+		}
+		execv(command, cmd_argv);
+		perror("execv failed");
+
+		/* release happens automatically when pid exits and
+		   daemon detects POLLHUP on registered connection */
+		break;
+
+	case ACT_ACQUIRE:
+		log_tool("acquire %d %d resources", com.pid, com.res_count);
+
+		rv = sanlock_acquire(-1, com.pid, com.res_count, com.res_args, NULL);
+		break;
+
+	case ACT_RELEASE:
+		log_tool("release_pid %d %d resources", com.pid, com.res_count);
+
+		rv = sanlock_release(-1, com.pid, com.res_count, com.res_args);
+		break;
+
+	case ACT_MIGRATE:
+		log_tool("migrate %d to host_id %llu",
+			 com.pid, (unsigned long long)com.host_id);
+
+		rv = sanlock_migrate(-1, com.pid, com.host_id);
+		break;
+
+	case ACT_SETOWNER:
+		log_tool("setowner %d", com.pid);
+
+		rv = sanlock_setowner(-1, com.pid);
+		break;
+
+	/* TODO */
+	/*
+	case ACT_ACQUIRE_ID:
+	case ACT_RELEASE_ID:
+	case ACT_RENEW_ID:
+	*/
+
+	default:
+		log_tool("action not implemented\n");
+		rv = -1;
+	}
+ out:
+	return rv;
+}
+
+static int do_direct(void)
+{
+	int rv;
+
+	switch (com.action) {
+	case ACT_INIT:
+		rv = sanlock_direct_init();
+		break;
+
+	case ACT_DUMP:
+		rv = sanlock_direct_dump();
+		break;
+
+	case ACT_ACQUIRE:
+		rv = sanlock_direct_acquire();
+		break;
+
+	case ACT_RELEASE:
+		rv = sanlock_direct_release();
+		break;
+
+	case ACT_MIGRATE:
+		rv = sanlock_direct_migrate();
+		break;
+
+	case ACT_ACQUIRE_ID:
+		rv = sanlock_direct_acquire_id();
+		break;
+
+	case ACT_RELEASE_ID:
+		rv = sanlock_direct_release_id();
+		break;
+
+	case ACT_RENEW_ID:
+		rv = sanlock_direct_renew_id();
+		break;
+
+	default:
+		log_tool("direct action %d not known\n", com.action);
+		rv = -1;
 	}
 
-	execv(command, cmd_argv);
-	perror("execv failed");
+	return rv;
 }
 
 int main(int argc, char *argv[])
 {
-	struct sanlk_options *opt;
-	int rv, fd;
+	int rv;
 	
 	memset(&com, 0, sizeof(com));
 	com.max_hosts = DEFAULT_MAX_HOSTS;
@@ -2306,92 +2371,19 @@ int main(int argc, char *argv[])
 	if (rv < 0)
 		goto out;
 
-	switch (com.action) {
-	case ACT_DAEMON:
+	switch (com.type) {
+	case COM_DAEMON:
 		rv = do_daemon();
 		break;
 
-	case ACT_INIT:
-		rv = do_init();
+	case COM_CLIENT:
+		rv = do_client();
 		break;
 
-	case ACT_DUMP:
-		do_dump();
+	case COM_DIRECT:
+		rv = do_direct();
 		break;
-
-	/* client actions that ask daemon to do something.
-	   we could split these into a separate command line
-	   utility (note that the lease arg processing is shared
-	   between init and acquire.  It would also be a pain
-	   to move init into a separate utility because it shares
-	   disk paxos code with the daemon. */
-
-	case ACT_COMMAND:
-		log_tool("register");
-		fd = sanlock_register();
-		if (fd < 0)
-			goto out;
-
-		log_tool("acquire_self %d resources", com.res_count);
-
-		if (com.num_hosts) {
-			opt = malloc(sizeof(struct sanlk_options) + 16);
-			memset(opt, 0, sizeof(struct sanlk_options) + 16);
-			snprintf(opt->str, 15, "num_hosts=%d", com.num_hosts);
-			opt->flags = SANLK_FLG_NUM_HOSTS;
-			opt->len = strlen(opt->str);
-		}
-
-		rv = sanlock_acquire_self(fd, com.res_count, com.res_args, opt);
-		if (rv < 0)
-			goto out;
-
-		if (opt)
-			free(opt);
-		log_tool("exec_command");
-		exec_command();
-
-		/* release happens automatically when pid exits and
-		   daemon detects POLLHUP on registered connection */
-		break;
-
-	case ACT_ACQUIRE:
-		log_tool("acquire_pid %d %d resources", com.pid, com.res_count);
-		rv = sanlock_acquire_pid(com.pid, com.res_count, com.res_args, NULL);
-		break;
-
-	case ACT_RELEASE:
-		log_tool("release_pid %d %d resources", com.pid, com.res_count);
-		rv = sanlock_release_pid(com.pid, com.res_count, com.res_args);
-		break;
-
-	case ACT_MIGRATE:
-		log_tool("migrate_pid %d to host_id %llu",
-			 com.pid, (unsigned long long)com.host_id);
-		rv = sanlock_migrate_pid(com.pid, com.host_id);
-		break;
-
-	case ACT_SHUTDOWN:
-		rv = sanlock_shutdown();
-		break;
-
-	case ACT_STATUS:
-		rv = sanlock_status(options.debug);
-		break;
-
-	case ACT_LOG_DUMP:
-		rv = sanlock_log_dump();
-		break;
-
-	case ACT_SET_HOST_ID:
-		rv = sanlock_set_host_id(options.our_host_id,
-					 options.host_id_path,
-					 options.host_id_offset);
-		break;
-
-	default:
-		break;
-	}
+	};
  out:
 	return rv;
 }

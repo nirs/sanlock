@@ -87,13 +87,13 @@ int sanlock_log_dump(void)
 	return rv;
 }
 
-int sanlock_set_host_id(uint64_t host_id, char *path, uint64_t offset)
+int sanlock_set_host(uint64_t host_id, char *path, uint64_t offset)
 {
 	struct sm_header h;
 	struct sanlk_disk sd;
 	int fd, rv;
 
-	fd = send_command(SM_CMD_SET_HOST_ID, 0);
+	fd = send_command(SM_CMD_SET_HOST, 0);
 	if (fd < 0)
 		return fd;
 

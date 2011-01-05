@@ -5,9 +5,9 @@
  * daemon admin/managment
  */
 
-int sanlock_shutdown(void);
 int sanlock_status(int debug);
 int sanlock_log_dump(void);
-int sanlock_set_host_id(uint64_t host_id, char *path, uint64_t offset);
+int sanlock_shutdown(void);
+int sanlock_set_host(uint64_t host_id, char *path, uint64_t offset);
 
 #endif

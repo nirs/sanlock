@@ -13,6 +13,7 @@ CMD_SOURCE = \
 	client_resource.c \
 	crc32c.c \
 	delta_lease.c \
+	direct.c \
 	diskio.c \
 	host_id.c \
 	lockfile.c \

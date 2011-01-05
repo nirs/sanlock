@@ -183,7 +183,7 @@ static int drv_snlk_acquire_object(virLockManagerPtr man,
 
 	sock = sanlock_register();
 
-	rv = sanlock_acquire_self(sock, con->res_count, con->res_args, opt);
+	rv = sanlock_acquire(sock, -1, con->res_count, con->res_args, opt);
 
 	free(opt);
 	for (i = 0; i < con->res_count; i++)
@@ -257,7 +257,7 @@ static int drv_snlk_acquire_resource(virLockManagerPtr man,
 	opt.flags = SANLK_FLG_REACQUIRE;
 	opt.len = 0;
 
-	rv = sanlock_acquire_pid(con->vm_pid, con->res_count, con->res_args, &opt);
+	rv = sanlock_acquire(-1, con->vm_pid, con->res_count, con->res_args, &opt);
 
 	free(con->res_args[0]);
 
@@ -287,7 +287,7 @@ static int drv_snlk_release_resource(virLockManagerPtr man,
 	if (rv < 0)
 		return rv;
 
-	rv = sanlock_release_pid(con->vm_pid, con->res_count, con->res_args, NULL);
+	rv = sanlock_release(-1, con->vm_pid, con->res_count, con->res_args, NULL);
 
 	free(con->res_args[0]);
 

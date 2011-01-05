@@ -4,7 +4,7 @@
 #define MAX_CLIENT_MSG (1024 * 1024) /* TODO: this is random */
 
 enum {
-	SM_CMD_SET_HOST_ID = 1,
+	SM_CMD_SET_HOST = 1,
 	SM_CMD_REGISTER,
 	SM_CMD_SHUTDOWN,
 	SM_CMD_STATUS,
@@ -18,7 +18,7 @@ enum {
 #define SANLK_STATE_MAXSTR	4096
 
 #define SANLK_STATE_DAEMON      1
-#define SANLK_STATE_HOSTID      2
+#define SANLK_STATE_HOST        2
 #define SANLK_STATE_CLIENT      3
 #define SANLK_STATE_RESOURCE    4
 

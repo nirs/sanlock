@@ -136,6 +136,7 @@ int our_host_id_renewed(void)
 
 static void *host_id_thread(void *arg_in)
 {
+	struct leader_record leader;
 	struct timespec renew_time;
 	uint64_t *arg = (uint64_t *)arg_in;
 	uint64_t host_id_in = (uint64_t)(*arg);
@@ -146,9 +147,10 @@ static void *host_id_thread(void *arg_in)
 
 	free(arg);
 
-	result = delta_lease_acquire(&host_id_disk, host_id_in, &t);
+	result = delta_lease_acquire(&host_id_disk, host_id_in, &leader);
 
 	dl_result = result;
+	t = leader.timestamp;
 
 	/* we need to start the watchdog after we acquire the host_id but
 	   before we allow any pid's to begin running */
@@ -202,7 +204,9 @@ static void *host_id_thread(void *arg_in)
 
 		clock_gettime(CLOCK_REALTIME, &renew_time);
 
-		result = delta_lease_renew(&host_id_disk, host_id_in, &t);
+		result = delta_lease_renew(&host_id_disk, host_id_in, &leader);
+
+		t = leader.timestamp;
 
 		pthread_mutex_lock(&host_id_mutex);
 		our_lease_status.renewal_last_result = result;
@@ -238,7 +242,7 @@ static void *host_id_thread(void *arg_in)
 	/* unlink_watchdog_file(); */
  out:
 	if (dl_result == DP_OK)
-		delta_lease_release(&host_id_disk, host_id_in);
+		delta_lease_release(&host_id_disk, host_id_in, &leader, &leader);
 	return NULL;
 }
 

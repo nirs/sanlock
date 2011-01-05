@@ -42,9 +42,9 @@ int sanlock_register(void)
 	return sock;
 }
 
-static int do_acquire(int sock, int pid, int res_count,
-		      struct sanlk_resource *res_args[],
-		      struct sanlk_options *opt_in)
+int sanlock_acquire(int sock, int pid, int res_count,
+		    struct sanlk_resource *res_args[],
+		    struct sanlk_options *opt_in)
 {
 	struct sanlk_resource *res;
 	struct sanlk_options opt;
@@ -142,21 +142,7 @@ static int do_acquire(int sock, int pid, int res_count,
 	return rv;
 }
 
-int sanlock_acquire_self(int sock, int res_count,
-			 struct sanlk_resource *res_args[],
-			 struct sanlk_options *opt_in)
-{
-	return do_acquire(sock, -1, res_count, res_args, opt_in);
-}
-
-int sanlock_acquire_pid(int pid, int res_count,
-			struct sanlk_resource *res_args[],
-			struct sanlk_options *opt_in)
-{
-	return do_acquire(-1, pid, res_count, res_args, opt_in);
-}
-
-static int do_migrate(int sock, int pid, uint64_t target_host_id)
+int sanlock_migrate(int sock, int pid, uint64_t target_host_id)
 {
 	struct sm_header h;
 	char *reply_str = NULL;
@@ -221,22 +207,12 @@ static int do_migrate(int sock, int pid, uint64_t target_host_id)
 	return rv;
 }
 
-int sanlock_migrate_self(int sock, uint64_t target_host_id)
-{
-	return do_migrate(sock, -1, target_host_id);
-}
-
-int sanlock_migrate_pid(int pid, uint64_t target_host_id)
-{
-	return do_migrate(-1, pid, target_host_id);
-}
-
 /* tell daemon to release lease(s) for given pid.
    I don't think the pid itself will usually tell sm to release leases,
    but it will be requested by a manager overseeing the pid */
 
-static int do_release(int sock, int pid, int res_count,
-		      struct sanlk_resource *res_args[])
+int sanlock_release(int sock, int pid, int res_count,
+		    struct sanlk_resource *res_args[])
 {
 	struct sm_header h;
 	int results[MAX_LEASES];
@@ -300,15 +276,47 @@ static int do_release(int sock, int pid, int res_count,
 	return rv;
 }
 
-int sanlock_release_self(int sock, int res_count,
-			 struct sanlk_resource *res_args[])
+int sanlock_setowner(int sock, int pid)
 {
-	return do_release(sock, -1, res_count, res_args);
-}
+	struct sm_header h;
+	int rv, fd, data2;
 
-int sanlock_release_pid(int pid, int res_count,
-			struct sanlk_resource *res_args[])
-{
-	return do_release(-1, pid, res_count, res_args);
-}
+	if (sock == -1) {
+		/* connect to daemon and ask it to acquire a lease for
+		   another registered pid */
 
+		data2 = pid;
+
+		rv = connect_socket(&fd);
+		if (rv < 0)
+			return rv;
+	} else {
+		/* use our own existing registered connection and ask daemon
+		   to acquire a lease for self */
+
+		data2 = -1;
+		fd = sock;
+	}
+
+	rv = send_header(fd, SM_CMD_SETOWNER, 0, 0, data2);
+	if (rv < 0)
+		return rv;
+
+	memset(&h, 0, sizeof(h));
+
+	rv = recv(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
+	if (rv != sizeof(h)) {
+		rv = -errno;
+		goto out;
+	}
+
+	if (h.data) {
+		rv = (int)h.data;
+		goto out;
+	}
+	rv = 0;
+ out:
+	if (sock == -1)
+		close(fd);
+	return rv;
+}

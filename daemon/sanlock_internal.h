@@ -139,6 +139,7 @@ struct sm_options {
 /* values used while processing command, not afterward */
 
 struct command_line {
+	int type;
 	int action;
 	int pid;
 	uint64_t host_id;
@@ -148,6 +149,27 @@ struct command_line {
 	int res_count;
 	struct sanlk_resource *res_args[];
 };
+
+/* command line types and actions */
+
+#define COM_DAEMON      1
+#define COM_CLIENT      2
+#define COM_DIRECT      3
+
+#define ACT_STATUS      1
+#define ACT_LOG_DUMP    2
+#define ACT_SHUTDOWN    3
+#define ACT_SET_HOST    4
+#define ACT_COMMAND     5
+#define ACT_ACQUIRE     6
+#define ACT_RELEASE     7
+#define ACT_MIGRATE     8
+#define ACT_SETOWNER    9
+#define ACT_ACQUIRE_ID  10
+#define ACT_RELEASE_ID  11
+#define ACT_RENEW_ID    12
+#define ACT_INIT        13
+#define ACT_DUMP        14
 
 EXTERN struct sm_options options;
 EXTERN struct sm_timeouts to;
