@@ -13,6 +13,7 @@
 #include <syslog.h>
 #include <sys/types.h>
 #include <sys/time.h>
+#include <sys/stat.h>
 
 #include "sanlock_internal.h"
 #include "diskio.h"
@@ -104,9 +105,6 @@ int create_watchdog_file(uint64_t timestamp)
 	if (!options.use_watchdog)
 		return 0;
 
-	snprintf(watchdog_path, PATH_MAX, "%s/%s",
-		 SANLK_RUN_DIR, SANLK_WATCHDOG_NAME);
-
 	/* If this open fails with EEXIST I don't think it's safe to unlink
 	 * watchdog_path and try again.  If the daemon had failed while pid's
 	 * remained running, then the daemon is restarted (before watchdog
@@ -148,5 +146,27 @@ void unlink_watchdog_file(void)
 
 	unlink(watchdog_path);
 	close(watchdog_fd);
+}
+
+int check_watchdog_file(void)
+{
+	struct stat buf;
+	int rv;
+
+	if (!options.use_watchdog)
+		return 0;
+
+	snprintf(watchdog_path, PATH_MAX, "%s/%s",
+		 SANLK_RUN_DIR, SANLK_WATCHDOG_NAME);
+
+	rv = stat(watchdog_path, &buf);
+
+	if (rv == -1 && errno == ENOENT)
+		return 0;
+
+	log_error(NULL, "check watchdog file %s: %s",
+		  watchdog_path, strerror(errno));
+
+	return -errno;
 }
 

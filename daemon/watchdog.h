@@ -4,5 +4,6 @@
 void update_watchdog_file(uint64_t timestamp);
 int create_watchdog_file(uint64_t timestamp);
 void unlink_watchdog_file(void);
+int check_watchdog_file(void);
 
 #endif

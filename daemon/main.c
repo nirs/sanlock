@@ -29,6 +29,7 @@
 #include "host_id.h"
 #include "token_manager.h"
 #include "lockfile.h"
+#include "watchdog.h"
 #include "client_msg.h"
 #include "sanlock_resource.h"
 #include "sanlock_admin.h"
@@ -1561,6 +1562,10 @@ static int do_daemon(void)
 	fd = lockfile(NULL, SANLK_RUN_DIR, SANLK_LOCKFILE_NAME);
 	if (fd < 0)
 		goto out;
+
+	rv = check_watchdog_file();
+	if (rv < 0)
+		goto out_lockfile;
 
 	rv = setup_listener();
 	if (rv < 0)
