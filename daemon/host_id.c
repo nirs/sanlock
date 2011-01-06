@@ -49,7 +49,9 @@ int print_hostid_state(char *str)
 	memset(str, 0, SANLK_STATE_MAXSTR);
 
 	snprintf(str, SANLK_STATE_MAXSTR-1,
-		 "path=%s offset=%llu "
+		 "path=%s "
+		 "offset=%llu "
+		 "our_host_id_generation=%llu "
 		 "acquire_last_result=%d "
 		 "renewal_last_result=%d "
 		 "release_last_result=%d "
@@ -63,6 +65,7 @@ int print_hostid_state(char *str)
 		 "max_renewal_interval=%d",
 		 options.host_id_path,
 		 (unsigned long long)options.host_id_offset,
+		 (unsigned long long)options.our_host_id_generation,
 		 our_lease_status.acquire_last_result,
 		 our_lease_status.renewal_last_result,
 		 our_lease_status.release_last_result,
@@ -78,27 +81,17 @@ int print_hostid_state(char *str)
 	return strlen(str);
 }
 
-/*
- * read lease of host_id, see if it has been renewed within timeout
- */
-
-int host_id_alive(uint64_t host_id)
+int host_id_leader_read(uint64_t host_id, struct leader_record *leader_ret)
 {
-	uint64_t good_time;
-	int good_diff;
+	struct leader_record leader;
 	int rv;
 
-	rv = delta_lease_read_timestamp(&host_id_disk, host_id, &good_time);
+	rv = delta_lease_leader_read(&host_id_disk, host_id, &leader);
 	if (rv < 0)
 		return rv;
 
-	good_diff = time(NULL) - good_time;
-
-	if (good_diff >= to.host_id_timeout_seconds) {
-		return 0;
-	}
-
-	return 1;
+	memcpy(leader_ret, &leader, sizeof(struct leader_record));
+	return 0;
 }
 
 /*
@@ -181,8 +174,12 @@ static void *host_id_thread(void *arg_in)
 		goto out;
 	}
 
-	log_debug(NULL, "host_id %llu acquire %llu",
-		  (unsigned long long)host_id_in, (unsigned long long)t);
+	log_debug(NULL, "host_id %llu generation %llu acquire %llu",
+		  (unsigned long long)host_id_in,
+		  (unsigned long long)leader.owner_generation,
+		  (unsigned long long)t);
+
+	options.our_host_id_generation = leader.owner_generation;
 
 	good_time = t;
 	good_diff = 0;

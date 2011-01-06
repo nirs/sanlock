@@ -593,8 +593,10 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 {
 	struct leader_record prev_leader;
 	struct leader_record new_leader;
+	struct leader_record host_id_leader;
 	struct paxos_dblock dblock;
-	int i, error;
+	uint64_t last_timestamp = 0;
+	int error;
 
 	log_debug(token, "paxos_acquire begin");
 
@@ -613,26 +615,82 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 	}
 
 	/*
-	 * check if current leader fails to update its host_id lock
+	 * Check if current owner is alive based on its host_id renewals.
+	 * If the current owner has been dead long enough we can assume that
+	 * its watchdog has triggered and we can go for the paxos lease.
 	 */
 
-	log_debug(token, "paxos_acquire wait host_id_timeout_seconds %u",
-		  to.host_id_timeout_seconds);
+	log_debug(token, "paxos_acquire check owner_id %llu",
+		  (unsigned long long)prev_leader.owner_id);
 
-	for (i = 0; i < to.host_id_timeout_seconds; i++) {
-		sleep(1);
+	while (1) {
+		error = host_id_leader_read(prev_leader.owner_id, &host_id_leader);
+		if (error < 0) {
+			log_error(token, "paxos_acquire host_id %llu read %d",
+				  (unsigned long long)prev_leader.owner_id,
+				  error);
+			goto out;
+		}
 
-		if (host_id_alive(prev_leader.owner_id)) {
-			log_error(token, "paxos_acquire leader alive owner_id %llu",
+		/* a host_id cannot become free in less than
+		   host_id_timeout_sec after the final renewal because
+		   a host_id must first be acquired before being freed,
+		   and acquiring cannot take less than host_id_timeout_sec */
+
+		if (host_id_leader.timestamp == LEASE_FREE) {
+			log_debug(token, "paxos_acquire host_id %llu free",
+				  (unsigned long long)prev_leader.owner_id);
+			goto run;
+		}
+
+		/* another host has acquired the host_id of the host that
+		   owned this paxos lease; acquiring a host_id also cannot be
+		   done in less than host_id_timeout_sec */
+
+		if (host_id_leader.owner_id != prev_leader.owner_id) {
+			log_debug(token, "paxos_acquire host_id %llu owner %llu",
+				  (unsigned long long)prev_leader.owner_id,
+				  (unsigned long long)host_id_leader.owner_id);
+			goto run;
+		}
+
+		/* the host_id that owns this lease may be alive, but it
+		   owned the lease in a previous generation without freeing it,
+		   and no longer owns it */
+
+		if (host_id_leader.owner_generation > prev_leader.owner_generation) {
+			log_debug(token, "paxos_acquire host_id %llu "
+				  "generation now %llu old %llu",
+				  (unsigned long long)prev_leader.owner_id,
+				  (unsigned long long)host_id_leader.owner_generation,
+				  (unsigned long long)prev_leader.owner_generation);
+			goto run;
+		}
+
+		/* if the owner hasn't renewed its host_id lease for
+		   host_id_timeout_seconds then its watchdog should have fired
+		   by now */
+
+		if (time(NULL) - host_id_leader.timestamp > to.host_id_timeout_seconds) {
+			log_debug(token, "paxos_acquire host_id %llu expired %llu",
+				  (unsigned long long)prev_leader.owner_id,
+				  (unsigned long long)host_id_leader.timestamp);
+			goto run;
+		}
+
+		/* the owner is renewing its host_id so it's alive */
+
+		if (last_timestamp && (host_id_leader.timestamp != last_timestamp)) {
+			log_error(token, "paxos_acquire host_id %llu alive",
 				  (unsigned long long)prev_leader.owner_id);
 			error = DP_LIVE_LEADER;
 			goto out;
 		}
+
+		last_timestamp = host_id_leader.timestamp;
+
+		sleep(1);
 	}
-
-	log_debug(token, "paxos_acquire leader timeout owner_id %llu",
-		  (unsigned long long)prev_leader.owner_id);
-
  run:
 	if (reacquire_lver && prev_leader.lver != reacquire_lver) {
 		log_error(token, "paxos_acquire reacquire %llu prev_leader %llu",
@@ -641,6 +699,13 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 		error = DP_REACQUIRE_LVER;
 		goto out;
 	}
+
+	/* TODO: test: while we were waiting in host_id_timeout_seconds loop
+	 * above, another host has finished that loop, come through here
+	 * and become the new leader (so if we were to read the leader record
+	 * again right here it would be different from our prev_leader).
+	 * what if the other host not only acquired the leader but also
+	 * freed it when we get here? */
 
 	/*
 	 * run disk paxos to reach consensus on a new leader
@@ -678,7 +743,8 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 
 	/* dblock has the disk paxos result: consensus inp and lver */
 
-	new_leader.owner_id = dblock.inp;
+	new_leader.owner_id = options.our_host_id;
+	new_leader.owner_generation = options.our_host_id_generation;
 	new_leader.next_owner_id = 0;
 	new_leader.lver = dblock.lver;
 	new_leader.timestamp = time(NULL);

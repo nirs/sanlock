@@ -1891,7 +1891,6 @@ static void print_usage(void)
 	printf("  -D			debug: no fork and print all logging to stderr\n");
 	printf("  -L <level>		write logging at level and up to logfile (-1 none)\n");
 	printf("  -S <level>		write logging at level and up to syslog (-1 none)\n");
-	printf("  -m <num>		cluster mode of hosts (default 0)\n");
 	printf("  -w <num>		enable (1) or disable (0) writing watchdog files\n");
 	printf("  -a <num>		use async io (1 yes, 0 no)\n");
 	printf("  -i <num>		local host_id\n");
@@ -1934,7 +1933,6 @@ static void print_usage(void)
 	printf("                        and number of sectors that are read when paxos is run\n");
 	printf("  -H <max_hosts>	max number of hosts the disk area will support\n");
 	printf("                        (default %d)\n", DEFAULT_MAX_HOSTS);
-	printf("  -m <num>		cluster mode of hosts (default 0)\n");
 	printf("  -d <path>		disk path for host_id leases\n");
 	printf("  -o <num>		offset on disk for host_id leases\n");
 	printf("  -l LEASE		resource lease description, see below\n");
@@ -1943,16 +1941,17 @@ static void print_usage(void)
 	printf("  -d <path>		disk path\n");
 	printf("  -o <num>		offset on disk to begin reading\n");
 	printf("direct acquire|release|migrate -i <num> -l LEASE ...\n");
-	printf("  -i <num>		local host_id\n");
 	printf("  -a <num>		use async io (1 yes, 0 no)\n");
-	printf("  -m <num>		cluster mode of hosts (default 0)\n");
-	printf("  -t <num>		target host_id\n");
+	printf("  -h <num_hosts>	change num_hosts in leases when acquired\n");
+	printf("  -i <num>		local host_id\n");
+	printf("  -g <num>		local host_id generation\n");
+	printf("  -t <num>		target host_id to acquire/release/migrate\n");
 	printf("  -l LEASE		resource lease description, see below\n");
 	printf("direct acquire_id|release_id -i <num> -d <path> -o <num> -t <num>\n");
 	printf("  -i <num>		local host_id\n");
 	printf("  -d <path>		disk path for host_id leases\n");
 	printf("  -o <num>		offset on disk for host_id leases\n");
-	printf("  -t <num>		target host_id\n");
+	printf("  -t <num>		target host_id to acquire/release\n");
 	printf("  -a <num>		use async io (1 yes, 0 no)\n");
 	printf("\n");
 	printf("LEASE = <resource_name>:<path>:<offset>[:<path>:<offset>...]\n");
@@ -2109,6 +2108,9 @@ static int read_command_line(int argc, char *argv[])
 			break;
 		case 'i':
 			options.our_host_id = atoll(optionarg);
+			break;
+		case 'g':
+			options.our_host_id_generation = atoll(optionarg);
 			break;
 		case 'd':
 			strncpy(options.host_id_path, optionarg, DISK_PATH_LEN);

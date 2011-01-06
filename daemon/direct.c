@@ -34,77 +34,77 @@ static int do_paxos_action(void)
 	for (i = 0; i < com.res_count; i++) {
 		res = com.res_args[i];
 
-	        rv = create_token(res->num_disks, &token);
-	        if (rv < 0)
+		rv = create_token(res->num_disks, &token);
+		if (rv < 0)
 			return rv;
 
-	        strncpy(token->resource_name, res->name, NAME_ID_SIZE);
+		strncpy(token->resource_name, res->name, NAME_ID_SIZE);
 
-	        /* see WARNING above about sync_disk == sanlk_disk */
+		/* see WARNING above about sync_disk == sanlk_disk */
 
-	        memcpy(token->disks, &res->disks,
-	               token->num_disks * sizeof(struct sync_disk));
+		memcpy(token->disks, &res->disks,
+		       token->num_disks * sizeof(struct sync_disk));
 
-	        /* zero out pad1 and pad2, see WARNING above */
-	        for (j = 0; j < token->num_disks; j++) {
+		/* zero out pad1 and pad2, see WARNING above */
+		for (j = 0; j < token->num_disks; j++) {
 			token->disks[j].sector_size = 0;
-	                token->disks[j].fd = 0;
-	        }
+			token->disks[j].fd = 0;
+		}
 
-	        num_opened = open_disks(token->disks, token->num_disks);
-	        if (!majority_disks(token, num_opened)) {
-	                log_tool("cannot open majority of disks");
-	                return -1;
-	        }
+		num_opened = open_disks(token->disks, token->num_disks);
+		if (!majority_disks(token, num_opened)) {
+			log_tool("cannot open majority of disks");
+			return -1;
+		}
 
 		switch (com.action) {
 		case ACT_INIT:
-	        	rv = paxos_lease_init(token, com.num_hosts, com.max_hosts);
-	        	if (rv < 0) {
-	                	log_tool("cannot initialize disks");
-	                	return -1;
-	        	}
+			rv = paxos_lease_init(token, com.num_hosts, com.max_hosts);
+			if (rv < 0) {
+				log_tool("cannot initialize disks");
+				return -1;
+			}
 			break;
 
 		case ACT_ACQUIRE:
-	        	rv = paxos_lease_acquire(token, 0, &leader_ret, 0, 0);
-	        	if (rv < 0) {
-	                	log_tool("cannot acquire lease on %s",
+			rv = paxos_lease_acquire(token, 0, &leader_ret, 0, com.num_hosts);
+			if (rv < 0) {
+				log_tool("cannot acquire lease on %s",
 				 	 token->resource_name);
-	                	return -1;
-	        	}
+				return -1;
+			}
 			break;
 
 		case ACT_RELEASE:
 			rv = paxos_lease_leader_read(token, &leader_read);
 			if (rv < 0) {
-	                	log_tool("cannot read lease on %s",
+				log_tool("cannot read lease on %s",
 				 	 token->resource_name);
-	                	return -1;
+				return -1;
 			}
 
-	        	rv = paxos_lease_release(token, &leader_read, &leader_ret);
-	        	if (rv < 0) {
-	                	log_tool("cannot release lease on %s",
+			rv = paxos_lease_release(token, &leader_read, &leader_ret);
+			if (rv < 0) {
+				log_tool("cannot release lease on %s",
 				 	 token->resource_name);
-	                	return -1;
-	        	}
+				return -1;
+			}
 			break;
 
 		case ACT_MIGRATE:
 			rv = paxos_lease_leader_read(token, &leader_read);
 			if (rv < 0) {
-	                	log_tool("cannot read lease on %s",
+				log_tool("cannot read lease on %s",
 				 	 token->resource_name);
-	                	return -1;
+				return -1;
 			}
 
-	        	rv = paxos_lease_migrate(token, &leader_read, &leader_ret, com.host_id);
-	        	if (rv < 0) {
-	                	log_tool("cannot migrate lease on %s",
+			rv = paxos_lease_migrate(token, &leader_read, &leader_ret, com.host_id);
+			if (rv < 0) {
+				log_tool("cannot migrate lease on %s",
 				 	 token->resource_name);
-	                	return -1;
-	        	}
+				return -1;
+			}
 			break;
 		}
 
@@ -121,7 +121,7 @@ int sanlock_direct_init(void)
 	int rv = 0;
 
 	if (!options.host_id_path[0])
-	        goto tokens;
+		goto tokens;
 
 	memset(&sd, 0, sizeof(struct sync_disk));
 	strncpy(sd.path, options.host_id_path, DISK_PATH_LEN);
@@ -129,28 +129,28 @@ int sanlock_direct_init(void)
 
 	num_opened = open_disks(&sd, 1);
 	if (num_opened != 1) {
-	        log_tool("cannot open disk %s", sd.path);
-	        return -1;
+		log_tool("cannot open disk %s", sd.path);
+		return -1;
 	}
 
 	rv = delta_lease_init(&sd, com.max_hosts);
 	if (rv < 0) {
-	        log_tool("cannot initialize host_id disk");
-	        return -1;
+		log_tool("cannot initialize host_id disk");
+		return -1;
 	}
 
  tokens:
 	if (!com.res_count)
-	        return 0;
+		return 0;
 
 	if (!com.num_hosts) {
-	        log_tool("num_hosts option (-h) required for paxos lease init");
-	        return -1;
+		log_tool("num_hosts option (-h) required for paxos lease init");
+		return -1;
 	}
 
 	if (com.num_hosts > com.max_hosts) {
-	        log_tool("num_hosts cannot be greater than max_hosts");
-	        return -1;
+		log_tool("num_hosts cannot be greater than max_hosts");
+		return -1;
 	}
 
 	return do_paxos_action();
@@ -239,44 +239,58 @@ int sanlock_direct_dump(void)
 
 	num_opened = open_disks(&sd, 1);
 	if (num_opened != 1) {
-	        log_tool("cannot open disk %s", sd.path);
-	        return -1;
+		log_tool("cannot open disk %s", sd.path);
+		return -1;
 	}
 
 	data = malloc(sd.sector_size);
 	if (!data)
-	        return -ENOMEM;
+		return -ENOMEM;
 	lr = (struct leader_record *)data;
 
 	sector_nr = 0;
 	while (1) {
-	        memset(data, 0, sd.sector_size);
+		memset(data, 0, sd.sector_size);
 
-	        rv = read_sectors(&sd, sector_nr, 1, data, sd.sector_size,
-	                          to.io_timeout_seconds, options.use_aio,
-	                          "dump");
+		rv = read_sectors(&sd, sector_nr, 1, data, sd.sector_size,
+				  to.io_timeout_seconds, options.use_aio,
+				  "dump");
 
-	        if (lr->magic == DELTA_DISK_MAGIC) {
-	                printf("%08llu %24s owner %4llu time %010llu\n",
-	                       (unsigned long long)sector_nr,
-	                       lr->resource_name,
-	                       (unsigned long long)lr->owner_id,
-	                       (unsigned long long)lr->timestamp);
-	                sector_nr += 1;
-	        } else if (lr->magic == PAXOS_DISK_MAGIC) {
-	                printf("%08llu %24s owner %4llu time %010llu lver %llu\n",
-	                       (unsigned long long)sector_nr,
-	                       lr->resource_name,
-	                       (unsigned long long)lr->owner_id,
-	                       (unsigned long long)lr->timestamp,
-	                       (unsigned long long)lr->lver);
-	                sector_nr += lr->max_hosts + 2;
-	        } else {
-	                printf("%08llu %24s\n",
-	                       (unsigned long long)sector_nr,
-	                       "uninitialized");
-	                break;
-	        }
+		if (lr->magic == DELTA_DISK_MAGIC) {
+			printf("%08llu %36s own %4llu gen %4llu",
+			       (unsigned long long)sector_nr,
+			       lr->resource_name,
+			       (unsigned long long)lr->owner_id,
+			       (unsigned long long)lr->owner_generation);
+			if (options.debug)
+				printf(" time %010llu age %u",
+			      	       (unsigned long long)lr->timestamp,
+				       !lr->timestamp ? 0 :
+				       (uint32_t)(time(NULL) - lr->timestamp));
+			printf("\n");
+
+			sector_nr += 1;
+		} else if (lr->magic == PAXOS_DISK_MAGIC) {
+			printf("%08llu %36s own %4llu gen %4llu ver %4llu",
+			       (unsigned long long)sector_nr,
+			       lr->resource_name,
+			       (unsigned long long)lr->owner_id,
+			       (unsigned long long)lr->owner_generation,
+			       (unsigned long long)lr->lver);
+			if (options.debug)
+				printf(" time %010llu age %u",
+			      	       (unsigned long long)lr->timestamp,
+				       !lr->timestamp ? 0 :
+				       (uint32_t)(time(NULL) - lr->timestamp));
+			printf("\n");
+
+			sector_nr += lr->max_hosts + 2;
+		} else {
+			printf("%08llu %36s\n",
+			       (unsigned long long)sector_nr,
+			       "uninitialized");
+			break;
+		}
 	}
 
 	free(data);

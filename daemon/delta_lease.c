@@ -95,30 +95,13 @@ int delta_lease_leader_read(struct sync_disk *disk, uint64_t host_id,
 	return error;
 }
 
-/* TODO: technically should be host_id+timestamp, although right now two different
-   hosts never try to acquire the same host_id lease */
-
-int delta_lease_read_timestamp(struct sync_disk *disk, uint64_t host_id,
-			       uint64_t *timestamp)
-{
-	struct leader_record leader;
-	int error;
-
-	error = delta_lease_leader_read(disk, host_id, &leader);
-	if (error < 0)
-		return error;
-
-	*timestamp = leader.timestamp;
-	return DP_OK;
-}
-
 int delta_lease_acquire(struct sync_disk *disk, uint64_t host_id,
 			struct leader_record *leader_ret)
 {
 	struct leader_record leader;
 	struct leader_record leader1;
 	uint64_t new_ts;
-	int error, delay;
+	int error, delay, delta_delay;
 
 	log_debug(NULL, "delta_acquire %llu begin", (unsigned long long)host_id);
 
@@ -130,11 +113,34 @@ int delta_lease_acquire(struct sync_disk *disk, uint64_t host_id,
 	if (leader.timestamp == LEASE_FREE)
 		goto write_new;
 
+	/* we need to ensure that a host_id cannot be acquired and released
+	 * sooner than host_id_timeout_seconds because the change in host_id
+	 * ownership affects the host_id "liveness" determination used by paxos
+	 * leases, and the ownership of paxos leases cannot change until after
+	 * host_id_timeout_seconds to ensure that the watchdog has fired.  So,
+	 * I think we want the delay here to be the max of
+	 * host_id_timeout_seconds and the D+6d delay.
+	 *
+	 * Per the algorithm in the paper, a delta lease can change ownership
+	 * in the while loop below after the delta_delay of D+6d.  However,
+	 * because we use the change of delta lease ownership to directly
+	 * determine the change in paxos lease ownership, we need the delta
+	 * delay to also meet the delay requirements of the paxos leases.
+	 * The paxos leases cannot change ownership until a min of
+	 * host_id_timeout_seconds to ensure the watchdog has fired.  So, the
+	 * timeout we use here must be the max of the delta delay (D+6d) and
+	 * paxos delay host_id_timeout_seconds, so that it covers the requirements
+	 * of both paxos and delta algorithms. */
+
+	delay = to.host_id_timeout_seconds; /* for paxos leases */
+	delta_delay = to.host_id_renewal_seconds + (6 * to.io_timeout_seconds);
+	if (delta_delay > delay)
+		delay = delta_delay;
+
 	while (1) {
 		memcpy(&leader1, &leader, sizeof(struct leader_record));
 
-		delay = to.host_id_renewal_seconds + (6 * to.io_timeout_seconds);
-		log_debug(NULL, "delta_acquire sleep D+6d %d", delay);
+		log_debug(NULL, "delta_acquire long sleep %d", delay);
 		sleep(delay);
 
 		error = delta_lease_leader_read(disk, host_id, &leader);
@@ -152,6 +158,7 @@ int delta_lease_acquire(struct sync_disk *disk, uint64_t host_id,
 	new_ts = time(NULL);
 	leader.timestamp = new_ts;
 	leader.owner_id = options.our_host_id;
+	leader.owner_generation++;
 	leader.checksum = leader_checksum(&leader);
 
 	log_debug(NULL, "delta_acquire write new %llu", (unsigned long long)new_ts);

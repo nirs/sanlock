@@ -21,42 +21,47 @@
 #include "log.h"
 #include "watchdog.h"
 
-/* 
+/* TODO: why can a used host_id be acquired in D+6d (11 sec) instead of
+ * waiting the full host_id_timeout_seconds (100) ? */
+
+/*
  * Purpose of watchdog: to forcibly reset the host in the case where a
- * supervised pid is running but sync_manager does not renew its lease
+ * supervised pid is running but sanlock daemon does not renew its lease
  * and does not kill the pid (or it kills the pid but the pid does not
- * exit).  So, just before the pid begins running, watchdogd needs to be
- * armed to reboot the host if things go bad right after the pid starts.
+ * exit).  So, just before the pid begins running with granted leases,
+ * watchdogd needs to be armed to reboot the host if things go bad right
+ * after the pid goes ahead.
  *
  * The initial timestamp in the wd file should be set to the acquire_time
- * just before sm forks the supervised pid.  If sm acquires the lease,
- * creates the wd file containing acquire_time, forks the pid, fails to
- * ever update the wd file, and cannot kill the pid, watchdogd will reboot
- * the host before acquire_time + lease_timeout_seconds, when another host
- * could acquire the lease.
+ * just before the daemon allows any pids to go ahead running with leases.
+ *
+ * If the daemon acquires its lease, creates the wd file containing
+ * acquire_time, grants lease to a pid, fails to ever update the wd file,
+ * and cannot kill the pid, watchdogd will reboot the host before
+ * acquire_time + host_id_timeout_seconds, when another host could acquire
+ * the lease.
  *
  * lease acquired at time AT
  * wd file created containing AT
- * pid forked
+ * pid starts running with granted lease
  * ...
  *
  * things go bad:
- * lease_thread cannot renew lease
+ * host_id_thread cannot renew lease
  * main thread cannot kill pid
  * watchdogd will reset host in AT + X seconds
  *
  * things go good:
- * lease_thread renews lease at time RT
- * lease_thread writes RT to wd file
- * watchdogd sees recent timestamp and does not reset host
+ * host_id_thread renews lease at time RT
+ * host_id_thread writes RT to wd file
+ * watchdogd sees recent timestamp, pets wd device, host is not reset
  *
  * things go ok:
- * lease_thread cannot renew lease
+ * host_id_thread cannot renew lease
  * main thread kills pid
  * pid exits
- * stop_all_leases stops lease_thread
- * lease_thread unlinks wd file
- * watchdogd does not check unlinked wd file and does not reset host
+ * stop_host_id unlinks wd file and stops host_id_thread
+ * watchdogd does not see wd file with old time and does not reset host
  */
 
 static char watchdog_path[PATH_MAX];

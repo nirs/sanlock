@@ -15,11 +15,11 @@
 #include "sanlock.h"
 
 #define PAXOS_DISK_MAGIC 0x06152010
-#define PAXOS_DISK_VERSION_MAJOR 0x00020000
+#define PAXOS_DISK_VERSION_MAJOR 0x00030000
 #define PAXOS_DISK_VERSION_MINOR 0x00000001
 
 #define DELTA_DISK_MAGIC 0x12212010
-#define DELTA_DISK_VERSION_MAJOR 0x00010000
+#define DELTA_DISK_VERSION_MAJOR 0x00020000
 #define DELTA_DISK_VERSION_MINOR 0x00000001
 
 #define SM_MAGIC 0x04282010
@@ -99,8 +99,8 @@ struct sm_header {
  * . host_id_renewal_fail_seconds 30
  * . host_id_timeout_seconds 100
  *
- * - lease ages to 30 sec at which point daemon enters recovery mode
- *   (kills pids) and stops updating wd file
+ * - host_id lease ages to 30 sec (our_host_id_renewed returns 0) at which
+ *   point daemon enters recovery mode (kills pids) and stops updating wd file
  * - 60 more seconds after we stop updating wd file, the wd fires
  *   (assuming standard 60 wd timeout, and assuming we don't unlink wd file first)
  * - this 90 seconds isn't quite right because of the intervals between
@@ -132,6 +132,7 @@ struct sm_options {
 	int use_watchdog;
 	uint32_t cluster_mode;
 	uint64_t our_host_id;
+	uint64_t our_host_id_generation;
 	uint64_t host_id_offset;
 	char host_id_path[DISK_PATH_LEN];
 };

@@ -52,8 +52,8 @@ enum {
    multiple leader blocks in a lease, but this potential inconsistency,
    like timestamp, should not factor against the repetition count. */
 
-#define LEADER_COMPARE_LEN 96
-#define LEADER_CHECKSUM_LEN 112
+#define LEADER_COMPARE_LEN 104
+#define LEADER_CHECKSUM_LEN 120
 #define LEASE_FREE 0
 
 struct leader_record {
@@ -64,6 +64,7 @@ struct leader_record {
 	uint64_t num_hosts;
 	uint64_t max_hosts;
 	uint64_t owner_id; /* host_id of owner */
+	uint64_t owner_generation;
 	uint64_t lver;
 	char resource_name[NAME_ID_SIZE]; /* resource being locked */
 	uint64_t timestamp;
