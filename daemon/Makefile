@@ -9,8 +9,6 @@ SHLIB_TARGET = $(LIB_TARGET).so.$(SOMAJOR).$(SOMINOR)
 
 CMD_SOURCE = \
 	client_admin.c \
-	client_msg.c \
-	client_resource.c \
 	crc32c.c \
 	delta_lease.c \
 	direct.c \
@@ -47,19 +45,18 @@ CFLAGS += -D_GNU_SOURCE -g \
 	-fasynchronous-unwind-tables \
 	-fdiagnostics-show-option
 
-CMD_LDFLAGS = -lpthread -lrt -lblkid
+CMD_LDFLAGS = -lpthread -lrt -lblkid -lsanlock
 
 
-all: $(CMD_TARGET) $(SHLIB_TARGET)
-
-$(CMD_TARGET): $(CMD_SOURCE)
-	$(CC) $(CFLAGS) $(CMD_LDFLAGS) $(CMD_SOURCE) -o $@
+all: $(SHLIB_TARGET) $(CMD_TARGET)
 
 $(SHLIB_TARGET): $(LIB_SOURCE)
 	$(CC) -shared -fPIC -o $@ -Wl,-soname=$(LIB_TARGET).so.$(SOMAJOR) $^
 	ln -sf $(SHLIB_TARGET) $(LIB_TARGET).so
 	ln -sf $(SHLIB_TARGET) $(LIB_TARGET).so.$(SOMAJOR)
 
+$(CMD_TARGET): $(SHLIB_TARGET) $(CMD_SOURCE)
+	$(CC) $(CFLAGS) $(CMD_LDFLAGS) $(CMD_SOURCE) -o $@ -L.
 
 clean:
 	rm -f *.o *.so *.so.* $(CMD_TARGET)
