@@ -70,11 +70,6 @@ CMD_BINDIR=/usr/libexec
 LIB_LIBDIR=/usr/lib64
 HEADER_DIR=/usr/include
 
-RPMTOP=$(shell bash -c "pwd -P")/rpmbuild
-rpmversion:=0.1
-rpmrelease:=1.$(shell date +%Y%m%d)git
-TARBALL=sanlock-$(rpmversion)-$(rpmrelease).tar.gz
-
 .PHONY: install
 install: all
 	mkdir -p $(DESTDIR)/$(CMD_BINDIR)
@@ -85,15 +80,3 @@ install: all
 	cp -a $(LIB_TARGET).so $(DESTDIR)/$(LIB_LIBDIR)
 	cp -a $(LIB_TARGET).so.$(SOMAJOR) $(DESTDIR)/$(LIB_LIBDIR)
 	$(INSTALL) -c -m 644 $(HEADER_TARGET) $(DESTDIR)/$(HEADER_DIR)
-
-rpm:
-	rm -rf $(RPMTOP)
-	mkdir $(RPMTOP)
-	mkdir $(RPMTOP)/BUILD  $(RPMTOP)/BUILDROOT  $(RPMTOP)/RPMS  $(RPMTOP)/SOURCES  $(RPMTOP)/SPECS $(RPMTOP)/SRPMS
-	tar zcf $(TARBALL) `git ls-files | grep -v /tests/`
-	mv $(TARBALL) $(RPMTOP)/SOURCES
-	sed 's/^Version:.*/Version: $(rpmversion)/;s/^Release:.*/Release: $(rpmrelease)%{?dist}/;s/^Source0:.*/Source0: $(TARBALL)/' \
-		sanlock.spec.in > sanlock.spec
-	rpmbuild -v -ba --define="_topdir $(RPMTOP)" \
-                        --define="_sourcedir $(RPMTOP)/SOURCES" \
-		./sanlock.spec
