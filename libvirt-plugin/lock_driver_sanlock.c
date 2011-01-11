@@ -1,11 +1,18 @@
 #include <stdlib.h>
 #include <stdint.h>
+#include <unistd.h>
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
+#include <sys/types.h>
 
 #include <libvirt/plugins/lock_driver.h>
 #include "../daemon/sanlock.h"
+#include "../daemon/sanlock_resource.h"
+
+#ifndef GNUC_UNUSED
+#define GNUC_UNUSED __attribute__((__unused__))
+#endif
 
 struct snlk_con {
 	char vm_name[SANLK_NAME_LEN];
@@ -33,7 +40,8 @@ static void copy_uuid_to_str(const unsigned char *uuid, char *str, int len)
  * sanlock plugin for the libvirt virLockManager API
  */
 
-static int drv_snlk_init(unsigned int version, unsigned int flags)
+static int drv_snlk_init(unsigned int version GNUC_UNUSED,
+			 unsigned int flags GNUC_UNUSED)
 {
 	return 0;
 }
@@ -44,7 +52,7 @@ static int drv_snlk_deinit(void)
 }
 
 static int drv_snlk_new(virLockManagerPtr man,
-			unsigned int type,
+			unsigned int type GNUC_UNUSED,
 			size_t nparams,
 			virLockManagerParamPtr params,
 			unsigned int flags)
@@ -128,7 +136,7 @@ static int drv_snlk_add_resource(virLockManagerPtr man,
 				 const char *name,
 				 size_t nparams,
 				 virLockManagerParamPtr params,
-				 unsigned int flags)
+				 unsigned int flags GNUC_UNUSED)
 {
 	struct snlk_con *con = man->privateData;
 	int rv;
@@ -150,7 +158,7 @@ static int drv_snlk_add_resource(virLockManagerPtr man,
 
 static int drv_snlk_acquire_object(virLockManagerPtr man,
 				   const char *state,
-				   unsigned int flags)
+				   unsigned int flags GNUC_UNUSED)
 {
 	struct snlk_con *con = man->privateData;
 	struct sanlk_options *opt = NULL;
@@ -197,24 +205,27 @@ static int drv_snlk_acquire_object(virLockManagerPtr man,
 	return rv;
 }
 
-static int drv_snlk_attach_object(virLockManagerPtr man, unsigned int flags)
+static int drv_snlk_attach_object(virLockManagerPtr man GNUC_UNUSED,
+				  unsigned int flags GNUC_UNUSED)
 {
 	return 0;
 }
 
-static int drv_snlk_detach_object(virLockManagerPtr man, unsigned int flags)
+static int drv_snlk_detach_object(virLockManagerPtr man GNUC_UNUSED,
+				  unsigned int flags GNUC_UNUSED)
 {
 	return 0;
 }
 
-static int drv_snlk_release_object(virLockManagerPtr man, unsigned int flags)
+static int drv_snlk_release_object(virLockManagerPtr man GNUC_UNUSED,
+				   unsigned int flags GNUC_UNUSED)
 {
 	return 0;
 }
 
-static int drv_snlk_get_state(virLockManagerPtr man,
+static int drv_snlk_get_state(virLockManagerPtr man GNUC_UNUSED,
 			      char **state,
-			      unsigned int flags)
+			      unsigned int flags GNUC_UNUSED)
 {
 	*state = NULL;
 
@@ -227,7 +238,7 @@ static int drv_snlk_acquire_resource(virLockManagerPtr man,
 				     const char *name,
 				     size_t nparams,
 				     virLockManagerParamPtr params,
-				     unsigned int flags)
+				     unsigned int flags GNUC_UNUSED)
 {
 	struct snlk_con *con = man->privateData;
 	struct sanlk_options opt;
@@ -269,7 +280,7 @@ static int drv_snlk_release_resource(virLockManagerPtr man,
 				     const char *name,
 				     size_t nparams,
 				     virLockManagerParamPtr params,
-				     unsigned int flags)
+				     unsigned int flags GNUC_UNUSED)
 {
 	struct snlk_con *con = man->privateData;
 	int rv;
@@ -287,7 +298,7 @@ static int drv_snlk_release_resource(virLockManagerPtr man,
 	if (rv < 0)
 		return rv;
 
-	rv = sanlock_release(-1, con->vm_pid, con->res_count, con->res_args, NULL);
+	rv = sanlock_release(-1, con->vm_pid, con->res_count, con->res_args);
 
 	free(con->res_args[0]);
 

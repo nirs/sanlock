@@ -30,7 +30,7 @@ CFLAGS += -D_GNU_SOURCE -g \
 all: $(SHLIB_TARGET)
 
 $(SHLIB_TARGET): $(LIB_SOURCE)
-	$(CC) -shared -fPIC -lsanlock -o $@ -Wl,-soname=$(LIB_TARGET).so.$(SOMAJOR) $^
+	$(CC) $(CFLAGS) -shared -fPIC -lsanlock -o $@ -Wl,-soname=$(LIB_TARGET).so.$(SOMAJOR) $^
 	ln -sf $(SHLIB_TARGET) $(LIB_TARGET).so
 
 clean:
