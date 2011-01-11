@@ -30,7 +30,7 @@ CFLAGS += -D_GNU_SOURCE -g \
 all: $(SHLIB_TARGET)
 
 $(SHLIB_TARGET): $(LIB_SOURCE)
-	$(CC) $(CFLAGS) -shared -fPIC -lsanlock -o $@ -Wl,-soname=$(LIB_TARGET).so.$(SOMAJOR) $^
+	$(CC) $(CFLAGS) -shared -fPIC -o $@ -Wl,-soname=$(LIB_TARGET).so.$(SOMAJOR) $^ -L../daemon -lsanlock
 	ln -sf $(SHLIB_TARGET) $(LIB_TARGET).so
 
 clean:
@@ -38,11 +38,12 @@ clean:
 
 INSTALL=$(shell which install)
 
-LIB_LIBDIR=$(DESTDIR)/usr/lib64/libvirt/lock_manager/
+LIB_LIBDIR=/usr/lib64/
+LIBDIR=$(LIB_LIBDIR)/libvirt/lock_manager/
 
 .PHONY: install
 install: all
-	mkdir -p $(LIB_LIBDIR)
-	$(INSTALL) -c -m 755 $(SHLIB_TARGET) $(LIB_LIBDIR)
-	cp -a $(LIB_TARGET).so $(LIB_LIBDIR)
+	mkdir -p $(DESTDIR)/$(LIBDIR)
+	$(INSTALL) -c -m 755 $(SHLIB_TARGET) $(DESTDIR)/$(LIBDIR)
+	cp -a $(LIB_TARGET).so $(DESTDIR)/$(LIBDIR)
 
