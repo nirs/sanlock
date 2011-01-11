@@ -331,6 +331,9 @@ void stop_host_id(void)
 {
 	unlink_watchdog_file();
 
+	if (!options.our_host_id)
+		return;
+
 	pthread_mutex_lock(&host_id_mutex);
 	our_host_id_thread_stop = 1;
 	pthread_cond_broadcast(&host_id_cond);
