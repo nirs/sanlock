@@ -66,7 +66,7 @@ clean:
 
 INSTALL=$(shell which install)
 
-CMD_BINDIR=/usr/libexec
+CMD_BINDIR=/usr/sbin
 LIB_LIBDIR=/usr/lib64
 HEADER_DIR=/usr/include
 
