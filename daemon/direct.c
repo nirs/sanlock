@@ -144,7 +144,7 @@ int sanlock_direct_init(void)
 		return 0;
 
 	if (!com.num_hosts) {
-		log_tool("num_hosts option (-h) required for paxos lease init");
+		log_tool("num_hosts option required for paxos lease init");
 		return -1;
 	}
 

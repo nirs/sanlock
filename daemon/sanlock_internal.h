@@ -144,7 +144,6 @@ struct command_line {
 	int action;
 	int pid;
 	uint64_t host_id;
-	int incoming;
 	int num_hosts;
 	int max_hosts;
 	int res_count;

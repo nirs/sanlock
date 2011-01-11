@@ -1760,6 +1760,19 @@ static int add_lease_to_com(char *arg)
 	return -1;
 }
 
+static void split_path_offset(char *path, uint64_t *offset)
+{
+	char *colon = strstr(path, ":");
+	char *off_str;
+
+	if (!colon)
+		return;
+
+	off_str = colon + 1;
+	*colon = '\0';
+	*offset = atoll(off_str);
+}
+
 static void set_timeout(char *key, char *val)
 {
 	if (!strcmp(key, "io_timeout")) {
@@ -1893,9 +1906,8 @@ static void print_usage(void)
 	printf("  -S <level>		write logging at level and up to syslog (-1 none)\n");
 	printf("  -w <num>		enable (1) or disable (0) writing watchdog files\n");
 	printf("  -a <num>		use async io (1 yes, 0 no)\n");
-	printf("  -i <num>		local host_id\n");
-	printf("  -d <path>		disk path for host_id leases\n");
-	printf("  -o <num>		offset on disk for host_id leases\n");
+	printf("  -i <num>		host_id of local host\n");
+	printf("  -h <path>[:<offset>]	host_id lease area\n");
 	printf("  -s <key=n,key=n,...>	change default timeouts in seconds, key (default):\n");
 	printf("                        io_timeout (%d)\n", DEFAULT_IO_TIMEOUT_SECONDS);
 	printf("                        host_id_renewal (%d)\n", DEFAULT_HOST_ID_RENEWAL_SECONDS);
@@ -1907,12 +1919,11 @@ static void print_usage(void)
 	printf("  -D			debug: print extra internal state for debugging\n");
 	printf("client log_dump\n");
 	printf("client shutdown\n");
-	printf("client set_host -i <num> -d <path> -o <num>\n");
-	printf("  -i <num>		local host_id\n");
-	printf("  -d <path>		disk path for host_id leases\n");
-	printf("  -o <num>		offset on disk for host_id leases\n");
+	printf("client set_host -i <num> -h <path>\n");
+	printf("  -i <num>		host_id of local host\n");
+	printf("  -h <path>[:<offset>]	host_id lease area\n");
 	printf("client command -l LEASE -c <path> <args>\n");
-	printf("  -h <num_hosts>	change num_hosts in leases when acquired\n");
+	printf("  -n <num_hosts>	change num_hosts in leases when acquired\n");
 	printf("  -l LEASE		resource lease description, see below\n");
 	printf("  -c <path> <args>	run command with args, -c must be final option\n");
 	printf("client acquire -p <pid> -l LEASE\n");
@@ -1927,32 +1938,29 @@ static void print_usage(void)
 	printf("client setowner -p <pid>\n");
 	printf("  -p <pid>		process whose leases should be owned\n");
 	printf("\n");
-	printf("direct init [-h <num_hosts> -d <path> -o <num>] [-l LEASE ...]\n");
+	printf("direct init [-n <num_hosts> -h <path>] [-l LEASE ...]\n");
 	printf("  -a <num>		use async io (1 yes, 0 no)\n");
-	printf("  -h <num_hosts>	max host id that will be able to acquire the lease,\n");
+	printf("  -n <num_hosts>	max host id that will be able to acquire the lease,\n");
 	printf("                        and number of sectors that are read when paxos is run\n");
-	printf("  -H <max_hosts>	max number of hosts the disk area will support\n");
+	printf("  -m <max_hosts>	max number of hosts the disk area will support\n");
 	printf("                        (default %d)\n", DEFAULT_MAX_HOSTS);
-	printf("  -d <path>		disk path for host_id leases\n");
-	printf("  -o <num>		offset on disk for host_id leases\n");
+	printf("  -h <path>[:<offset>]	host_id lease area\n");
 	printf("  -l LEASE		resource lease description, see below\n");
-	printf("direct dump -d <path> -o <num>\n");
+	printf("direct dump <path>[:<offset>] [options]\n");
+	printf("  -D			debug: print extra info for debugging\n");
 	printf("  -a <num>		use async io (1 yes, 0 no)\n");
-	printf("  -d <path>		disk path\n");
-	printf("  -o <num>		offset on disk to begin reading\n");
 	printf("direct acquire|release|migrate -i <num> -l LEASE ...\n");
 	printf("  -a <num>		use async io (1 yes, 0 no)\n");
-	printf("  -h <num_hosts>	change num_hosts in leases when acquired\n");
-	printf("  -i <num>		local host_id\n");
-	printf("  -g <num>		local host_id generation\n");
+	printf("  -n <num_hosts>	change num_hosts in leases when acquired\n");
+	printf("  -i <num>		host_id of local host\n");
+	printf("  -g <num>		host_id generation of local host\n");
 	printf("  -t <num>		target host_id to acquire/release/migrate\n");
 	printf("  -l LEASE		resource lease description, see below\n");
 	printf("direct acquire_id|release_id -i <num> -d <path> -o <num> -t <num>\n");
-	printf("  -i <num>		local host_id\n");
-	printf("  -d <path>		disk path for host_id leases\n");
-	printf("  -o <num>		offset on disk for host_id leases\n");
-	printf("  -t <num>		target host_id to acquire/release\n");
 	printf("  -a <num>		use async io (1 yes, 0 no)\n");
+	printf("  -i <num>		host_id of local host\n");
+	printf("  -h <path>[:<offset>]	host_id lease area\n");
+	printf("  -t <num>		target host_id to acquire/release\n");
 	printf("\n");
 	printf("LEASE = <resource_name>:<path>:<offset>[:<path>:<offset>...]\n");
 	printf("  <resource_name>	name of resource being leased\n");
@@ -2061,6 +2069,16 @@ static int read_command_line(int argc, char *argv[])
 		break;
 	};
 
+
+	/* the only action that has an option without dash-letter prefix */
+	if (com.action == ACT_DUMP) {
+		optionarg = argv[i++];
+		strncpy(options.host_id_path, optionarg, DISK_PATH_LEN);
+		options.host_id_offset = 0;
+		split_path_offset(options.host_id_path,
+				  &options.host_id_offset);
+	}
+
 	for (; i < argc; ) {
 		p = argv[i];
 
@@ -2094,15 +2112,17 @@ static int read_command_line(int argc, char *argv[])
 		case 'S':
 			log_syslog_priority = atoi(optionarg);
 			break;
-		case 'h':
+		case 'n':
 			com.num_hosts = atoi(optionarg);
 			break;
-		case 'H':
+		case 'm':
 			com.max_hosts = atoi(optionarg);
 			break;
-		case 'm':
+#if 0
+		case 'o':
 			options.cluster_mode = atoi(optionarg);
 			break;
+#endif
 		case 's':
 			parse_timeouts(optionarg);
 			break;
@@ -2112,11 +2132,11 @@ static int read_command_line(int argc, char *argv[])
 		case 'g':
 			options.our_host_id_generation = atoll(optionarg);
 			break;
-		case 'd':
+		case 'h':
 			strncpy(options.host_id_path, optionarg, DISK_PATH_LEN);
-			break;
-		case 'o':
-			options.host_id_offset = atoll(optionarg);
+			options.host_id_offset = 0;
+			split_path_offset(options.host_id_path,
+					  &options.host_id_offset);
 			break;
 		case 'a':
 			options.use_aio = atoi(optionarg);
@@ -2134,9 +2154,6 @@ static int read_command_line(int argc, char *argv[])
 			break;
 		case 't':
 			com.host_id = atoll(optionarg);
-			break;
-		case 'f':
-			com.incoming = atoi(optionarg);
 			break;
 		case 'l':
 			if (com.action == ACT_RELEASE)
@@ -2166,10 +2183,10 @@ static int read_command_line(int argc, char *argv[])
 
 	if ((com.type == COM_DAEMON) || (com.action == ACT_SET_HOST)) {
 		if (options.our_host_id && !options.host_id_path[0]) {
-			log_tool("host_id_path option (-d) required");
+			log_tool("host_id_path option required");
 			exit(EXIT_FAILURE);
 		}
-	}	
+	}
 
 	/*
 	 * the remaining args are for the command
