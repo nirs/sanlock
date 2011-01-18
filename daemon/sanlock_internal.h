@@ -52,10 +52,10 @@
 
 #define SANLK_RUN_DIR "/var/run/sanlock"
 #define SANLK_LOG_DIR "/var/log"
-#define SANLK_SOCKET_NAME "sanlock.sock"
+#define SANLK_SOCKET_NAME "sanlock_sock"
 #define SANLK_LOGFILE_NAME "sanlock.log"
 #define SANLK_LOCKFILE_NAME "sanlock.pid"
-#define SANLK_WATCHDOG_NAME "sanlock.time"
+#define SANLK_WATCHDOG_NAME "sanlock_wdtest"
 
 #define DAEMON_NAME "sanlock"
 
@@ -155,6 +155,7 @@ struct command_line {
 #define COM_DAEMON      1
 #define COM_CLIENT      2
 #define COM_DIRECT      3
+#define COM_WDTEST      4
 
 #define ACT_STATUS      1
 #define ACT_LOG_DUMP    2

@@ -235,8 +235,8 @@ static void *host_id_thread(void *arg_in)
 		}
 	}
 
-	/* called below to get it done ASAP */
-	/* unlink_watchdog_file(); */
+	/* unlink called below to get it done ASAP */
+	close_watchdog_file();
  out:
 	if (dl_result == DP_OK)
 		delta_lease_release(&host_id_disk, host_id_in, &leader, &leader);

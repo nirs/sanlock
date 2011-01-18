@@ -21,9 +21,6 @@
 #include "log.h"
 #include "watchdog.h"
 
-/* TODO: why can a used host_id be acquired in D+6d (11 sec) instead of
- * waiting the full host_id_timeout_seconds (100) ? */
-
 /*
  * Purpose of watchdog: to forcibly reset the host in the case where a
  * supervised pid is running but sanlock daemon does not renew its lease
@@ -67,6 +64,8 @@
 static char watchdog_path[PATH_MAX];
 static int watchdog_fd;
 
+#define BUF_SIZE 128
+
 static int do_write(int fd, void *buf, size_t count)
 {
 	int rv, off = 0;
@@ -89,13 +88,15 @@ static int do_write(int fd, void *buf, size_t count)
 
 void update_watchdog_file(uint64_t timestamp)
 {
-	char buf[16];
+	char buf[BUF_SIZE];
 
 	if (!options.use_watchdog)
 		return;
 
 	memset(buf, 0, sizeof(buf));
-	snprintf(buf, sizeof(buf), "%llu\n", (unsigned long long)timestamp);
+	snprintf(buf, sizeof(buf), "renewal %llu expire %llu\n",
+		 (unsigned long long)timestamp,
+		 (unsigned long long)timestamp + to.host_id_renewal_fail_seconds);
 
 	lseek(watchdog_fd, 0, SEEK_SET);
 
@@ -104,7 +105,7 @@ void update_watchdog_file(uint64_t timestamp)
 
 int create_watchdog_file(uint64_t timestamp)
 {
-	char buf[16];
+	char buf[BUF_SIZE];
 	int rv, fd;
 
 	if (!options.use_watchdog)
@@ -131,7 +132,9 @@ int create_watchdog_file(uint64_t timestamp)
 	}
 
 	memset(buf, 0, sizeof(buf));
-	snprintf(buf, sizeof(buf), "%llu\n", (unsigned long long)timestamp);
+	snprintf(buf, sizeof(buf), "renewal %llu expire %llu\n",
+		 (unsigned long long)timestamp,
+		 (unsigned long long)timestamp + to.host_id_renewal_fail_seconds);
 
 	rv = do_write(fd, buf, sizeof(buf));
 	if (rv < 0) {
@@ -150,6 +153,10 @@ void unlink_watchdog_file(void)
 		return;
 
 	unlink(watchdog_path);
+}
+
+void close_watchdog_file(void)
+{
 	close(watchdog_fd);
 }
 
@@ -173,5 +180,52 @@ int check_watchdog_file(void)
 		  watchdog_path, strerror(errno));
 
 	return -errno;
+}
+
+int do_wdtest(void)
+{		
+	char buf[BUF_SIZE];
+	unsigned long long renewal = 0, expire = 0;
+	time_t t;
+	int rv, fd;
+
+	openlog("sanlock_wdtest", LOG_CONS | LOG_PID, LOG_USER);
+
+	snprintf(watchdog_path, PATH_MAX, "%s/%s",
+		 SANLK_RUN_DIR, SANLK_WATCHDOG_NAME);
+
+	fd = open(watchdog_path, O_RDONLY|O_NONBLOCK, 0666);
+	if (fd < 0) {
+		syslog(LOG_ERR, "open error %s", watchdog_path);
+		return 0;
+	}
+
+	memset(buf, 0, sizeof(buf));
+	rv = read(fd, buf, sizeof(buf));
+	if (rv < 0) {
+		syslog(LOG_ERR, "read error %s", watchdog_path);
+		return 0;
+	}
+
+	sscanf(buf, "renewal %llu expire %llu", &renewal, &expire);
+
+	t = time(NULL);
+
+	syslog(LOG_ERR, "renewal %llu expire %llu now %llu",
+	       (unsigned long long)renewal,
+	       (unsigned long long)expire,
+	       (unsigned long long)t);
+
+	if (t < expire)
+		return 0;
+
+	syslog(LOG_CRIT, "test fail renewal %llu expire %llu now %llu",
+	       (unsigned long long)renewal,
+	       (unsigned long long)expire,
+	       (unsigned long long)t);
+
+	/* test command exit codes have special meaning to watchdog deamon */
+
+	return -2;
 }
 
