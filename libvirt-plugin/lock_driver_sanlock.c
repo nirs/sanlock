@@ -92,7 +92,6 @@ static void drv_snlk_free(virLockManagerPtr man)
 {
 	struct snlk_con *con = man->privateData;
 
-	close(con->sock);
 	free(con);
 	man->privateData = NULL;
 }
