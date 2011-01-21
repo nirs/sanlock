@@ -6,8 +6,8 @@ Release:	1%{?alphatag:.%{alphatag}}%{?dist}
 Summary:	A shared disk lock manager
 Group:		System Environment/Base
 License:	GPLv2+
-URL:		https://fedorahosted.org/releases/s/y/sync_manager/
-Source0:	https://fedorahosted.org/releases/s/y/sync_manager/%{name}-%{version}.tar.gz
+URL:		https://fedorahosted.org/releases/s/a/sanlock/
+Source0:	https://fedorahosted.org/releases/s/a/sanlock/%{name}-%{version}.tar.gz
 
 ## Setup/build bits
 BuildRoot: %(mktemp -ud %{_tmppath}/%{name}-%{version}-%{release}-XXXXXX)
