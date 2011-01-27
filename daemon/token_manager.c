@@ -16,13 +16,9 @@
 
 #include "sanlock_internal.h"
 #include "diskio.h"
-#include "leader.h"
 #include "log.h"
 #include "paxos_lease.h"
 #include "token_manager.h"
-#include "list.h"
-
-struct sm_timeouts to;
 
 static struct list_head resources;
 static struct list_head dispose_resources;
@@ -30,23 +26,28 @@ static struct list_head saved_resources;
 static pthread_mutex_t resource_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t resource_cond = PTHREAD_COND_INITIALIZER;
 static pthread_t release_thread;
-static int release_thread_done;
+static int release_thread_stop;
 
 struct resource {
 	struct list_head list;
-	char name[NAME_ID_SIZE+1];
+	char space_name[NAME_ID_SIZE+1];
+	char resource_name[NAME_ID_SIZE+1];
 	struct token *token;
 	struct leader_record leader;
 	int pid;
 };
 
-static struct resource *find_resource(struct list_head *head, char *name)
+static struct resource *find_resource(struct token *token,
+				      struct list_head *head)
 {
 	struct resource *r;
 
 	list_for_each_entry(r, head, list) {
-		if (!strncmp(r->name, name, NAME_ID_SIZE))
-			return r;
+		if (strncmp(r->space_name, token->space_name, NAME_ID_SIZE))
+			continue;
+		if (strncmp(r->resource_name, token->resource_name, NAME_ID_SIZE))
+			continue;
+		return r;
 	}
 	return NULL;
 }
@@ -56,7 +57,7 @@ void save_resource_leader(struct token *token)
 	struct resource *r;
 
 	pthread_mutex_lock(&resource_mutex);
-	r = find_resource(&resources, token->resource_name);
+	r = find_resource(token, &resources);
 	if (r)
 		memcpy(&r->leader, &token->leader, sizeof(struct leader_record));
 	pthread_mutex_unlock(&resource_mutex);
@@ -69,7 +70,7 @@ int add_resource(struct token *token, int pid)
 
 	pthread_mutex_lock(&resource_mutex);
 
-	r = find_resource(&resources, token->resource_name);
+	r = find_resource(token, &resources);
 	if (r) {
 		log_error(token, "add_resource used token_id %d",
 			  r->token->token_id);
@@ -77,7 +78,7 @@ int add_resource(struct token *token, int pid)
 		goto out;
 	}
 
-	r = find_resource(&dispose_resources, token->resource_name);
+	r = find_resource(token, &dispose_resources);
 	if (r) {
 		log_error(token, "add_resource disposed token_id %d",
 			  r->token->token_id);
@@ -85,7 +86,7 @@ int add_resource(struct token *token, int pid)
 		goto out;
 	}
 
-	r = find_resource(&saved_resources, token->resource_name);
+	r = find_resource(token, &saved_resources);
 	if (r) {
 		if (r->pid == pid) {
 			/* the same pid is allowed to reacquire a resource */
@@ -109,11 +110,12 @@ int add_resource(struct token *token, int pid)
 	}
 
 	memset(r, 0, sizeof(struct resource));
-	strncpy(r->name, token->resource_name, NAME_ID_SIZE);
+	strncpy(r->space_name, token->space_name, NAME_ID_SIZE);
+	strncpy(r->resource_name, token->resource_name, NAME_ID_SIZE);
  add:
 	/* leader.ver is the last lver we knew when we last held the lease.
 	 * we're sticking it in token->prev_lver just to pass it back to
-	 * cmd_acquire, so cmd_acquire can pass it into acquire_lease().
+	 * cmd_acquire, so cmd_acquire can pass it into acquire_token().
 	 * (it would probably be less confusing to pass leader.lver back to
 	 * cmd_acquire through a function param rather than using a token
 	 * field to pass it between functions) */
@@ -141,7 +143,7 @@ void del_resource(struct token *token)
 	struct resource *r;
 
 	pthread_mutex_lock(&resource_mutex);
-	r = find_resource(&resources, token->resource_name);
+	r = find_resource(token, &resources);
 	if (r)
 		_del_resource(r);
 	pthread_mutex_unlock(&resource_mutex);
@@ -158,7 +160,7 @@ void save_resource(struct token *token)
 	struct resource *r;
 
 	pthread_mutex_lock(&resource_mutex);
-	r = find_resource(&resources, token->resource_name);
+	r = find_resource(token, &resources);
 	if (r) {
 		r->token = NULL;
 		list_move(&r->list, &saved_resources);
@@ -182,7 +184,7 @@ void purge_saved_resources(int pid)
 
 /* return < 0 on error, 1 on success */
 
-int acquire_lease(struct token *token, uint64_t reacquire_lver,
+int acquire_token(struct token *token, uint64_t reacquire_lver,
 		  int new_num_hosts)
 {
 	struct leader_record leader_ret;
@@ -205,7 +207,7 @@ int acquire_lease(struct token *token, uint64_t reacquire_lver,
 	return 1;
 }
 
-int setowner_lease(struct token *token)
+int setowner_token(struct token *token)
 {
 	struct leader_record leader_ret;
 	int rv;
@@ -240,12 +242,12 @@ int setowner_lease(struct token *token)
 
 /* return < 0 on error, 1 on success */
 
-int release_lease(struct token *token)
+int release_token(struct token *token)
 {
 	struct leader_record leader_ret;
 	int rv;
 
-	if (token->leader.owner_id != options.our_host_id) {
+	if (token->leader.owner_id != token->host_id) {
 		/* this case occurs on the receiving side of migration, when
 		   the local host hasn't become the lease owner (just next_owner),
 		   and the pid fails, causing sm to clean up the pid's tokens */
@@ -270,7 +272,7 @@ int release_lease(struct token *token)
 
 /* migration source: writes leader_record.next_owner_id = target_host_id */
 
-int migrate_lease(struct token *token, uint64_t target_host_id)
+int migrate_token(struct token *token, uint64_t target_host_id)
 {
 	struct leader_record leader_ret;
 	int rv;
@@ -290,7 +292,7 @@ int migrate_lease(struct token *token, uint64_t target_host_id)
 
 /* migration target: verifies that the source wrote us as the next_owner_id */
 
-int receive_lease(struct token *token, char *opt_str GNUC_UNUSED)
+int receive_token(struct token *token, char *opt_str GNUC_UNUSED)
 {
 	struct leader_record leader_ret;
 	int rv;
@@ -303,7 +305,7 @@ int receive_lease(struct token *token, char *opt_str GNUC_UNUSED)
 	 * (full leader_record?) from the migration source. */
 #if 0
 	/* token->leader is a copy of the leader_record that the source wrote
-	   in migrate_lease(); it should not have changed between then and when
+	   in migrate_token(); it should not have changed between then and when
 	   we read it here. */
 
 	if (memcmp(&token->leader, &leader_ret, sizeof(struct leader_record))) {
@@ -319,7 +321,7 @@ int receive_lease(struct token *token, char *opt_str GNUC_UNUSED)
 	   next_owner_id = our_host_id for it. */
 
 	if (token->migrate_result == 1) {
-		if (leader_ret.next_owner_id != options.our_host_id) {
+		if (leader_ret.next_owner_id != token->host_id) {
 			log_error(token, "receive wrong next_owner %llu",
 				  (unsigned long long)leader_ret.next_owner_id);
 			return -1;
@@ -340,7 +342,7 @@ int receive_lease(struct token *token, char *opt_str GNUC_UNUSED)
 	/* since the source failed to write next_owner_id to be us, we do it
 	   instead */
 
-	return migrate_lease(token, options.our_host_id);
+	return migrate_token(token, token->host_id);
 
  out:
 	memcpy(&token->leader, &leader_ret, sizeof(struct leader_record));
@@ -376,6 +378,8 @@ void free_token(struct token *token)
 	free(token);
 }
 
+/* thread that releases tokens of pid's that die */
+
 static void *async_release_thread(void *arg GNUC_UNUSED)
 {
 	struct resource *r;
@@ -384,7 +388,7 @@ static void *async_release_thread(void *arg GNUC_UNUSED)
 	while (1) {
 		pthread_mutex_lock(&resource_mutex);
 		while (list_empty(&dispose_resources)) {
-			if (release_thread_done) {
+			if (release_thread_stop) {
 				pthread_mutex_unlock(&resource_mutex);
 				goto out;
 			}
@@ -397,7 +401,7 @@ static void *async_release_thread(void *arg GNUC_UNUSED)
 		token = r->token;
 
 		if (token->acquire_result == 1)
-			release_lease(token);
+			release_token(token);
 
 		close_disks(token->disks, token->num_disks);
 
@@ -415,16 +419,12 @@ static void *async_release_thread(void *arg GNUC_UNUSED)
 	return NULL;
 }
 
-/* move resource struct from active list to delayed release list
-   that release_thread will process; after release_thread calls
-   release_lease, it calls del_token_resource */
-
 void release_token_async(struct token *token)
 {
 	struct resource *r;
 
 	pthread_mutex_lock(&resource_mutex);
-	r = find_resource(&resources, token->resource_name);
+	r = find_resource(token, &resources);
 	if (r) {
 		/* assert r->token == token ? */
 		list_move(&r->list, &dispose_resources);
@@ -450,7 +450,7 @@ int setup_token_manager(void)
 void close_token_manager(void)
 {
 	pthread_mutex_lock(&resource_mutex);
-	release_thread_done = 1;
+	release_thread_stop = 1;
 	pthread_cond_signal(&resource_cond);
 	pthread_mutex_unlock(&resource_mutex);
 	pthread_join(release_thread, NULL);

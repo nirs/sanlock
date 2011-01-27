@@ -17,7 +17,6 @@
 
 #include "sanlock_internal.h"
 #include "diskio.h"
-#include "leader.h"
 #include "log.h"
 
 static int set_disk_properties(struct sync_disk *disk)

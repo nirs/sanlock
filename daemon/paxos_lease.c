@@ -15,7 +15,6 @@
 
 #include "sanlock_internal.h"
 #include "diskio.h"
-#include "leader.h"
 #include "log.h"
 #include "crc32c.h"
 #include "host_id.h"
@@ -392,7 +391,7 @@ uint32_t leader_checksum(struct leader_record *lr)
 	return crc32c((uint32_t)~1, (char *)lr, LEADER_CHECKSUM_LEN);
 }
 
-static int verify_leader(struct sync_disk *disk, char *resource,
+static int verify_leader(struct token *token, struct sync_disk *disk,
 			 struct leader_record *lr)
 {
 	uint32_t sum;
@@ -421,16 +420,22 @@ static int verify_leader(struct sync_disk *disk, char *resource,
 		return DP_BAD_SECTORSIZE;
 	}
 
-	if (strncmp(lr->resource_name, resource, NAME_ID_SIZE)) {
-		log_error(NULL, "verify_leader wrong resource name %s %s %s",
-			  lr->resource_name, resource, disk->path);
+	if (strncmp(lr->space_name, token->space_name, NAME_ID_SIZE)) {
+		log_error(NULL, "verify_leader wrong space name %.48s %.48s %s",
+			  lr->space_name, token->space_name, disk->path);
+		return DP_BAD_LOCKSPACE;
+	}
+
+	if (strncmp(lr->resource_name, token->resource_name, NAME_ID_SIZE)) {
+		log_error(NULL, "verify_leader wrong resource name %.48s %.48s %s",
+			  lr->resource_name, token->resource_name, disk->path);
 		return DP_BAD_RESOURCEID;
 	}
 
-	if (lr->num_hosts < options.our_host_id) {
+	if (lr->num_hosts < token->host_id) {
 		log_error(NULL, "verify_leader num_hosts too small %llu %llu %s",
 			  (unsigned long long)lr->num_hosts,
-			  (unsigned long long)options.our_host_id, disk->path);
+			  (unsigned long long)token->host_id, disk->path);
 		return DP_BAD_NUMHOSTS;
 	}
 
@@ -493,8 +498,7 @@ int paxos_lease_leader_read(struct token *token, struct leader_record *leader_re
 		if (rv < 0)
 			continue;
 
-		rv = verify_leader(&token->disks[d], token->resource_name,
-				   &leaders[d]);
+		rv = verify_leader(token, &token->disks[d], &leaders[d]);
 		if (rv < 0)
 			continue;
 
@@ -609,7 +613,7 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 		goto run;
 	}
 
-	if (prev_leader.owner_id == options.our_host_id) {
+	if (prev_leader.owner_id == token->host_id) {
 		log_debug(token, "paxos_acquire already owner");
 		goto run;
 	}
@@ -624,7 +628,9 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 		  (unsigned long long)prev_leader.owner_id);
 
 	while (1) {
-		error = host_id_leader_read(prev_leader.owner_id, &host_id_leader);
+		error = host_id_leader_read(prev_leader.space_name,
+					    prev_leader.owner_id,
+					    &host_id_leader);
 		if (error < 0) {
 			log_error(token, "paxos_acquire host_id %llu read %d",
 				  (unsigned long long)prev_leader.owner_id,
@@ -714,7 +720,7 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 	memcpy(&new_leader, &prev_leader, sizeof(struct leader_record));
 	new_leader.lver += 1; /* req.lver */
 
-	error = run_disk_paxos(token, options.our_host_id, options.our_host_id,
+	error = run_disk_paxos(token, token->host_id, token->host_id,
 			       new_leader.num_hosts, new_leader.lver, &dblock);
 	if (error < 0) {
 		log_error(token, "paxos_acquire paxos error %d", error);
@@ -729,10 +735,10 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 
 	/* the inp value we commited wasn't us */
 
-	if (dblock.inp != options.our_host_id) {
+	if (dblock.inp != token->host_id) {
 		log_error(token, "paxos_acquire paxos contention our_host_id %llu "
 			  "mbal %llu bal %llu inp %llu lver %llu",
-			  (unsigned long long)options.our_host_id,
+			  (unsigned long long)token->host_id,
 			  (unsigned long long)dblock.mbal,
 			  (unsigned long long)dblock.bal,
 			  (unsigned long long)dblock.inp,
@@ -743,8 +749,8 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 
 	/* dblock has the disk paxos result: consensus inp and lver */
 
-	new_leader.owner_id = options.our_host_id;
-	new_leader.owner_generation = options.our_host_id_generation;
+	new_leader.owner_id = token->host_id;
+	new_leader.owner_generation = token->host_generation;
 	new_leader.next_owner_id = 0;
 	new_leader.lver = dblock.lver;
 	new_leader.timestamp = time(NULL);
@@ -892,11 +898,12 @@ int paxos_lease_init(struct token *token, int num_hosts, int max_hosts)
 	uint32_t offset, ss;
 	uint64_t bb, be, sb, se;
 
-	printf("initialize lease for resource %s\n", token->resource_name);
+	printf("initialize lease for resource %.48s\n", token->resource_name);
 	for (d = 0; d < token->num_disks; d++) {
-		printf("disk %s offset %llu sector_size %d\n",
+		printf("disk %s offset %llu/%llu sector_size %d\n",
 		       token->disks[d].path,
 		       (unsigned long long)token->disks[d].offset,
+		       (unsigned long long)(token->disks[d].offset / token->disks[d].sector_size),
 		       token->disks[d].sector_size);
 	}
 
@@ -907,14 +914,12 @@ int paxos_lease_init(struct token *token, int num_hosts, int max_hosts)
 	sb = bb / ss;
 	se = be / ss;
 
-	printf("bytes %llu - %llu len %llu\n",
+	printf("%llu/%llu - %llu/%llu len %llu/%llu\n",
 	       (unsigned long long)bb,
-	       (unsigned long long)be,
-	       (unsigned long long)be - bb + 1);
-
-	printf("sectors %llu - %llu len %llu\n",
 	       (unsigned long long)sb,
+	       (unsigned long long)be,
 	       (unsigned long long)se,
+	       (unsigned long long)be - bb + 1,
 	       (unsigned long long)se - sb + 1);
 
 	memset(&leader, 0, sizeof(struct leader_record));
@@ -928,6 +933,7 @@ int paxos_lease_init(struct token *token, int num_hosts, int max_hosts)
 	leader.num_hosts = num_hosts;
 	leader.max_hosts = max_hosts;
 	leader.timestamp = LEASE_FREE;
+	strncpy(leader.space_name, token->space_name, NAME_ID_SIZE);
 	strncpy(leader.resource_name, token->resource_name, NAME_ID_SIZE);
 	leader.checksum = leader_checksum(&leader);
 

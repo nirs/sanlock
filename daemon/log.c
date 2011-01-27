@@ -15,8 +15,6 @@
 #include <stdarg.h>
 
 #include "sanlock_internal.h"
-#include "diskio.h"
-#include "leader.h"
 #include "log.h"
 
 #define LOG_STR_LEN 256

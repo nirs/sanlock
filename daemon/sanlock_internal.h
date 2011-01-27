@@ -13,36 +13,18 @@
 #endif
 
 #include "sanlock.h"
-
-#define PAXOS_DISK_MAGIC 0x06152010
-#define PAXOS_DISK_VERSION_MAJOR 0x00030000
-#define PAXOS_DISK_VERSION_MINOR 0x00000001
-
-#define DELTA_DISK_MAGIC 0x12212010
-#define DELTA_DISK_VERSION_MAJOR 0x00020000
-#define DELTA_DISK_VERSION_MINOR 0x00000001
+#include "leader.h"
+#include "list.h"
 
 #define SM_MAGIC 0x04282010
-
-/* each pid can own this many leases */
-
-#define MAX_LEASES SANLK_MAX_RESOURCES
 
 /* max disks in a single lease */
 
 #define MAX_DISKS 8
 
-/* includes terminating null byte */
-
-#define DISK_PATH_LEN SANLK_PATH_LEN
-
 /* default max number of hosts supported */
 
 #define DEFAULT_MAX_HOSTS 2000
-
-/* does not include terminating null byte */
-
-#define NAME_ID_SIZE SANLK_NAME_LEN
 
 #define SM_LOG_DUMP_SIZE (1024*1024)
 
@@ -52,14 +34,88 @@
 
 #define SANLK_RUN_DIR "/var/run/sanlock"
 #define SANLK_LOG_DIR "/var/log"
+#define SANLK_WDTEST_DIR "/var/run/sanlock/wdtest"
 #define SANLK_SOCKET_NAME "sanlock_sock"
 #define SANLK_LOGFILE_NAME "sanlock.log"
 #define SANLK_LOCKFILE_NAME "sanlock.pid"
-#define SANLK_WATCHDOG_NAME "sanlock_wdtest"
 
 #define DAEMON_NAME "sanlock"
 
-#define SMERR_UNREGISTERED -501;
+
+/* for paxos_lease sync_disk + offset:
+   points to 1 leader_record + 1 request_record + MAX_HOSTS paxos_dblock's =
+   256 blocks = 128KB, ref: lease_item_record */
+
+struct sync_disk {
+	/* mirror external sanlk_disk */
+	char path[SANLK_PATH_LEN];
+	uint64_t offset;
+	uint32_t units;
+
+	/* internal */
+	uint32_t sector_size;
+	int fd;
+};
+
+/* Once token and token->disks are initialized by the main loop, the only
+   fields that are modified are disk fd's by open_disks() in the lease
+   threads. */
+
+struct token {
+	/* mirror external sanlk_resource from acquire */
+	char space_name[NAME_ID_SIZE];
+	char resource_name[NAME_ID_SIZE];
+	int num_disks;
+	uint32_t acquire_data32;
+	uint64_t acquire_data64;
+
+	/* copied from the sp with space_name */
+	uint64_t host_id;
+	uint64_t host_generation;
+
+	/* disks from acquire */
+	struct sync_disk *disks;
+
+	/* internal */
+	int token_id;
+	int acquire_result;
+	int migrate_result;
+	int release_result;
+	int setowner_result;
+	uint64_t prev_lver; /* just used to pass a value between functions */
+	struct leader_record leader; /* copy of last leader_record we wrote */
+};
+
+struct lease_status {
+	int acquire_last_result;
+	int renewal_last_result;
+	int release_last_result;
+	int max_renewal_interval;
+	uint64_t acquire_last_time;
+	uint64_t acquire_good_time;
+	uint64_t renewal_last_time;
+	uint64_t renewal_good_time;
+	uint64_t release_last_time;
+	uint64_t release_good_time;
+	uint64_t max_renewal_time;
+};
+
+struct space {
+	char space_name[NAME_ID_SIZE];
+	uint64_t host_id;
+	uint64_t host_generation;
+	struct sync_disk host_id_disk;
+	struct list_head list;
+	int killing_pids;
+	int external_remove;
+	int thread_stop;
+	pthread_t thread;
+	pthread_mutex_t mutex; /* protects lease_status, thread_stop  */
+	pthread_cond_t cond;
+	struct lease_status lease_status;
+	int wdtest_fd;
+	char wdtest_path[PATH_MAX];
+};
 
 struct sm_header {
 	uint32_t magic;
@@ -116,7 +172,7 @@ struct sm_header {
 #define DEFAULT_HOST_ID_RENEWAL_WARN_SECONDS 25
 #define DEFAULT_HOST_ID_TIMEOUT_SECONDS 100
 
-struct sm_timeouts {
+struct timeouts {
 	int io_timeout_seconds;
 	int host_id_timeout_seconds;
 	int host_id_renewal_seconds;
@@ -126,28 +182,28 @@ struct sm_timeouts {
 
 /* values used after processing command, while running */
 
-struct sm_options {
+struct options {
 	int debug;
 	int use_aio;
 	int use_watchdog;
 	uint32_t cluster_mode;
-	uint64_t our_host_id;
-	uint64_t our_host_id_generation;
-	uint64_t host_id_offset;
-	char host_id_path[DISK_PATH_LEN];
 };
 
 /* values used while processing command, not afterward */
 
 struct command_line {
-	int type;
-	int action;
-	int pid;
-	uint64_t host_id;
-	int num_hosts;
-	int max_hosts;
+	int type;				/* COM_ */
+	int action;				/* ACT_ */
+	int pid;				/* -p */
+	uint64_t local_host_id;			/* -i */
+	uint64_t local_host_generation;		/* -g */
+	uint64_t target_host_id;		/* -t */
+	int num_hosts;				/* -n */
+	int max_hosts;				/* -m */
 	int res_count;
-	struct sanlk_resource *res_args[];
+	char *dump_path;
+	struct sanlk_lockspace lockspace;	/* -s LOCKSPACE */
+	struct sanlk_resource *res_args[];	/* -r RESOURCE */
 };
 
 /* command line types and actions */
@@ -157,23 +213,26 @@ struct command_line {
 #define COM_DIRECT      3
 #define COM_WDTEST      4
 
-#define ACT_STATUS      1
-#define ACT_LOG_DUMP    2
-#define ACT_SHUTDOWN    3
-#define ACT_SET_HOST    4
-#define ACT_COMMAND     5
-#define ACT_ACQUIRE     6
-#define ACT_RELEASE     7
-#define ACT_MIGRATE     8
-#define ACT_SETOWNER    9
-#define ACT_ACQUIRE_ID  10
-#define ACT_RELEASE_ID  11
-#define ACT_RENEW_ID    12
-#define ACT_INIT        13
-#define ACT_DUMP        14
+enum {
+	ACT_STATUS = 1,
+	ACT_LOG_DUMP,
+	ACT_SHUTDOWN,
+	ACT_ADD_LOCKSPACE,
+	ACT_REM_LOCKSPACE,
+	ACT_COMMAND, 
+	ACT_ACQUIRE, 
+	ACT_RELEASE,
+	ACT_MIGRATE, 
+	ACT_SETOWNER,
+	ACT_ACQUIRE_ID,
+	ACT_RELEASE_ID,
+	ACT_RENEW_ID,
+	ACT_INIT,
+	ACT_DUMP,
+};
 
-EXTERN struct sm_options options;
-EXTERN struct sm_timeouts to;
+EXTERN struct options options;
+EXTERN struct timeouts to;
 EXTERN struct command_line com;
 
 #endif

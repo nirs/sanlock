@@ -20,8 +20,6 @@
 #include <sys/un.h>
 
 #include "sanlock_internal.h"
-#include "diskio.h"
-#include "leader.h"
 #include "log.h"
 #include "client_msg.h"
 #include "sanlock_admin.h"
@@ -87,60 +85,94 @@ int sanlock_log_dump(void)
 	return rv;
 }
 
-int sanlock_set_host(uint64_t host_id, char *path, uint64_t offset)
+/* 
+ * TODO: print_debug that splits up the debug line, e.g.
+ *
+ *     L1
+ *     RA:/dev/vdb:4096
+ *     debug: acquire_result=1 migrate_result=0 release_result=0 setowner_result=0 leader.lver=1 leader.timestamp=1296499248 leader.next_owner_id=0
+ *
+ * to
+ *
+ *     L1
+ *     RA:/dev/vdb:4096
+ *     debug:
+ *     acquire_result=1
+ *     migrate_result=0
+ *     release_result=0
+ *     setowner_result=0
+ *     leader.lver=1
+ *     leader.timestamp=1296499248
+ *     leader.next_owner_id=0
+ *
+ * also add a "wide" print option to enable long lines, e.g.
+ *
+ *     L1:RA:/dev/vdb:4096
+ *     debug: acquire_result=1 migrate_result=0 release_result=0 setowner_result=0 leader.lver=1 leader.timestamp=1296499248 leader.next_owner_id=0
+ */
+
+static void status_daemon(int fd GNUC_UNUSED, struct sanlk_state *st, char *str, int debug)
 {
-	struct sm_header h;
-	struct sanlk_disk sd;
-	int fd, rv;
+	printf("daemon\n");
 
-	fd = send_command(SM_CMD_SET_HOST, 0);
-	if (fd < 0)
-		return fd;
-
-	rv = send(fd, &host_id, sizeof(uint64_t), 0);
-	if (rv < 0) {
-		rv = -errno;
-		goto out;
-	}
-
-	memset(&sd, 0, sizeof(sd));
-	strncpy(sd.path, path, SANLK_PATH_LEN-1);
-	sd.offset = offset;
-
-	rv = send(fd, &sd, sizeof(sd), 0);
-	if (rv < 0) {
-		rv = -errno;
-		goto out;
-	}
-
-	rv = recv(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
-	if (rv != sizeof(h)) {
-		rv = -errno;
-		goto out;
-	}
-
-	if (!h.data)
-		rv = 0;
-	else
-		rv = -1;
- out:
-	close(fd);
-	return rv;
+	if (st->str_len && debug)
+		printf("debug: %s\n", str);
 }
 
-/* TODO: nicer way of printing some of the debug fields */
+static void status_lockspace(int fd, struct sanlk_state *st, char *str, int debug)
+{
+	struct sanlk_lockspace lockspace;
+	int rv;
+
+	printf("lockspace %.*s ", SANLK_NAME_LEN, st->name);
+
+	rv = recv(fd, &lockspace, sizeof(lockspace), MSG_WAITALL);
+
+	printf("host_id %llu %s:%llu\n",
+	       (unsigned long long)lockspace.host_id,
+	       lockspace.host_id_disk.path,
+	       (unsigned long long)lockspace.host_id_disk.offset);
+
+	if (st->str_len && debug)
+		printf("debug: %s\n", str);
+}
+
+static void status_client(int fd GNUC_UNUSED, struct sanlk_state *st, char *str, int debug)
+{
+	printf("pid %u ", st->data32);
+	printf("%.*s\n", SANLK_NAME_LEN, st->name);
+
+	if (st->str_len && debug)
+		printf("debug: %s\n", str);
+}
+
+static void status_resource(int fd, struct sanlk_state *st, char *str, int debug)
+{
+	struct sanlk_resource resource;
+	struct sanlk_disk disk;
+	int i, rv;
+
+	rv = recv(fd, &resource, sizeof(resource), MSG_WAITALL);
+
+	printf("    %.*s:", SANLK_NAME_LEN, resource.lockspace_name);
+	printf("    %.*s", SANLK_NAME_LEN, resource.name);
+
+	for (i = 0; i < resource.num_disks; i++) {
+		rv = recv(fd, &disk, sizeof(disk), MSG_WAITALL);
+
+		printf(":%s:%llu\n", disk.path, (unsigned long long)disk.offset);
+	}
+
+	if (st->str_len && debug)
+		printf("debug: %s\n", str);
+}
 
 int sanlock_status(int debug)
 {
 	struct sm_header h;
-	struct sanlk_state dst;
-	struct sanlk_state hst;
-	struct sanlk_state cst;
-	struct sanlk_state rst;
-	struct sanlk_resource res;
-	struct sanlk_disk disk;
+	struct sanlk_state st;
 	char str[SANLK_STATE_MAXSTR];
-	int fd, rv, ci, i, j;
+	int fd, rv;
 
 	fd = send_command(SM_CMD_STATUS, 0);
 	if (fd < 0)
@@ -150,70 +182,84 @@ int sanlock_status(int debug)
 	if (rv != sizeof(h))
 		return -errno;
 
-	rv = recv(fd, &dst, sizeof(dst), MSG_WAITALL);
-	if (rv != sizeof(dst))
-		return -errno;
 
-	printf("daemon: our_host_id %llu\n",
-	       (unsigned long long)dst.data64);
-
-	if (dst.len) {
-		rv = recv(fd, str, dst.len, MSG_WAITALL);
-		if (rv != dst.len)
+	while (1) {
+		rv = recv(fd, &st, sizeof(st), MSG_WAITALL);
+		if (!rv)
+			break;
+		if (rv != sizeof(st))
 			return -errno;
-		if (debug)
-			printf("debug: %s\n", str);
-	}
 
-	rv = recv(fd, &hst, sizeof(hst), MSG_WAITALL);
-	if (rv != sizeof(hst))
-		return -errno;
-
-	printf("host_id: our_host_id %llu\n",
-	       (unsigned long long)hst.data64);
-
-	if (hst.len) {
-		rv = recv(fd, str, hst.len, MSG_WAITALL);
-		if (rv != hst.len)
-			return -errno;
-		if (debug)
-			printf("debug: %s\n", str);
-	}
-
-	for (ci = 0; ci < dst.count; ci++) {
-
-		rv = recv(fd, &cst, sizeof(cst), MSG_WAITALL);
-
-		printf("pid %u ", cst.data32);
-		printf("%.*s\n", SANLK_NAME_LEN, cst.name);
-
-		if (cst.len) {
-			rv = recv(fd, str, cst.len, MSG_WAITALL);
-			if (debug)
-				printf("debug: %s\n", str);
+		if (st.str_len) {
+			rv = recv(fd, str, st.str_len, MSG_WAITALL);
+			if (rv != st.str_len)
+				return -errno;
 		}
 
-		for (i = 0; i < cst.count; i++) {
-			rv = recv(fd, &rst, sizeof(rst), MSG_WAITALL);
-			if (rst.len)
-				rv = recv(fd, str, rst.len, MSG_WAITALL);
-
-			rv = recv(fd, &res, sizeof(res), MSG_WAITALL);
-
-			printf("    %.*s", SANLK_NAME_LEN, rst.name);
-
-			for (j = 0; j < res.num_disks; j++) {
-				rv = recv(fd, &disk, sizeof(disk), MSG_WAITALL);
-
-				printf(":%s:%llu\n", disk.path,
-				       (unsigned long long)disk.offset);
-			}
-
-			if (rst.len && debug)
-				printf("debug: %s\n", str);
+		switch (st.type) {
+		case SANLK_STATE_DAEMON:
+			status_daemon(fd, &st, str, debug);
+			break;
+		case SANLK_STATE_LOCKSPACE:
+			status_lockspace(fd, &st, str, debug);
+			break;
+		case SANLK_STATE_CLIENT:
+			status_client(fd, &st, str, debug);
+			break;
+		case SANLK_STATE_RESOURCE:
+			status_resource(fd, &st, str, debug);
+			break;
 		}
 	}
 
 	return 0;
+}
+
+static int cmd_lockspace(int cmd, struct sanlk_lockspace *ls, uint32_t flags)
+{
+	struct sm_header h;
+	int rv, fd;
+
+	rv = connect_socket(&fd);
+	if (rv < 0)
+		return rv;
+
+	rv = send_header(fd, cmd, sizeof(struct sanlk_lockspace), flags, 0);
+	if (rv < 0)
+		return rv;
+
+	rv = send(fd, (void *)ls, sizeof(struct sanlk_lockspace), 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	memset(&h, 0, sizeof(h));
+
+	rv = recv(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
+	if (rv != sizeof(h)) {
+		rv = -errno;
+		goto out;
+	}
+
+	if (h.data) {
+		rv = (int)h.data;
+		goto out;
+	}
+
+	rv = 0;
+ out:
+	close(fd);
+	return rv;
+}
+
+int sanlock_add_lockspace(struct sanlk_lockspace *ls, uint32_t flags)
+{
+	return cmd_lockspace(SM_CMD_ADD_LOCKSPACE, ls, flags);
+}
+
+int sanlock_rem_lockspace(struct sanlk_lockspace *ls, uint32_t flags)
+{
+	return cmd_lockspace(SM_CMD_REM_LOCKSPACE, ls, flags);
 }
 

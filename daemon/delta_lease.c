@@ -16,7 +16,6 @@
 
 #include "sanlock_internal.h"
 #include "diskio.h"
-#include "leader.h"
 #include "log.h"
 #include "paxos_lease.h"
 #include "delta_lease.h"
@@ -27,7 +26,9 @@
 /* delta_leases are a series max_hosts leader_records, one leader per sector,
    host N's delta_lease is the leader_record in sectors N-1 */
 
-static int verify_leader(struct sync_disk *disk, char *resource,
+static int verify_leader(struct sync_disk *disk,
+			 char *space_name,
+			 char *resource_name,
 			 struct leader_record *lr)
 {
 	uint32_t sum;
@@ -56,9 +57,15 @@ static int verify_leader(struct sync_disk *disk, char *resource,
 		return DP_BAD_SECTORSIZE;
 	}
 
-	if (strncmp(lr->resource_name, resource, NAME_ID_SIZE)) {
-		log_error(NULL, "verify_leader wrong resource name %s %s %s",
-			  lr->resource_name, resource, disk->path);
+	if (strncmp(lr->space_name, space_name, NAME_ID_SIZE)) {
+		log_error(NULL, "verify_leader wrong space name %.48s %.48s %s",
+			  lr->space_name, space_name, disk->path);
+		return DP_BAD_LOCKSPACE;
+	}
+
+	if (strncmp(lr->resource_name, resource_name, NAME_ID_SIZE)) {
+		log_error(NULL, "verify_leader wrong resource name %.48s %.48s %s",
+			  lr->resource_name, resource_name, disk->path);
 		return DP_BAD_RESOURCEID;
 	}
 
@@ -73,10 +80,10 @@ static int verify_leader(struct sync_disk *disk, char *resource,
 	return DP_OK;
 }
 
-int delta_lease_leader_read(struct sync_disk *disk, uint64_t host_id,
-			    struct leader_record *leader_ret)
+int delta_lease_leader_read(struct sync_disk *disk, char *space_name,
+			    uint64_t host_id, struct leader_record *leader_ret)
 {
-	char name[NAME_ID_SIZE];
+	char resource_name[NAME_ID_SIZE];
 	int rv, error;
 
 	/* host_id N is block offset N-1 */
@@ -87,15 +94,17 @@ int delta_lease_leader_read(struct sync_disk *disk, uint64_t host_id,
 	if (rv < 0)
 		return DP_READ_LEADERS;
 
-	snprintf(name, NAME_ID_SIZE, "host_id_%llu",
+	memset(resource_name, 0, NAME_ID_SIZE);
+	snprintf(resource_name, NAME_ID_SIZE, "host_id_%llu",
 		 (unsigned long long)host_id);
 
-	error = verify_leader(disk, name, leader_ret);
+	error = verify_leader(disk, space_name, resource_name, leader_ret);
 
 	return error;
 }
 
-int delta_lease_acquire(struct sync_disk *disk, uint64_t host_id,
+int delta_lease_acquire(struct sync_disk *disk, char *space_name,
+			uint64_t our_host_id, uint64_t host_id,
 			struct leader_record *leader_ret)
 {
 	struct leader_record leader;
@@ -105,7 +114,7 @@ int delta_lease_acquire(struct sync_disk *disk, uint64_t host_id,
 
 	log_debug(NULL, "delta_acquire %llu begin", (unsigned long long)host_id);
 
-	error = delta_lease_leader_read(disk, host_id, &leader);
+	error = delta_lease_leader_read(disk, space_name, host_id, &leader);
 	if (error < 0)
 		return error;
 
@@ -143,7 +152,7 @@ int delta_lease_acquire(struct sync_disk *disk, uint64_t host_id,
 		log_debug(NULL, "delta_acquire long sleep %d", delay);
 		sleep(delay);
 
-		error = delta_lease_leader_read(disk, host_id, &leader);
+		error = delta_lease_leader_read(disk, space_name, host_id, &leader);
 		if (error < 0)
 			return error;
 
@@ -157,7 +166,7 @@ int delta_lease_acquire(struct sync_disk *disk, uint64_t host_id,
  write_new:
 	new_ts = time(NULL);
 	leader.timestamp = new_ts;
-	leader.owner_id = options.our_host_id;
+	leader.owner_id = our_host_id;
 	leader.owner_generation++;
 	leader.checksum = leader_checksum(&leader);
 
@@ -173,18 +182,19 @@ int delta_lease_acquire(struct sync_disk *disk, uint64_t host_id,
 	log_debug(NULL, "delta_acquire sleep 2d %d", delay);
 	sleep(delay);
 
-	error = delta_lease_leader_read(disk, host_id, &leader);
+	error = delta_lease_leader_read(disk, space_name, host_id, &leader);
 	if (error < 0)
 		return error;
 
-	if ((leader.timestamp != new_ts) || (leader.owner_id != options.our_host_id))
+	if ((leader.timestamp != new_ts) || (leader.owner_id != our_host_id))
 		goto retry;
 
 	memcpy(leader_ret, &leader, sizeof(struct leader_record));
 	return DP_OK;
 }
 
-int delta_lease_renew(struct sync_disk *disk, uint64_t host_id,
+int delta_lease_renew(struct sync_disk *disk, char *space_name,
+		      uint64_t our_host_id, uint64_t host_id,
 		      struct leader_record *leader_ret)
 {
 	struct leader_record leader;
@@ -193,11 +203,11 @@ int delta_lease_renew(struct sync_disk *disk, uint64_t host_id,
 
 	log_debug(NULL, "delta_renew %llu begin", (unsigned long long)host_id);
 
-	error = delta_lease_leader_read(disk, host_id, &leader);
+	error = delta_lease_leader_read(disk, space_name, host_id, &leader);
 	if (error < 0)
 		return error;
 
-	if (leader.owner_id != options.our_host_id)
+	if (leader.owner_id != our_host_id)
 		return DP_BAD_LEADER;
 
 	new_ts = time(NULL);
@@ -222,18 +232,19 @@ int delta_lease_renew(struct sync_disk *disk, uint64_t host_id,
 	log_debug(NULL, "delta_renew sleep 2d %d", delay);
 	sleep(delay);
 
-	error = delta_lease_leader_read(disk, host_id, &leader);
+	error = delta_lease_leader_read(disk, space_name, host_id, &leader);
 	if (error < 0)
 		return error;
 
-	if ((leader.timestamp != new_ts) || (leader.owner_id != options.our_host_id))
+	if ((leader.timestamp != new_ts) || (leader.owner_id != our_host_id))
 		return DP_BAD_LEADER;
 
 	memcpy(leader_ret, &leader, sizeof(struct leader_record));
 	return DP_OK;
 }
 
-int delta_lease_release(struct sync_disk *disk, uint64_t host_id,
+int delta_lease_release(struct sync_disk *disk, char *space_name GNUC_UNUSED,
+			uint64_t host_id,
 			struct leader_record *leader_last,
 			struct leader_record *leader_ret)
 {
@@ -259,7 +270,7 @@ int delta_lease_release(struct sync_disk *disk, uint64_t host_id,
 /* the host_id lease area begins disk->offset bytes from the start of
    block device disk->path */
 
-int delta_lease_init(struct sync_disk *disk, int max_hosts)
+int delta_lease_init(struct sync_disk *disk, char *space_name, int max_hosts)
 {
 	struct leader_record leader;
 	int i, rv;
@@ -267,8 +278,11 @@ int delta_lease_init(struct sync_disk *disk, int max_hosts)
 	uint32_t ss;
 
 	printf("initialize leases for host_id 1 - %d\n", max_hosts);
-	printf("disk %s offset %llu sector_size %d\n",
-	       disk->path, (unsigned long long)disk->offset, disk->sector_size);
+	printf("disk %s offset %llu/%llu sector_size %d\n",
+	       disk->path,
+	       (unsigned long long)disk->offset,
+	       (unsigned long long)(disk->offset / disk->sector_size),
+	       disk->sector_size);
 
 	ss = disk->sector_size;
 	bb = disk->offset;
@@ -276,14 +290,12 @@ int delta_lease_init(struct sync_disk *disk, int max_hosts)
 	sb = bb / ss;
 	se = be / ss;
 
-	printf("bytes %llu - %llu len %llu\n",
+	printf("%llu/%llu - %llu/%llu len %llu/%llu\n",
 	       (unsigned long long)bb,
-	       (unsigned long long)be,
-	       (unsigned long long)be - bb + 1);
-
-	printf("sectors %llu - %llu len %llu\n",
 	       (unsigned long long)sb,
+	       (unsigned long long)be,
 	       (unsigned long long)se,
+	       (unsigned long long)be - bb + 1,
 	       (unsigned long long)se - sb + 1);
 
 	memset(&leader, 0, sizeof(struct leader_record));
@@ -294,6 +306,7 @@ int delta_lease_init(struct sync_disk *disk, int max_hosts)
 	leader.sector_size = disk->sector_size;
 	leader.max_hosts = 1;
 	leader.timestamp = LEASE_FREE;
+	strncpy(leader.space_name, space_name, NAME_ID_SIZE);
 
 	/* host_id N is block offset N-1 */
 

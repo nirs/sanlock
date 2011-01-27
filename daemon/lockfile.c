@@ -14,8 +14,6 @@
 #include <sys/time.h>
 
 #include "sanlock_internal.h"
-#include "diskio.h"
-#include "leader.h"
 #include "log.h"
 #include "lockfile.h"
 

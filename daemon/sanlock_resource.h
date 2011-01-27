@@ -12,6 +12,7 @@
  */
 
 int sanlock_register(void);
+
 int sanlock_acquire(int sock, int pid, int res_count,
 		    struct sanlk_resource *res_args[],
 		    struct sanlk_options *opt_in);

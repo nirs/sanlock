@@ -7,7 +7,6 @@ void log_level(const struct token *token, int level, const char *fmt, ...)
 int setup_logging(void);
 void close_logging(void);
 void write_log_dump(int fd, struct sm_header *hd);
-
 #define log_debug(token, fmt, args...) log_level(token, LOG_DEBUG, fmt, ##args)
 #define log_error(token, fmt, args...) log_level(token, LOG_ERR, fmt, ##args)
 

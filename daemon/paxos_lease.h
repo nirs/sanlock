@@ -9,12 +9,12 @@ int paxos_lease_acquire(struct token *token, int force,
 		        uint64_t reacquire_lver,
 		        int new_num_hosts);
 int paxos_lease_migrate(struct token *token,
-                        struct leader_record *leader_last,
-                        struct leader_record *leader_ret,
-                        uint64_t target_host_id);
+			struct leader_record *leader_last,
+			struct leader_record *leader_ret,
+			uint64_t target_host_id);
 int paxos_lease_release(struct token *token,
-		        struct leader_record *leader_last,
-		        struct leader_record *leader_ret);
+			struct leader_record *leader_last,
+			struct leader_record *leader_ret);
 int paxos_lease_init(struct token *token, int num_hosts, int max_hosts);
 
 #endif

@@ -16,42 +16,23 @@
 
 #include "sanlock_internal.h"
 #include "diskio.h"
-#include "leader.h"
 #include "log.h"
 #include "delta_lease.h"
 #include "host_id.h"
 #include "watchdog.h"
 #include "client_msg.h"
 
-struct lease_status {
-	int acquire_last_result;
-	int renewal_last_result;
-	int release_last_result;
-	int max_renewal_interval;
-	uint64_t acquire_last_time;
-	uint64_t acquire_good_time;
-	uint64_t renewal_last_time;
-	uint64_t renewal_good_time;
-	uint64_t release_last_time;
-	uint64_t release_good_time;
-	uint64_t max_renewal_time;
-};
+struct list_head spaces;
+struct list_head spaces_remove;
+pthread_mutex_t spaces_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-static struct lease_status our_lease_status;
-static pthread_t our_host_id_thread;
-static pthread_mutex_t host_id_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t host_id_cond = PTHREAD_COND_INITIALIZER;
-static int our_host_id_thread_stop;
-static struct sync_disk host_id_disk;
-
-int print_hostid_state(char *str)
+int print_space_state(struct space *sp, char *str)
 {
 	memset(str, 0, SANLK_STATE_MAXSTR);
 
 	snprintf(str, SANLK_STATE_MAXSTR-1,
-		 "path=%s "
-		 "offset=%llu "
-		 "our_host_id_generation=%llu "
+		 "host_generation=%llu "
+		 "killing_pids=%d "
 		 "acquire_last_result=%d "
 		 "renewal_last_result=%d "
 		 "release_last_result=%d "
@@ -63,34 +44,79 @@ int print_hostid_state(char *str)
 		 "release_good_time=%llu "
 		 "max_renewal_time=%llu "
 		 "max_renewal_interval=%d",
-		 options.host_id_path,
-		 (unsigned long long)options.host_id_offset,
-		 (unsigned long long)options.our_host_id_generation,
-		 our_lease_status.acquire_last_result,
-		 our_lease_status.renewal_last_result,
-		 our_lease_status.release_last_result,
-		 (unsigned long long)our_lease_status.acquire_last_time,
-		 (unsigned long long)our_lease_status.acquire_good_time,
-		 (unsigned long long)our_lease_status.renewal_last_time,
-		 (unsigned long long)our_lease_status.renewal_good_time,
-		 (unsigned long long)our_lease_status.release_last_time,
-		 (unsigned long long)our_lease_status.release_good_time,
-		 (unsigned long long)our_lease_status.max_renewal_time,
-		 our_lease_status.max_renewal_interval);
+		 (unsigned long long)sp->host_generation,
+		 sp->killing_pids,
+		 sp->lease_status.acquire_last_result,
+		 sp->lease_status.renewal_last_result,
+		 sp->lease_status.release_last_result,
+		 (unsigned long long)sp->lease_status.acquire_last_time,
+		 (unsigned long long)sp->lease_status.acquire_good_time,
+		 (unsigned long long)sp->lease_status.renewal_last_time,
+		 (unsigned long long)sp->lease_status.renewal_good_time,
+		 (unsigned long long)sp->lease_status.release_last_time,
+		 (unsigned long long)sp->lease_status.release_good_time,
+		 (unsigned long long)sp->lease_status.max_renewal_time,
+		 sp->lease_status.max_renewal_interval);
 
 	return strlen(str);
 }
 
-int host_id_leader_read(uint64_t host_id, struct leader_record *leader_ret)
+static struct space *_search_space(char *space_name, struct list_head *head)
 {
-	struct leader_record leader;
+	struct space *sp;
+
+	list_for_each_entry(sp, head, list) {
+		if (strncmp(sp->space_name, space_name, NAME_ID_SIZE))
+			continue;
+		return sp;
+	}
+	return NULL;
+}
+
+int get_space_info(char *space_name, struct space *sp_out)
+{
+	struct space *sp;
+
+	pthread_mutex_lock(&spaces_mutex);
+	list_for_each_entry(sp, &spaces, list) {
+		if (strncmp(sp->space_name, space_name, NAME_ID_SIZE))
+			continue;
+		memcpy(sp_out, sp, sizeof(struct space));
+		pthread_mutex_unlock(&spaces_mutex);
+		return 0;
+	}
+	pthread_mutex_unlock(&spaces_mutex);
+	return -1;
+}
+
+uint64_t get_our_host_id(char *space_name)
+{
+	struct space *sp;
+	uint64_t id = 0;
+
+	pthread_mutex_lock(&spaces_mutex);
+	sp = _search_space(space_name, &spaces);
+	if (sp)
+		id = sp->host_id;
+	pthread_mutex_unlock(&spaces_mutex);
+	return id;
+}
+
+int host_id_leader_read(char *space_name, uint64_t host_id,
+			struct leader_record *leader_ret)
+{
+	struct space space;
 	int rv;
 
-	rv = delta_lease_leader_read(&host_id_disk, host_id, &leader);
+	rv = get_space_info(space_name, &space);
 	if (rv < 0)
 		return rv;
 
-	memcpy(leader_ret, &leader, sizeof(struct leader_record));
+	rv = delta_lease_leader_read(&space.host_id_disk, space_name,
+				     host_id, leader_ret);
+	if (rv < 0)
+		return rv;
+
 	return 0;
 }
 
@@ -98,28 +124,24 @@ int host_id_leader_read(uint64_t host_id, struct leader_record *leader_ret)
  * check if our_host_id_thread has renewed within timeout
  */
 
-int our_host_id_renewed(void)
+int host_id_renewed(struct space *sp)
 {
 	uint64_t good_time;
 	int good_diff;
 
-	pthread_mutex_lock(&host_id_mutex);
-	good_time = our_lease_status.renewal_good_time;
-	pthread_mutex_unlock(&host_id_mutex);
-
-	/* host_id hasn't been started yet */
-	if (!good_time)
-		return 1;
+	pthread_mutex_lock(&sp->mutex);
+	good_time = sp->lease_status.renewal_good_time;
+	pthread_mutex_unlock(&sp->mutex);
 
 	good_diff = time(NULL) - good_time;
 
 	if (good_diff >= to.host_id_renewal_fail_seconds) {
-		log_error(NULL, "our_host_id_renewed failed %d", good_diff);
+		log_error(NULL, "host_id_renewed failed %d", good_diff);
 		return 0;
 	}
 
 	if (good_diff >= to.host_id_renewal_warn_seconds) {
-		log_error(NULL, "our_host_id_renewed warning %d last good %llu",
+		log_error(NULL, "host_id_renewed warning %d last good %llu",
 			  good_diff,
 			  (unsigned long long)good_time);
 	}
@@ -131,17 +153,17 @@ static void *host_id_thread(void *arg_in)
 {
 	struct leader_record leader;
 	struct timespec renew_time;
-	uint64_t *arg = (uint64_t *)arg_in;
-	uint64_t host_id_in = (uint64_t)(*arg);
+	struct space *sp = (struct space *)arg_in;
+	uint64_t our_host_id;
 	uint64_t t;
-       	uint64_t good_time;
+	uint64_t good_time;
 	int good_diff;
 	int rv, stop, result, dl_result;
 
-	free(arg);
+	our_host_id = sp->host_id;
 
-	result = delta_lease_acquire(&host_id_disk, host_id_in, &leader);
-
+	result = delta_lease_acquire(&sp->host_id_disk, sp->space_name,
+				     our_host_id, sp->host_id, &leader);
 	dl_result = result;
 	t = leader.timestamp;
 
@@ -149,197 +171,258 @@ static void *host_id_thread(void *arg_in)
 	   before we allow any pid's to begin running */
 
 	if (result == DP_OK) {
-		rv = create_watchdog_file(t);
+		rv = create_watchdog_file(sp, t);
 		if (rv < 0) {
 			log_error(NULL, "create_watchdog failed %d", rv);
 			result = DP_ERROR;
 		}
 	}
 
-	pthread_mutex_lock(&host_id_mutex);
-	our_lease_status.acquire_last_result = result;
-	our_lease_status.acquire_last_time = t;
+	pthread_mutex_lock(&sp->mutex);
+	sp->lease_status.acquire_last_result = result;
+	sp->lease_status.acquire_last_time = t;
 	if (result == DP_OK)
-		our_lease_status.acquire_good_time = t;
-	our_lease_status.renewal_last_result = result;
-	our_lease_status.renewal_last_time = t;
+		sp->lease_status.acquire_good_time = t;
+	sp->lease_status.renewal_last_result = result;
+	sp->lease_status.renewal_last_time = t;
 	if (result == DP_OK)
-		our_lease_status.renewal_good_time = t;
-	pthread_cond_broadcast(&host_id_cond);
-	pthread_mutex_unlock(&host_id_mutex);
+		sp->lease_status.renewal_good_time = t;
+	pthread_cond_broadcast(&sp->cond);
+	pthread_mutex_unlock(&sp->mutex);
 
 	if (result < 0) {
 		log_error(NULL, "host_id %llu acquire failed %d",
-			  (unsigned long long)host_id_in, result);
+			  (unsigned long long)sp->host_id, result);
 		goto out;
 	}
 
 	log_debug(NULL, "host_id %llu generation %llu acquire %llu",
-		  (unsigned long long)host_id_in,
+		  (unsigned long long)sp->host_id,
 		  (unsigned long long)leader.owner_generation,
 		  (unsigned long long)t);
 
-	options.our_host_id_generation = leader.owner_generation;
+	sp->host_generation = leader.owner_generation;
 
 	good_time = t;
 	good_diff = 0;
 	renew_time.tv_sec = t;
 
 	while (1) {
-		pthread_mutex_lock(&host_id_mutex);
+		pthread_mutex_lock(&sp->mutex);
 		renew_time.tv_sec += to.host_id_renewal_seconds;
 		rv = 0;
-		while (!our_host_id_thread_stop && rv == 0) {
-			rv = pthread_cond_timedwait(&host_id_cond,
-						    &host_id_mutex,
+		while (!sp->thread_stop && rv == 0) {
+			rv = pthread_cond_timedwait(&sp->cond,
+						    &sp->mutex,
 						    &renew_time);
 		}
-		stop = our_host_id_thread_stop;
-		pthread_mutex_unlock(&host_id_mutex);
+		stop = sp->thread_stop;
+		pthread_mutex_unlock(&sp->mutex);
 		if (stop)
 			break;
 
 		clock_gettime(CLOCK_REALTIME, &renew_time);
 
-		result = delta_lease_renew(&host_id_disk, host_id_in, &leader);
-
+		result = delta_lease_renew(&sp->host_id_disk, sp->space_name,
+					   our_host_id, sp->host_id, &leader);
 		t = leader.timestamp;
 
-		pthread_mutex_lock(&host_id_mutex);
-		our_lease_status.renewal_last_result = result;
-		our_lease_status.renewal_last_time = t;
+		pthread_mutex_lock(&sp->mutex);
+		sp->lease_status.renewal_last_result = result;
+		sp->lease_status.renewal_last_time = t;
 
 		if (result == DP_OK) {
-			our_lease_status.renewal_good_time = t;
+			sp->lease_status.renewal_good_time = t;
 
 			good_diff = t - good_time;
 			good_time = t;
 
-			if (good_diff > our_lease_status.max_renewal_interval) {
-				our_lease_status.max_renewal_interval = good_diff;
-				our_lease_status.max_renewal_time = t;
+			if (good_diff > sp->lease_status.max_renewal_interval) {
+				sp->lease_status.max_renewal_interval = good_diff;
+				sp->lease_status.max_renewal_time = t;
 			}
 		}
-		pthread_mutex_unlock(&host_id_mutex);
+		pthread_mutex_unlock(&sp->mutex);
 
 		if (result < 0) {
 			log_error(NULL, "host_id %llu renewal error %d last good %llu",
-				  (unsigned long long)host_id_in, result,
-				  (unsigned long long)our_lease_status.renewal_good_time);
+				  (unsigned long long)sp->host_id, result,
+				  (unsigned long long)sp->lease_status.renewal_good_time);
 		} else {
 			log_debug(NULL, "host_id %llu renewal %llu interval %d",
-				  (unsigned long long)host_id_in,
+				  (unsigned long long)sp->host_id,
 				  (unsigned long long)t, good_diff);
 
-			update_watchdog_file(t);
+			update_watchdog_file(sp, t);
 		}
 	}
 
 	/* unlink called below to get it done ASAP */
-	close_watchdog_file();
+	close_watchdog_file(sp);
  out:
 	if (dl_result == DP_OK)
-		delta_lease_release(&host_id_disk, host_id_in, &leader, &leader);
+		delta_lease_release(&sp->host_id_disk, sp->space_name,
+				    sp->host_id, &leader, &leader);
+
 	return NULL;
 }
 
-/* 
- * options.our_host_id must be set prior to calling this, and the
- * caller should set our_host_id back to 0 if this function returns
- * an error; the delta_lease functions use options.our_host_id directly,
- * so we can't wait an set options.our_host_id after this function
- * returns success
- *
+/*
  * When this function returns, it needs to be safe to being processing lease
  * requests and allowing pid's to run, so we need to own our host_id, and the
- * watchdog needs to be active watching our host_id renewals.  start_host_id()
- * blocks the main processing thread, so a lease request can be processed
- * immediately when this returns, and it will check if options.our_host_id is > 0.
+ * watchdog needs to be active watching our host_id renewals.
  */
 
-int start_host_id(void)
+int add_space(struct space *sp)
 {
 	int rv, result;
-	uint64_t *arg;
 
-	memset(&host_id_disk, 0, sizeof(struct sync_disk));
-	strncpy(host_id_disk.path, options.host_id_path, DISK_PATH_LEN);
-	host_id_disk.offset = options.host_id_offset;
+	if (space_exists(sp->space_name)) {
+		log_error(NULL, "add_space exists");
+		goto fail;
+	}
 
-	rv = open_disks(&host_id_disk, 1);
+	rv = open_disks(&sp->host_id_disk, 1);
 	if (rv != 1) {
-		log_error(NULL, "start_host_id open_disk failed %d %s",
-			  rv, options.host_id_path);
+		log_error(NULL, "add_space open_disk failed %d %s",
+			  rv, sp->host_id_disk.path);
 		rv = -1;
 		goto fail;
 	}
 
-	log_debug(NULL, "start_host_id %llu host_id_path %s offset %llu",
-		  (unsigned long long)options.our_host_id,
-		  options.host_id_path,
-		  (unsigned long long)options.host_id_offset);
+	log_debug(NULL, "add_space host_id %llu path %s offset %llu",
+		  (unsigned long long)sp->host_id,
+		  sp->host_id_disk.path,
+		  (unsigned long long)sp->host_id_disk.offset);
 
-	arg = malloc(sizeof(uint64_t));
-	if (!arg) {
-		rv = -ENOMEM;
+	rv = pthread_create(&sp->thread, NULL, host_id_thread, sp);
+	if (rv < 0) {
+		log_error(NULL, "add_space create thread failed");
 		goto fail_close;
 	}
-	*arg = options.our_host_id;
 
-	memset(&our_lease_status, 0, sizeof(struct lease_status));
-
-	rv = pthread_create(&our_host_id_thread, NULL, host_id_thread, arg);
-	if (rv < 0) {
-		log_error(NULL, "start_host_id create thread failed");
-		goto fail_free;
+	pthread_mutex_lock(&sp->mutex);
+	while (!sp->lease_status.acquire_last_result) {
+		pthread_cond_wait(&sp->cond, &sp->mutex);
 	}
-
-	pthread_mutex_lock(&host_id_mutex);
-	while (!our_lease_status.acquire_last_result) {
-		pthread_cond_wait(&host_id_cond, &host_id_mutex);
-	}
-	result = our_lease_status.acquire_last_result;
-	pthread_mutex_unlock(&host_id_mutex);
+	result = sp->lease_status.acquire_last_result;
+	pthread_mutex_unlock(&sp->mutex);
 
 	if (result != DP_OK) {
 		/* the thread exits right away if acquire fails */
-		pthread_join(our_host_id_thread, NULL);
+		pthread_join(sp->thread, NULL);
 		rv = result;
 		goto fail_close;
 	}
 
+	pthread_mutex_lock(&spaces_mutex);
+	/* TODO: repeating check here unnecessary if we serialize adds and removes */
+	if (_search_space(sp->space_name, &spaces) ||
+	    _search_space(sp->space_name, &spaces_remove)) {
+		pthread_mutex_unlock(&spaces_mutex);
+		log_error(NULL, "add_space duplicate");
+		goto fail_stop;
+	} else {
+		list_add(&sp->list, &spaces);
+	}
+	pthread_mutex_unlock(&spaces_mutex);
 	return 0;
 
- fail_free:
-	free(arg);
+ fail_stop:
+	sp->thread_stop = 1;
+	pthread_join(sp->thread, NULL);
  fail_close:
-	close_disks(&host_id_disk, 1);
+	close_disks(&sp->host_id_disk, 1);
  fail:
+	return rv;
+}
+
+int rem_space(char *space_name)
+{
+	struct space *sp;
+	int rv = -ENOENT;
+
+	pthread_mutex_lock(&spaces_mutex);
+	sp = _search_space(space_name, &spaces);
+	if (sp) {
+		sp->external_remove = 1;
+		rv = 0;
+	}
+	pthread_mutex_unlock(&spaces_mutex);
 	return rv;
 }
 
 /* 
  * we call stop_host_id() when all pids are gone and we're in a safe state, so
- * it's safe to unlink the watchdog right away here.  We want to do the unlink
+ * it's safe to unlink the watchdog right away here.  We want to sp the unlink
  * as soon as it's safe, so we can reduce the chance we get killed by the
  * watchdog (we could actually call this in main_loop just before the break).
  * Getting this unlink done quickly is more important than doing at the more
  * "logical" point commented above in host_id_thread.
  */
 
-void stop_host_id(void)
+static int finish_space(struct space *sp, int wait)
 {
-	unlink_watchdog_file();
+	int stop, rv;
 
-	if (!options.our_host_id)
-		return;
+	pthread_mutex_lock(&sp->mutex);
+	stop = sp->thread_stop;
+	pthread_mutex_unlock(&sp->mutex);
 
-	pthread_mutex_lock(&host_id_mutex);
-	our_host_id_thread_stop = 1;
-	pthread_cond_broadcast(&host_id_cond);
-	pthread_mutex_unlock(&host_id_mutex);
+	if (!stop) {
+		log_error(NULL, "finish_space zero thread_stop");
+		return -EINVAL;
+	}
 
-	pthread_join(our_host_id_thread, NULL);
-	close_disks(&host_id_disk, 1);
+	log_debug(NULL, "%s finish_space", sp->space_name);
+
+	if (wait)
+		rv = pthread_join(sp->thread, NULL);
+	else
+		rv = pthread_tryjoin_np(sp->thread, NULL);
+
+	if (rv)
+		return rv;
+
+	log_debug(NULL, "%s close_disks", sp->space_name);
+
+	close_disks(&sp->host_id_disk, 1);
+	return 0;
+}
+
+void clear_spaces(int wait)
+{
+	struct space *sp, *safe;
+	int rv;
+
+	pthread_mutex_lock(&spaces_mutex);
+	list_for_each_entry_safe(sp, safe, &spaces_remove, list) {
+		rv = finish_space(sp, wait);
+		if (!rv) {
+			list_del(&sp->list);
+			free(sp);
+		}
+	}
+	pthread_mutex_unlock(&spaces_mutex);
+}
+
+int space_exists(char *space_name)
+{
+	struct space *sp;
+
+	pthread_mutex_lock(&spaces_mutex);
+	sp = _search_space(space_name, &spaces);
+	if (!sp)
+		sp = _search_space(space_name, &spaces_remove);
+	pthread_mutex_unlock(&spaces_mutex);
+	if (sp)
+		return 1;
+	return 0;
+}
+
+void setup_spaces(void)
+{
+	INIT_LIST_HEAD(&spaces);
+	INIT_LIST_HEAD(&spaces_remove);
 }
 

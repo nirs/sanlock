@@ -20,8 +20,6 @@
 #include <sys/un.h>
 
 #include "sanlock_internal.h"
-#include "diskio.h"
-#include "leader.h"
 #include "client_msg.h"
 #include "sanlock_resource.h"
 
@@ -52,7 +50,7 @@ int sanlock_acquire(int sock, int pid, int res_count,
 	int rv, i, fd, data2;
 	int datalen = 0;
 
-	if (res_count > MAX_LEASES)
+	if (res_count > SANLK_MAX_RESOURCES)
 		return -EINVAL;
 
 	for (i = 0; i < res_count; i++) {
@@ -183,7 +181,7 @@ int sanlock_migrate(int sock, int pid, uint64_t target_host_id)
 		goto out;
 	}
 
-	len = h.length = sizeof(h);
+	len = h.length - sizeof(h);
 	reply_str = malloc(len);
 	if (!reply_str)
 		goto out;
@@ -215,7 +213,7 @@ int sanlock_release(int sock, int pid, int res_count,
 		    struct sanlk_resource *res_args[])
 {
 	struct sm_header h;
-	int results[MAX_LEASES];
+	int results[SANLK_MAX_RESOURCES];
 	int fd, rv, i, data2, datalen;
 
 	if (sock == -1) {

@@ -10,14 +10,13 @@
 #include <limits.h>
 #include <pthread.h>
 #include <time.h>
+#include <dirent.h>
 #include <syslog.h>
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/stat.h>
 
 #include "sanlock_internal.h"
-#include "diskio.h"
-#include "leader.h"
 #include "log.h"
 #include "watchdog.h"
 
@@ -61,9 +60,6 @@
  * watchdogd does not see wd file with old time and does not reset host
  */
 
-static char watchdog_path[PATH_MAX];
-static int watchdog_fd;
-
 #define BUF_SIZE 128
 
 static int do_write(int fd, void *buf, size_t count)
@@ -86,7 +82,7 @@ static int do_write(int fd, void *buf, size_t count)
 	return 0;
 }
 
-void update_watchdog_file(uint64_t timestamp)
+void update_watchdog_file(struct space *sp, uint64_t timestamp)
 {
 	char buf[BUF_SIZE];
 
@@ -98,18 +94,22 @@ void update_watchdog_file(uint64_t timestamp)
 		 (unsigned long long)timestamp,
 		 (unsigned long long)timestamp + to.host_id_renewal_fail_seconds);
 
-	lseek(watchdog_fd, 0, SEEK_SET);
+	lseek(sp->wdtest_fd, 0, SEEK_SET);
 
-	do_write(watchdog_fd, buf, sizeof(buf));
+	do_write(sp->wdtest_fd, buf, sizeof(buf));
 }
 
-int create_watchdog_file(uint64_t timestamp)
+int create_watchdog_file(struct space *sp, uint64_t timestamp)
 {
 	char buf[BUF_SIZE];
 	int rv, fd;
 
 	if (!options.use_watchdog)
 		return 0;
+
+	snprintf(sp->wdtest_path, PATH_MAX, "%s/%s_hostid%llu",
+		 SANLK_WDTEST_DIR, sp->space_name,
+		 (unsigned long long)sp->host_id);
 
 	/* If this open fails with EEXIST I don't think it's safe to unlink
 	 * watchdog_path and try again.  If the daemon had failed while pid's
@@ -124,10 +124,10 @@ int create_watchdog_file(uint64_t timestamp)
 	 * on, although there's currently no mechanism to reattach to any
 	 * running pid's we're supposed to be supervising. */
 
-	fd = open(watchdog_path, O_WRONLY|O_CREAT|O_EXCL|O_NONBLOCK, 0666);
+	fd = open(sp->wdtest_path, O_WRONLY|O_CREAT|O_EXCL|O_NONBLOCK, 0666);
 	if (fd < 0) {
 		log_error(NULL, "create_watchdog_file open %s error %d",
-			  watchdog_path, errno);
+			  sp->wdtest_path, errno);
 		return fd;
 	}
 
@@ -143,89 +143,114 @@ int create_watchdog_file(uint64_t timestamp)
 		return rv;
 	}
 
-	watchdog_fd = fd;
+	sp->wdtest_fd = fd;
 	return 0;
 }
 
-void unlink_watchdog_file(void)
+void unlink_watchdog_file(struct space *sp)
 {
 	if (!options.use_watchdog)
 		return;
 
-	unlink(watchdog_path);
+	unlink(sp->wdtest_path);
 }
 
-void close_watchdog_file(void)
+void close_watchdog_file(struct space *sp)
 {
-	close(watchdog_fd);
+	close(sp->wdtest_fd);
 }
 
 int check_watchdog_file(void)
 {
-	struct stat buf;
-	int rv;
+	DIR *d;
+	struct dirent *de;
+	int rv = 0;
 
 	if (!options.use_watchdog)
 		return 0;
 
-	snprintf(watchdog_path, PATH_MAX, "%s/%s",
-		 SANLK_RUN_DIR, SANLK_WATCHDOG_NAME);
-
-	rv = stat(watchdog_path, &buf);
-
-	if (rv == -1 && errno == ENOENT)
+	d = opendir(SANLK_WDTEST_DIR);
+	if (!d)
 		return 0;
 
-	log_error(NULL, "check watchdog file %s: %s",
-		  watchdog_path, strerror(errno));
+	while ((de = readdir(d))) {
+		if (de->d_name[0] == '.')
+			continue;
 
-	return -errno;
+		log_error(NULL, "stale wdtest file: %s/%s",
+			  SANLK_WDTEST_DIR, de->d_name);
+		rv = -1;
+	}
+	closedir(d);
+
+	return rv;
 }
 
 int do_wdtest(void)
 {		
+	DIR *d;
+	struct dirent *de;
+	char path[PATH_MAX];
 	char buf[BUF_SIZE];
 	unsigned long long renewal = 0, expire = 0;
 	time_t t;
+	int fail_count = 0;
 	int rv, fd;
 
 	openlog("sanlock_wdtest", LOG_CONS | LOG_PID, LOG_USER);
 
-	snprintf(watchdog_path, PATH_MAX, "%s/%s",
-		 SANLK_RUN_DIR, SANLK_WATCHDOG_NAME);
-
-	fd = open(watchdog_path, O_RDONLY|O_NONBLOCK, 0666);
-	if (fd < 0) {
-		syslog(LOG_ERR, "open error %s", watchdog_path);
+	d = opendir(SANLK_WDTEST_DIR);
+	if (!d)
 		return 0;
+
+	while ((de = readdir(d))) {
+		if (de->d_name[0] == '.')
+			continue;
+
+		snprintf(path, PATH_MAX-1, "%s/%s",
+			 SANLK_WDTEST_DIR, de->d_name);
+
+		fd = open(path, O_RDONLY|O_NONBLOCK, 0666);
+		if (fd < 0) {
+			syslog(LOG_ERR, "open error %s", path);
+			continue;
+		}
+
+		memset(buf, 0, sizeof(buf));
+		rv = read(fd, buf, sizeof(buf));
+		if (rv < 0) {
+			syslog(LOG_ERR, "read error %s", path);
+			close(fd);
+			continue;
+		}
+
+		close(fd);
+
+		sscanf(buf, "renewal %llu expire %llu", &renewal, &expire);
+
+		t = time(NULL);
+
+		syslog(LOG_ERR, "%s renewal %llu expire %llu now %llu",
+		       path,
+	       	       (unsigned long long)renewal,
+		       (unsigned long long)expire,
+	               (unsigned long long)t);
+
+		if (t < expire)
+			continue;
+
+		syslog(LOG_CRIT, "%s test fail renewal %llu expire %llu now %llu",
+		       path,
+		       (unsigned long long)renewal,
+		       (unsigned long long)expire,
+		       (unsigned long long)t);
+
+		fail_count++;
 	}
+	closedir(d);
 
-	memset(buf, 0, sizeof(buf));
-	rv = read(fd, buf, sizeof(buf));
-	if (rv < 0) {
-		syslog(LOG_ERR, "read error %s", watchdog_path);
-		return 0;
-	}
-
-	sscanf(buf, "renewal %llu expire %llu", &renewal, &expire);
-
-	t = time(NULL);
-
-	syslog(LOG_ERR, "renewal %llu expire %llu now %llu",
-	       (unsigned long long)renewal,
-	       (unsigned long long)expire,
-	       (unsigned long long)t);
-
-	if (t < expire)
-		return 0;
-
-	syslog(LOG_CRIT, "test fail renewal %llu expire %llu now %llu",
-	       (unsigned long long)renewal,
-	       (unsigned long long)expire,
-	       (unsigned long long)t);
-
-	/* test command exit codes have special meaning to watchdog deamon */
-
-	return -2;
+	if (fail_count)
+		return -1;
+	return 0;
 }
 

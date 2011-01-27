@@ -9,7 +9,7 @@
 
 #define SANLK_NAME_LEN		48   
 
-/* max disk path length */
+/* max disk path length, includes terminating \0 byte */
 
 #define SANLK_PATH_LEN		1024
 
@@ -29,6 +29,7 @@ struct sanlk_disk {
 };
 
 struct sanlk_resource {
+	char lockspace_name[SANLK_NAME_LEN]; /* terminating \0 not required */
 	char name[SANLK_NAME_LEN]; /* terminating \0 not required */
 	uint32_t num_disks;
 	uint32_t data32;   /* per-resource command-specific data */
@@ -50,6 +51,13 @@ struct sanlk_options {
 	uint32_t len;
 	/* followed by len bytes (migration input will use this) */
 	char str[0];
+};
+
+struct sanlk_lockspace {
+	char name[SANLK_NAME_LEN];
+	uint64_t host_id;
+	uint32_t flags;
+	struct sanlk_disk host_id_disk;
 };
 
 #endif

@@ -31,7 +31,22 @@ enum {
 	DP_OTHER_INP = -25,
 	DP_BAD_SECTORSIZE = -26,
 	DP_REACQUIRE_LVER = -27,
+	DP_BAD_LOCKSPACE = -28,
 };
+
+/* does not include terminating null byte */
+/* NB NAME_ID_SIZE must match SANLK_NAME_LEN */
+/* NB NAME_ID_SIZE is part of ondisk format */
+
+#define NAME_ID_SIZE 48
+
+#define PAXOS_DISK_MAGIC 0x06152010
+#define PAXOS_DISK_VERSION_MAJOR 0x00040000
+#define PAXOS_DISK_VERSION_MINOR 0x00000001
+
+#define DELTA_DISK_MAGIC 0x12212010
+#define DELTA_DISK_VERSION_MAJOR 0x00030000
+#define DELTA_DISK_VERSION_MINOR 0x00000001
 
 /* for all disk structures:
    uint64 aligned on 8 byte boundaries,
@@ -52,8 +67,8 @@ enum {
    multiple leader blocks in a lease, but this potential inconsistency,
    like timestamp, should not factor against the repetition count. */
 
-#define LEADER_COMPARE_LEN 104
-#define LEADER_CHECKSUM_LEN 120
+#define LEADER_COMPARE_LEN 152
+#define LEADER_CHECKSUM_LEN 168
 #define LEASE_FREE 0
 
 struct leader_record {
@@ -66,35 +81,12 @@ struct leader_record {
 	uint64_t owner_id; /* host_id of owner */
 	uint64_t owner_generation;
 	uint64_t lver;
+	char space_name[NAME_ID_SIZE]; /* lockspace for resource */
 	char resource_name[NAME_ID_SIZE]; /* resource being locked */
 	uint64_t timestamp;
 	uint64_t next_owner_id;
 	uint32_t checksum;
 	uint32_t pad2;
-};
-
-/* Once token and token->disks are initialized by the main loop, the only
-   fields that are modified are disk fd's by open_disks() in the lease
-   threads. */
-
-struct token {
-	/* mirror external sanlk_resource from acquire */
-	char resource_name[NAME_ID_SIZE];
-	int num_disks;
-	uint32_t acquire_data32;
-	uint64_t acquire_data64; 
-
-	/* disks from acquire */
-	struct sync_disk *disks;
-
-	/* internal */
-	int token_id;
-	int acquire_result;
-	int migrate_result;
-	int release_result;
-	int setowner_result;
-	uint64_t prev_lver; /* just used to pass a value between functions */
-	struct leader_record leader; /* copy of last leader_record we wrote */
 };
 
 #endif

@@ -8,6 +8,7 @@
 int sanlock_status(int debug);
 int sanlock_log_dump(void);
 int sanlock_shutdown(void);
-int sanlock_set_host(uint64_t host_id, char *path, uint64_t offset);
+int sanlock_add_lockspace(struct sanlk_lockspace *ls, uint32_t flags);
+int sanlock_rem_lockspace(struct sanlk_lockspace *ls, uint32_t flags);
 
 #endif
