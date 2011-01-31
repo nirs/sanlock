@@ -72,7 +72,7 @@ int add_resource(struct token *token, int pid)
 
 	r = find_resource(token, &resources);
 	if (r) {
-		log_error(token, "add_resource used token_id %d",
+		log_errot(token, "add_resource used token_id %d",
 			  r->token->token_id);
 		rv = -EEXIST;
 		goto out;
@@ -80,7 +80,7 @@ int add_resource(struct token *token, int pid)
 
 	r = find_resource(token, &dispose_resources);
 	if (r) {
-		log_error(token, "add_resource disposed token_id %d",
+		log_errot(token, "add_resource disposed token_id %d",
 			  r->token->token_id);
 		rv = -EEXIST;
 		goto out;
@@ -97,7 +97,7 @@ int add_resource(struct token *token, int pid)
 			   was released by an existing (but paused) pid,
 			   because the paused pid may resume and expect to
 			   reacquire the lease unchanged */
-			log_error(token, "add_resource saved for %d", r->pid);
+			log_errot(token, "add_resource saved for %d", r->pid);
 			rv = -EBUSY;
 			goto out;
 		}
@@ -195,7 +195,7 @@ int acquire_token(struct token *token, uint64_t reacquire_lver,
 
 	token->acquire_result = rv;
 
-	log_debug(token, "acquire token_id %d rv %d lver %llu at %llu",
+	log_token(token, "acquire token_id %d rv %d lver %llu at %llu",
 		  token->token_id, rv,
 		  (unsigned long long)token->leader.lver,
 		  (unsigned long long)token->leader.timestamp);
@@ -217,7 +217,7 @@ int setowner_token(struct token *token)
 		return rv;
 
 	if (memcmp(&token->leader, &leader_ret, sizeof(struct leader_record))) {
-		log_error(token, "setowner leader_read mismatch");
+		log_errot(token, "setowner leader_read mismatch");
 		return -1;
 	}
 
@@ -228,7 +228,7 @@ int setowner_token(struct token *token)
 
 	token->setowner_result = rv;
 
-	log_debug(token, "setowner token_id %d rv %d lver %llu at %llu",
+	log_token(token, "setowner token_id %d rv %d lver %llu at %llu",
 		  token->token_id, rv,
 		  (unsigned long long)token->leader.lver,
 		  (unsigned long long)token->leader.timestamp);
@@ -251,7 +251,7 @@ int release_token(struct token *token)
 		/* this case occurs on the receiving side of migration, when
 		   the local host hasn't become the lease owner (just next_owner),
 		   and the pid fails, causing sm to clean up the pid's tokens */
-		log_debug(token, "release token_id %d we are not owner",
+		log_token(token, "release token_id %d we are not owner",
 			  token->token_id);
 		return 1;
 	}
@@ -260,7 +260,7 @@ int release_token(struct token *token)
 
 	token->release_result = rv;
 
-	log_debug(token, "release token_id %d rv %d",
+	log_token(token, "release token_id %d rv %d",
 		  token->token_id, rv);
 
 	if (rv < 0)
@@ -281,7 +281,7 @@ int migrate_token(struct token *token, uint64_t target_host_id)
 
 	token->migrate_result = rv;
 
-	log_debug(token, "migrate token_id %d rv %d", token->token_id, rv);
+	log_token(token, "migrate token_id %d rv %d", token->token_id, rv);
 
 	if (rv < 0)
 		return rv;
@@ -309,7 +309,7 @@ int receive_token(struct token *token, char *opt_str GNUC_UNUSED)
 	   we read it here. */
 
 	if (memcmp(&token->leader, &leader_ret, sizeof(struct leader_record))) {
-		log_error(token, "receive leader_read mismatch");
+		log_errot(token, "receive leader_read mismatch");
 		return -1;
 	}
 #endif
@@ -322,7 +322,7 @@ int receive_token(struct token *token, char *opt_str GNUC_UNUSED)
 
 	if (token->migrate_result == 1) {
 		if (leader_ret.next_owner_id != token->host_id) {
-			log_error(token, "receive wrong next_owner %llu",
+			log_errot(token, "receive wrong next_owner %llu",
 				  (unsigned long long)leader_ret.next_owner_id);
 			return -1;
 		}
@@ -333,7 +333,7 @@ int receive_token(struct token *token, char *opt_str GNUC_UNUSED)
 	   be zero */
 
 	if (leader_ret.next_owner_id != 0) {
-		log_error(token, "receive expect zero next_owner %llu",
+		log_errot(token, "receive expect zero next_owner %llu",
 			  (unsigned long long)leader_ret.next_owner_id);
 		return -1;
 	}

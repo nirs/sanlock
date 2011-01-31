@@ -126,7 +126,7 @@ int create_watchdog_file(struct space *sp, uint64_t timestamp)
 
 	fd = open(sp->wdtest_path, O_WRONLY|O_CREAT|O_EXCL|O_NONBLOCK, 0666);
 	if (fd < 0) {
-		log_error(NULL, "create_watchdog_file open %s error %d",
+		log_erros(sp, "create_watchdog_file open %s error %d",
 			  sp->wdtest_path, errno);
 		return fd;
 	}
@@ -138,7 +138,7 @@ int create_watchdog_file(struct space *sp, uint64_t timestamp)
 
 	rv = do_write(fd, buf, sizeof(buf));
 	if (rv < 0) {
-		log_error(NULL, "create_watchdog_file write error %d", rv);
+		log_erros(sp, "create_watchdog_file write error %d", rv);
 		close(fd);
 		return rv;
 	}
@@ -177,7 +177,7 @@ int check_watchdog_file(void)
 		if (de->d_name[0] == '.')
 			continue;
 
-		log_error(NULL, "stale wdtest file: %s/%s",
+		log_error("stale wdtest file: %s/%s",
 			  SANLK_WDTEST_DIR, de->d_name);
 		rv = -1;
 	}

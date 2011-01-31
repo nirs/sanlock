@@ -136,12 +136,12 @@ int host_id_renewed(struct space *sp)
 	good_diff = time(NULL) - good_time;
 
 	if (good_diff >= to.host_id_renewal_fail_seconds) {
-		log_error(NULL, "host_id_renewed failed %d", good_diff);
+		log_erros(sp, "host_id_renewed failed %d", good_diff);
 		return 0;
 	}
 
 	if (good_diff >= to.host_id_renewal_warn_seconds) {
-		log_error(NULL, "host_id_renewed warning %d last good %llu",
+		log_erros(sp, "host_id_renewed warning %d last good %llu",
 			  good_diff,
 			  (unsigned long long)good_time);
 	}
@@ -162,7 +162,7 @@ static void *host_id_thread(void *arg_in)
 
 	our_host_id = sp->host_id;
 
-	result = delta_lease_acquire(&sp->host_id_disk, sp->space_name,
+	result = delta_lease_acquire(sp, &sp->host_id_disk, sp->space_name,
 				     our_host_id, sp->host_id, &leader);
 	dl_result = result;
 	t = leader.timestamp;
@@ -173,7 +173,7 @@ static void *host_id_thread(void *arg_in)
 	if (result == DP_OK) {
 		rv = create_watchdog_file(sp, t);
 		if (rv < 0) {
-			log_error(NULL, "create_watchdog failed %d", rv);
+			log_erros(sp, "create_watchdog failed %d", rv);
 			result = DP_ERROR;
 		}
 	}
@@ -191,12 +191,12 @@ static void *host_id_thread(void *arg_in)
 	pthread_mutex_unlock(&sp->mutex);
 
 	if (result < 0) {
-		log_error(NULL, "host_id %llu acquire failed %d",
+		log_erros(sp, "host_id %llu acquire failed %d",
 			  (unsigned long long)sp->host_id, result);
 		goto out;
 	}
 
-	log_debug(NULL, "host_id %llu generation %llu acquire %llu",
+	log_erros(sp, "host_id %llu generation %llu acquire %llu",
 		  (unsigned long long)sp->host_id,
 		  (unsigned long long)leader.owner_generation,
 		  (unsigned long long)t);
@@ -223,7 +223,7 @@ static void *host_id_thread(void *arg_in)
 
 		clock_gettime(CLOCK_REALTIME, &renew_time);
 
-		result = delta_lease_renew(&sp->host_id_disk, sp->space_name,
+		result = delta_lease_renew(sp, &sp->host_id_disk, sp->space_name,
 					   our_host_id, sp->host_id, &leader);
 		t = leader.timestamp;
 
@@ -245,11 +245,11 @@ static void *host_id_thread(void *arg_in)
 		pthread_mutex_unlock(&sp->mutex);
 
 		if (result < 0) {
-			log_error(NULL, "host_id %llu renewal error %d last good %llu",
+			log_erros(sp, "host_id %llu renewal error %d last good %llu",
 				  (unsigned long long)sp->host_id, result,
 				  (unsigned long long)sp->lease_status.renewal_good_time);
 		} else {
-			log_debug(NULL, "host_id %llu renewal %llu interval %d",
+			log_space(sp, "host_id %llu renewal %llu interval %d",
 				  (unsigned long long)sp->host_id,
 				  (unsigned long long)t, good_diff);
 
@@ -261,7 +261,7 @@ static void *host_id_thread(void *arg_in)
 	close_watchdog_file(sp);
  out:
 	if (dl_result == DP_OK)
-		delta_lease_release(&sp->host_id_disk, sp->space_name,
+		delta_lease_release(sp, &sp->host_id_disk, sp->space_name,
 				    sp->host_id, &leader, &leader);
 
 	return NULL;
@@ -278,26 +278,26 @@ int add_space(struct space *sp)
 	int rv, result;
 
 	if (space_exists(sp->space_name)) {
-		log_error(NULL, "add_space exists");
+		log_erros(sp, "add_space exists");
 		goto fail;
 	}
 
 	rv = open_disks(&sp->host_id_disk, 1);
 	if (rv != 1) {
-		log_error(NULL, "add_space open_disk failed %d %s",
+		log_erros(sp, "add_space open_disk failed %d %s",
 			  rv, sp->host_id_disk.path);
 		rv = -1;
 		goto fail;
 	}
 
-	log_debug(NULL, "add_space host_id %llu path %s offset %llu",
+	log_space(sp, "add_space host_id %llu path %s offset %llu",
 		  (unsigned long long)sp->host_id,
 		  sp->host_id_disk.path,
 		  (unsigned long long)sp->host_id_disk.offset);
 
 	rv = pthread_create(&sp->thread, NULL, host_id_thread, sp);
 	if (rv < 0) {
-		log_error(NULL, "add_space create thread failed");
+		log_erros(sp, "add_space create thread failed");
 		goto fail_close;
 	}
 
@@ -320,7 +320,7 @@ int add_space(struct space *sp)
 	if (_search_space(sp->space_name, &spaces) ||
 	    _search_space(sp->space_name, &spaces_remove)) {
 		pthread_mutex_unlock(&spaces_mutex);
-		log_error(NULL, "add_space duplicate");
+		log_erros(sp, "add_space duplicate name");
 		goto fail_stop;
 	} else {
 		list_add(&sp->list, &spaces);
@@ -370,11 +370,11 @@ static int finish_space(struct space *sp, int wait)
 	pthread_mutex_unlock(&sp->mutex);
 
 	if (!stop) {
-		log_error(NULL, "finish_space zero thread_stop");
+		log_erros(sp, "finish_space zero thread_stop");
 		return -EINVAL;
 	}
 
-	log_debug(NULL, "%s finish_space", sp->space_name);
+	log_space(sp, "finish_space");
 
 	if (wait)
 		rv = pthread_join(sp->thread, NULL);
@@ -384,7 +384,7 @@ static int finish_space(struct space *sp, int wait)
 	if (rv)
 		return rv;
 
-	log_debug(NULL, "%s close_disks", sp->space_name);
+	log_space(sp, "close_disks");
 
 	close_disks(&sp->host_id_disk, 1);
 	return 0;

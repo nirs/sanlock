@@ -92,7 +92,7 @@ static void _log_save_ent(int level, int len)
  *    logfile and/or syslog (so callers don't block writing messages to files)
  */
 
-void log_level(const struct token *token, int level, const char *fmt, ...)
+void log_level(int space_id, int token_id, int level, const char *fmt, ...)
 {
 	va_list ap;
 	char name[NAME_ID_SIZE + 1];
@@ -100,7 +100,15 @@ void log_level(const struct token *token, int level, const char *fmt, ...)
 	int len = LOG_STR_LEN - 2; /* leave room for \n\0 */
 
 	memset(name, 0, sizeof(name));
-	snprintf(name, NAME_ID_SIZE, "%s", token ? token->resource_name: "-");
+
+	if (!space_id && !token_id)
+		snprintf(name, NAME_ID_SIZE, "-");
+	else if (space_id && !token_id)
+		snprintf(name, NAME_ID_SIZE, "s%u", space_id);
+	else if (!space_id && token_id)
+		snprintf(name, NAME_ID_SIZE, "t%u", token_id);
+	else if (space_id && token_id)
+		snprintf(name, NAME_ID_SIZE, "s%u:t%u", space_id, token_id);
 
 	pthread_mutex_lock(&log_mutex);
 

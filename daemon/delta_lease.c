@@ -34,37 +34,37 @@ static int verify_leader(struct sync_disk *disk,
 	uint32_t sum;
 
 	if (lr->magic != DELTA_DISK_MAGIC) {
-		log_error(NULL, "verify_leader wrong magic %x %s",
+		log_error("verify_leader wrong magic %x %s",
 			  lr->magic, disk->path);
 		return DP_BAD_MAGIC;
 	}
 
 	if ((lr->version & 0xFFFF0000) != DELTA_DISK_VERSION_MAJOR) {
-		log_error(NULL, "verify_leader wrong version %x %s",
+		log_error("verify_leader wrong version %x %s",
 			  lr->version, disk->path);
 		return DP_BAD_VERSION;
 	}
 
 	if (lr->cluster_mode != options.cluster_mode) {
-		log_error(NULL, "verify_leader wrong cluster mode %d %d %s",
+		log_error("verify_leader wrong cluster mode %d %d %s",
 			  lr->cluster_mode, options.cluster_mode, disk->path);
 		return DP_BAD_CLUSTERMODE;
 	}
 
 	if (lr->sector_size != disk->sector_size) {
-		log_error(NULL, "verify_leader wrong sector size %d %d %s",
+		log_error("verify_leader wrong sector size %d %d %s",
 			  lr->sector_size, disk->sector_size, disk->path);
 		return DP_BAD_SECTORSIZE;
 	}
 
 	if (strncmp(lr->space_name, space_name, NAME_ID_SIZE)) {
-		log_error(NULL, "verify_leader wrong space name %.48s %.48s %s",
+		log_error("verify_leader wrong space name %.48s %.48s %s",
 			  lr->space_name, space_name, disk->path);
 		return DP_BAD_LOCKSPACE;
 	}
 
 	if (strncmp(lr->resource_name, resource_name, NAME_ID_SIZE)) {
-		log_error(NULL, "verify_leader wrong resource name %.48s %.48s %s",
+		log_error("verify_leader wrong resource name %.48s %.48s %s",
 			  lr->resource_name, resource_name, disk->path);
 		return DP_BAD_RESOURCEID;
 	}
@@ -72,7 +72,7 @@ static int verify_leader(struct sync_disk *disk,
 	sum = leader_checksum(lr);
 
 	if (lr->checksum != sum) {
-		log_error(NULL, "verify_leader wrong checksum %x %x %s",
+		log_error("verify_leader wrong checksum %x %x %s",
 			  lr->checksum, sum, disk->path);
 		return DP_BAD_CHECKSUM;
 	}
@@ -103,7 +103,8 @@ int delta_lease_leader_read(struct sync_disk *disk, char *space_name,
 	return error;
 }
 
-int delta_lease_acquire(struct sync_disk *disk, char *space_name,
+int delta_lease_acquire(struct space *sp, struct sync_disk *disk,
+			char *space_name,
 			uint64_t our_host_id, uint64_t host_id,
 			struct leader_record *leader_ret)
 {
@@ -112,7 +113,7 @@ int delta_lease_acquire(struct sync_disk *disk, char *space_name,
 	uint64_t new_ts;
 	int error, delay, delta_delay;
 
-	log_debug(NULL, "delta_acquire %llu begin", (unsigned long long)host_id);
+	log_space(sp, "delta_acquire %llu begin", (unsigned long long)host_id);
 
 	error = delta_lease_leader_read(disk, space_name, host_id, &leader);
 	if (error < 0)
@@ -149,7 +150,7 @@ int delta_lease_acquire(struct sync_disk *disk, char *space_name,
 	while (1) {
 		memcpy(&leader1, &leader, sizeof(struct leader_record));
 
-		log_debug(NULL, "delta_acquire long sleep %d", delay);
+		log_space(sp, "delta_acquire long sleep %d", delay);
 		sleep(delay);
 
 		error = delta_lease_leader_read(disk, space_name, host_id, &leader);
@@ -170,7 +171,7 @@ int delta_lease_acquire(struct sync_disk *disk, char *space_name,
 	leader.owner_generation++;
 	leader.checksum = leader_checksum(&leader);
 
-	log_debug(NULL, "delta_acquire write new %llu", (unsigned long long)new_ts);
+	log_space(sp, "delta_acquire write new %llu", (unsigned long long)new_ts);
 
 	error = write_sector(disk, host_id - 1, (char *)&leader,
 			     sizeof(struct leader_record),
@@ -179,7 +180,7 @@ int delta_lease_acquire(struct sync_disk *disk, char *space_name,
 		return error;
 
 	delay = 2 * to.io_timeout_seconds;
-	log_debug(NULL, "delta_acquire sleep 2d %d", delay);
+	log_space(sp, "delta_acquire sleep 2d %d", delay);
 	sleep(delay);
 
 	error = delta_lease_leader_read(disk, space_name, host_id, &leader);
@@ -193,7 +194,8 @@ int delta_lease_acquire(struct sync_disk *disk, char *space_name,
 	return DP_OK;
 }
 
-int delta_lease_renew(struct sync_disk *disk, char *space_name,
+int delta_lease_renew(struct space *sp, struct sync_disk *disk,
+		      char *space_name,
 		      uint64_t our_host_id, uint64_t host_id,
 		      struct leader_record *leader_ret)
 {
@@ -201,7 +203,7 @@ int delta_lease_renew(struct sync_disk *disk, char *space_name,
 	uint64_t new_ts;
 	int error, delay;
 
-	log_debug(NULL, "delta_renew %llu begin", (unsigned long long)host_id);
+	log_space(sp, "delta_renew %llu begin", (unsigned long long)host_id);
 
 	error = delta_lease_leader_read(disk, space_name, host_id, &leader);
 	if (error < 0)
@@ -213,14 +215,13 @@ int delta_lease_renew(struct sync_disk *disk, char *space_name,
 	new_ts = time(NULL);
 
 	if (leader.timestamp >= new_ts) {
-		log_error(NULL, "delta_renew timestamp too small");
+		log_erros(sp, "delta_renew timestamp too small");
 	}
 
 	leader.timestamp = new_ts;
 	leader.checksum = leader_checksum(&leader);
 
-	log_debug(NULL, "delta_renew write new %llu",
-		  (unsigned long long)new_ts);
+	log_space(sp, "delta_renew write new %llu", (unsigned long long)new_ts);
 
 	error = write_sector(disk, host_id - 1, (char *)&leader,
 			     sizeof(struct leader_record),
@@ -229,7 +230,7 @@ int delta_lease_renew(struct sync_disk *disk, char *space_name,
 		return error;
 
 	delay = 2 * to.io_timeout_seconds;
-	log_debug(NULL, "delta_renew sleep 2d %d", delay);
+	log_space(sp, "delta_renew sleep 2d %d", delay);
 	sleep(delay);
 
 	error = delta_lease_leader_read(disk, space_name, host_id, &leader);
@@ -243,7 +244,8 @@ int delta_lease_renew(struct sync_disk *disk, char *space_name,
 	return DP_OK;
 }
 
-int delta_lease_release(struct sync_disk *disk, char *space_name GNUC_UNUSED,
+int delta_lease_release(struct space *sp, struct sync_disk *disk,
+			char *space_name GNUC_UNUSED,
 			uint64_t host_id,
 			struct leader_record *leader_last,
 			struct leader_record *leader_ret)
@@ -251,7 +253,7 @@ int delta_lease_release(struct sync_disk *disk, char *space_name GNUC_UNUSED,
 	struct leader_record leader;
 	int error;
 
-	log_debug(NULL, "delta_release %llu begin", (unsigned long long)host_id);
+	log_space(sp, "delta_release %llu begin", (unsigned long long)host_id);
 
 	memcpy(&leader, leader_last, sizeof(struct leader_record));
 	leader.timestamp = LEASE_FREE;
@@ -319,7 +321,7 @@ int delta_lease_init(struct sync_disk *disk, char *space_name, int max_hosts)
 				  to.io_timeout_seconds, options.use_aio, "delta_leader");
 
 		if (rv < 0) {
-			log_error(NULL, "delta_init write_sector %d rv %d", i, rv);
+			log_tool("delta_init write_sector %d rv %d", i, rv);
 			return rv;
 		}
 	}

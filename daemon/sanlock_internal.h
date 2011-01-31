@@ -77,7 +77,7 @@ struct token {
 	struct sync_disk *disks;
 
 	/* internal */
-	int token_id;
+	int token_id; /* used to refer to this token instance in log messages */
 	int acquire_result;
 	int migrate_result;
 	int release_result;
@@ -106,6 +106,7 @@ struct space {
 	uint64_t host_generation;
 	struct sync_disk host_id_disk;
 	struct list_head list;
+	int space_id; /* used to refer to this space instance in log messages */
 	int killing_pids;
 	int external_remove;
 	int thread_stop;

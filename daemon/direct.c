@@ -148,7 +148,11 @@ static int do_delta_action(void)
 {
 	struct leader_record leader;
 	struct sync_disk sd;
+	struct space space;
 	int rv;
+
+	/* for log_space in delta functions */
+	memset(&space, 0, sizeof(space));
 
 	memset(&sd, 0, sizeof(struct sync_disk));
 	memcpy(&sd, &com.lockspace.host_id_disk, sizeof(struct sanlk_disk));
@@ -161,14 +165,14 @@ static int do_delta_action(void)
 
 	switch (com.action) {
 	case ACT_ACQUIRE_ID:
-		rv = delta_lease_acquire(&sd,
+		rv = delta_lease_acquire(&space, &sd,
 					 com.lockspace.name,
 					 com.lockspace.host_id,
 					 com.lockspace.host_id,
 					 &leader);
 		break;
 	case ACT_RENEW_ID:
-		rv = delta_lease_renew(&sd,
+		rv = delta_lease_renew(&space, &sd,
 				       com.lockspace.name,
 				       com.lockspace.host_id,
 				       com.lockspace.host_id,
@@ -181,7 +185,7 @@ static int do_delta_action(void)
 					     &leader);
 		if (rv < 0)
 			return rv;
-		rv = delta_lease_release(&sd,
+		rv = delta_lease_release(&space, &sd,
 					 com.lockspace.name,
 					 com.lockspace.host_id,
 					 &leader, &leader);

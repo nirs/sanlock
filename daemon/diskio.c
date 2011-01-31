@@ -27,13 +27,13 @@ static int set_disk_properties(struct sync_disk *disk)
 
 	probe = blkid_new_probe_from_filename(disk->path);
 	if (!probe) {
-		log_error(NULL, "cannot get blkid probe %s", disk->path);
+		log_error("cannot get blkid probe %s", disk->path);
 		return -1;
 	}
 
 	topo = blkid_probe_get_topology(probe);
 	if (!topo) {
-		log_error(NULL, "cannot get blkid topology %s", disk->path);
+		log_error("cannot get blkid topology %s", disk->path);
 		blkid_free_probe(probe);
 		return -1;
 	}
@@ -47,7 +47,7 @@ static int set_disk_properties(struct sync_disk *disk)
 	if ((sector_size != ss_logical) ||
 	    (sector_size != ss_physical) ||
 	    (sector_size % 512)) {
-		log_error(NULL, "invalid disk sector size %u logical %u "
+		log_error("invalid disk sector size %u logical %u "
 			  "physical %u %s", sector_size, ss_logical,
 			  ss_physical, disk->path);
 		return -1;
@@ -79,7 +79,7 @@ int open_disks(struct sync_disk *disks, int num_disks)
 		disk = &disks[d];
 		fd = open(disk->path, O_RDWR | O_DIRECT | O_SYNC, 0);
 		if (fd < 0) {
-			log_error(NULL, "open error %d %s", fd, disk->path);
+			log_error("open error %d %s", fd, disk->path);
 			continue;
 		}
 
@@ -92,7 +92,7 @@ int open_disks(struct sync_disk *disks, int num_disks)
 		if (!ss) {
 			ss = disk->sector_size;
 		} else if (ss != disk->sector_size) {
-			log_error(NULL, "inconsistent sector sizes %u %u %s",
+			log_error("inconsistent sector sizes %u %u %s",
 				  ss, disk->sector_size, disk->path);
 			goto fail;
 		}
@@ -112,12 +112,12 @@ int open_disks(struct sync_disk *disks, int num_disks)
 			disk->offset = orig_offset * 1024 * 1024;
 			break;
 		default:
-			log_error(NULL, "invalid offset units %d", disk->units);
+			log_error("invalid offset units %d", disk->units);
 			goto fail;
 		}
 
 		if (disk->offset % disk->sector_size) {
-			log_error(NULL, "invalid offset %llu sector size %u %s",
+			log_error("invalid offset %llu sector size %u %s",
 				  (unsigned long long)disk->offset,
 				  disk->sector_size, disk->path);
 			goto fail;
@@ -300,7 +300,7 @@ static int _write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 
 	rv = posix_memalign((void *)p_iobuf, getpagesize(), iobuf_len);
 	if (rv) {
-		log_error(NULL, "write_sectors %s posix_memalign rv %d %s",
+		log_error("write_sectors %s posix_memalign rv %d %s",
 			  blktype, rv, disk->path);
 		rv = -1;
 		goto out;
@@ -315,7 +315,7 @@ static int _write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 		rv = do_write(disk->fd, offset, iobuf, iobuf_len);
 
 	if (rv < 0)
-		log_error(NULL, "write_sectors %s offset %llu rv %d %s",
+		log_error("write_sectors %s offset %llu rv %d %s",
 			  blktype, (unsigned long long)offset, rv, disk->path);
 	free(iobuf);
  out:
@@ -334,7 +334,7 @@ int write_sector(const struct sync_disk *disk, uint64_t sector_nr,
 	int iobuf_len = disk->sector_size;
 
 	if (data_len > iobuf_len) {
-		log_error(NULL, "write_sector %s data_len %d max %d %s",
+		log_error("write_sector %s data_len %d max %d %s",
 			  blktype, data_len, iobuf_len, disk->path);
 		return -1;
 	}
@@ -352,7 +352,7 @@ int write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 	int iobuf_len = data_len;
 
 	if (data_len != sector_count * disk->sector_size) {
-		log_error(NULL, "write_sectors %s data_len %d sector_count %d %s",
+		log_error("write_sectors %s data_len %d sector_count %d %s",
 			  blktype, data_len, sector_count, disk->path);
 		return -1;
 	}
@@ -382,7 +382,7 @@ int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 
 	rv = posix_memalign((void *)p_iobuf, getpagesize(), iobuf_len);
 	if (rv) {
-		log_error(NULL, "read_sectors %s posix_memalign rv %d %s",
+		log_error("read_sectors %s posix_memalign rv %d %s",
 			  blktype, rv, disk->path);
 		rv = -1;
 		goto out;
@@ -398,7 +398,7 @@ int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 	if (!rv) {
 		memcpy(data, iobuf, data_len);
 	} else {
-		log_error(NULL, "read_sectors %s offset %llu rv %d %s",
+		log_error("read_sectors %s offset %llu rv %d %s",
 			  blktype, (unsigned long long)offset, rv, disk->path);
 	}
 

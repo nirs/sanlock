@@ -115,8 +115,7 @@ static int read_dblocks(struct sync_disk *disk, struct paxos_dblock *pds,
 
 	data = malloc(data_len);
 	if (!data) {
-		log_error(NULL, "read_dblocks malloc %d %s",
-			  data_len, disk->path);
+		log_error("read_dblocks malloc %d %s", data_len, disk->path);
 		rv = -1;
 		goto out;
 	}
@@ -185,12 +184,12 @@ static int run_disk_paxos(struct token *token, uint64_t host_id, uint64_t inp,
 	int d, q, rv;
 
 	if (!host_id) {
-		log_error(token, "invalid host_id");
+		log_errot(token, "invalid host_id");
 		return DP_INVAL;
 	}
 
 	if (!inp) {
-		log_error(token, "invalid inp");
+		log_errot(token, "invalid inp");
 		return DP_INVAL;
 	}
 
@@ -207,11 +206,11 @@ static int run_disk_paxos(struct token *token, uint64_t host_id, uint64_t inp,
 	}
 
 	if (rv < 0) {
-		log_error(token, "no initial dblock found");
+		log_errot(token, "no initial dblock found");
 		return DP_OWN_DBLOCK;
 	}
 
-	log_debug(token, "initial dblock %u mbal %llu bal %llu inp %llu lver %llu", d,
+	log_token(token, "initial dblock %u mbal %llu bal %llu inp %llu lver %llu", d,
 		  (unsigned long long)dblock.mbal,
 		  (unsigned long long)dblock.bal,
 		  (unsigned long long)dblock.inp,
@@ -251,7 +250,7 @@ static int run_disk_paxos(struct token *token, uint64_t host_id, uint64_t inp,
 	}
 
 	if (!majority_disks(token, num_writes)) {
-		log_error(token, "cannot write dblock to majority of disks");
+		log_errot(token, "cannot write dblock to majority of disks");
 		return DP_WRITE1_DBLOCKS;
 	}
 
@@ -268,7 +267,7 @@ static int run_disk_paxos(struct token *token, uint64_t host_id, uint64_t inp,
 				continue;
 
 			if (bk[q].lver > dblock.lver) {
-				log_error(token, "bk %d %d lver %llu dblock lver %llu",
+				log_errot(token, "bk %d %d lver %llu dblock lver %llu",
 					  d, q,
 					  (unsigned long long)bk[q].lver,
 					  (unsigned long long)dblock.lver);
@@ -278,7 +277,7 @@ static int run_disk_paxos(struct token *token, uint64_t host_id, uint64_t inp,
 			/* see "It aborts the ballot" in comment above */
 
 			if (bk[q].mbal > dblock.mbal) {
-				log_error(token, "bk %d %d mbal %llu dblock mbal %llu",
+				log_errot(token, "bk %d %d mbal %llu dblock mbal %llu",
 					  d, q,
 					  (unsigned long long)bk[q].mbal,
 					  (unsigned long long)dblock.mbal);
@@ -296,7 +295,7 @@ static int run_disk_paxos(struct token *token, uint64_t host_id, uint64_t inp,
 	}
 
 	if (!majority_disks(token, num_reads)) {
-		log_error(token, "cannot read dblocks on majority of disks");
+		log_errot(token, "cannot read dblocks on majority of disks");
 		return DP_READ1_DBLOCKS;
 	}
 
@@ -315,7 +314,7 @@ static int run_disk_paxos(struct token *token, uint64_t host_id, uint64_t inp,
 	 * nonInitBlks having the largest value of bk.bal."
 	 */
 
-	log_debug(token, "bk_max inp %llu bal %llu",
+	log_token(token, "bk_max inp %llu bal %llu",
 		  (unsigned long long)bk_max.inp,
 		  (unsigned long long)bk_max.bal);
 
@@ -338,7 +337,7 @@ static int run_disk_paxos(struct token *token, uint64_t host_id, uint64_t inp,
 	}
 
 	if (!majority_disks(token, num_writes)) {
-		log_error(token, "cannot write dblock to majority of disks 2");
+		log_errot(token, "cannot write dblock to majority of disks 2");
 		return DP_WRITE2_DBLOCKS;
 	}
 
@@ -355,7 +354,7 @@ static int run_disk_paxos(struct token *token, uint64_t host_id, uint64_t inp,
 				continue;
 
 			if (bk[q].lver > dblock.lver) {
-				log_error(token, "bk %d %d lver %llu dblock lver %llu",
+				log_errot(token, "bk %d %d lver %llu dblock lver %llu",
 					  d, q,
 					  (unsigned long long)bk[q].lver,
 					  (unsigned long long)dblock.lver);
@@ -365,7 +364,7 @@ static int run_disk_paxos(struct token *token, uint64_t host_id, uint64_t inp,
 			/* see "It aborts the ballot" in comment above */
 
 			if (bk[q].mbal > dblock.mbal) {
-				log_error(token, "bk %d %d mbal %llu dblock mbal %llu",
+				log_errot(token, "bk %d %d mbal %llu dblock mbal %llu",
 					  d, q,
 					  (unsigned long long)bk[q].mbal,
 					  (unsigned long long)dblock.mbal);
@@ -375,7 +374,7 @@ static int run_disk_paxos(struct token *token, uint64_t host_id, uint64_t inp,
 	}
 
 	if (!majority_disks(token, num_reads)) {
-		log_error(token, "cannot read dblocks from majority of disks 2");
+		log_errot(token, "cannot read dblocks from majority of disks 2");
 		return DP_READ2_DBLOCKS;
 	}
 
@@ -397,43 +396,43 @@ static int verify_leader(struct token *token, struct sync_disk *disk,
 	uint32_t sum;
 
 	if (lr->magic != PAXOS_DISK_MAGIC) {
-		log_error(NULL, "verify_leader wrong magic %x %s",
+		log_errot(token, "verify_leader wrong magic %x %s",
 			  lr->magic, disk->path);
 		return DP_BAD_MAGIC;
 	}
 
 	if ((lr->version & 0xFFFF0000) != PAXOS_DISK_VERSION_MAJOR) {
-		log_error(NULL, "verify_leader wrong version %x %s",
+		log_errot(token, "verify_leader wrong version %x %s",
 			  lr->version, disk->path);
 		return DP_BAD_VERSION;
 	}
 
 	if (lr->cluster_mode != options.cluster_mode) {
-		log_error(NULL, "verify_leader wrong cluster mode %d %d %s",
+		log_errot(token, "verify_leader wrong cluster mode %d %d %s",
 			  lr->cluster_mode, options.cluster_mode, disk->path);
 		return DP_BAD_CLUSTERMODE;
 	}
 
 	if (lr->sector_size != disk->sector_size) {
-		log_error(NULL, "verify_leader wrong sector size %d %d %s",
+		log_errot(token, "verify_leader wrong sector size %d %d %s",
 			  lr->sector_size, disk->sector_size, disk->path);
 		return DP_BAD_SECTORSIZE;
 	}
 
 	if (strncmp(lr->space_name, token->space_name, NAME_ID_SIZE)) {
-		log_error(NULL, "verify_leader wrong space name %.48s %.48s %s",
+		log_errot(token, "verify_leader wrong space name %.48s %.48s %s",
 			  lr->space_name, token->space_name, disk->path);
 		return DP_BAD_LOCKSPACE;
 	}
 
 	if (strncmp(lr->resource_name, token->resource_name, NAME_ID_SIZE)) {
-		log_error(NULL, "verify_leader wrong resource name %.48s %.48s %s",
+		log_errot(token, "verify_leader wrong resource name %.48s %.48s %s",
 			  lr->resource_name, token->resource_name, disk->path);
 		return DP_BAD_RESOURCEID;
 	}
 
 	if (lr->num_hosts < token->host_id) {
-		log_error(NULL, "verify_leader num_hosts too small %llu %llu %s",
+		log_errot(token, "verify_leader num_hosts too small %llu %llu %s",
 			  (unsigned long long)lr->num_hosts,
 			  (unsigned long long)token->host_id, disk->path);
 		return DP_BAD_NUMHOSTS;
@@ -442,7 +441,7 @@ static int verify_leader(struct token *token, struct sync_disk *disk,
 	sum = leader_checksum(lr);
 
 	if (lr->checksum != sum) {
-		log_error(NULL, "verify_leader wrong checksum %x %x %s",
+		log_errot(token, "verify_leader wrong checksum %x %x %s",
 			  lr->checksum, sum, disk->path);
 		return DP_BAD_CHECKSUM;
 	}
@@ -517,7 +516,7 @@ int paxos_lease_leader_read(struct token *token, struct leader_record *leader_re
 	}
 
 	if (!majority_disks(token, num_reads)) {
-		log_error(token, "paxos_leader_read no majority reads");
+		log_errot(token, "paxos_leader_read no majority reads");
 		error = DP_READ_LEADERS;
 		goto fail;
 	}
@@ -539,14 +538,14 @@ int paxos_lease_leader_read(struct token *token, struct leader_record *leader_re
 	}
 
 	if (!found) {
-		log_error(token, "paxos_leader_read no majority reps");
+		log_errot(token, "paxos_leader_read no majority reps");
 		error = DP_DIFF_LEADERS;
 		goto fail;
 	}
 
-	log_debug(token, "leader_read d %u reps %u", d, leader_reps[d]);
+	log_token(token, "leader_read d %u reps %u", d, leader_reps[d]);
 
-	log_debug(token, "leader_read owner %llu lver %llu hosts %llu "
+	log_token(token, "leader_read owner %llu lver %llu hosts %llu "
 		  "time %llu res %s",
 		  (unsigned long long)prev_leader.owner_id,
 		  (unsigned long long)prev_leader.lver,
@@ -578,7 +577,7 @@ static int write_new_leader(struct token *token, struct leader_record *nl)
 	}
 
 	if (!majority_disks(token, num_writes)) {
-		log_error(token, "write_new_leader no majority writes");
+		log_errot(token, "write_new_leader no majority writes");
 		error = DP_WRITE_LEADERS;
 	}
 
@@ -602,19 +601,19 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 	uint64_t last_timestamp = 0;
 	int error;
 
-	log_debug(token, "paxos_acquire begin");
+	log_token(token, "paxos_acquire begin");
 
 	error = paxos_lease_leader_read(token, &prev_leader);
 	if (error < 0)
 		goto out;
 
 	if (prev_leader.timestamp == LEASE_FREE) {
-		log_debug(token, "paxos_acquire lease free");
+		log_token(token, "paxos_acquire lease free");
 		goto run;
 	}
 
 	if (prev_leader.owner_id == token->host_id) {
-		log_debug(token, "paxos_acquire already owner");
+		log_token(token, "paxos_acquire already owner");
 		goto run;
 	}
 
@@ -624,7 +623,7 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 	 * its watchdog has triggered and we can go for the paxos lease.
 	 */
 
-	log_debug(token, "paxos_acquire check owner_id %llu",
+	log_token(token, "paxos_acquire check owner_id %llu",
 		  (unsigned long long)prev_leader.owner_id);
 
 	while (1) {
@@ -632,7 +631,7 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 					    prev_leader.owner_id,
 					    &host_id_leader);
 		if (error < 0) {
-			log_error(token, "paxos_acquire host_id %llu read %d",
+			log_errot(token, "paxos_acquire host_id %llu read %d",
 				  (unsigned long long)prev_leader.owner_id,
 				  error);
 			goto out;
@@ -644,7 +643,7 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 		   and acquiring cannot take less than host_id_timeout_sec */
 
 		if (host_id_leader.timestamp == LEASE_FREE) {
-			log_debug(token, "paxos_acquire host_id %llu free",
+			log_token(token, "paxos_acquire host_id %llu free",
 				  (unsigned long long)prev_leader.owner_id);
 			goto run;
 		}
@@ -654,7 +653,7 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 		   done in less than host_id_timeout_sec */
 
 		if (host_id_leader.owner_id != prev_leader.owner_id) {
-			log_debug(token, "paxos_acquire host_id %llu owner %llu",
+			log_token(token, "paxos_acquire host_id %llu owner %llu",
 				  (unsigned long long)prev_leader.owner_id,
 				  (unsigned long long)host_id_leader.owner_id);
 			goto run;
@@ -665,7 +664,7 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 		   and no longer owns it */
 
 		if (host_id_leader.owner_generation > prev_leader.owner_generation) {
-			log_debug(token, "paxos_acquire host_id %llu "
+			log_token(token, "paxos_acquire host_id %llu "
 				  "generation now %llu old %llu",
 				  (unsigned long long)prev_leader.owner_id,
 				  (unsigned long long)host_id_leader.owner_generation,
@@ -678,7 +677,7 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 		   by now */
 
 		if (time(NULL) - host_id_leader.timestamp > to.host_id_timeout_seconds) {
-			log_debug(token, "paxos_acquire host_id %llu expired %llu",
+			log_token(token, "paxos_acquire host_id %llu expired %llu",
 				  (unsigned long long)prev_leader.owner_id,
 				  (unsigned long long)host_id_leader.timestamp);
 			goto run;
@@ -687,7 +686,7 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 		/* the owner is renewing its host_id so it's alive */
 
 		if (last_timestamp && (host_id_leader.timestamp != last_timestamp)) {
-			log_error(token, "paxos_acquire host_id %llu alive",
+			log_errot(token, "paxos_acquire host_id %llu alive",
 				  (unsigned long long)prev_leader.owner_id);
 			error = DP_LIVE_LEADER;
 			goto out;
@@ -699,7 +698,7 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 	}
  run:
 	if (reacquire_lver && prev_leader.lver != reacquire_lver) {
-		log_error(token, "paxos_acquire reacquire %llu prev_leader %llu",
+		log_errot(token, "paxos_acquire reacquire %llu prev_leader %llu",
 			  (unsigned long long)reacquire_lver,
 			  (unsigned long long)prev_leader.lver);
 		error = DP_REACQUIRE_LVER;
@@ -723,11 +722,11 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 	error = run_disk_paxos(token, token->host_id, token->host_id,
 			       new_leader.num_hosts, new_leader.lver, &dblock);
 	if (error < 0) {
-		log_error(token, "paxos_acquire paxos error %d", error);
+		log_errot(token, "paxos_acquire paxos error %d", error);
 		goto out;
 	}
 
-	log_debug(token, "paxos_acquire paxos result dblock mbal %llu bal %llu inp %llu lver %llu",
+	log_token(token, "paxos_acquire paxos result dblock mbal %llu bal %llu inp %llu lver %llu",
 		  (unsigned long long)dblock.mbal,
 		  (unsigned long long)dblock.bal,
 		  (unsigned long long)dblock.inp,
@@ -736,7 +735,7 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 	/* the inp value we commited wasn't us */
 
 	if (dblock.inp != token->host_id) {
-		log_error(token, "paxos_acquire paxos contention our_host_id %llu "
+		log_errot(token, "paxos_acquire paxos contention our_host_id %llu "
 			  "mbal %llu bal %llu inp %llu lver %llu",
 			  (unsigned long long)token->host_id,
 			  (unsigned long long)dblock.mbal,
@@ -764,7 +763,7 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 
 	memcpy(leader_ret, &new_leader, sizeof(struct leader_record));
  out:
-	log_debug(token, "paxos_acquire done %d", error);
+	log_token(token, "paxos_acquire done %d", error);
 	return error;
 }
 
@@ -777,7 +776,7 @@ int paxos_lease_migrate(struct token *token,
 	int rv, d;
 	int error;
 
-	log_debug(token, "paxos_migrate begin");
+	log_token(token, "paxos_migrate begin");
 
 	/* TODO: is it really worth reading/verifying leader here? it's safer */
 
@@ -790,14 +789,14 @@ int paxos_lease_migrate(struct token *token,
 
 		if (memcmp(&new_leader, leader_last,
 			   sizeof(struct leader_record))) {
-			log_error(token, "paxos_migrate leader changed before migrate");
+			log_errot(token, "paxos_migrate leader changed before migrate");
 			error = DP_BAD_LEADER;
 			goto out;
 		}
 	}
 
 	if (new_leader.num_hosts < target_host_id) {
-		log_error(token, "paxos_migrate num_hosts %llu target_host_id %llu",
+		log_errot(token, "paxos_migrate num_hosts %llu target_host_id %llu",
 			  (unsigned long long)new_leader.num_hosts,
 			  (unsigned long long)target_host_id);
 		return DP_BAD_NUMHOSTS;
@@ -813,7 +812,7 @@ int paxos_lease_migrate(struct token *token,
 
 	memcpy(leader_ret, &new_leader, sizeof(struct leader_record));
  out:
-	log_debug(token, "paxos_migrate done %d", error);
+	log_token(token, "paxos_migrate done %d", error);
 	return error;
 }
 
@@ -835,7 +834,7 @@ int paxos_lease_renew(struct token *token,
 
 		if (memcmp(&new_leader, leader_last,
 			   sizeof(struct leader_record))) {
-			log_error(token, "leader changed between renewals");
+			log_errot(token, "leader changed between renewals");
 			return DP_BAD_LEADER;
 		}
 	}
@@ -872,7 +871,7 @@ int paxos_lease_release(struct token *token,
 
 		if (memcmp(&new_leader, leader_last,
 			   sizeof(struct leader_record))) {
-			log_error(token, "leader changed before release");
+			log_errot(token, "leader changed before release");
 			return DP_BAD_LEADER;
 		}
 	}

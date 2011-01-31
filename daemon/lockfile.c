@@ -17,7 +17,7 @@
 #include "log.h"
 #include "lockfile.h"
 
-int lockfile(struct token *token, const char *dir, const char *name)
+int lockfile(const char *dir, const char *name)
 {
 	char path[PATH_MAX];
 	char buf[16];
@@ -28,7 +28,7 @@ int lockfile(struct token *token, const char *dir, const char *name)
 
 	fd = open(path, O_CREAT|O_WRONLY|O_CLOEXEC, 0666);
 	if (fd < 0) {
-		log_error(token, "lockfile open error %s: %s",
+		log_error("lockfile open error %s: %s",
 			  path, strerror(errno));
 		return -1;
 	}
@@ -40,14 +40,14 @@ int lockfile(struct token *token, const char *dir, const char *name)
 
 	rv = fcntl(fd, F_SETLK, &lock);
 	if (rv < 0) {
-		log_error(token, "lockfile setlk error %s: %s",
+		log_error("lockfile setlk error %s: %s",
 			  path, strerror(errno));
 		goto fail;
 	}
 
 	rv = ftruncate(fd, 0);
 	if (rv < 0) {
-		log_error(token, "lockfile truncate error %s: %s",
+		log_error("lockfile truncate error %s: %s",
 			  path, strerror(errno));
 		goto fail;
 	}
@@ -57,7 +57,7 @@ int lockfile(struct token *token, const char *dir, const char *name)
 
 	rv = write(fd, buf, strlen(buf));
 	if (rv <= 0) {
-		log_error(token, "lockfile write error %s: %s",
+		log_error("lockfile write error %s: %s",
 			  path, strerror(errno));
 		goto fail;
 	}

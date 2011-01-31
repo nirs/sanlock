@@ -66,6 +66,7 @@ static int cmd_argc;
 static char **cmd_argv;
 static int external_shutdown;
 static int token_id_counter = 1;
+static int space_id_counter = 1;
 
 struct cmd_args {
 	int ci_in;
@@ -90,10 +91,10 @@ static void client_alloc(void)
 		pollfd = realloc(pollfd, (client_size + CLIENT_NALLOC) *
 					 sizeof(struct pollfd));
 		if (!pollfd)
-			log_error(NULL, "can't alloc for pollfd");
+			log_error("can't alloc for pollfd");
 	}
 	if (!client || !pollfd)
-		log_error(NULL, "can't alloc for client array");
+		log_error("can't alloc for client array");
 
 	for (i = client_size; i < client_size + CLIENT_NALLOC; i++) {
 		memset(&client[i], 0, sizeof(struct client));
@@ -181,7 +182,7 @@ static void client_pid_dead(int ci)
 	int delay_release = 0;
 	int i, pid;
 
-	log_debug(NULL, "client_pid_dead ci %d pid %d", ci, cl->pid);
+	log_debug("client_pid_dead ci %d pid %d", ci, cl->pid);
 
 	/* cmd_acquire_thread may still be waiting for the tokens
 	   to be acquired.  if it is, tell it to release them when
@@ -209,7 +210,7 @@ static void client_pid_dead(int ci)
 	purge_saved_resources(pid);
 
 	if (delay_release) {
-		log_debug(NULL, "client_pid_dead delay release");
+		log_debug("client_pid_dead delay release");
 		return;
 	}
 
@@ -228,7 +229,7 @@ static int client_using_space(struct client *cl, struct space *sp)
 	struct token *token;
 	int i, rv = 0;
 
-	log_debug(NULL, "%s client_using_space %d", sp->space_name, cl->pid);
+	log_space(sp, "client_using_space %d", cl->pid);
 
 	pthread_mutex_lock(&cl->mutex);
 	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
@@ -238,8 +239,7 @@ static int client_using_space(struct client *cl, struct space *sp)
 		if (strncmp(token->space_name, sp->space_name, NAME_ID_SIZE))
 			continue;
 		rv = 1;
-		log_debug(NULL, "%s client_using_space pid %d token %s",
-			  sp->space_name, cl->pid, token->resource_name);
+		log_spoke(sp, token, "client_using_space pid %d", cl->pid);
 		break;
 	}
 	pthread_mutex_unlock(&cl->mutex);
@@ -251,7 +251,7 @@ static void kill_pids(struct space *sp)
 	struct client *cl;
 	int ci, found = 0;
 
-	log_debug(NULL, "%s kill_pids %d", sp->space_name, sp->killing_pids);
+	log_space(sp, "kill_pids %d", sp->killing_pids);
 
 	/* TODO: try killscript first if one is provided */
 
@@ -282,7 +282,7 @@ static void kill_pids(struct space *sp)
 	}
 
 	if (found) {
-		log_debug(NULL, "kill_pids SIGTERM found %d pids", found);
+		log_space(sp, "kill_pids SIGTERM found %d pids", found);
 		usleep(500000);
 	}
 
@@ -309,7 +309,7 @@ static void kill_pids(struct space *sp)
 	}
 
 	if (found) {
-		log_debug(NULL, "kill_pids SIGKILL found %d pids", found);
+		log_space(sp, "kill_pids SIGKILL found %d pids", found);
 		usleep(500000);
 	}
 
@@ -319,7 +319,7 @@ static void kill_pids(struct space *sp)
  do_dump:
 	for (ci = 0; ci <= client_maxi; ci++) {
 		if (client[ci].pid && client[ci].killing) {
-			log_error(NULL, "kill_pids %d stuck", client[ci].pid);
+			log_error("kill_pids %d stuck", client[ci].pid);
 			found++;
 		}
 	}
@@ -332,7 +332,7 @@ static int all_pids_dead(struct space *sp)
 	struct client *cl;
 	int ci;
 
-	log_debug(NULL, "%s all_pids_dead", sp->space_name);
+	log_space(sp, "all_pids_dead check");
 
 	for (ci = 0; ci <= client_maxi; ci++) {
 		cl = &client[ci];
@@ -344,11 +344,10 @@ static int all_pids_dead(struct space *sp)
 		if (!client_using_space(cl, sp))
 			continue;
 
-		log_debug(NULL, "%s used by pid %d",
-			  sp->space_name, cl->pid);
+		log_space(sp, "used by pid %d", cl->pid);
 		return 0;
 	}
-	log_debug(NULL, "%s used by no pids", sp->space_name);
+	log_space(sp, "used by no pids");
 	return 1;
 }
 
@@ -389,12 +388,12 @@ static int main_loop(void)
 			if (sp->killing_pids) {
 				if (all_pids_dead(sp)) {
 					unlink_watchdog_file(sp);
-					log_debug(NULL, "%s thread_stop", sp->space_name);
+					log_space(sp, "set thread_stop");
 					pthread_mutex_lock(&sp->mutex);
 					sp->thread_stop = 1;
 					pthread_cond_broadcast(&sp->cond);
 					pthread_mutex_unlock(&sp->mutex);
-					log_debug(NULL, "%s move spaces_remove", sp->space_name);
+					log_space(sp, "move to spaces_remove");
 					list_move(&sp->list, &spaces_remove);
 				} else {
 					kill_pids(sp);
@@ -430,7 +429,7 @@ static int set_cmd_active(int ci_target, int cmd)
 
 	/* TODO: find a nicer, more general way to handle this? */
 	if (cl->need_setowner && cmd != SM_CMD_SETOWNER) {
-		log_error(NULL, "set_cmd_active ci %d cmd %d need_setowner",
+		log_error("set_cmd_active ci %d cmd %d need_setowner",
 			  ci_target, cmd);
 		pthread_mutex_unlock(&cl->mutex);
 		return -EBUSY;
@@ -449,13 +448,13 @@ static int set_cmd_active(int ci_target, int cmd)
 	pthread_mutex_unlock(&cl->mutex);
 
 	if (cmd && cmd_active) {
-		log_error(NULL, "set_cmd_active ci %d cmd %d busy %d",
+		log_error("set_cmd_active ci %d cmd %d busy %d",
 			  ci_target, cmd, cmd_active);
 		return -EBUSY;
 	}
 
 	if (!cmd && !cmd_active) {
-		log_error(NULL, "set_cmd_active ci %d already zero",
+		log_error("set_cmd_active ci %d already zero",
 			  ci_target);
 	}
 
@@ -483,7 +482,7 @@ static void client_recv_all(int ci, struct sm_header *h_recv, int pos)
 			break;
 	}
 
-	log_debug(NULL, "recv_all ci %d rem %d total %d", ci, rem, total);
+	log_debug("recv_all ci %d rem %d total %d", ci, rem, total);
 }
 
 /* optstr format: "abc=123 def=456 ghi=780" */
@@ -525,7 +524,7 @@ static int parse_key_val(char *optstr, const char *key_arg, char *val_arg,
 			val[kvi++] = optstr[i];
 
 		if (kvi > 62) {
-			log_error(NULL, "invalid timeout parameter");
+			log_error("invalid timeout parameter");
 			return -1;
 		}
 	}
@@ -561,7 +560,7 @@ static void *cmd_acquire_thread(void *args_in)
 	cl = &client[ca->ci_target];
 	fd = client[ca->ci_in].fd;
 
-	log_debug(NULL, "cmd_acquire ci_in %d ci_target %d pid %d",
+	log_debug("cmd_acquire ci_in %d ci_target %d pid %d",
 		  ca->ci_in, ca->ci_target, cl->pid);
 
 	/*
@@ -570,7 +569,7 @@ static void *cmd_acquire_thread(void *args_in)
 
 	new_tokens_count = ca->header.data;
 	if (new_tokens_count > SANLK_MAX_RESOURCES) {
-		log_error(NULL, "cmd_acquire new_tokens_count %d max %d",
+		log_error("cmd_acquire new_tokens_count %d max %d",
 			  new_tokens_count, SANLK_MAX_RESOURCES);
 		rv = -E2BIG;
 		goto fail_reply;
@@ -585,7 +584,7 @@ static void *cmd_acquire_thread(void *args_in)
 	pthread_mutex_unlock(&cl->mutex);
 
 	if (empty_slots < new_tokens_count) {
-		log_error(NULL, "cmd_acquire new_tokens_count %d empty %d",
+		log_error("cmd_acquire new_tokens_count %d empty %d",
 			  new_tokens_count, empty_slots);
 		rv = -ENOSPC;
 		goto fail_reply;
@@ -612,13 +611,13 @@ static void *cmd_acquire_thread(void *args_in)
 		if (rv > 0)
 			pos += rv;
 		if (rv != sizeof(struct sanlk_resource)) {
-			log_error(NULL, "cmd_acquire recv %d %d", rv, errno);
+			log_error("cmd_acquire recv %d %d", rv, errno);
 			free(token);
 			rv = -EIO;
 			goto fail_free;
 		}
 
-		log_debug(NULL, "cmd_acquire recv res %d %.48s %d %u %llu", rv,
+		log_debug("cmd_acquire recv res %d %.48s %d %u %llu", rv,
 			  res.name, res.num_disks, res.data32,
 			  (unsigned long long)res.data64);
 		strncpy(token->space_name, res.lockspace_name, SANLK_NAME_LEN);
@@ -657,30 +656,37 @@ static void *cmd_acquire_thread(void *args_in)
 		if (rv > 0)
 			pos += rv;
 		if (rv != disks_len) {
-			log_error(NULL, "cmd_acquire recv %d %d", rv, errno);
+			log_error("cmd_acquire recv %d %d", rv, errno);
 			free(disks);
 			free(token);
 			rv = -EIO;
 			goto fail_free;
 		}
-		log_debug(NULL, "cmd_acquire recv disks %d", rv);
+		log_debug("cmd_acquire recv disks %d", rv);
 
 		/* zero out pad1 and pad2, see WARNING above */
 		for (j = 0; j < num_disks; j++) {
 			disks[j].sector_size = 0;
 			disks[j].fd = 0;
 
-			log_debug(NULL, "cmd_acquire recv disk %s %llu",
+			log_debug("cmd_acquire recv disk %s %llu",
 				  disks[j].path,
 				  (unsigned long long)disks[j].offset);
 		}
-
-		/* TODO: get rid of token_id, it's not used */
 
 		token->token_id = token_id_counter++;
 		token->disks = disks;
 		new_tokens[i] = token;
 		alloc_count++;
+
+		/* We use the token_id in log messages because the combination
+		 * of full length space_name+resource_name in each log message
+		 * would make excessively long lines.  Use an error message
+		 * here to make a more permanent record of what the token_id
+		 * represents for reference from later log messages. */
+
+		log_errot(token, "lockspace %.48s resource %.48s has token_id %u for pid %u",
+			  token->space_name, token->resource_name, token->token_id, cl->pid);
 	}
 
 	/*
@@ -691,12 +697,12 @@ static void *cmd_acquire_thread(void *args_in)
 	if (rv > 0)
 		pos += rv;
 	if (rv != sizeof(struct sanlk_options)) {
-		log_error(NULL, "cmd_acquire recv %d %d", rv, errno);
+		log_error("cmd_acquire recv %d %d", rv, errno);
 		rv = -EIO;
 		goto fail_free;
 	}
 
-	log_debug(NULL, "cmd_acquire recv opt %d %x %u", rv, opt.flags, opt.len);
+	log_debug("cmd_acquire recv opt %d %x %u", rv, opt.flags, opt.len);
 
 	strcpy(cl->owner_name, opt.owner_name);
 
@@ -713,19 +719,19 @@ static void *cmd_acquire_thread(void *args_in)
 	if (rv > 0)
 		pos += rv;
 	if (rv != opt.len) {
-		log_error(NULL, "cmd_acquire recv %d %d", rv, errno);
+		log_error("cmd_acquire recv %d %d", rv, errno);
 		free(opt_str);
 		rv = -EIO;
 		goto fail_free;
 	}
 
-	log_debug(NULL, "cmd_acquire recv str %d", rv);
+	log_debug("cmd_acquire recv str %d", rv);
 
 
  skip_opt_str:
 	/* TODO: warn if header.length != sizeof(header) + pos ? */
 
-	log_debug(NULL, "cmd_acquire command data done %d bytes", pos);
+	log_debug("cmd_acquire command data done %d bytes", pos);
 
 
 	/*
@@ -743,7 +749,7 @@ static void *cmd_acquire_thread(void *args_in)
 
 		rv = parse_key_val(opt_str, "num_hosts", num_hosts_str, 15);
 		if (rv < 0) {
-			log_error(NULL, "cmd_acquire num_hosts error");
+			log_error("cmd_acquire num_hosts error");
 			goto fail_free;
 		}
 
@@ -754,7 +760,7 @@ static void *cmd_acquire_thread(void *args_in)
 		token = new_tokens[i];
 		rv = get_space_info(token->space_name, &space);
 		if (rv < 0 || space.killing_pids) {
-			log_error(NULL, "cmd_acquire bad space %s",
+			log_error("cmd_acquire bad space %.48s",
 				  token->space_name);
 			goto fail_free;
 		}
@@ -766,7 +772,7 @@ static void *cmd_acquire_thread(void *args_in)
 		token = new_tokens[i];
 		rv = add_resource(token, cl->pid);
 		if (rv < 0) {
-			log_error(token, "cmd_acquire add_resource %d", rv);
+			log_errot(token, "cmd_acquire add_resource %d", rv);
 			goto fail_del;
 		}
 		add_count++;
@@ -776,7 +782,7 @@ static void *cmd_acquire_thread(void *args_in)
 		token = new_tokens[i];
 		opened = open_disks(token->disks, token->num_disks);
 		if (!majority_disks(token, opened)) {
-			log_error(token, "cmd_acquire open_disks %d", opened);
+			log_errot(token, "cmd_acquire open_disks %d", opened);
 			rv = -ENODEV;
 			goto fail_close;
 		}
@@ -795,7 +801,7 @@ static void *cmd_acquire_thread(void *args_in)
 		save_resource_leader(token);
 
 		if (rv < 0) {
-			log_error(token, "cmd_acquire lease %d", rv);
+			log_errot(token, "cmd_acquire lease %d", rv);
 			goto fail_release;
 		}
 		acquire_count++;
@@ -814,7 +820,7 @@ static void *cmd_acquire_thread(void *args_in)
 
 	if (cl->pid_dead) {
 		pthread_mutex_unlock(&cl->mutex);
-		log_error(NULL, "cmd_acquire pid dead");
+		log_error("cmd_acquire pid %d dead", cl->pid);
 		pid_dead = 1;
 		rv = -ENOTTY;
 		goto fail_dead;
@@ -827,7 +833,7 @@ static void *cmd_acquire_thread(void *args_in)
 	}
 	if (empty_slots < new_tokens_count) {
 		pthread_mutex_unlock(&cl->mutex);
-		log_error(NULL, "cmd_acquire new_tokens_count %d slots %d",
+		log_error("cmd_acquire new_tokens_count %d slots %d",
 			  new_tokens_count, empty_slots);
 		rv = -ENOSPC;
 		goto fail_release;
@@ -840,7 +846,7 @@ static void *cmd_acquire_thread(void *args_in)
 		if (!rv && !space.killing_pids && space.host_id == token->host_id)
 			continue;
 		pthread_mutex_unlock(&cl->mutex);
-		log_error(NULL, "cmd_acquire bad space %s", token->space_name);
+		log_error("cmd_acquire bad space %.48s", token->space_name);
 		rv = -EINVAL;
 		goto fail_release;
 	}
@@ -859,7 +865,7 @@ static void *cmd_acquire_thread(void *args_in)
 	cl->need_setowner = need_setowner;
 	pthread_mutex_unlock(&cl->mutex);
 
-	log_debug(NULL, "cmd_acquire done %d", new_tokens_count);
+	log_debug("cmd_acquire done %d", new_tokens_count);
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
 	h.length = sizeof(h);
@@ -929,7 +935,7 @@ static void *cmd_release_thread(void *args_in)
 	cl = &client[ca->ci_target];
 	fd = client[ca->ci_in].fd;
 
-	log_debug(NULL, "cmd_release ci_in %d ci_target %d pid %d",
+	log_debug("cmd_release ci_in %d ci_target %d pid %d",
 		  ca->ci_in, ca->ci_target, cl->pid);
 
 	memset(results, 0, sizeof(results));
@@ -938,7 +944,7 @@ static void *cmd_release_thread(void *args_in)
 	for (i = 0; i < rem_tokens_count; i++) {
 		rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
 		if (rv != sizeof(struct sanlk_resource)) {
-			log_error(NULL, "cmd_release recv fd %d %d %d", fd, rv, errno);
+			log_error("cmd_release recv fd %d %d %d", fd, rv, errno);
 			results[i] = -1;
 			break;
 		}
@@ -965,7 +971,7 @@ static void *cmd_release_thread(void *args_in)
 		}
 
 		if (!found) {
-			log_error(NULL, "cmd_release pid %d no resource %s",
+			log_error("cmd_release pid %d no resource %s",
 				  cl->pid, res.name);
 			results[i] = -ENOENT;
 		}
@@ -973,7 +979,7 @@ static void *cmd_release_thread(void *args_in)
 
 	set_cmd_active(ca->ci_target, 0);
 
-	log_debug(NULL, "cmd_release done %d", rem_tokens_count);
+	log_debug("cmd_release done %d", rem_tokens_count);
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
 	h.length = sizeof(h) + sizeof(int) * rem_tokens_count;
@@ -1003,7 +1009,7 @@ static void *cmd_migrate_thread(void *args_in)
 	cl = &client[ca->ci_target];
 	fd = client[ca->ci_in].fd;
 
-	log_debug(NULL, "cmd_migrate ci_in %d ci_target %d pid %d",
+	log_debug("cmd_migrate ci_in %d ci_target %d pid %d",
 		  ca->ci_in, ca->ci_target, cl->pid);
 
 	rv = recv(fd, &target_host_id, sizeof(uint64_t), MSG_WAITALL);
@@ -1043,7 +1049,7 @@ static void *cmd_migrate_thread(void *args_in)
 		/* TODO: would it be better to quit after one failure? */
 
 		if (total2 == total) {
-			log_error(NULL, "cmd_migrate total %d changed", total);
+			log_error("cmd_migrate total %d changed", total);
 			continue;
 		}
 
@@ -1058,7 +1064,7 @@ static void *cmd_migrate_thread(void *args_in)
 	if (result < 0)
 		set_cmd_active(ca->ci_target, 0);
 
-	log_debug(NULL, "cmd_migrate done %d", total);
+	log_debug("cmd_migrate done %d", total);
 
 	/* TODO: encode tokens_reply as a string to send back */
 
@@ -1091,7 +1097,7 @@ static void *cmd_setowner_thread(void *args_in)
 	cl = &client[ca->ci_target];
 	fd = client[ca->ci_in].fd;
 
-	log_debug(NULL, "cmd_setowner ci_in %d ci_target %d pid %d",
+	log_debug("cmd_setowner ci_in %d ci_target %d pid %d",
 		  ca->ci_in, ca->ci_target, cl->pid);
 
 	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
@@ -1118,7 +1124,7 @@ static void *cmd_setowner_thread(void *args_in)
 			result = -1;
 
 		if (total2 == total) {
-			log_error(NULL, "cmd_setowner total %d changed", total);
+			log_error("cmd_setowner total %d changed", total);
 			continue;
 		}
 
@@ -1128,7 +1134,7 @@ static void *cmd_setowner_thread(void *args_in)
  reply:
 	set_cmd_active(ca->ci_target, 0);
 
-	log_debug(NULL, "cmd_setowner done %d", total);
+	log_debug("cmd_setowner done %d", total);
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
 	h.length = sizeof(h) + tokens_len;
@@ -1152,7 +1158,7 @@ static void *cmd_add_lockspace_thread(void *args_in)
 
 	fd = client[ca->ci_in].fd;
 
-	log_debug(NULL, "cmd_add_lockspace ci_in %d", ca->ci_in);
+	log_debug("cmd_add_lockspace ci_in %d", ca->ci_in);
 
 	sp = malloc(sizeof(struct space));
 	if (!sp) {
@@ -1174,6 +1180,19 @@ static void *cmd_add_lockspace_thread(void *args_in)
 	pthread_mutex_init(&sp->mutex, NULL);
 	pthread_cond_init(&sp->cond, NULL);
 
+	pthread_mutex_lock(&spaces_mutex);
+	sp->space_id = space_id_counter++;
+	pthread_mutex_unlock(&spaces_mutex);
+
+	/* We use the space_id in log messages because the full length
+	 * space_name in each log message woul dmake excessively long lines.
+	 * Use an error message here to make a more permanent record of what
+	 * the space_id represents for reference from later log messages. */
+
+	log_erros(sp, "lockspace %.48s host_id %llu has space_id %u",
+		  sp->space_name, (unsigned long long)sp->host_id,
+		  sp->space_id);
+
 	/* add_space returns once the host_id has been acquired and
 	   sp space has been added to the spaces list */
 
@@ -1182,7 +1201,7 @@ static void *cmd_add_lockspace_thread(void *args_in)
 	if (result)
 		free(sp);
  reply:
-	log_debug(NULL, "cmd_add_lockspace done %d", result);
+	log_debug("cmd_add_lockspace done %d", result);
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
 	h.length = sizeof(h);
@@ -1203,7 +1222,7 @@ static void *cmd_rem_lockspace_thread(void *args_in)
 
 	fd = client[ca->ci_in].fd;
 
-	log_debug(NULL, "cmd_rem_lockspace ci_in %d", ca->ci_in);
+	log_debug("cmd_rem_lockspace ci_in %d", ca->ci_in);
 
 	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_lockspace)) {
@@ -1229,7 +1248,7 @@ static void *cmd_rem_lockspace_thread(void *args_in)
 	}
 
  reply:
-	log_debug(NULL, "cmd_rem_lockspace done %d", result);
+	log_debug("cmd_rem_lockspace done %d", result);
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
 	h.length = sizeof(h);
@@ -1471,7 +1490,7 @@ static void process_cmd_thread_lockspace(int ci_in, struct sm_header *h_recv)
 
 	pthread_attr_destroy(&attr);
 	if (rv < 0) {
-		log_error(NULL, "create cmd thread failed");
+		log_error("create cmd thread failed");
 		goto fail_free;
 	}
 
@@ -1549,7 +1568,7 @@ static void process_cmd_thread_resource(int ci_in, struct sm_header *h_recv)
 
 	pthread_attr_destroy(&attr);
 	if (rv < 0) {
-		log_error(NULL, "create cmd thread failed");
+		log_error("create cmd thread failed");
 		goto fail_free;
 	}
 
@@ -1579,7 +1598,7 @@ static void process_cmd_daemon(int ci, struct sm_header *h_recv)
 		rv = get_peer_pid(fd, &pid);
 		if (rv < 0)
 			break;
-		log_debug(NULL, "cmd_register ci %d fd %d pid %d", ci, fd, pid);
+		log_debug("cmd_register ci %d fd %d pid %d", ci, fd, pid);
 		client[ci].pid = pid;
 		client[ci].deadfn = client_pid_dead;
 		auto_close = 0;
@@ -1611,15 +1630,15 @@ static void process_connection(int ci)
 	if (!rv)
 		return;
 	if (rv < 0) {
-		log_error(NULL, "ci %d recv error %d", ci, errno);
+		log_error("ci %d recv error %d", ci, errno);
 		return;
 	}
 	if (rv != sizeof(h)) {
-		log_error(NULL, "ci %d recv size %d", ci, rv);
+		log_error("ci %d recv size %d", ci, rv);
 		goto dead;
 	}
 	if (h.magic != SM_MAGIC) {
-		log_error(NULL, "ci %d recv %d magic %x vs %x",
+		log_error("ci %d recv %d magic %x vs %x",
 			  ci, rv, h.magic, SM_MAGIC);
 		goto dead;
 	}
@@ -1646,7 +1665,7 @@ static void process_connection(int ci)
 		process_cmd_thread_resource(ci, &h);
 		break;
 	default:
-		log_error(NULL, "ci %d cmd %d unknown", ci, h.cmd);
+		log_error("ci %d cmd %d unknown", ci, h.cmd);
 	};
 
 	return;
@@ -1743,7 +1762,7 @@ static int do_daemon(void)
 
 	setup_logging();
 
-	fd = lockfile(NULL, SANLK_RUN_DIR, SANLK_LOCKFILE_NAME);
+	fd = lockfile(SANLK_RUN_DIR, SANLK_LOCKFILE_NAME);
 	if (fd < 0)
 		goto out;
 
@@ -1827,7 +1846,7 @@ static int parse_arg_lockspace(char *arg)
 	if (offset)
 		com.lockspace.host_id_disk.offset = atoll(offset);
 
-	log_debug(NULL, "lockspace arg %s %llu %s %llu",
+	log_debug("lockspace arg %s %llu %s %llu",
 		  com.lockspace.name,
 		  (unsigned long long)com.lockspace.host_id,
 		  com.lockspace.host_id_disk.path,
@@ -1963,10 +1982,10 @@ static int parse_arg_resource(char *arg)
 		memset(sub, 0, sizeof(sub));
 	}
 
-	log_debug(NULL, "resource arg %s %s num_disks %d",
+	log_debug("resource arg %s %s num_disks %d",
 		  res->lockspace_name, res->name, res->num_disks);
 	for (i = 0; i < res->num_disks; i++) {
-		log_debug(NULL, "resource arg disk %s %llu %u",
+		log_debug("resource arg disk %s %llu %u",
 			   res->disks[i].path,
 			   (unsigned long long)res->disks[i].offset,
 			   res->disks[i].units);
@@ -1982,31 +2001,31 @@ static void set_timeout(char *key, char *val)
 {
 	if (!strcmp(key, "io_timeout")) {
 		to.io_timeout_seconds = atoi(val);
-		log_debug(NULL, "io_timeout_seconds %d", to.io_timeout_seconds);
+		log_debug("io_timeout_seconds %d", to.io_timeout_seconds);
 		return;
 	}
 
 	if (!strcmp(key, "host_id_timeout")) {
 		to.host_id_timeout_seconds = atoi(val);
-		log_debug(NULL, "host_id_timeout_seconds %d", to.host_id_timeout_seconds);
+		log_debug("host_id_timeout_seconds %d", to.host_id_timeout_seconds);
 		return;
 	}
 
 	if (!strcmp(key, "host_id_renewal")) {
 		to.host_id_renewal_seconds = atoi(val);
-		log_debug(NULL, "host_id_renewal_seconds %d", to.host_id_renewal_seconds);
+		log_debug("host_id_renewal_seconds %d", to.host_id_renewal_seconds);
 		return;
 	}
 
 	if (!strcmp(key, "host_id_renewal_warn")) {
 		to.host_id_renewal_warn_seconds = atoi(val);
-		log_debug(NULL, "host_id_renewal_warn_seconds %d", to.host_id_renewal_warn_seconds);
+		log_debug("host_id_renewal_warn_seconds %d", to.host_id_renewal_warn_seconds);
 		return;
 	}
 
 	if (!strcmp(key, "host_id_renewal_fail")) {
 		to.host_id_renewal_fail_seconds = atoi(val);
-		log_debug(NULL, "host_id_renewal_fail_seconds %d", to.host_id_renewal_fail_seconds);
+		log_debug("host_id_renewal_fail_seconds %d", to.host_id_renewal_fail_seconds);
 		return;
 	}
 
@@ -2047,7 +2066,7 @@ static void parse_arg_timeout(char *optstr)
 			val[kvi++] = optstr[i];
 
 		if (kvi > 62) {
-			log_error(NULL, "invalid timeout parameter");
+			log_error("invalid timeout parameter");
 			return;
 		}
 	}
