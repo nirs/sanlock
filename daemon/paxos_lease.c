@@ -778,8 +778,6 @@ int paxos_lease_migrate(struct token *token,
 
 	log_token(token, "paxos_migrate begin");
 
-	/* TODO: is it really worth reading/verifying leader here? it's safer */
-
 	for (d = 0; d < token->num_disks; d++) {
 		memset(&new_leader, 0, sizeof(struct leader_record));
 
@@ -859,8 +857,6 @@ int paxos_lease_release(struct token *token,
 	struct leader_record new_leader;
 	int rv, d;
 	int error;
-
-	/* TODO: is it really worth reading/verifying leader here? it's safer */
 
 	for (d = 0; d < token->num_disks; d++) {
 		memset(&new_leader, 0, sizeof(struct leader_record));

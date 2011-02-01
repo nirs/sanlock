@@ -72,16 +72,14 @@ int add_resource(struct token *token, int pid)
 
 	r = find_resource(token, &resources);
 	if (r) {
-		log_errot(token, "add_resource used token_id %d",
-			  r->token->token_id);
+		log_errot(token, "add_resource name exists");
 		rv = -EEXIST;
 		goto out;
 	}
 
 	r = find_resource(token, &dispose_resources);
 	if (r) {
-		log_errot(token, "add_resource disposed token_id %d",
-			  r->token->token_id);
+		log_errot(token, "add_resource disposed");
 		rv = -EEXIST;
 		goto out;
 	}
@@ -195,8 +193,7 @@ int acquire_token(struct token *token, uint64_t reacquire_lver,
 
 	token->acquire_result = rv;
 
-	log_token(token, "acquire token_id %d rv %d lver %llu at %llu",
-		  token->token_id, rv,
+	log_token(token, "acquire rv %d lver %llu at %llu", rv,
 		  (unsigned long long)token->leader.lver,
 		  (unsigned long long)token->leader.timestamp);
 
@@ -228,8 +225,7 @@ int setowner_token(struct token *token)
 
 	token->setowner_result = rv;
 
-	log_token(token, "setowner token_id %d rv %d lver %llu at %llu",
-		  token->token_id, rv,
+	log_token(token, "setowner rv %d lver %llu at %llu", rv,
 		  (unsigned long long)token->leader.lver,
 		  (unsigned long long)token->leader.timestamp);
 
@@ -251,8 +247,7 @@ int release_token(struct token *token)
 		/* this case occurs on the receiving side of migration, when
 		   the local host hasn't become the lease owner (just next_owner),
 		   and the pid fails, causing sm to clean up the pid's tokens */
-		log_token(token, "release token_id %d we are not owner",
-			  token->token_id);
+		log_token(token, "release we are not owner");
 		return 1;
 	}
 
@@ -260,8 +255,7 @@ int release_token(struct token *token)
 
 	token->release_result = rv;
 
-	log_token(token, "release token_id %d rv %d",
-		  token->token_id, rv);
+	log_token(token, "release rv %d", rv);
 
 	if (rv < 0)
 		return rv;
@@ -281,7 +275,7 @@ int migrate_token(struct token *token, uint64_t target_host_id)
 
 	token->migrate_result = rv;
 
-	log_token(token, "migrate token_id %d rv %d", token->token_id, rv);
+	log_token(token, "migrate rv %d", rv);
 
 	if (rv < 0)
 		return rv;

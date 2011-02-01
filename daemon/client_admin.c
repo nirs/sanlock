@@ -85,38 +85,30 @@ int sanlock_log_dump(void)
 	return rv;
 }
 
-/* 
- * TODO: print_debug that splits up the debug line, e.g.
- *
- *     L1
- *     RA:/dev/vdb:4096
- *     debug: acquire_result=1 migrate_result=0 release_result=0 setowner_result=0 leader.lver=1 leader.timestamp=1296499248 leader.next_owner_id=0
- *
- * to
- *
- *     L1
- *     RA:/dev/vdb:4096
- *     debug:
- *     acquire_result=1
- *     migrate_result=0
- *     release_result=0
- *     setowner_result=0
- *     leader.lver=1
- *     leader.timestamp=1296499248
- *     leader.next_owner_id=0
- *
- * also add a "wide" print option to enable long lines, e.g.
- *
- *     L1:RA:/dev/vdb:4096
- *     debug: acquire_result=1 migrate_result=0 release_result=0 setowner_result=0 leader.lver=1 leader.timestamp=1296499248 leader.next_owner_id=0
- */
+static void print_debug(char *str, int len)
+{
+	char *p;
+	int i;
+
+	p = &str[0];
+	for (i = 0; i < len-1; i++) {
+		if (str[i] == ' ') {
+			str[i] = '\0';
+			printf("    %s\n", p);
+			p = &str[i+1];
+		}
+	}
+
+	if (p)
+		printf("    %s\n", p);
+}
 
 static void status_daemon(int fd GNUC_UNUSED, struct sanlk_state *st, char *str, int debug)
 {
 	printf("daemon\n");
 
 	if (st->str_len && debug)
-		printf("debug: %s\n", str);
+		print_debug(str, st->str_len);
 }
 
 static void status_lockspace(int fd, struct sanlk_state *st, char *str, int debug)
@@ -124,26 +116,24 @@ static void status_lockspace(int fd, struct sanlk_state *st, char *str, int debu
 	struct sanlk_lockspace lockspace;
 	int rv;
 
-	printf("lockspace %.*s ", SANLK_NAME_LEN, st->name);
-
 	rv = recv(fd, &lockspace, sizeof(lockspace), MSG_WAITALL);
 
-	printf("host_id %llu %s:%llu\n",
-	       (unsigned long long)lockspace.host_id,
+	printf("lockspace %.48s host_id %llu %s:%llu\n",
+	       lockspace.name, (unsigned long long)lockspace.host_id,
 	       lockspace.host_id_disk.path,
 	       (unsigned long long)lockspace.host_id_disk.offset);
 
 	if (st->str_len && debug)
-		printf("debug: %s\n", str);
+		print_debug(str, st->str_len);
 }
 
 static void status_client(int fd GNUC_UNUSED, struct sanlk_state *st, char *str, int debug)
 {
 	printf("pid %u ", st->data32);
-	printf("%.*s\n", SANLK_NAME_LEN, st->name);
+	printf("%.48s\n", st->name);
 
 	if (st->str_len && debug)
-		printf("debug: %s\n", str);
+		print_debug(str, st->str_len);
 }
 
 static void status_resource(int fd, struct sanlk_state *st, char *str, int debug)
@@ -154,17 +144,17 @@ static void status_resource(int fd, struct sanlk_state *st, char *str, int debug
 
 	rv = recv(fd, &resource, sizeof(resource), MSG_WAITALL);
 
-	printf("    %.*s:", SANLK_NAME_LEN, resource.lockspace_name);
-	printf("    %.*s", SANLK_NAME_LEN, resource.name);
+	printf("    %.48s %.48s\n", resource.lockspace_name, resource.name);
 
 	for (i = 0; i < resource.num_disks; i++) {
 		rv = recv(fd, &disk, sizeof(disk), MSG_WAITALL);
 
-		printf(":%s:%llu\n", disk.path, (unsigned long long)disk.offset);
+		printf("    %s:%llu\n",
+		       disk.path, (unsigned long long)disk.offset);
 	}
 
 	if (st->str_len && debug)
-		printf("debug: %s\n", str);
+		print_debug(str, st->str_len);
 }
 
 int sanlock_status(int debug)

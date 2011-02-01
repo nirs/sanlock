@@ -31,6 +31,7 @@ int print_space_state(struct space *sp, char *str)
 	memset(str, 0, SANLK_STATE_MAXSTR);
 
 	snprintf(str, SANLK_STATE_MAXSTR-1,
+		 "space_id=%u "
 		 "host_generation=%llu "
 		 "killing_pids=%d "
 		 "acquire_last_result=%d "
@@ -44,6 +45,7 @@ int print_space_state(struct space *sp, char *str)
 		 "release_good_time=%llu "
 		 "max_renewal_time=%llu "
 		 "max_renewal_interval=%d",
+		 sp->space_id,
 		 (unsigned long long)sp->host_generation,
 		 sp->killing_pids,
 		 sp->lease_status.acquire_last_result,

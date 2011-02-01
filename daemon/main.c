@@ -229,8 +229,6 @@ static int client_using_space(struct client *cl, struct space *sp)
 	struct token *token;
 	int i, rv = 0;
 
-	log_space(sp, "client_using_space %d", cl->pid);
-
 	pthread_mutex_lock(&cl->mutex);
 	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
 		token = cl->tokens[i];
@@ -332,8 +330,6 @@ static int all_pids_dead(struct space *sp)
 	struct client *cl;
 	int ci;
 
-	log_space(sp, "all_pids_dead check");
-
 	for (ci = 0; ci <= client_maxi; ci++) {
 		cl = &client[ci];
 
@@ -344,7 +340,8 @@ static int all_pids_dead(struct space *sp)
 		if (!client_using_space(cl, sp))
 			continue;
 
-		log_space(sp, "used by pid %d", cl->pid);
+		log_space(sp, "used by pid %d killing %d",
+			  cl->pid, cl->killing);
 		return 0;
 	}
 	log_space(sp, "used by no pids");
@@ -393,7 +390,6 @@ static int main_loop(void)
 					sp->thread_stop = 1;
 					pthread_cond_broadcast(&sp->cond);
 					pthread_mutex_unlock(&sp->mutex);
-					log_space(sp, "move to spaces_remove");
 					list_move(&sp->list, &spaces_remove);
 				} else {
 					kill_pids(sp);
@@ -401,6 +397,7 @@ static int main_loop(void)
 			} else {
 				if (external_shutdown || sp->external_remove ||
 				    !host_id_renewed(sp)) {
+					log_space(sp, "set killing_pids");
 					sp->killing_pids = 1;
 					kill_pids(sp);
 				}
@@ -760,7 +757,7 @@ static void *cmd_acquire_thread(void *args_in)
 		token = new_tokens[i];
 		rv = get_space_info(token->space_name, &space);
 		if (rv < 0 || space.killing_pids) {
-			log_error("cmd_acquire bad space %.48s",
+			log_errot(token, "cmd_acquire bad space %.48s",
 				  token->space_name);
 			goto fail_free;
 		}
@@ -846,7 +843,7 @@ static void *cmd_acquire_thread(void *args_in)
 		if (!rv && !space.killing_pids && space.host_id == token->host_id)
 			continue;
 		pthread_mutex_unlock(&cl->mutex);
-		log_error("cmd_acquire bad space %.48s", token->space_name);
+		log_errot(token, "cmd_acquire bad space %.48s", token->space_name);
 		rv = -EINVAL;
 		goto fail_release;
 	}
@@ -1294,6 +1291,7 @@ static int print_token_state(struct token *t, char *str)
 	memset(str, 0, SANLK_STATE_MAXSTR);
 
 	snprintf(str, SANLK_STATE_MAXSTR-1,
+		 "token_id=%u "
 		 "acquire_result=%d migrate_result=%d "
 		 "release_result=%d setowner_result=%d "
 		 "leader.lver=%llu leader.timestamp=%llu "
@@ -1302,6 +1300,7 @@ static int print_token_state(struct token *t, char *str)
 		 t->migrate_result,
 		 t->release_result,
 		 t->setowner_result,
+		 t->token_id,
 		 (unsigned long long)t->leader.lver,
 		 (unsigned long long)t->leader.timestamp,
 		 (unsigned long long)t->leader.next_owner_id);

@@ -230,6 +230,7 @@ int do_wdtest(void)
 
 		t = time(NULL);
 
+		/* TODO: remove this line, just for debugging */
 		syslog(LOG_ERR, "%s renewal %llu expire %llu now %llu",
 		       path,
 	       	       (unsigned long long)renewal,
