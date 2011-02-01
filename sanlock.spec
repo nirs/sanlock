@@ -39,7 +39,7 @@ rm -rf %{buildroot}
 
 %files
 %defattr(-,root,root,-)
-/usr/libexec/sanlock
+/usr/sbin/sanlock
 %{_libdir}/libsanlock.so.*
 
 %post -n sanlock -p /sbin/ldconfig
