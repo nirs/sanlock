@@ -12,7 +12,7 @@
 # Required-Start: $time $syslog
 # Required-Stop: $syslog
 # Should-Start:
-# Should-Stop: watchdog
+# Should-Stop:
 # Default-Start: 2 3 4 5
 # Default-Stop: 0 1 6
 # Short-Description: starts and stops sanlock daemon
