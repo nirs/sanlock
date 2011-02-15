@@ -25,40 +25,151 @@
  * supervised pid is running but sanlock daemon does not renew its lease
  * and does not kill the pid (or it kills the pid but the pid does not
  * exit).  So, just before the pid begins running with granted leases,
- * watchdogd needs to be armed to reboot the host if things go bad right
+ * /dev/watchdog needs to be armed to reboot the host if things go bad right
  * after the pid goes ahead.
- *
- * The initial timestamp in the wd file should be set to the acquire_time
- * just before the daemon allows any pids to go ahead running with leases.
- *
- * If the daemon acquires its lease, creates the wd file containing
- * acquire_time, grants lease to a pid, fails to ever update the wd file,
- * and cannot kill the pid, watchdogd will reboot the host before
- * acquire_time + host_id_timeout_seconds, when another host could acquire
- * the lease.
- *
- * lease acquired at time AT
- * wd file created containing AT
- * pid starts running with granted lease
- * ...
- *
- * things go bad:
- * host_id_thread cannot renew lease
- * main thread cannot kill pid
- * watchdogd will reset host in AT + X seconds
- *
- * things go good:
- * host_id_thread renews lease at time RT
- * host_id_thread writes RT to wd file
- * watchdogd sees recent timestamp, pets wd device, host is not reset
- *
- * things go ok:
- * host_id_thread cannot renew lease
- * main thread kills pid
- * pid exits
- * stop_host_id unlinks wd file and stops host_id_thread
- * watchdogd does not see wd file with old time and does not reset host
  */
+
+#ifdef USE_WDMD
+
+#include "../wdmd/wdmd.h"
+#define WDMD_NAME_SIZE 128
+
+static int daemon_wdmd_con;
+
+void update_watchdog_file(struct space *sp, uint64_t timestamp)
+{
+	int rv;
+
+	rv = wdmd_test_live(sp->wd_fd, timestamp, timestamp + to.host_id_renewal_fail_seconds);
+	if (rv < 0)
+		log_erros(sp, "wdmd_test_live failed %d", rv);
+}
+
+int create_watchdog_file(struct space *sp, uint64_t timestamp)
+{
+	char name[WDMD_NAME_SIZE];
+	int con, rv;
+
+	con = wdmd_connect();
+	if (con < 0) {
+		log_erros(sp, "wdmd connect failed %d", con);
+		goto fail;
+	}
+
+	memset(name, 0, sizeof(name));
+
+	snprintf(name, WDMD_NAME_SIZE - 1, "%s_hostid%llu",
+		 sp->space_name, (unsigned long long)sp->host_id);
+
+	rv = wdmd_register(con, name);
+	if (rv < 0) {
+		log_erros(sp, "wdmd register failed %d", rv);
+		goto fail_close;
+	}
+
+	rv = wdmd_test_live(con, timestamp, timestamp + to.host_id_renewal_fail_seconds);
+	if (rv < 0) {
+		log_erros(sp, "wdmd_test_live failed %d", rv);
+		goto fail_close;
+	}
+
+	sp->wd_fd = con;
+	return 0;
+
+ fail_close:
+	close(con);
+ fail:
+	return -1;
+}
+
+void unlink_watchdog_file(struct space *sp)
+{
+	int rv;
+
+	rv = wdmd_test_live(sp->wd_fd, 0, 0);
+	if (rv < 0)
+		log_erros(sp, "wdmd_test_live failed %d", rv);
+}
+
+void close_watchdog_file(struct space *sp)
+{
+	close(sp->wd_fd);
+}
+
+void close_watchdog(void)
+{
+	wdmd_refcount_clear(daemon_wdmd_con);
+	close(daemon_wdmd_con);
+}
+
+/* TODO: add wdmd connection as client so poll detects if it fails? */
+
+int setup_watchdog(void)
+{
+	int test_interval, fire_timeout;
+	uint64_t last_keepalive;
+	int con, rv;
+
+	if (!options.use_watchdog)
+		return 0;
+
+	con = wdmd_connect();
+	if (con < 0) {
+		log_error("wdmd connect failed for watchdog handling");
+		goto fail;
+	}
+
+	rv = wdmd_register(con, "sanlock");
+	if (rv < 0) {
+		log_error("wdmd register failed");
+		goto fail_close;
+	}
+
+	rv = wdmd_refcount_set(con);
+	if (rv < 0) {
+		log_error("wdmd refcount failed");
+		goto fail_close;
+	}
+
+	rv = wdmd_status(con, &test_interval, &fire_timeout, &last_keepalive);
+	if (rv < 0) {
+		log_error("wdmd status failed");
+		goto fail_clear;
+	}
+
+	log_debug("wdmd test_interval %d fire_timeout %d last_keepalive %llu",
+		  test_interval, fire_timeout,
+		  (unsigned long long)last_keepalive);
+
+	if (to.host_id_renewal_fail_seconds + fire_timeout !=
+	    to.host_id_timeout_seconds) {
+		log_error("invalid timeout settings "
+			  "host_id_renewal_fail %d "
+			  "fire_timeout %d "
+			  "host_id_timeout %d",
+			  to.host_id_renewal_fail_seconds,
+			  fire_timeout,
+			  to.host_id_timeout_seconds);
+		goto fail_clear;
+	}
+
+	daemon_wdmd_con = con;
+	return 0;
+
+ fail_clear:
+	wdmd_refcount_clear(con);
+ fail_close:
+	close(con);
+ fail:
+	return -1;
+}
+
+int do_wdtest(void)
+{
+	return -1;
+}
+
+#else
 
 #define BUF_SIZE 128
 
@@ -94,9 +205,9 @@ void update_watchdog_file(struct space *sp, uint64_t timestamp)
 		 (unsigned long long)timestamp,
 		 (unsigned long long)timestamp + to.host_id_renewal_fail_seconds);
 
-	lseek(sp->wdtest_fd, 0, SEEK_SET);
+	lseek(sp->wd_fd, 0, SEEK_SET);
 
-	do_write(sp->wdtest_fd, buf, sizeof(buf));
+	do_write(sp->wd_fd, buf, sizeof(buf));
 }
 
 int create_watchdog_file(struct space *sp, uint64_t timestamp)
@@ -143,7 +254,7 @@ int create_watchdog_file(struct space *sp, uint64_t timestamp)
 		return rv;
 	}
 
-	sp->wdtest_fd = fd;
+	sp->wd_fd = fd;
 	return 0;
 }
 
@@ -157,10 +268,14 @@ void unlink_watchdog_file(struct space *sp)
 
 void close_watchdog_file(struct space *sp)
 {
-	close(sp->wdtest_fd);
+	close(sp->wd_fd);
 }
 
-int check_watchdog_file(void)
+void close_watchdog(void)
+{
+}
+
+int setup_watchdog(void)
 {
 	DIR *d;
 	struct dirent *de;
@@ -254,4 +369,4 @@ int do_wdtest(void)
 		return -1;
 	return 0;
 }
-
+#endif

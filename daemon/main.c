@@ -1765,7 +1765,7 @@ static int do_daemon(void)
 	if (fd < 0)
 		goto out;
 
-	rv = check_watchdog_file();
+	rv = setup_watchdog();
 	if (rv < 0)
 		goto out_lockfile;
 
@@ -1782,6 +1782,9 @@ static int do_daemon(void)
 	main_loop();
 
 	close_token_manager();
+
+	close_watchdog();
+
  out_lockfile:
 	unlink_lockfile(fd, SANLK_RUN_DIR, SANLK_LOCKFILE_NAME);
  out:

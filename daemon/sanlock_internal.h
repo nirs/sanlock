@@ -114,7 +114,7 @@ struct space {
 	pthread_mutex_t mutex; /* protects lease_status, thread_stop  */
 	pthread_cond_t cond;
 	struct lease_status lease_status;
-	int wdtest_fd;
+	int wd_fd;
 	char wdtest_path[PATH_MAX];
 };
 
@@ -151,27 +151,105 @@ struct sm_header {
  * host_id lease is this old (or more), and will take ownership of any resource
  * leases that the other host owned.
  *
- * Example of how host_id_timeout_seconds is derived (primarily from 
- * host_id_renewal_fail_seconds).
- * . host_id_renewal_fail_seconds 30
- * . host_id_timeout_seconds 100
  *
- * - host_id lease ages to 30 sec (our_host_id_renewed returns 0) at which
- *   point daemon enters recovery mode (kills pids) and stops updating wd file
- * - 60 more seconds after we stop updating wd file, the wd fires
- *   (assuming standard 60 wd timeout, and assuming we don't unlink wd file first)
- * - this 90 seconds isn't quite right because of the intervals between
- *   checks (daemon checking lease age, and watchdog daemon running checks), so
- *   add 10 more seconds to deal with check intervals, e.g. the watchdog daemon
- *   checks the status every 5 or 10 seconds, so the lease may be 30-40 sec
- *   old when it stops petting the wd device
+ * Example of watchdog behavior when host_id renewals fail, assuming
+ * that sanlock cannot successfully kill the pids it is supervising that
+ * depend on the given host_id.
+ *
+ * Using these default values
+ * host_id_renewal_fail_seconds 30
+ * host_id_timeout_seconds 90
+ * wdmd fire_timeout 60
+ *
+ *   T
+ *   0: sanlock renews host_id on disk
+ *      sanlock calls wdmd_test_live(0, 30)
+ *      wdmd test_client sees now 0 < expire 30 ok
+ *      wdmd /dev/watchdog keepalive
+ *
+ *   5: sanlock renews host_id on disk
+ *      sanlock calls wdmd_test_live(5, 35)
+ *
+ *  10: sanlock renews host_id on disk ok
+ *      sanlock calls wdmd_test_live(10, 40)
+ *      wdmd test_client sees now 10 < expire 35 or 40 ok
+ *      wdmd /dev/watchdog keepalive
+ *
+ *  15: sanlock fails to renew host_id on disk
+ *      sanlock does not call wdmd_test_live
+ *
+ *  20: sanlock fails to renew host_id on disk
+ *      sanlock does not call wdmd_test_live
+ *      wdmd test_client sees now 20 < expire 40 ok
+ *      wdmd /dev/watchdog keepalive
+ *
+ *  25: sanlock fails to renew host_id on disk
+ *      sanlock does not call wdmd_test_live
+ *
+ *  30: sanlock fails to renew host_id on disk
+ *      sanlock does not call wdmd_test_live
+ *      wdmd test_client sees now 30 < expire 40 ok
+ *      wdmd /dev/watchdog keepalive
+ *       
+ *  35: sanlock fails to renew host_id on disk
+ *      sanlock does not call wdmd_test_live
+ *
+ *  40: sanlock fails to renew host_id on disk
+ *      sanlock does not call wdmd_test_live
+ *      wdmd test_client sees now 40 >= expire 40 fail
+ *      wdmd no keepalive
+ *
+ *      . /dev/watchdog will fire at last keepalive + fire_timeout =
+ *        T30 + 60 = T90
+ *      . host_id will expire at
+ *        last disk renewal ok + host_id_renewal_fail_seconds + fire_timeout
+ *        T10 + 30 + 60 = T100
+ *      . the wdmd test at T30 could have been at T39, so wdmd would have
+ *        seen the client unexpired/ok just before the expiry time at T40,
+ *        which would lead to /dev/watchdog firing at 99 instead of 90
+ *      . also last disk renewal ok + host_id_timeout_seconds
+ *        T10 + 90 = T100
+ *      . setup_watchdog checks that host_id_timeout_seconds =
+ *        host_id_renewal_fail_seconds + fire_timeout
+ *
+ *  45: sanlock fails to renew host_id on disk -> does not call wdmd_test_live
+ *  50: sanlock fails to renew host_id on disk -> does not call wdmd_test_live
+ *      wdmd test_client sees now 50 > expire 40 fail -> no keepalive
+ *  55: sanlock fails to renew host_id on disk -> does not call wdmd_test_live
+ *  60: sanlock fails to renew host_id on disk -> does not call wdmd_test_live
+ *      wdmd test_client sees now 60 > expire 40 fail -> no keepalive
+ *  65: sanlock fails to renew host_id on disk -> does not call wdmd_test_live
+ *  70: sanlock fails to renew host_id on disk -> does not call wdmd_test_live
+ *      wdmd test_client sees now 70 > expire 40 fail -> no keepalive
+ *  75: sanlock fails to renew host_id on disk -> does not call wdmd_test_live
+ *  80: sanlock fails to renew host_id on disk -> does not call wdmd_test_live
+ *      wdmd test_client sees now 80 > expire 40 fail -> no keepalive
+ *  85: sanlock fails to renew host_id on disk -> does not call wdmd_test_live
+ *  90: sanlock fails to renew host_id on disk -> does not call wdmd_test_live
+ *      wdmd test_client sees now 90 > expire 40 fail -> no keepalive
+ *      /dev/watchdog fires, machine reset
+ * 100: another host takes over leases held by host_id
+ *
+ *
+ * A more likely recovery scenario when a host_id cannot be renewed
+ * (probably caused by loss of storage connection):
+ *
+ * The sanlock daemon fails six times to renew its host_id from
+ * T15 to T40.  At T40, after failing for host_id_renewal_fail_seconds (30),
+ * the sanlock daemon begins trying to kill all pids that were using
+ * leases under this host_id.  As soon as all those pids exit, the sanlock
+ * daemon will call wdmd_test_live(0, 0) to disable the wdmd testing for
+ * this client/host_id.  If it's able to call wdmd_test_live(0, 0) before T90,
+ * the wdmd test will no longer see this client's expiry time of 40,
+ * so the wdmd tests will succeed, wdmd will immediately go back to
+ * /dev/watchdog keepalive's, and the machine will not be reset.
  */
 
 #define DEFAULT_IO_TIMEOUT_SECONDS 1
 #define DEFAULT_HOST_ID_RENEWAL_SECONDS 5
 #define DEFAULT_HOST_ID_RENEWAL_FAIL_SECONDS 30
 #define DEFAULT_HOST_ID_RENEWAL_WARN_SECONDS 25
-#define DEFAULT_HOST_ID_TIMEOUT_SECONDS 100
+#define DEFAULT_HOST_ID_TIMEOUT_SECONDS 90
 
 struct timeouts {
 	int io_timeout_seconds;
