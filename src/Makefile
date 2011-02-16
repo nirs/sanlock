@@ -65,7 +65,7 @@ $(SHLIB_TARGET): $(LIB_SOURCE)
 	ln -sf $(SHLIB_TARGET) $(LIB_TARGET).so.$(SOMAJOR)
 
 $(CMD_TARGET): $(SHLIB_TARGET) $(CMD_SOURCE)
-	$(CC) $(CFLAGS) $(CMD_LDFLAGS) $(CMD_SOURCE) -o $@ -L.
+	$(CC) $(CFLAGS) $(CMD_LDFLAGS) $(CMD_SOURCE) -o $@ -L. -L../wdmd
 
 clean:
 	rm -f *.o *.so *.so.* $(CMD_TARGET)
