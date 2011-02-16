@@ -1,3 +1,11 @@
+/*
+ * Copyright (C) 2010-2011 Red Hat, Inc.  All rights reserved.
+ *
+ * This copyrighted material is made available to anyone wishing to use,
+ * modify, copy, or redistribute it subject to the terms and conditions
+ * of the GNU General Public License v.2.
+ */
+
 #ifndef __SANLOCK_DIRECT_H__
 #define __SANLOCK_DIRECT_H__
 
