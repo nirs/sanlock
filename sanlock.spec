@@ -24,11 +24,11 @@ access to the shared disks.
 %build
 # upstream does not require configure
 # upstream does not support _smp_mflags
-CFLAGS=$RPM_OPT_FLAGS make -C daemon
+CFLAGS=$RPM_OPT_FLAGS make -C src
 
 %install
 rm -rf $RPM_BUILD_ROOT
-make -C daemon \
+make -C src \
         install LIB_LIBDIR=%{_libdir} \
         DESTDIR=$RPM_BUILD_ROOT
 
@@ -41,7 +41,7 @@ rm -rf $RPM_BUILD_ROOT
 
 %files
 %defattr(-,root,root,-)
-%doc daemon/COPYING
+%doc COPYING
 %{_sbindir}/sanlock
 %{_libdir}/libsanlock.so.*
 
@@ -56,7 +56,7 @@ developing applications that use %{name}.
 
 %files          devel
 %defattr(-,root,root,-)
-%doc daemon/COPYING
+%doc COPYING
 %{_libdir}/libsanlock.so
 %{_includedir}/sanlock.h
 %{_includedir}/sanlock_resource.h
