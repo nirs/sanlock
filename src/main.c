@@ -20,6 +20,7 @@
 #include <syslog.h>
 #include <pthread.h>
 #include <poll.h>
+#include <sched.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/stat.h>

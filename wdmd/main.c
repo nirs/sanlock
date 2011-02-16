@@ -21,11 +21,13 @@
 #include <syslog.h>
 #include <dirent.h>
 #include <signal.h>
+#include <sched.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <sys/un.h>
 #include <sys/stat.h>
+#include <sys/mman.h>
 #include <sys/signalfd.h>
 #include <linux/watchdog.h>
 
@@ -34,9 +36,11 @@
 
 #define DEFAULT_TEST_INTERVAL 10
 #define DEFAULT_FIRE_TIMEOUT 60
+#define DEFAULT_HIGH_PRIORITY 1
 
 static int test_interval = DEFAULT_TEST_INTERVAL;
 static int fire_timeout = DEFAULT_FIRE_TIMEOUT;
+static int high_priority = DEFAULT_HIGH_PRIORITY;
 static int daemon_quit;
 static int daemon_debug;
 static time_t last_keepalive;
@@ -796,6 +800,33 @@ static int lockfile(void)
 	return -1;
 }
 
+static void setup_priority(void)
+{
+	struct sched_param sched_param;
+	int rv;
+
+	if (!high_priority)
+		return;
+
+	rv = mlockall(MCL_CURRENT | MCL_FUTURE);
+	if (rv < 0) {
+		log_error("mlockall failed");
+	}
+
+	rv = sched_get_priority_max(SCHED_RR);
+	if (rv < 0) {
+		log_error("could not get max scheduler priority err %d", errno);
+		return;
+	}
+
+	sched_param.sched_priority = rv;
+	rv = sched_setscheduler(0, SCHED_RR|SCHED_RESET_ON_FORK, &sched_param);
+	if (rv < 0) {
+		log_error("could not set RR|RESET_ON_FORK priority %d err %d",
+			  sched_param.sched_priority, errno);
+	}
+}
+
 /* If wdmd exits abnormally, /dev/watchdog will eventually fire, and clients
    can detect wdmd is gone and begin to shut down cleanly ahead of the reset.
    But what if wdmd is restarted before the wd fires?  It will begin petting
@@ -807,6 +838,8 @@ static int lockfile(void)
 int main(int argc, char *argv[])
 {
 	int rv;
+
+	/* TODO: real option parsing, including -h 0 */
 
 	if (argc > 1 && !strcmp(argv[1], "-D"))
 		daemon_debug = 1;
@@ -820,6 +853,8 @@ int main(int argc, char *argv[])
 	}
 
 	openlog("wdmd", LOG_CONS | LOG_PID, LOG_DAEMON);
+
+	setup_priority();
 
 	rv = lockfile();
 	if (rv < 0)
