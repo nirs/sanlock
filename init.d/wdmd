@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# sanlock - SAN-based lock manager
+# wdmd - watchdog multiplexing daemon
 #
 # chkconfig: 2345 97 03
 # description: starts and stops sanlock daemon
@@ -8,27 +8,27 @@
 
 
 ### BEGIN INIT INFO
-# Provides: sanlock
-# Required-Start: $time $syslog wdmd
+# Provides: wdmd
+# Required-Start: $time $syslog
 # Required-Stop: $syslog
 # Should-Start:
 # Should-Stop:
 # Default-Start: 2 3 4 5
 # Default-Stop: 0 1 6
-# Short-Description: starts and stops sanlock daemon
-# Description: starts and stops sanlock daemon
+# Short-Description: starts and stops wdmd daemon
+# Description: starts and stops wdmd daemon
 ### END INIT INFO
 
 . /etc/rc.d/init.d/functions
 
-prog="sanlock"
-lockfile="/var/run/sanlock/$prog.pid"
+prog="wdmd"
+lockfile="/var/run/wdmd/$prog.pid"
 exec="/usr/sbin/$prog"
 
 start() {
 	[ -x $exec ] || exit 5
 	echo -n $"Starting $prog: "
-	daemon $prog daemon
+	daemon $prog
 	retval=$?
 	echo
 	[ $retval -eq 0 ] && touch $lockfile
