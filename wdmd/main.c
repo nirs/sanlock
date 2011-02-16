@@ -26,6 +26,7 @@
 #include <sys/ioctl.h>
 #include <sys/un.h>
 #include <sys/stat.h>
+#include <sys/signalfd.h>
 #include <linux/watchdog.h>
 
 #include "wdmd.h"
@@ -94,10 +95,6 @@ do { \
 } while (0)
 
 
-static void sigterm_handler(int sig GNUC_UNUSED)
-{
-	daemon_quit = 1;
-}
 
 /*
  * test clients
@@ -643,6 +640,43 @@ static void pet_watchdog(void)
 	log_debug("keepalive %d", rv);
 }
 
+static void process_signals(int ci)
+{
+	struct signalfd_siginfo fdsi;
+	ssize_t rv;
+	int fd = client[ci].fd;
+
+	rv = read(fd, &fdsi, sizeof(struct signalfd_siginfo));
+	if (rv != sizeof(struct signalfd_siginfo)) {
+		return;
+	}
+
+	if (fdsi.ssi_signo == SIGTERM) {
+		if (!active_clients())
+			daemon_quit = 1;
+	}
+}
+
+static int setup_signals(void)
+{
+	sigset_t mask;
+	int fd, rv;
+
+	sigemptyset(&mask);
+	sigaddset(&mask, SIGTERM);
+
+	rv = sigprocmask(SIG_BLOCK, &mask, NULL);
+	if (rv < 0)
+		return rv;
+
+	fd = signalfd(-1, &mask, 0);
+	if (fd < 0)
+		return -errno;
+
+	client_add(fd, process_signals, client_pid_dead);
+	return 0;
+}
+
 static int test_loop(void)
 {
 	void (*workfn) (int ci);
@@ -772,7 +806,6 @@ static int lockfile(void)
    
 int main(int argc, char *argv[])
 {
-	struct sigaction act;
 	int rv;
 
 	if (argc > 1 && strcmp(argv[1], "-D"))
@@ -792,9 +825,7 @@ int main(int argc, char *argv[])
 	if (rv < 0)
 		goto out;
 
-	memset(&act, 0, sizeof(act));
-	act.sa_handler = sigterm_handler;
-	rv = sigaction(SIGTERM, &act, NULL);
+	rv = setup_signals();
 	if (rv < 0)
 		goto out_lockfile;
 
