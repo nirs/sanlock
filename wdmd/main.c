@@ -38,7 +38,7 @@
 static int test_interval = DEFAULT_TEST_INTERVAL;
 static int fire_timeout = DEFAULT_FIRE_TIMEOUT;
 static int daemon_quit;
-static int daemon_debug = 1;
+static int daemon_debug;
 static time_t last_keepalive;
 static char lockfile_path[PATH_MAX];
 static int dev_fd;
@@ -808,7 +808,7 @@ int main(int argc, char *argv[])
 {
 	int rv;
 
-	if (argc > 1 && strcmp(argv[1], "-D"))
+	if (argc > 1 && !strcmp(argv[1], "-D"))
 		daemon_debug = 1;
 
 	if (!daemon_debug) {
