@@ -13,17 +13,25 @@
 
 int main(int argc, char *argv[])
 {
+	char name[WDMD_NAME_SIZE];
 	uint64_t t, last_keepalive;
 	int test_interval, fire_timeout;
 	int con, rv;
 	int i = 0;
+	int iter = 10;
+
+	if (argc > 1)
+		iter = atoi(argv[1]);
+
+	memset(name, 0, sizeof(name));
+	sprintf(name, "%s", "wdmd_client");
 
 	con = wdmd_connect();
 	printf("wdmd_connect %d\n", con);
 	if (con < 0)
 		return con;
 
-	rv = wdmd_register(con, "wdmd_client");
+	rv = wdmd_register(con, name);
 	printf("wdmd_register %d\n", rv);
 	if (rv < 0)
 		return rv;
@@ -45,7 +53,7 @@ int main(int argc, char *argv[])
 		       (unsigned long long)t,
 		       (unsigned long long)(t + 40));
 
-		if (i++ > 10)
+		if (i++ > iter)
 			break;
 	}
 

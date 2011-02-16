@@ -32,13 +32,15 @@
 #ifdef USE_WDMD
 
 #include "../wdmd/wdmd.h"
-#define WDMD_NAME_SIZE 128
 
 static int daemon_wdmd_con;
 
 void update_watchdog_file(struct space *sp, uint64_t timestamp)
 {
 	int rv;
+
+	if (!options.use_watchdog)
+		return;
 
 	rv = wdmd_test_live(sp->wd_fd, timestamp, timestamp + to.host_id_renewal_fail_seconds);
 	if (rv < 0)
@@ -50,6 +52,9 @@ int create_watchdog_file(struct space *sp, uint64_t timestamp)
 	char name[WDMD_NAME_SIZE];
 	int con, rv;
 
+	if (!options.use_watchdog)
+		return 0;
+
 	con = wdmd_connect();
 	if (con < 0) {
 		log_erros(sp, "wdmd connect failed %d", con);
@@ -58,7 +63,7 @@ int create_watchdog_file(struct space *sp, uint64_t timestamp)
 
 	memset(name, 0, sizeof(name));
 
-	snprintf(name, WDMD_NAME_SIZE - 1, "%s_hostid%llu",
+	snprintf(name, WDMD_NAME_SIZE - 1, "sanlock_%s_hostid%llu",
 		 sp->space_name, (unsigned long long)sp->host_id);
 
 	rv = wdmd_register(con, name);
@@ -86,6 +91,9 @@ void unlink_watchdog_file(struct space *sp)
 {
 	int rv;
 
+	if (!options.use_watchdog)
+		return;
+
 	rv = wdmd_test_live(sp->wd_fd, 0, 0);
 	if (rv < 0)
 		log_erros(sp, "wdmd_test_live failed %d", rv);
@@ -93,11 +101,17 @@ void unlink_watchdog_file(struct space *sp)
 
 void close_watchdog_file(struct space *sp)
 {
+	if (!options.use_watchdog)
+		return;
+
 	close(sp->wd_fd);
 }
 
 void close_watchdog(void)
 {
+	if (!options.use_watchdog)
+		return;
+
 	wdmd_refcount_clear(daemon_wdmd_con);
 	close(daemon_wdmd_con);
 }
@@ -106,6 +120,7 @@ void close_watchdog(void)
 
 int setup_watchdog(void)
 {
+	char name[WDMD_NAME_SIZE];
 	int test_interval, fire_timeout;
 	uint64_t last_keepalive;
 	int con, rv;
@@ -113,13 +128,17 @@ int setup_watchdog(void)
 	if (!options.use_watchdog)
 		return 0;
 
+	memset(name, 0, sizeof(name));
+
+	snprintf(name, WDMD_NAME_SIZE - 1, "%s", "sanlock_daemon");
+
 	con = wdmd_connect();
 	if (con < 0) {
 		log_error("wdmd connect failed for watchdog handling");
 		goto fail;
 	}
 
-	rv = wdmd_register(con, "sanlock");
+	rv = wdmd_register(con, name);
 	if (rv < 0) {
 		log_error("wdmd register failed");
 		goto fail_close;

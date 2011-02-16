@@ -16,8 +16,6 @@ enum {
 	CMD_STATUS,
 };
 
-#define WDMD_NAME_SIZE 128
-
 struct wdmd_header {
 	uint32_t magic;
 	uint32_t cmd;

@@ -32,15 +32,11 @@ static int daemon_quit;
 static int daemon_debug = 1;
 static time_t last_keepalive;
 static char lockfile_path[PATH_MAX];
-
 static int dev_fd;
 
 #define WDMD_RUN_DIR	"/var/run/wdmd"
 #define FILES_DIR	"/var/run/wdmd/test_files"
 #define SCRIPTS_DIR	"/etc/wdmd/test_scripts"
-
-static DIR *files_dir;
-static DIR *scripts_dir;
 
 struct script_status {
 	int pid;
@@ -372,6 +368,7 @@ static int active_clients(void)
 
 
 #ifdef TEST_FILES
+static DIR *files_dir;
 
 static void close_files(void)
 {
@@ -454,6 +451,7 @@ static int test_files(void) { return 0; }
 
 
 #ifdef TEST_SCRIPTS
+static DIR *scripts_dir;
 
 static void close_scripts(void)
 {
