@@ -26,6 +26,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/un.h>
+#include <sys/mman.h>
 
 #define EXTERN
 #include "sanlock_internal.h"
@@ -1735,6 +1736,33 @@ static int make_dirs(void)
 	return rv;
 }
 
+static void setup_priority(void)
+{
+	struct sched_param sched_param;
+	int rv;
+
+	if (!options.high_priority)
+		return;
+
+	rv = mlockall(MCL_CURRENT | MCL_FUTURE);
+	if (rv < 0) {
+		log_error("mlockall failed");
+	}
+
+	rv = sched_get_priority_max(SCHED_RR);
+	if (rv < 0) {
+                log_error("could not get max scheduler priority err %d", errno);
+		return;
+	}
+
+	sched_param.sched_priority = rv;
+	rv = sched_setscheduler(0, SCHED_RR|SCHED_RESET_ON_FORK, &sched_param);
+	if (rv < 0) {
+		log_error("could not set RR|RESET_ON_FORK priority %d err %d",
+			  sched_param.sched_priority, errno);
+	}
+}
+
 static int do_daemon(void)
 {
 	struct sigaction act;
@@ -1768,6 +1796,8 @@ static int do_daemon(void)
 	}
 
 	setup_logging();
+
+	setup_priority();
 
 	fd = lockfile(SANLK_RUN_DIR, SANLK_LOCKFILE_NAME);
 	if (fd < 0)
@@ -2135,8 +2165,10 @@ static void print_usage(void)
 	printf("  -D			debug: no fork and print all logging to stderr\n");
 	printf("  -L <level>		write logging at level and up to logfile (-1 none)\n");
 	printf("  -S <level>		write logging at level and up to syslog (-1 none)\n");
-	printf("  -w <num>		enable (1) or disable (0) writing watchdog files\n");
-	printf("  -a <num>		use async io (1 yes, 0 no)\n");
+	printf("  -w <num>		use watchdog through wdmd (1 yes, 0 no, default %d)\n", DEFAULT_USE_WATCHDOG);
+	printf("  -a <num>		use async io (1 yes, 0 no, default %d)\n", DEFAULT_USE_AIO);
+	printf("  -h <num>		use high priority features (1 yes, 0 no, default %d)\n", DEFAULT_HIGH_PRIORITY);
+	printf("                        includes max realtime scheduling priority, mlockall\n");
 	printf("  -o <key=n,key=n,...>	change default timeouts in seconds, key (default):\n");
 	printf("                        io_timeout (%d)\n", DEFAULT_IO_TIMEOUT_SECONDS);
 	printf("                        host_id_renewal (%d)\n", DEFAULT_HOST_ID_RENEWAL_SECONDS);
@@ -2365,6 +2397,9 @@ static int read_command_line(int argc, char *argv[])
 			break;
 		case 'w':
 			options.use_watchdog = atoi(optionarg);
+			break;
+		case 'h':
+			options.high_priority = atoi(optionarg);
 			break;
 		case 'o':
 			parse_arg_timeout(optionarg); /* to */
@@ -2603,8 +2638,9 @@ int main(int argc, char *argv[])
 	com.pid = -1;
 
 	memset(&options, 0, sizeof(options));
-	options.use_aio = 1;
-	options.use_watchdog = 1;
+	options.use_aio = DEFAULT_USE_AIO;
+	options.use_watchdog = DEFAULT_USE_WATCHDOG;
+	options.high_priority = DEFAULT_HIGH_PRIORITY;
 
 	memset(&to, 0, sizeof(to));
 	to.io_timeout_seconds = DEFAULT_IO_TIMEOUT_SECONDS;

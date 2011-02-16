@@ -269,10 +269,15 @@ struct timeouts {
 
 /* values used after processing command, while running */
 
+#define DEFAULT_USE_AIO 1
+#define DEFAULT_USE_WATCHDOG 1
+#define DEFAULT_HIGH_PRIORITY 1
+
 struct options {
 	int debug;
 	int use_aio;
 	int use_watchdog;
+	int high_priority;
 	uint32_t cluster_mode;
 };
 
