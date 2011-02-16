@@ -1,18 +1,17 @@
-## global alphatag git0a6184070
+Name:           sanlock
+Version:        1.0
+Release:        2%{?dist}
+Summary:        A shared disk lock manager
 
-Name:		sanlock
-Version:	1.0
-Release:	1%{?alphatag:.%{alphatag}}%{?dist}
-Summary:	A shared disk lock manager
-Group:		System Environment/Base
-License:	GPLv2+
-URL:		https://fedorahosted.org/releases/s/a/sanlock/
-Source0:	https://fedorahosted.org/releases/s/a/sanlock/%{name}-%{version}.tar.gz
+Group:          System Environment/Base
+License:        GPLv2+
+URL:            https://fedorahosted.org/sanlock/
+Source0:        https://fedorahosted.org/releases/s/a/sanlock/%{name}-%{version}.tar.gz
+BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
-## Setup/build bits
-BuildRoot: %(mktemp -ud %{_tmppath}/%{name}-%{version}-%{release}-XXXXXX)
+BuildRequires:  libblkid-devel
 
-BuildRequires:	libblkid-devel
+#Requires: <nothing>
 
 %description
 sanlock uses disk paxos to manage leases on shared storage.
@@ -20,46 +19,51 @@ Hosts connected to a common SAN can use this to synchronize their
 access to the shared disks.
 
 %prep
-%setup -q -n %{name}-%{version}
+%setup -q
 
 %build
 # upstream does not require configure
-
 # upstream does not support _smp_mflags
-CFLAGS="$(echo '%{optflags}')" make -C daemon
+CFLAGS=$RPM_OPT_FLAGS make -C daemon
 
 %install
-rm -rf %{buildroot}
+rm -rf $RPM_BUILD_ROOT
 make -C daemon \
-	install LIB_LIBDIR=%{_libdir} \
-	DESTDIR=%{buildroot}
+        install LIB_LIBDIR=%{_libdir} \
+        DESTDIR=$RPM_BUILD_ROOT
 
 %clean
-rm -rf %{buildroot}
+rm -rf $RPM_BUILD_ROOT
+
+%post -p /sbin/ldconfig
+
+%postun -p /sbin/ldconfig
 
 %files
 %defattr(-,root,root,-)
-/usr/sbin/sanlock
+%doc daemon/COPYING
+%{_sbindir}/sanlock
 %{_libdir}/libsanlock.so.*
 
-%post -n sanlock -p /sbin/ldconfig
+%package        devel
+Summary:        Development files for %{name}
+Group:          Development/Libraries
+Requires:       %{name} = %{version}-%{release}
 
-%postun -n sanlock -p /sbin/ldconfig
+%description    devel
+The %{name}-devel package contains libraries and header files for
+developing applications that use %{name}.
 
-%package -n sanlock-devel
-Group: Development/Libraries
-Summary: A shared disk lock manager devel package
-Requires: sanlock = %{version}-%{release}
-
-%description -n sanlock-devel
-The sanlock library devel package.
-
-%files -n sanlock-devel
+%files          devel
 %defattr(-,root,root,-)
+%doc daemon/COPYING
 %{_libdir}/libsanlock.so
 %{_includedir}/sanlock.h
 %{_includedir}/sanlock_resource.h
 
 %changelog
+* Tue Feb 8 2011 Angus Salkeld <asalkeld@redhat.com> - 1.0-2
+* - SPEC: Add docs and make more consistent with the fedora template.
+
 * Mon Jan 10 2011 Fabio M. Di Nitto <fdinitto@redhat.com> - 1.0-1
 - first cut at rpm packaging
