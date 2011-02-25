@@ -1,0 +1,167 @@
+
+Migration 1 (no problems)
+
+- Source pid X is running and has leases on resources A and B
+
+- S libvirt calls plugin "migrate pid X's leases to D" (virLockDriverGetState)
+  . plugin calls sanlock_migrate(X, D)
+  . sanlock writes next_owner_id=D to leader block of leases A,B
+    [see cmd_migrate_thread() and migrate_lease()]
+  . sanlock_migrate() returns 0
+  . sanlock returns string "leases=A,B ver=1,1 result=OK" to plugin
+  . plugin returns string "leases=A,B ver=1,1 result=OK" to libvirt
+
+- S libvirt sends "leases=A,B ver=1,1 result=OK" to D libvirt
+- S libvirt migration begins
+
+- D libvirt calls plugin New()
+- D libvirt calls plugin AddResource(A, path, offset)
+- D libvirt calls plugin AddResource(B, path, offset)
+- D libvirt forks pid Y
+- D libvirt calls plugin AcquireObject("leases=A,B ver=1,1 result=OK")
+  . plugin calls sanlock_acquire(A, B, INCOMING, "leases=A,B ver=1,1 result=0")
+  . sanlock reads next_owner_id=D in leader block of leases A,B
+    [see cmd_acquire_thread() and receive_lease()]
+  . sanlock_acquire() returns 0
+- D libvirt execs qemu -incoming in paused mode
+
+- S libvirt migration ends successfully
+- D libvirt migration ends successfully
+
+- D libvirt calls plugin "migration of pid Y complete" (no function yet)
+  . plugin calls sanlock_setowner(Y)
+  . sanlock writes owner_id=D, next_owner_id=0 to leader block of leases A,B
+    [see cmd_setowner_thread() and setowner_lease()]
+  . sanlock_setowner() returns 0
+
+- D libvirt resumes vm pid Y
+- S qemu pid X exits
+- S sanlock cleans up pid X when it exits
+
+End result is success.
+
+--
+
+Migration 2 (source looses storage connectivity, destination doesn't)
+
+- Source pid X is running and has leases on resources A and B
+
+- S libvirt calls plugin "migrate pid X's leases to D" (virLockDriverGetState)
+  . plugin calls sanlock_migrate(X, D)
+  . sanlock FAILS to write next_owner_id=D to leader block of leases A,B
+  . sanlock_migrate() returns 0 (migration can still procede despite failure)
+  . sanlock returns string "leases=A,B ver=1,1 result=ERROR" to plugin
+  . plugin returns string "leases=A,B ver=1,1 result=ERROR" to libvirt
+
+- S libvirt sends "leases=A,B ver=1,1 result=ERROR" to D libvirt
+- S libvirt migration begins
+
+- D libvirt calls plugin New()
+- D libvirt calls plugin AddResource(A, path, offset)
+- D libvirt calls plugin AddResource(B, path, offset)
+- D libvirt forks pid Y
+- D libvirt calls plugin AcquireObject("leases=A,B ver=1,1 result=ERROR")
+  . plugin calls sanlock_acquire(A, B, INCOMING, "leases=A,B ver=1,1 result=ERROR")
+  . sanlock reads next_owner_id=0 in leader block of leases A,B
+  . sanlock sees ERROR which is consistent with no next_owner_id being set
+  . sanlock writes next_owner_id=D to leader block of leases A,B
+    (S was supposed to do this but failed, having D set next_owner_id is
+     probably unnecessary)
+  . sanlock_acquire() returns 0
+- D libvirt execs qemu -incoming in paused mode
+
+- S libvirt migration ends successfully
+- D libvirt migration ends successfully
+
+- D libvirt calls plugin "migration of pid Y complete" (no function yet)
+  . plugin calls sanlock_setowner(Y)
+  . sanlock writes owner_id=D, next_owner_id=0 to leader block of leases A,B
+    [see cmd_setowner_thread() and setowner_lease()]
+  . sanlock_setowner() returns 0
+
+- D libvirt resumes vm pid Y
+- S qemu pid X exits
+- S sanlock cleans up pid X when it exits
+
+End result is success.
+
+--
+
+Migration 3 (source looses storage connectivity, destination also)
+
+- Source pid X is running and has leases on resources A and B
+
+- S libvirt calls plugin "migrate pid X's leases to D" (virLockDriverGetState)
+  . plugin calls sanlock_migrate(X, D)
+  . sanlock FAILS to write next_owner_id=D to leader block of leases A,B
+  . sanlock_migrate() returns 0 (migration can still procede despite failure)
+  . sanlock returns string "leases=A,B ver=1,1 result=ERROR" to plugin
+  . plugin returns string "leases=A,B ver=1,1 result=ERROR" to libvirt
+
+- S libvirt sends "leases=A,B ver=1,1 result=ERROR" to D libvirt
+- S libvirt migration begins
+
+- D libvirt calls plugin New()
+- D libvirt calls plugin AddResource(A, path, offset)
+- D libvirt calls plugin AddResource(B, path, offset)
+- D libvirt forks pid Y
+- D libvirt calls plugin AcquireObject("leases=A,B ver=1,1 result=ERROR")
+  . plugin calls sanlock_acquire(A, B, INCOMING, "leases=A,B ver=1,1 result=ERROR")
+  . sanlock FAILS to read leader block of leases A,B
+    [receive_token() paxos_lease_leader_read() error]
+  . sanlock_acquire() returns -1
+- D libvirt does not exec qemu
+
+- D libvirt migration fails
+- S libvirt migration fails
+
+- D pid Y exits
+- D sanlock cleans up pid Y when it exits
+
+- S qemu pid X exits
+- S sanlock cleans up pid X when it exits
+
+End result is the vm is not running on either the source or the
+destination.  The disk leases that the vm held have owner_id=S.
+
+--
+
+Migration 4 (libvirt migration fails)
+
+- Source pid X is running and has leases on resources A and B
+
+- S libvirt calls plugin "migrate pid X's leases to D" (virLockDriverGetState)
+  . plugin calls sanlock_migrate(X, D)
+  . sanlock writes next_owner_id=D to leader block of leases A,B
+    [see cmd_migrate_thread() and migrate_lease()]
+  . sanlock_migrate() returns 0
+  . sanlock returns string "leases=A,B ver=1,1 result=OK" to plugin
+  . plugin returns string "leases=A,B ver=1,1 result=OK" to libvirt
+
+- S libvirt sends "leases=A,B ver=1,1 result=OK" to D libvirt
+- S libvirt migration begins
+
+- D libvirt calls plugin New()
+- D libvirt calls plugin AddResource(A, path, offset)
+- D libvirt calls plugin AddResource(B, path, offset)
+- D libvirt forks pid Y
+- D libvirt calls plugin AcquireObject("leases=A,B ver=1,1 result=OK")
+  . plugin calls sanlock_acquire(A, B, INCOMING, "leases=A,B ver=1,1 result=0")
+  . sanlock reads next_owner_id=D in leader block of leases A,B
+    [see cmd_acquire_thread() and receive_lease()]
+  . sanlock_acquire() returns 0
+- D libvirt execs qemu -incoming in paused mode
+
+- S libvirt migration fails
+- D libvirt migration fails
+
+- D pid Y exits
+- D sanlock cleans up pid Y when it exits
+
+- S qemu pid X exits
+- S sanlock cleans up pid X when it exits
+  . writes owner=0, next_owner=0 in leader block of leases A,B
+
+End result is the vm is not running on either the source or the
+destination.  The disk leases that the vm held are free.
+
