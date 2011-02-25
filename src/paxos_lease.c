@@ -805,7 +805,8 @@ int paxos_lease_migrate(struct token *token,
 		log_errot(token, "paxos_migrate num_hosts %llu target_host_id %llu",
 			  (unsigned long long)new_leader.num_hosts,
 			  (unsigned long long)target_host_id);
-		return DP_BAD_NUMHOSTS;
+		error = DP_BAD_NUMHOSTS;
+		goto out;
 	}
 
 	new_leader.next_owner_id = target_host_id;

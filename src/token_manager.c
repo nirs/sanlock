@@ -209,8 +209,10 @@ int acquire_token(struct token *token, uint64_t reacquire_lver,
 		return rv;
 
 	memcpy(&token->leader, &leader_ret, sizeof(struct leader_record));
-	return 1;
+	return rv; /* DP_OK */
 }
+
+/* return < 0 on error, 1 on success */
 
 int setowner_token(struct token *token)
 {
@@ -241,7 +243,7 @@ int setowner_token(struct token *token)
 		return rv;
 
 	memcpy(&token->leader, &leader_ret, sizeof(struct leader_record));
-	return 1;
+	return rv; /* DP_OK */
 }
 
 /* return < 0 on error, 1 on success */
@@ -269,10 +271,11 @@ int release_token(struct token *token)
 		return rv;
 
 	memcpy(&token->leader, &leader_ret, sizeof(struct leader_record));
-	return 1;
+	return rv; /* DP_OK */
 }
 
 /* migration source: writes leader_record.next_owner_id = target_host_id */
+/* return < 0 on error, 1 on success */
 
 int migrate_token(struct token *token, uint64_t target_host_id)
 {
@@ -289,66 +292,78 @@ int migrate_token(struct token *token, uint64_t target_host_id)
 		return rv;
 
 	memcpy(&token->leader, &leader_ret, sizeof(struct leader_record));
-	return 1;
+	return rv; /* DP_OK */
 }
 
-/* migration target: verifies that the source wrote us as the next_owner_id */
 
-int receive_token(struct token *token, char *opt_str GNUC_UNUSED)
+/*
+ * migration target: verifies that the source wrote us as the next_owner_id
+ *
+ * When everything is working correctly, we just verify here that
+ * fields in leader_ret match what we see in leader_src
+ * (created from opt_str which was returned by sanlock_migrate()
+ * on the source).
+ *
+ * If we can't read the leader, return an error, and the migration
+ * needs to be aborted.
+ */
+/* return < 0 on error, 1 on success */
+
+int receive_token(struct token *token, int migrate_result,
+		  struct leader_record *leader_src)
 {
-	struct leader_record leader_ret;
+	struct leader_record leader_read;
 	int rv;
 
-	rv = paxos_lease_leader_read(token, &leader_ret);
+	rv = paxos_lease_leader_read(token, &leader_read);
 	if (rv < 0)
 		return rv;
 
-	/* TODO: opt_str will be an encoding of a bunch of lease state
-	 * (full leader_record?) from the migration source. */
-#if 0
-	/* token->leader is a copy of the leader_record that the source wrote
-	   in migrate_token(); it should not have changed between then and when
-	   we read it here. */
-
-	if (memcmp(&token->leader, &leader_ret, sizeof(struct leader_record))) {
-		log_errot(token, "receive leader_read mismatch");
-		return -1;
-	}
-#endif
-	
-	/* token->migrate_result is a copy of the paxos_lease_migrate() return
-	   value on the source; if it was successful on the source (1), then
-	   next_owner_id should equal our_host_id; if the source could not
-	   write to the lease, then next_owner_id should be 0, and we'll write
-	   next_owner_id = our_host_id for it. */
-
-	if (token->migrate_result == 1) {
-		if (leader_ret.next_owner_id != token->host_id) {
-			log_errot(token, "receive wrong next_owner %llu",
-				  (unsigned long long)leader_ret.next_owner_id);
+	if (migrate_result == DP_OK) {
+		if (leader_src->next_owner_id == token->host_id &&
+		    leader_read.next_owner_id == token->host_id &&
+		    leader_src->lver == leader_read.lver &&
+		    leader_src->timestamp == leader_read.timestamp) {
+			log_token(token, "receive_token all match");
+			return DP_OK;
+		} else {
+			log_errot(token, "receive_token mismatch "
+				  "next_owner %llu %llu %llu "
+				  "lver %llu %llu "
+				  "timestamp %llu %llu",
+				  (unsigned long long)token->host_id,
+				  (unsigned long long)leader_src->next_owner_id,
+				  (unsigned long long)leader_read.next_owner_id,
+				  (unsigned long long)leader_src->lver,
+				  (unsigned long long)leader_read.lver,
+				  (unsigned long long)leader_src->timestamp,
+				  (unsigned long long)leader_read.timestamp);
 			return -1;
 		}
-		goto out;
 	}
 
-	/* source failed to migrate this lease, so next_owner_id should still
-	   be zero */
+	/* migrate_result < 0, source could not write next_owner_id, so it
+	   should still be 0 */
 
-	if (leader_ret.next_owner_id != 0) {
-		log_errot(token, "receive expect zero next_owner %llu",
-			  (unsigned long long)leader_ret.next_owner_id);
+	if (leader_src->owner_id != leader_read.owner_id ||
+	    leader_src->timestamp != leader_read.timestamp ||
+	    leader_read.next_owner_id != 0) {
+
+		log_errot(token, "receive_token mismatch migrate_result %d "
+			  "next_owner %llu owner %llu %llu timestamp %llu %llu",
+			  migrate_result,
+			  (unsigned long long)leader_read.next_owner_id,
+			  (unsigned long long)leader_src->owner_id,
+			  (unsigned long long)leader_read.owner_id,
+			  (unsigned long long)leader_src->timestamp,
+			  (unsigned long long)leader_read.timestamp);
 		return -1;
 	}
 
-	/* TODO: not sure about this */
 	/* since the source failed to write next_owner_id to be us, we do it
 	   instead */
 
 	return migrate_token(token, token->host_id);
-
- out:
-	memcpy(&token->leader, &leader_ret, sizeof(struct leader_record));
-	return 1;
 }
 
 int create_token(int num_disks, struct token **token_out)

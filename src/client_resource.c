@@ -148,7 +148,7 @@ int sanlock_acquire(int sock, int pid, int res_count,
 	return rv;
 }
 
-int sanlock_migrate(int sock, int pid, uint64_t target_host_id)
+int sanlock_migrate(int sock, int pid, uint64_t target_host_id, char **state)
 {
 	struct sm_header h;
 	char *reply_str = NULL;
@@ -191,25 +191,30 @@ int sanlock_migrate(int sock, int pid, uint64_t target_host_id)
 
 	len = h.length - sizeof(h);
 	reply_str = malloc(len);
-	if (!reply_str)
+	if (!reply_str) {
+		rv = -ENOMEM;
 		goto out;
+	}
 
 	rv = recv(fd, reply_str, len, MSG_WAITALL);
 	if (rv != len) {
+		free(reply_str);
 		rv = -errno;
 		goto out;
 	}
 
 	if (h.data) {
+		free(reply_str);
 		rv = (int)h.data;
 		goto out;
 	}
+
+	if (state)
+		*state = reply_str;
 	rv = 0;
  out:
 	if (sock == -1)
 		close(fd);
-	if (reply_str)
-		free(reply_str);
 	return rv;
 }
 

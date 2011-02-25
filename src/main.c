@@ -492,20 +492,21 @@ static void client_recv_all(int ci, struct sm_header *h_recv, int pos)
 	log_debug("recv_all ci %d rem %d total %d", ci, rem, total);
 }
 
-/* optstr format: "abc=123 def=456 ghi=780" */
+/* str format: "abc=123 def=456 ghi=780" */
 
-static int parse_key_val(char *optstr, const char *key_arg, char *val_arg,
-			 int len)
+static int parse_key_val(char *str, const char *key_arg, char *val_arg, int len)
 {
 	int copy_key, copy_val, i, kvi;
 	char key[64], val[64];
+
+	memset(val_arg, 0, len);
 
 	copy_key = 1;
 	copy_val = 0;
 	kvi = 0;
 
-	for (i = 0; i < strlen(optstr); i++) {
-		if (optstr[i] == ' ') {
+	for (i = 0; i < strlen(str); i++) {
+		if (str[i] == ' ') {
 			if (!strcmp(key, key_arg)) {
 				strncpy(val_arg, val, len);
 				return 0;
@@ -518,7 +519,7 @@ static int parse_key_val(char *optstr, const char *key_arg, char *val_arg,
 			continue;
 		}
 
-		if (optstr[i] == '=') {
+		if (str[i] == '=') {
 			copy_key = 0;
 			copy_val = 1;
 			kvi = 0;
@@ -526,9 +527,9 @@ static int parse_key_val(char *optstr, const char *key_arg, char *val_arg,
 		}
 
 		if (copy_key)
-			key[kvi++] = optstr[i];
+			key[kvi++] = str[i];
 		else if (copy_val)
-			val[kvi++] = optstr[i];
+			val[kvi++] = str[i];
 
 		if (kvi > 62) {
 			log_error("invalid timeout parameter");
@@ -544,6 +545,74 @@ static int parse_key_val(char *optstr, const char *key_arg, char *val_arg,
 	return -1;
 }
 
+/* 
+ * The state strings for multiple tokens all exist in the single input
+ * string.  There's no special separator between strings for separate
+ * tokens, so we expect that each token state string begins with
+ * "lockspace_name=.... resource_name=.... "
+ */
+
+static int parse_migrate_state(struct token *token, char *str,
+				int *migrate_result,
+				struct leader_record *leader)
+{
+	char state[SANLK_STATE_MAXSTR];
+	char name[128];
+	char val_str[128];
+	char *p, *begin, *end;
+	int rv, i;
+
+	memset(name, 0, sizeof(name));
+
+	snprintf(name, 128, "lockspace_name=%s resource_name=%s",
+		 token->space_name, token->resource_name);
+
+	begin = strstr(str, name);
+	if (!begin)
+		return -1;
+
+	end = strstr(begin, "lockspace_name=");
+	if (!end)
+		end = str + strlen(str) + 1;
+
+	memset(state, 0, sizeof(state));
+
+	for (i = 0, p = begin; p < end; p++) {
+		state[i++] = *p;
+
+		if (i == SANLK_STATE_MAXSTR)
+			break;
+	}
+	state[SANLK_STATE_MAXSTR-1] = '\0';
+
+	rv = parse_key_val(state, "migrate_result", val_str, sizeof(val_str));
+	if (rv < 0)
+		return rv;
+	*migrate_result = atoi(val_str);
+
+	rv = parse_key_val(state, "leader.lver", val_str, sizeof(val_str));
+	if (rv < 0)
+		return rv;
+	leader->lver = strtoull(val_str, NULL, 0);
+
+	rv = parse_key_val(state, "leader.timestamp", val_str, sizeof(val_str));
+	if (rv < 0)
+		return rv;
+	leader->timestamp = strtoull(val_str, NULL, 0);
+
+	rv = parse_key_val(state, "leader.owner_id", val_str, sizeof(val_str));
+	if (rv < 0)
+		return rv;
+	leader->owner_id = strtoull(val_str, NULL, 0);
+
+	rv = parse_key_val(state, "leader.next_owner_id", val_str, sizeof(val_str));
+	if (rv < 0)
+		return rv;
+	leader->next_owner_id = strtoull(val_str, NULL, 0);
+
+	return 0;
+}
+
 static void *cmd_acquire_thread(void *args_in)
 {
 	struct cmd_args *ca = args_in;
@@ -554,6 +623,7 @@ static void *cmd_acquire_thread(void *args_in)
 	struct token *new_tokens[SANLK_MAX_RESOURCES];
 	struct sanlk_resource res;
 	struct sanlk_options opt;
+	struct leader_record leader;
 	char *opt_str;
 	char num_hosts_str[16];
 	uint64_t reacquire_lver = 0;
@@ -562,7 +632,7 @@ static void *cmd_acquire_thread(void *args_in)
 	int fd, rv, i, j, disks_len, num_disks, empty_slots, opened;
 	int alloc_count = 0, add_count = 0, open_count = 0, acquire_count = 0;
 	int pos = 0, need_setowner = 0, pid_dead = 0;
-	int new_tokens_count;
+	int new_tokens_count, migrate_result;
 
 	cl = &client[ca->ci_target];
 	fd = client[ca->ci_in].fd;
@@ -798,17 +868,31 @@ static void *cmd_acquire_thread(void *args_in)
 
 	for (i = 0; i < new_tokens_count; i++) {
 		token = new_tokens[i];
+
 		if (opt.flags & SANLK_FLG_INCOMING) {
-			rv = receive_token(token, opt_str);
-		} else {
-			if (opt.flags & SANLK_FLG_REACQUIRE)
-				reacquire_lver = token->prev_lver;
-			rv = acquire_token(token, reacquire_lver, new_num_hosts);
+			migrate_result = 0;
+			memset(&leader, 0, sizeof(leader));
+			rv = parse_migrate_state(token, opt_str, &migrate_result, &leader);
+			if (rv < 0 || !migrate_result) {
+				log_errot(token, "cmd_acquire migrate state "
+					  "bad %d len %zd", migrate_result,
+					  strlen(opt_str));
+				goto fail_release;
+			}
+		} else if (opt.flags & SANLK_FLG_REACQUIRE) {
+			reacquire_lver = token->prev_lver;
 		}
+
+		if (opt.flags & SANLK_FLG_INCOMING)
+			rv = receive_token(token, migrate_result, &leader);
+		else
+			rv = acquire_token(token, reacquire_lver, new_num_hosts);
+
 		save_resource_leader(token);
 
 		if (rv < 0) {
-			log_errot(token, "cmd_acquire lease %d", rv);
+			log_errot(token, "cmd_acquire lease %d flags %x",
+				  rv, opt.flags);
 			goto fail_release;
 		}
 		acquire_count++;
@@ -1008,10 +1092,10 @@ static void *cmd_migrate_thread(void *args_in)
 	struct cmd_args *ca = args_in;
 	struct sm_header h;
 	struct token *token;
-	struct token *tokens_reply;
+	char *reply_str;
 	struct client *cl;
 	uint64_t target_host_id = 0;
-	int fd, rv, i, tokens_len, result = 0, total = 0, total2 = 0;
+	int fd, rv, i, reply_len, result = 0, total = 0, ret, pos;
 
 	cl = &client[ca->ci_target];
 	fd = client[ca->ci_in].fd;
@@ -1035,33 +1119,54 @@ static void *cmd_migrate_thread(void *args_in)
 			total++;
 	}
 
-	tokens_len = total * sizeof(struct token);
-	tokens_reply = malloc(tokens_len);
-	if (!tokens_reply) {
+	reply_len = total * SANLK_STATE_MAXSTR; 
+	reply_str = malloc(reply_len);
+	if (!reply_str) {
 		result = -ENOMEM;
 		total = 0;
 		goto reply;
 	}
-	memset(tokens_reply, 0, tokens_len);
+	memset(reply_str, 0, reply_len);
+	pos = 0;
 
 	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
 		token = cl->tokens[i];
 		if (!token)
 			continue;
 
-		rv = migrate_token(token, target_host_id);
-		if (rv < 0 && !result)
-			result = rv;
+		/* if migrate_token() fails it is not fatal, we can still
+		   procede with the migration; receive_token() will attempt
+		   to set next_owner_id */
 
-		/* TODO: would it be better to quit after one failure? */
+		migrate_token(token, target_host_id);
 
-		if (total2 == total) {
-			log_error("cmd_migrate total %d changed", total);
-			continue;
+		ret = snprintf(reply_str + pos, reply_len - pos,
+				"lockspace_name=%s "
+				"resource_name=%s "
+				"token_id=%u "
+				"migrate_result=%d "
+				"leader.lver=%llu "
+				"leader.timestamp=%llu "
+				"leader.owner_id=%llu "
+				"leader.owner_generation=%llu "
+				"leader.next_owner_id=%llu ",
+				token->space_name,
+				token->resource_name,
+				token->token_id,
+				token->migrate_result,
+				(unsigned long long)token->leader.lver,
+				(unsigned long long)token->leader.timestamp,
+				(unsigned long long)token->leader.owner_id,
+				(unsigned long long)token->leader.owner_generation,
+				(unsigned long long)token->leader.next_owner_id);
+
+		if (ret >= reply_len - pos) {
+			log_errot(token, "cmd_migrate reply_str full");
+			result = -ENOMSG;
 		}
-
-		memcpy(&tokens_reply[total2++], token, sizeof(struct token));
+		pos += ret;
 	}
+	reply_str[reply_len-1] = '\0';
 
  reply:
 	/* TODO: for success I don't think we want to clear cmd_active
@@ -1071,16 +1176,17 @@ static void *cmd_migrate_thread(void *args_in)
 	if (result < 0)
 		set_cmd_active(ca->ci_target, 0);
 
-	log_debug("cmd_migrate done %d", total);
-
-	/* TODO: encode tokens_reply as a string to send back */
+	log_debug("cmd_migrate done result %d", result);
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
-	h.length = sizeof(h) + tokens_len;
+	h.length = sizeof(h) + strlen(reply_str)+1;
 	h.data = result;
 	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
 	if (total)
-		send(fd, tokens_reply, tokens_len, MSG_NOSIGNAL);
+		send(fd, reply_str, strlen(reply_str)+1, MSG_NOSIGNAL);
+
+	if (reply_str)
+		free(reply_str);
 
 	client_back(ca->ci_in, fd);
 	free(ca);
@@ -1302,17 +1408,24 @@ static int print_token_state(struct token *t, char *str)
 
 	snprintf(str, SANLK_STATE_MAXSTR-1,
 		 "token_id=%u "
-		 "acquire_result=%d migrate_result=%d "
-		 "release_result=%d setowner_result=%d "
-		 "leader.lver=%llu leader.timestamp=%llu "
+		 "acquire_result=%d "
+		 "migrate_result=%d "
+		 "release_result=%d "
+		 "setowner_result=%d "
+		 "leader.lver=%llu "
+		 "leader.timestamp=%llu "
+		 "leader.owner_id=%llu "
+		 "leader.owner_generation=%llu "
 		 "leader.next_owner_id=%llu",
+		 t->token_id,
 		 t->acquire_result,
 		 t->migrate_result,
 		 t->release_result,
 		 t->setowner_result,
-		 t->token_id,
 		 (unsigned long long)t->leader.lver,
 		 (unsigned long long)t->leader.timestamp,
+		 (unsigned long long)t->leader.owner_id,
+		 (unsigned long long)t->leader.owner_generation,
 		 (unsigned long long)t->leader.next_owner_id);
 
 	return strlen(str) + 1;
@@ -2491,6 +2604,7 @@ static int read_command_line(int argc, char *argv[])
 static int do_client(void)
 {
 	struct sanlk_options *opt = NULL;
+	char *state = NULL;
 	int fd, rv = 0;
 
 	switch (com.action) {
@@ -2568,7 +2682,9 @@ static int do_client(void)
 		log_tool("migrate %d to host_id %llu",
 			 com.pid, (unsigned long long)com.target_host_id);
 
-		rv = sanlock_migrate(-1, com.pid, com.target_host_id);
+		rv = sanlock_migrate(-1, com.pid, com.target_host_id, &state);
+		if (state)
+			printf("migrate state: %s\n", state);
 		break;
 
 	case ACT_SETOWNER:

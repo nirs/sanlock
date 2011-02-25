@@ -26,7 +26,7 @@ int sanlock_acquire(int sock, int pid, int res_count,
 		    struct sanlk_options *opt_in);
 int sanlock_release(int sock, int pid, int res_count,
 		    struct sanlk_resource *res_args[]);
-int sanlock_migrate(int sock, int pid, uint64_t target_host_id);
+int sanlock_migrate(int sock, int pid, uint64_t target_host_id, char **state);
 int sanlock_setowner(int sock, int pid);
 
 #endif
