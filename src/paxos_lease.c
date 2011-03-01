@@ -606,6 +606,7 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 	struct leader_record new_leader;
 	struct leader_record host_id_leader;
 	struct paxos_dblock dblock;
+	time_t start;
 	uint64_t last_timestamp = 0;
 	int error;
 
@@ -633,6 +634,8 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 
 	log_token(token, "paxos_acquire check owner_id %llu",
 		  (unsigned long long)prev_leader.owner_id);
+
+	start = time(NULL);
 
 	while (1) {
 		error = host_id_leader_read(prev_leader.space_name,
@@ -682,14 +685,31 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 
 		/* if the owner hasn't renewed its host_id lease for
 		   host_id_timeout_seconds then its watchdog should have fired
-		   by now */
+		   by now
 
+		   if we trust that the clocks are in sync among hosts, then this
+		   check could be: if (time(NULL) - host_id_leader.timestamp >
+		   to.host_id_timeout_seconds), but if the clocks are out of sync,
+		   this check would easily give two hosts the lease.
+
+		   N.B. we need to be careful about ever comparing local time(NULL)
+		   to a time value we read off disk from another node that may
+		   have different time. */
+
+		if (time(NULL) - start > to.host_id_timeout_seconds) {
+			log_token(token, "paxos_acquire host_id %llu expired %llu",
+				  (unsigned long long)prev_leader.owner_id,
+				  (unsigned long long)host_id_leader.timestamp);
+			goto run;
+		}
+#if 0
 		if (time(NULL) - host_id_leader.timestamp > to.host_id_timeout_seconds) {
 			log_token(token, "paxos_acquire host_id %llu expired %llu",
 				  (unsigned long long)prev_leader.owner_id,
 				  (unsigned long long)host_id_leader.timestamp);
 			goto run;
 		}
+#endif
 
 		/* the owner is renewing its host_id so it's alive */
 
