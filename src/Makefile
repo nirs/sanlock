@@ -8,7 +8,7 @@ CMD_TARGET = sanlock
 
 LIB_TARGET = libsanlock
 
-HEADER_TARGET = sanlock.h sanlock_resource.h
+HEADER_TARGET = sanlock.h sanlock_resource.h sanlock_admin.h
 
 SOMAJOR=1
 SOMINOR=0
@@ -16,7 +16,6 @@ SOMINOR=0
 SHLIB_TARGET = $(LIB_TARGET).so.$(SOMAJOR).$(SOMINOR)
 
 CMD_SOURCE = \
-	client_admin.c \
 	crc32c.c \
 	delta_lease.c \
 	direct.c \
@@ -32,6 +31,7 @@ CMD_SOURCE = \
 LIB_SOURCE = \
 	client_msg.c \
 	client_resource.c \
+	client_admin.c
 
 CFLAGS += -D_GNU_SOURCE -g \
 	-Wall \
