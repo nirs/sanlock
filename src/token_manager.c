@@ -231,9 +231,14 @@ int setowner_token(struct token *token)
 	/* we want the dblocks to reflect a full, proper ownership, so we
 	   do the full acquire rather than just writing a new leader_record */
 
-	rv = paxos_lease_acquire(token, 0, &leader_ret, 0, 0);
+	rv = paxos_lease_acquire(token, 1, &leader_ret, 0, 0);
 
 	token->setowner_result = rv;
+
+	/* we set acquire_result here for at least one reason: because release
+	   will not release the token if acquire_result is not 1 */
+
+	token->acquire_result = rv;
 
 	log_token(token, "setowner rv %d lver %llu at %llu", rv,
 		  (unsigned long long)token->leader.lver,
@@ -246,6 +251,88 @@ int setowner_token(struct token *token)
 	return rv; /* DP_OK */
 }
 
+/*
+ * migration creates special cases for release.  if either the source or
+ * the dest calls release_token and read leader shows next_owner_id is not
+ * zero, it means migration is in progress, and they should not free the
+ * lease.
+ *
+ * In other words, paxos release should only be done (lease freed) on a
+ * "fully owned", clean lease, i.e. next_owner_id is zero, and current
+ * leader matches our last leader.
+ *
+ * (A second mechanism is also needed to prevent release of migrating leases,
+ * the token->migrating flag.  This is because we need to block releases
+ * on the source effective immediately, before next_owner may be written.)
+ *
+ * setowner on the destination, in the case of migration success, moves a
+ * disk lease from being in limbo (both owner and next_owner set), to having
+ * just an owner (the dest).  After this the owner (dest) can release it.
+ *
+ * TODO: setowner on the source, in the case of migration failure, moves the
+ * disk lease from being in limbo with both owner and next_owner, to having
+ * just an owner (the source).  This setowner call will need to ignore the
+ * fact that the leader block doesn't match its latest copy since it may
+ * have been the dest that wrote next_owner at the start of migration.
+ *
+ * We don't have to worry that next_owner is ever running the vm; setowner
+ * on dest is required to complete successfully (making dest the owner and
+ * clearing next_owner) before vm is resumed on the dest.
+ *
+ * If migration fails, the source/owner does not free the paxos lease, but
+ * the source/owner continues running and renewing its host_id, then no
+ * other host will be able to take ownership of the lease, because they will
+ * see that the owner is alive.  The source/owner will be able to acquire
+ * the lease, though.  So, the source/owner needs to either
+ * 1. call setowner to clear next_owner_id, then call release to free it (TODO above)
+ * 2. call acquire to acquire the lease, then call release to free it
+ *
+ * If migration fails, the source/owner does not free the paxos lease, and
+ * the source/owner does not continue running or renewing its host_id, then
+ * another host will be able to take ownership of the lease, because they
+ * will see that the owner is not alive (or comes back with a different
+ * generation).
+ *
+ * For migration, the paxos lease is in limbo: both owner and next_owner
+ * are set, and in this state neither the source nor the dest can free the
+ * paxos lease.  The limbo state needs to be cleared (next_owner cleared)
+ * before the lease can be freed.
+ *
+ * - if migration succeeds, the dest will call setowner to clear next_owner
+ *   and bring the lease out of limbo
+ *
+ * - if migration fails because the dest host fails,
+ *   setowner on the source will clear next_owner, and allow source to
+ *   continue running and holding the lease, or release the lease.
+ *   setowner on source would have to ignore the fact that the leader
+ *   will have been changed since it last read or wrote it (by the dest
+ *   writing itself as the next_owner_id)
+ *
+ * - if migration fails because the source host fails,
+ *   the paxos lease will be left on disk with owner and next_owner set,
+ *   and neither source nor dest owning the lease to free it.
+ *   The lease can be acquired because someone will see that the owner's
+ *   host_id is not renewed (or a different generation).  This acquire
+ *   will clear next_owner.
+ *
+ * - if migration fails and both source and dest fail, the lease can be
+ *   acquired because someone will see that the owner's host_id is not
+ *   renewed (or a diff generation).  This acquire will clear next_owner.
+ *
+ * - if migration fails because the the dest qemu fails but dest host still ok
+ *   setowner on the source will clear next_owner (same as if dest host fails)
+ *
+ * - if migration fails because the the source qemu fails but source host still ok
+ *   sanlock will not free the lease in release_token because next_owner is set.
+ *   no other host can acquire the lease because its owned by a live host_id.
+ *   the source host can acquire the lease again, and then free it.  what causes
+ *   the source host to try to acquire the lease again?  trying to start the vm
+ *   on the source again...
+ *
+ * - if migration fails because the the source and dest qemu fails but hosts ok
+ *    same as prev
+ */
+
 /* return < 0 on error, 1 on success */
 
 int release_token(struct token *token)
@@ -253,12 +340,9 @@ int release_token(struct token *token)
 	struct leader_record leader_ret;
 	int rv;
 
-	if (token->leader.owner_id != token->host_id) {
-		/* this case occurs on the receiving side of migration, when
-		   the local host hasn't become the lease owner (just next_owner),
-		   and the pid fails, causing sm to clean up the pid's tokens */
-		log_token(token, "release we are not owner");
-		return 1;
+	if (token->migrating) {
+		log_errot(token, "release skip migrating");
+		return DP_ERROR;
 	}
 
 	rv = paxos_lease_release(token, &token->leader, &leader_ret);
@@ -274,96 +358,146 @@ int release_token(struct token *token)
 	return rv; /* DP_OK */
 }
 
-/* migration source: writes leader_record.next_owner_id = target_host_id */
 /* return < 0 on error, 1 on success */
 
-int migrate_token(struct token *token, uint64_t target_host_id)
+int set_next_owner_other(struct token *token, uint64_t target_host_id)
 {
-	struct leader_record leader_ret;
+	struct leader_record leader;
 	int rv;
 
-	rv = paxos_lease_migrate(token, &token->leader, &leader_ret, target_host_id);
-
-	token->migrate_result = rv;
-
-	log_token(token, "migrate rv %d", rv);
-
+	rv = paxos_lease_leader_read(token, &leader);
 	if (rv < 0)
 		return rv;
 
-	memcpy(&token->leader, &leader_ret, sizeof(struct leader_record));
+	if (memcmp(&leader, &token->leader, sizeof(struct leader_record))) {
+		log_errot(token, "set_next_owner_other leader changed before migrate");
+		return DP_BAD_LEADER;
+	}
+
+	if (leader.num_hosts < target_host_id) {
+		log_errot(token, "set_next_owner_other num_hosts %llu "
+			  "target_host_id %llu",
+			  (unsigned long long)leader.num_hosts,
+			  (unsigned long long)target_host_id);
+		return DP_BAD_NUMHOSTS;
+	}
+
+	leader.next_owner_id = target_host_id;
+
+	rv = paxos_lease_leader_write(token, &leader);
+	if (rv < 0)
+		return rv;
+
+	memcpy(&token->leader, &leader, sizeof(struct leader_record));
 	return rv; /* DP_OK */
 }
 
+/* return < 0 on error, 1 on success */
+
+int set_next_owner_self(struct token *token)
+{
+	struct leader_record leader;
+	int rv;
+
+	rv = paxos_lease_leader_read(token, &leader);
+	if (rv < 0)
+		return rv;
+
+	if (leader.num_hosts < token->host_id) {
+		log_errot(token, "set_next_owner_self num_hosts %llu host_id %llu",
+			  (unsigned long long)leader.num_hosts,
+			  (unsigned long long)token->host_id);
+		return DP_BAD_NUMHOSTS;
+	}
+
+	leader.next_owner_id = token->host_id;
+
+	rv = paxos_lease_leader_write(token, &leader);
+	if (rv < 0)
+		return rv;
+
+	memcpy(&token->leader, &leader, sizeof(struct leader_record));
+	return rv; /* DP_OK */
+}
 
 /*
- * migration target: verifies that the source wrote us as the next_owner_id
- *
- * When everything is working correctly, we just verify here that
- * fields in leader_ret match what we see in leader_src
- * (created from opt_str which was returned by sanlock_migrate()
- * on the source).
+ * migration destination verifies the migrate state sent from source,
+ * which needs to be consisent with the source having successfully written
+ * the next_owner itself, or having not tried or tried and failed.
  *
  * If we can't read the leader, return an error, and the migration
  * needs to be aborted.
  */
+
 /* return < 0 on error, 1 on success */
 
-int receive_token(struct token *token, int migrate_result,
-		  struct leader_record *leader_src)
+int parse_incoming_state(struct token *token, char *str, int *migrate_result,
+                         struct leader_record *leader);
+
+int check_incoming_state(struct token *token, char *opt_str, int *migrate_result_out)
 {
-	struct leader_record leader_read;
+	struct leader_record leader_ret;
+	struct leader_record leader_src;
+	int migrate_result;
 	int rv;
 
-	rv = paxos_lease_leader_read(token, &leader_read);
+	rv = paxos_lease_leader_read(token, &leader_ret);
 	if (rv < 0)
 		return rv;
 
+	rv = parse_incoming_state(token, opt_str, &migrate_result, &leader_src);
+	if (rv < 0) {
+		log_errot(token, "check_incoming_state parse error %d result %d len %zd",
+			  rv, migrate_result, strlen(opt_str));
+		return rv;
+	}
+
+	*migrate_result_out = migrate_result;
+
+	/* source successfully wrote next_owner */
+
 	if (migrate_result == DP_OK) {
-		if (leader_src->next_owner_id == token->host_id &&
-		    leader_read.next_owner_id == token->host_id &&
-		    leader_src->lver == leader_read.lver &&
-		    leader_src->timestamp == leader_read.timestamp) {
-			log_token(token, "receive_token all match");
+		if (leader_src.next_owner_id == token->host_id &&
+		    leader_ret.next_owner_id == token->host_id &&
+		    leader_src.lver == leader_ret.lver &&
+		    leader_src.timestamp == leader_ret.timestamp) {
+			log_token(token, "check_incoming_state all match");
 			return DP_OK;
 		} else {
-			log_errot(token, "receive_token mismatch "
+			log_errot(token, "check_incoming_state mismatch "
 				  "next_owner %llu %llu %llu "
 				  "lver %llu %llu "
 				  "timestamp %llu %llu",
 				  (unsigned long long)token->host_id,
-				  (unsigned long long)leader_src->next_owner_id,
-				  (unsigned long long)leader_read.next_owner_id,
-				  (unsigned long long)leader_src->lver,
-				  (unsigned long long)leader_read.lver,
-				  (unsigned long long)leader_src->timestamp,
-				  (unsigned long long)leader_read.timestamp);
+				  (unsigned long long)leader_src.next_owner_id,
+				  (unsigned long long)leader_ret.next_owner_id,
+				  (unsigned long long)leader_src.lver,
+				  (unsigned long long)leader_ret.lver,
+				  (unsigned long long)leader_src.timestamp,
+				  (unsigned long long)leader_ret.timestamp);
 			return -1;
 		}
 	}
 
-	/* migrate_result < 0, source could not write next_owner_id, so it
-	   should still be 0 */
+	/* migrate_result <= 0, source could not (or did not) write next_owner_id,
+	   so it should still be 0 */
 
-	if (leader_src->owner_id != leader_read.owner_id ||
-	    leader_src->timestamp != leader_read.timestamp ||
-	    leader_read.next_owner_id != 0) {
+	if (leader_src.owner_id != leader_ret.owner_id ||
+	    leader_src.timestamp != leader_ret.timestamp ||
+	    leader_ret.next_owner_id != 0) {
 
-		log_errot(token, "receive_token mismatch migrate_result %d "
+		log_errot(token, "check_incoming_state mismatch migrate_result %d "
 			  "next_owner %llu owner %llu %llu timestamp %llu %llu",
 			  migrate_result,
-			  (unsigned long long)leader_read.next_owner_id,
-			  (unsigned long long)leader_src->owner_id,
-			  (unsigned long long)leader_read.owner_id,
-			  (unsigned long long)leader_src->timestamp,
-			  (unsigned long long)leader_read.timestamp);
+			  (unsigned long long)leader_ret.next_owner_id,
+			  (unsigned long long)leader_src.owner_id,
+			  (unsigned long long)leader_ret.owner_id,
+			  (unsigned long long)leader_src.timestamp,
+			  (unsigned long long)leader_ret.timestamp);
 		return -1;
 	}
 
-	/* since the source failed to write next_owner_id to be us, we do it
-	   instead */
-
-	return migrate_token(token, token->host_id);
+	return DP_OK;
 }
 
 int create_token(int num_disks, struct token **token_out)

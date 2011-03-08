@@ -551,8 +551,6 @@ int paxos_lease_leader_read(struct token *token, struct leader_record *leader_re
 		goto fail;
 	}
 
-	log_token(token, "leader_read d %u reps %u", d, leader_reps[d]);
-
 	log_token(token, "leader_read owner %llu lver %llu hosts %llu "
 		  "time %llu res %s",
 		  (unsigned long long)prev_leader.owner_id,
@@ -597,7 +595,7 @@ static int write_new_leader(struct token *token, struct leader_record *nl)
  * ref: obtain()
  */
 
-int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
+int paxos_lease_acquire(struct token *token, int force,
 		        struct leader_record *leader_ret,
 		        uint64_t reacquire_lver,
 		        int new_num_hosts)
@@ -610,19 +608,25 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 	uint64_t last_timestamp = 0;
 	int error;
 
-	log_token(token, "paxos_acquire begin");
+	log_token(token, "paxos_acquire begin force %d", force);
 
 	error = paxos_lease_leader_read(token, &prev_leader);
 	if (error < 0)
 		goto out;
+
+	if (force)
+		goto run;
 
 	if (prev_leader.timestamp == LEASE_FREE) {
 		log_token(token, "paxos_acquire lease free");
 		goto run;
 	}
 
-	if (prev_leader.owner_id == token->host_id) {
-		log_token(token, "paxos_acquire already owner");
+	if (prev_leader.owner_id == token->host_id &&
+	    prev_leader.owner_generation == token->host_generation) {
+		log_token(token, "paxos_acquire already owner id %llu gen %llu",
+			  (unsigned long long)token->host_id,
+			  (unsigned long long)token->host_generation);
 		goto run;
 	}
 
@@ -795,51 +799,18 @@ int paxos_lease_acquire(struct token *token, int force GNUC_UNUSED,
 	return error;
 }
 
-int paxos_lease_migrate(struct token *token,
-		        struct leader_record *leader_last,
-		        struct leader_record *leader_ret,
-		        uint64_t target_host_id)
+int paxos_lease_leader_write(struct token *token,
+			     struct leader_record *leader_new)
 {
-	struct leader_record new_leader;
-	int rv, d;
 	int error;
 
-	log_token(token, "paxos_migrate begin");
+	log_token(token, "paxos_lease_leader_write begin");
 
-	for (d = 0; d < token->num_disks; d++) {
-		memset(&new_leader, 0, sizeof(struct leader_record));
+	leader_new->checksum = leader_checksum(leader_new);
 
-		rv = read_leader(&token->disks[d], &new_leader);
-		if (rv < 0)
-			continue;
+	error = write_new_leader(token, leader_new);
 
-		if (memcmp(&new_leader, leader_last,
-			   sizeof(struct leader_record))) {
-			log_errot(token, "paxos_migrate leader changed before migrate");
-			error = DP_BAD_LEADER;
-			goto out;
-		}
-	}
-
-	if (new_leader.num_hosts < target_host_id) {
-		log_errot(token, "paxos_migrate num_hosts %llu target_host_id %llu",
-			  (unsigned long long)new_leader.num_hosts,
-			  (unsigned long long)target_host_id);
-		error = DP_BAD_NUMHOSTS;
-		goto out;
-	}
-
-	new_leader.next_owner_id = target_host_id;
-	new_leader.timestamp = time(NULL);
-	new_leader.checksum = leader_checksum(&new_leader);
-
-	error = write_new_leader(token, &new_leader);
-	if (error < 0)
-		goto out;
-
-	memcpy(leader_ret, &new_leader, sizeof(struct leader_record));
- out:
-	log_token(token, "paxos_migrate done %d", error);
+	log_token(token, "paxos_lease_leader_write done %d", error);
 	return error;
 }
 
@@ -896,9 +867,21 @@ int paxos_lease_release(struct token *token,
 
 		if (memcmp(&new_leader, leader_last,
 			   sizeof(struct leader_record))) {
-			log_errot(token, "leader changed before release");
+			log_errot(token, "release error leader changed");
 			return DP_BAD_LEADER;
 		}
+	}
+
+	if (new_leader.owner_id != token->host_id) {
+		log_errot(token, "release error other owner_id %llu",
+			  (unsigned long long)new_leader.owner_id);
+		return DP_OTHER_OWNER;
+	}
+
+	if (new_leader.next_owner_id) {
+		log_errot(token, "release error next_owner_id %llu",
+			  (unsigned long long)new_leader.next_owner_id);
+		return DP_LEADER_MIGRATE;
 	}
 
 	new_leader.timestamp = LEASE_FREE;

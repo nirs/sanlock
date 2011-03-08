@@ -40,6 +40,8 @@ enum {
 	DP_BAD_SECTORSIZE = -26,
 	DP_REACQUIRE_LVER = -27,
 	DP_BAD_LOCKSPACE = -28,
+	DP_LEADER_MIGRATE = -29,
+	DP_OTHER_OWNER = -30,
 };
 
 /* does not include terminating null byte */

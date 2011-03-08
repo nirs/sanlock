@@ -85,6 +85,7 @@ struct token {
 	struct sync_disk *disks;
 
 	/* internal */
+	int migrating;
 	int token_id; /* used to refer to this token instance in log messages */
 	int acquire_result;
 	int migrate_result;

@@ -116,9 +116,11 @@ static int do_paxos_action(void)
 				return -1;
 			}
 
-			rv = paxos_lease_migrate(token, &leader_read, &leader_ret, com.target_host_id);
+			leader_read.next_owner_id = com.target_host_id;
+
+			rv = paxos_lease_leader_write(token, &leader_read);
 			if (rv < 0) {
-				log_tool("cannot migrate lease on %s",
+				log_tool("cannot write lease on %s",
 				 	 token->resource_name);
 				return -1;
 			}

@@ -427,6 +427,9 @@ static int main_loop(void)
 	return 0;
 }
 
+/* FIXME: allow setowner on the source to "cancel" a migration by clearing
+   next_owner.  This means allowing CMD_SETOWNER when cmd_active == CMD_MIGRATE */
+
 static int set_cmd_active(int ci_target, int cmd)
 {
 	struct client *cl = &client[ci_target];
@@ -441,6 +444,9 @@ static int set_cmd_active(int ci_target, int cmd)
 		pthread_mutex_unlock(&cl->mutex);
 		return -EBUSY;
 	}
+
+	if (cl->need_setowner && cmd == SM_CMD_SETOWNER)
+		cl->need_setowner = 0;
 
 	cmd_active = cl->cmd_active;
 
@@ -552,9 +558,8 @@ static int parse_key_val(char *str, const char *key_arg, char *val_arg, int len)
  * "lockspace_name=.... resource_name=.... "
  */
 
-static int parse_migrate_state(struct token *token, char *str,
-				int *migrate_result,
-				struct leader_record *leader)
+int parse_incoming_state(struct token *token, char *str, int *migrate_result,
+			 struct leader_record *leader)
 {
 	char state[SANLK_STATE_MAXSTR];
 	char name[128];
@@ -571,7 +576,7 @@ static int parse_migrate_state(struct token *token, char *str,
 	if (!begin)
 		return -1;
 
-	end = strstr(begin, "lockspace_name=");
+	end = strstr(begin+strlen(name), "lockspace_name=");
 	if (!end)
 		end = str + strlen(str) + 1;
 
@@ -587,27 +592,27 @@ static int parse_migrate_state(struct token *token, char *str,
 
 	rv = parse_key_val(state, "migrate_result", val_str, sizeof(val_str));
 	if (rv < 0)
-		return rv;
+		return -2;
 	*migrate_result = atoi(val_str);
 
 	rv = parse_key_val(state, "leader.lver", val_str, sizeof(val_str));
 	if (rv < 0)
-		return rv;
+		return -3;
 	leader->lver = strtoull(val_str, NULL, 0);
 
 	rv = parse_key_val(state, "leader.timestamp", val_str, sizeof(val_str));
 	if (rv < 0)
-		return rv;
+		return -4;
 	leader->timestamp = strtoull(val_str, NULL, 0);
 
 	rv = parse_key_val(state, "leader.owner_id", val_str, sizeof(val_str));
 	if (rv < 0)
-		return rv;
+		return -5;
 	leader->owner_id = strtoull(val_str, NULL, 0);
 
 	rv = parse_key_val(state, "leader.next_owner_id", val_str, sizeof(val_str));
 	if (rv < 0)
-		return rv;
+		return -6;
 	leader->next_owner_id = strtoull(val_str, NULL, 0);
 
 	return 0;
@@ -623,7 +628,6 @@ static void *cmd_acquire_thread(void *args_in)
 	struct token *new_tokens[SANLK_MAX_RESOURCES];
 	struct sanlk_resource res;
 	struct sanlk_options opt;
-	struct leader_record leader;
 	char *opt_str;
 	char num_hosts_str[16];
 	uint64_t reacquire_lver = 0;
@@ -870,23 +874,22 @@ static void *cmd_acquire_thread(void *args_in)
 		token = new_tokens[i];
 
 		if (opt.flags & SANLK_FLG_INCOMING) {
-			migrate_result = 0;
-			memset(&leader, 0, sizeof(leader));
-			rv = parse_migrate_state(token, opt_str, &migrate_result, &leader);
-			if (rv < 0 || !migrate_result) {
-				log_errot(token, "cmd_acquire migrate state "
-					  "bad %d len %zd", migrate_result,
-					  strlen(opt_str));
+			rv = check_incoming_state(token, opt_str, &migrate_result);
+			if (rv < 0) {
+				log_errot(token, "cmd_acquire incoming state %d", rv);
 				goto fail_release;
 			}
-		} else if (opt.flags & SANLK_FLG_REACQUIRE) {
-			reacquire_lver = token->prev_lver;
-		}
 
-		if (opt.flags & SANLK_FLG_INCOMING)
-			rv = receive_token(token, migrate_result, &leader);
-		else
+			/* source set_next_owner_other() wasn't called or failed */
+			if (migrate_result != DP_OK)
+				rv = set_next_owner_self(token);
+
+		} else {
+			if (opt.flags & SANLK_FLG_REACQUIRE)
+				reacquire_lver = token->prev_lver;
+
 			rv = acquire_token(token, reacquire_lver, new_num_hosts);
+		}
 
 		save_resource_leader(token);
 
@@ -1109,11 +1112,6 @@ static void *cmd_migrate_thread(void *args_in)
 		goto reply;
 	}
 
-	if (!target_host_id) {
-		result = -EINVAL;
-		goto reply;
-	}
-
 	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
 		if (cl->tokens[i])
 			total++;
@@ -1123,7 +1121,6 @@ static void *cmd_migrate_thread(void *args_in)
 	reply_str = malloc(reply_len);
 	if (!reply_str) {
 		result = -ENOMEM;
-		total = 0;
 		goto reply;
 	}
 	memset(reply_str, 0, reply_len);
@@ -1134,11 +1131,23 @@ static void *cmd_migrate_thread(void *args_in)
 		if (!token)
 			continue;
 
-		/* if migrate_token() fails it is not fatal, we can still
-		   procede with the migration; receive_token() will attempt
-		   to set next_owner_id */
+		/* the migrating flag causes the source to avoid freeing the lease
+		 * if the pid exits before the dest has written itself as next_owner.
+		 * i.e. we can't rely on paxos_lease_release seeing next_owner_id
+		 * non-zero because the cmd_migrate can be called on the source,
+		 * followed by the source pid exiting before the dest gets to write
+		 * next_owner_id to itself */
 
-		migrate_token(token, target_host_id);
+		token->migrating = 1;
+
+		if (target_host_id) {
+			rv = set_next_owner_other(token, target_host_id);
+			token->migrate_result = rv;
+		} else {
+			/* acquire-incoming on the destination will call
+			   set_next_owner_self() */
+			token->migrate_result = 0;
+		}
 
 		ret = snprintf(reply_str + pos, reply_len - pos,
 				"lockspace_name=%s "
@@ -1169,24 +1178,21 @@ static void *cmd_migrate_thread(void *args_in)
 	reply_str[reply_len-1] = '\0';
 
  reply:
-	/* TODO: for success I don't think we want to clear cmd_active
-	   here.  We probably want to wait until the migrate is done
-	   and then do set_cmd_active(0)? */
-
-	if (result < 0)
-		set_cmd_active(ca->ci_target, 0);
-
 	log_debug("cmd_migrate done result %d", result);
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
-	h.length = sizeof(h) + strlen(reply_str)+1;
-	h.data = result;
-	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
-	if (total)
-		send(fd, reply_str, strlen(reply_str)+1, MSG_NOSIGNAL);
 
-	if (reply_str)
+	if (reply_str) {
+		h.length = sizeof(h) + strlen(reply_str)+1;
+		h.data = result;
+		send(fd, &h, sizeof(h), MSG_NOSIGNAL);
+		send(fd, reply_str, strlen(reply_str)+1, MSG_NOSIGNAL);
 		free(reply_str);
+	} else {
+		h.length = sizeof(h);
+		h.data = result;
+		send(fd, &h, sizeof(h), MSG_NOSIGNAL);
+	}
 
 	client_back(ca->ci_in, fd);
 	free(ca);
@@ -1202,30 +1208,15 @@ static void *cmd_setowner_thread(void *args_in)
 	struct cmd_args *ca = args_in;
 	struct sm_header h;
 	struct token *token;
-	struct token *tokens_reply;
 	struct client *cl;
-	int result = 0, total = 0, total2 = 0;
-	int fd, rv, i, tokens_len;
+	int result = 0;
+	int fd, rv, i;
 
 	cl = &client[ca->ci_target];
 	fd = client[ca->ci_in].fd;
 
 	log_debug("cmd_setowner ci_in %d ci_target %d pid %d",
 		  ca->ci_in, ca->ci_target, cl->pid);
-
-	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
-		if (cl->tokens[i])
-			total++;
-	}
-
-	tokens_len = total * sizeof(struct token);
-	tokens_reply = malloc(tokens_len);
-	if (!tokens_reply) {
-		result = -ENOMEM;
-		total = 0;
-		goto reply;
-	}
-	memset(tokens_reply, 0, tokens_len);
 
 	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
 		token = cl->tokens[i];
@@ -1235,26 +1226,16 @@ static void *cmd_setowner_thread(void *args_in)
 		rv = setowner_token(token);
 		if (rv < 0)
 			result = -1;
-
-		if (total2 == total) {
-			log_error("cmd_setowner total %d changed", total);
-			continue;
-		}
-
-		memcpy(&tokens_reply[total2++], token, sizeof(struct token));
 	}
 
- reply:
 	set_cmd_active(ca->ci_target, 0);
 
-	log_debug("cmd_setowner done %d", total);
+	log_debug("cmd_setowner done");
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
-	h.length = sizeof(h) + tokens_len;
+	h.length = sizeof(h);
 	h.data = result;
 	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
-	if (total)
-		send(fd, tokens_reply, tokens_len, MSG_NOSIGNAL);
 
 	client_back(ca->ci_in, fd);
 	free(ca);

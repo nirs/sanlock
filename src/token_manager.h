@@ -12,10 +12,12 @@
 int acquire_token(struct token *token, uint64_t reacquire_lver,
 		  int new_num_hosts);
 int release_token(struct token *token);
-int migrate_token(struct token *token, uint64_t target_host_id);
-int receive_token(struct token *token, int migrate_result,
-		  struct leader_record *leader_src);
 int setowner_token(struct token *token);
+
+int check_incoming_state(struct token *token, char *opt_str,
+			 int *migrate_result_out);
+int set_next_owner_other(struct token *token, uint64_t target_host_id);
+int set_next_owner_self(struct token *token);
 
 int create_token(int num_disks, struct token **token_out);
 void free_token(struct token *token);
