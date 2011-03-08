@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <time.h>
+#include <signal.h>
 
 #include "sanlock.h"
 #include "sanlock_admin.h"
@@ -26,10 +27,7 @@ int count_offset;
 int lock_offset;
 
 int our_hostid;
-
-int seconds;
-int verify;
-int quiet;
+int max_hostid;
 
 struct entry {
 	uint32_t turn;
@@ -52,14 +50,15 @@ static int rand_int(int a, int b)
 
 /* 64 byte entry: can fit up to 8 nodes in a 512 byte block */
 
-void print_entries(char *buf)
+void print_entries(int pid, char *buf)
 {
 	struct entry *e = (struct entry *)buf;
 	int i;
 
 	for (i = 0; i < (512 / sizeof(struct entry)); i++) {
-		printf("index %d turn %u time %llu %u:%llu:%llu "
+		printf("%d index %d turn %u time %llu %u:%llu:%llu "
 		       "last %u %llu %u:%llu:%llu\n",
+		       pid,
 		       i,
 		       e->turn,
 		       (unsigned long long)e->time,
@@ -75,10 +74,11 @@ void print_entries(char *buf)
 	}
 }
 
-void print_our_we(struct entry *our_we)
+void print_our_we(int pid, struct entry *our_we)
 {
-	printf("w index %d turn %u time %llu %u:%llu:%llu "
+	printf("%d w index %d turn %u time %llu %u:%llu:%llu "
 		"last %u %llu %u:%llu:%llu\n",
+		pid,
 		our_hostid - 1,
 		our_we->turn,
 		(unsigned long long)our_we->time,
@@ -94,9 +94,10 @@ void print_our_we(struct entry *our_we)
 
 #define COUNT_ARGS 6
 #define LOCK_ARGS 8
+#define MIGRATE_ARGS 9
 
-/* 
- * devcount count <count_disk> <rsec> <wsec> <hostid>
+/*
+ * devcount rw|wr <count_disk> <sec1> <sec2> <hostid>
  */
 
 static int do_count(int argc, char *argv[])
@@ -107,18 +108,27 @@ static int do_count(int argc, char *argv[])
 	time_t start;
 	uint32_t our_pid = getpid();
 	uint32_t max_turn;
+	int sec1, sec2;
 	int read_seconds, write_seconds;
 
 	if (argc < COUNT_ARGS)
 		return -1;
 
 	strcpy(count_path, argv[2]);
-	read_seconds = atoi(argv[3]);
-	write_seconds = atoi(argv[4]);
+	sec1 = atoi(argv[3]);
+	sec2 = atoi(argv[4]);
 	our_hostid = atoi(argv[5]);
 
-	printf("%d count count_disk %s rsec %d wsec %d our_hostid %d\n",
-	       our_pid, count_path, read_seconds, write_seconds, our_hostid);
+	if (!strcmp(argv[1], "rw")) {
+		read_seconds = sec1;
+		write_seconds = sec2;
+	} else {
+		write_seconds = sec1;
+		read_seconds = sec2;
+	}
+
+	printf("%d %s count_disk %s sec1 %d sec2 %d our_hostid %d\n",
+	       our_pid, argv[1], count_path, sec1, sec2, our_hostid);
 
 	fd = open(count_path, O_RDWR | O_DIRECT | O_SYNC, 0);
 	if (fd < 0) {
@@ -154,11 +164,6 @@ static int do_count(int argc, char *argv[])
 		goto fail;
 	}
 
-	/*
-	 * Quickly read, then reread for a few seconds to see if
-	 * the previous writer does another write.
-	 */
-
 	lseek(fd, count_offset, SEEK_SET);
 
 	rv = read(fd, rbuf, 512);
@@ -167,30 +172,36 @@ static int do_count(int argc, char *argv[])
 		goto fail;
 	}
 
-	/* print_entries(rbuf); */
+	/* print_entries(our_pid, rbuf); */
 
-	for (i = 0; i < read_seconds; i++) {
-		sleep(1);
+	/*
+	 * reading for "rw"
+	 */
 
-		lseek(fd, count_offset, SEEK_SET);
+	if (!strcmp(argv[1], "rw")) {
+		for (i = 0; i < read_seconds; i++) {
+			sleep(1);
 
-		rv = read(fd, vbuf, 512);
-		if (rv != 512) {
-			perror("read failed");
-			goto fail;
-		}
+			lseek(fd, count_offset, SEEK_SET);
 
-		if (memcmp(rbuf, vbuf, 512)) {
-			printf("rbuf:\n");
-			print_entries(rbuf);
-			printf("vbuf:\n");
-			print_entries(vbuf);
-			goto fail;
+			rv = read(fd, vbuf, 512);
+			if (rv != 512) {
+				perror("read failed");
+				goto fail;
+			}
+
+			if (memcmp(rbuf, vbuf, 512)) {
+				printf("%d rbuf:\n", our_pid);
+				print_entries(our_pid, rbuf);
+				printf("%d vbuf:\n", our_pid);
+				print_entries(our_pid, vbuf);
+				goto fail;
+			}
 		}
 	}
 
 	/*
-	 * Now start writing
+	 * writing
 	 */
 
 	re = (struct entry *)rbuf;
@@ -209,14 +220,14 @@ static int do_count(int argc, char *argv[])
 	}
 
 	if (max_turn != max_re->turn) {
-		printf("max_turn %d max_re->turn %d\n", max_turn,
-			max_re->turn);
+		printf("%d max_turn %d max_re->turn %d\n", our_pid,
+		       max_turn, max_re->turn);
 		goto fail;
 	}
 
 	/*
-	printf("max index %d turn %d count %llu\n", max_i, max_turn,
-	       (unsigned long long)max_re->count);
+	printf("%d max index %d turn %d count %llu\n", our_pid,
+	       max_i, max_turn, (unsigned long long)max_re->count);
 	*/
 
 	memcpy(wbuf, rbuf, 512);
@@ -245,7 +256,7 @@ static int do_count(int argc, char *argv[])
 	}
 
 	printf("%d first write\n", our_pid);
-	print_our_we(our_we);
+	print_our_we(our_pid, our_we);
 
 	start = time(NULL);
 
@@ -266,7 +277,7 @@ static int do_count(int argc, char *argv[])
 	}
 
 	printf("%d last write\n", our_pid);
-	print_our_we(our_we);
+	print_our_we(our_pid, our_we);
 
 	if (turn_file) {
 		fprintf(turn_file, "turn %03u start %llu end %llu host %u pid %u\n",
@@ -278,6 +289,34 @@ static int do_count(int argc, char *argv[])
 		fclose(turn_file);
 	}
 
+	/*
+	 * reading for "wr"
+	 */
+
+	if (!strcmp(argv[1], "wr")) {
+		memcpy(rbuf, wbuf, 512);
+
+		for (i = 0; i < read_seconds; i++) {
+			sleep(1);
+
+			lseek(fd, count_offset, SEEK_SET);
+
+			rv = read(fd, vbuf, 512);
+			if (rv != 512) {
+				perror("read failed");
+				goto fail;
+			}
+
+			if (memcmp(rbuf, vbuf, 512)) {
+				printf("%d rbuf:\n", our_pid);
+				print_entries(our_pid, rbuf);
+				printf("%d vbuf:\n", our_pid);
+				print_entries(our_pid, vbuf);
+				goto fail;
+			}
+		}
+	}
+
 	return 0;
  fail:
 	printf("sleeping...\n");
@@ -286,9 +325,9 @@ static int do_count(int argc, char *argv[])
 }
 
 /*
- * devcount lock <lock_disk> count <count_disk> <rsec> <wsec> <hostid>
+ * devcount lock <lock_disk> rw <count_disk> <sec1> <sec2> <hostid>
  * sanlock add_lockspace -s devcount:<hostid>:<lock_disk>:0
- * devcount count <count_disk> <rsec> <wsec> <hostid>
+ * devcount rw <count_disk> <sec1> <sec2> <hostid>
  */
 
 static int do_lock(int argc, char *argv[])
@@ -297,10 +336,12 @@ static int do_lock(int argc, char *argv[])
 	struct sanlk_lockspace lockspace;
 	struct sanlk_resource *res;
 	int i, j, pid, rv, sock, len, status;
-	uint32_t our_pid = getpid();
+	uint32_t parent_pid = getpid();
 
 	if (argc < LOCK_ARGS)
 		return -1;
+
+	count_offset = 0;
 
 	strcpy(lock_path, argv[2]);
 	strcpy(count_path, argv[4]);
@@ -318,7 +359,7 @@ static int do_lock(int argc, char *argv[])
 	res->disks[0].offset = 1024000;
 
 	printf("%d lock_disk %s count_disk %s our_hostid %d\n",
-	       our_pid, lock_path, count_path, our_hostid);
+	       parent_pid, lock_path, count_path, our_hostid);
 
 	memset(&lockspace, 0, sizeof(lockspace));
 	strcpy(lockspace.name, "devcount");
@@ -328,16 +369,16 @@ static int do_lock(int argc, char *argv[])
 
 	rv = sanlock_add_lockspace(&lockspace, 0);
 	if (rv < 0) {
-		printf("sanlock_add_lockspace error %d\n", rv);
+		printf("%d sanlock_add_lockspace error %d\n", parent_pid, rv);
 		exit(EXIT_FAILURE);
 	}
-	printf("sanlock_add_lockspace done\n");
+	printf("%d sanlock_add_lockspace done\n", parent_pid);
 
 	/* 
 	 * argv[0] = devcount
 	 * argv[1] = lock
 	 * argv[2] = <lock_disk>
-	 * argv[3] = count
+	 * argv[3] = rw
 	 * start copying at argv[3]
 	 */
 
@@ -351,18 +392,27 @@ static int do_lock(int argc, char *argv[])
 	while (1) {
 		pid = fork();
 		if (!pid) {
-			int our_pid = getpid();
+			int child_pid = getpid();
 
 			printf("\n");
 
 			sock = sanlock_register();
+			if (sock < 0) {
+				printf("%d sanlock_register error %d\n",
+				       child_pid, rv);
+				exit(-1);
+			}
+
 			rv = sanlock_acquire(sock, -1, 1, &res, NULL);
 			if (rv < 0) {
 				printf("%d sanlock_acquire error %d\n",
-				       our_pid, rv);
+				       child_pid, rv);
+				/* all hosts are trying to acquire so we
+				   expect this to acquire only sometimes;
+				   TODO: exit with an error for some rv's */
 				exit(0);
 			}
-			printf("%d sanlock_acquire done\n", our_pid);
+			printf("%d sanlock_acquire done\n", child_pid);
 
 			execv(av[0], av);
 			perror("execv devcount problem");
@@ -370,14 +420,390 @@ static int do_lock(int argc, char *argv[])
 		}
 
 		waitpid(pid, &status, 0);
+
+		/* TODO: goto fail if exit status is an error */
+
 		sleep(rand_int(0, 1));
 	}
+
+ fail:
+	printf("test failed...\n");
+	sleep(1000000);
+}
+
+/* counting block: count_path offset 0
+ * incoming block: count_path offset 4K
+ * stopped block: count_path offset 8K */
+
+static void write_migrate(char *state, int offset)
+{
+	char *wbuf, **p_wbuf;
+	int fd, rv;
+
+	if (strlen(state) > 512) {
+		printf("state string too long\n");
+		goto fail;
+	}
+
+	fd = open(count_path, O_RDWR | O_DIRECT | O_SYNC, 0);
+	if (fd < 0) {
+		perror("open failed");
+		goto fail;
+	}
+
+	rv = ioctl(fd, BLKFLSBUF);
+	if (rv) {
+		perror("BLKFLSBUF failed");
+		goto fail;
+	}
+
+	p_wbuf = &wbuf;
+
+	rv = posix_memalign((void *)p_wbuf, getpagesize(), 512);
+	if (rv) {
+		perror("posix_memalign failed");
+		goto fail;
+	}
+
+	memset(wbuf, 0, 512);
+	memcpy(wbuf, state, strlen(state));
+
+	lseek(fd, offset, SEEK_SET);
+
+	rv = write(fd, wbuf, 512);
+	if (rv != 512) {
+		perror("write failed");
+		goto fail;
+	}
+
+	return;
+
+ fail:
+	printf("write_migrate %d failed %s\n", offset, state);
+	sleep(10000000);
+}
+
+static void write_migrate_incoming(char *state)
+{
+	write_migrate(state, 4096);
+}
+
+static void write_migrate_stopped(char *state)
+{
+	write_migrate(state, 4096*2);
+}
+
+/* read incoming block until it's set and our_hostid is next */
+
+static int wait_migrate_incoming(char *state_out)
+{
+	char *rbuf, **p_rbuf, *wbuf, **p_wbuf;
+	char *owner_id, *val_str;
+	int fd, rv, val;
+	int offset = 4096;
+
+	fd = open(count_path, O_RDWR | O_DIRECT | O_SYNC, 0);
+	if (fd < 0) {
+		perror("open failed");
+		goto fail;
+	}
+
+	rv = ioctl(fd, BLKFLSBUF);
+	if (rv) {
+		perror("BLKFLSBUF failed");
+		goto fail;
+	}
+
+	p_rbuf = &rbuf;
+	p_wbuf = &wbuf;
+
+	rv = posix_memalign((void *)p_rbuf, getpagesize(), 512);
+	if (rv) {
+		perror("posix_memalign failed");
+		goto fail;
+	}
+
+	rv = posix_memalign((void *)p_wbuf, getpagesize(), 512);
+	if (rv) {
+		perror("posix_memalign failed");
+		goto fail;
+	}
+
+ retry:
+	lseek(fd, offset, SEEK_SET);
+
+	rv = read(fd, rbuf, 512);
+	if (rv != 512) {
+		perror("read failed");
+		goto fail;
+	}
+	rbuf[511] = '\0';
+
+	/* init case to get things going */
+	if (!rbuf[0] && our_hostid == 1) {
+		return 1;
+	}
+
+	owner_id = strstr(rbuf, "leader.owner_id=");
+	if (!owner_id) {
+		goto retry;
+	}
+
+	val_str = strstr(owner_id, "=") + 1;
+	if (!val_str) {
+		goto retry;
+	}
+
+	val = atoi(val_str);
+	if ((val % max_hostid)+1 != our_hostid) {
+		goto retry;
+	}
+
+	strcpy(state_out, rbuf);
+
+	memset(wbuf, 0, 512);
+	strcpy(wbuf, "empty");
+
+	lseek(fd, offset, SEEK_SET);
+
+	rv = write(fd, wbuf, 512);
+	if (rv != 512) {
+		perror("write failed");
+		goto fail;
+	}
+
+	return 0;
+
+ fail:
+	printf("wait_migrate_incoming failed %s\n", state_out);
+	sleep(10000000);
+}
+
+/* read stopped block until it matches state_in */
+
+static void wait_migrate_stopped(char *state_in)
+{
+	char *rbuf, **p_rbuf, *wbuf, **p_wbuf;
+	int fd, rv;
+	int offset = 4096 * 2;
+
+	fd = open(count_path, O_RDWR | O_DIRECT | O_SYNC, 0);
+	if (fd < 0) {
+		perror("open failed");
+		goto fail;
+	}
+
+	rv = ioctl(fd, BLKFLSBUF);
+	if (rv) {
+		perror("BLKFLSBUF failed");
+		goto fail;
+	}
+
+	p_rbuf = &rbuf;
+	p_wbuf = &wbuf;
+
+	rv = posix_memalign((void *)p_rbuf, getpagesize(), 512);
+	if (rv) {
+		perror("posix_memalign failed");
+		goto fail;
+	}
+
+	rv = posix_memalign((void *)p_wbuf, getpagesize(), 512);
+	if (rv) {
+		perror("posix_memalign failed");
+		goto fail;
+	}
+
+ retry:
+	lseek(fd, offset, SEEK_SET);
+
+	rv = read(fd, rbuf, 512);
+	if (rv != 512) {
+		perror("read failed");
+		goto fail;
+	}
+	rbuf[511] = '\0';
+
+	if (strcmp(rbuf, state_in)) {
+		sleep(1);
+		goto retry;
+	}
+
+	memset(wbuf, 0, 512);
+
+	lseek(fd, offset, SEEK_SET);
+
+	rv = write(fd, wbuf, 512);
+	if (rv != 512) {
+		perror("write failed");
+		goto fail;
+	}
+
+	return;
+
+ fail:
+	printf("wait_migrate_stopped failed %s\n", state_in);
+	sleep(10000000);
+}
+
+#define MAX_MIGRATE_STATE 512 /* keep in one block for simplicity */
+
+static int do_migrate(int argc, char *argv[])
+{
+	char incoming[MAX_MIGRATE_STATE];
+	char *av[MIGRATE_ARGS+1];
+	char *state;
+	struct sanlk_lockspace lockspace;
+	struct sanlk_resource *res;
+	struct sanlk_options *opt;
+	int i, j, pid, rv, sock, len, status, init;
+	uint32_t parent_pid = getpid();
+
+	if (argc < MIGRATE_ARGS)
+		return -1;
+
+	count_offset = 0;
+
+	strcpy(lock_path, argv[2]);
+	strcpy(count_path, argv[4]);
+	our_hostid = atoi(argv[7]);
+	max_hostid = atoi(argv[8]);
+
+	len = sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk);
+	res = malloc(len);
+	memset(res, 0, len);
+	strcpy(res->lockspace_name, "devcount");
+	snprintf(res->name, SANLK_NAME_LEN, "resource%s", count_path);
+	res->name[SANLK_NAME_LEN-1] = '\0';
+	res->num_disks = 1;
+	strncpy(res->disks[0].path, lock_path, SANLK_PATH_LEN);
+	res->disks[0].path[SANLK_PATH_LEN-1] = '\0';
+	res->disks[0].offset = 1024000;
+
+	len = sizeof(struct sanlk_options) + MAX_MIGRATE_STATE;
+	opt = malloc(len);
+	memset(opt, 0, len);
+
+	printf("%d lock_disk %s count_disk %s our_hostid %d max_hostid\n",
+	       parent_pid, lock_path, count_path, our_hostid, max_hostid);
+
+	memset(&lockspace, 0, sizeof(lockspace));
+	strcpy(lockspace.name, "devcount");
+	strcpy(lockspace.host_id_disk.path, lock_path);
+	lockspace.host_id_disk.offset = lock_offset;
+	lockspace.host_id = our_hostid;
+
+	rv = sanlock_add_lockspace(&lockspace, 0);
+	if (rv < 0) {
+		printf("%d sanlock_add_lockspace error %d\n", parent_pid, rv);
+		exit(EXIT_FAILURE);
+	}
+	printf("%d sanlock_add_lockspace done\n", parent_pid);
+
+	/*
+	 * argv[0] = devcount
+	 * argv[1] = migrate
+	 * argv[2] = <lock_disk>
+	 * argv[3] = rw
+	 * start copying at argv[3]
+	 */
+
+	j = 0;
+	memset(av, 0, sizeof(char *) * MIGRATE_ARGS+1);
+
+	av[j++] = strdup(argv[0]);
+	for (i = 3; i < MIGRATE_ARGS; i++)
+		av[j++] = strdup(argv[i]);
+
+	memset(incoming, 0, sizeof(incoming));
+
+	while (1) {
+		init = wait_migrate_incoming(incoming);
+
+		pid = fork();
+		if (!pid) {
+			int child_pid = getpid();
+
+			printf("\n");
+
+			if (!init) {
+				opt->flags = SANLK_FLG_INCOMING;
+				opt->len = strlen(incoming);
+				strncpy(opt->str, incoming, MAX_MIGRATE_STATE);
+			}
+
+			sock = sanlock_register();
+			if (sock < 0) {
+				printf("%d sanlock_register error %d\n",
+				       child_pid, rv);
+				exit(-1);
+			}
+
+			rv = sanlock_acquire(sock, -1, 1, &res, opt);
+			if (rv < 0) {
+				printf("%d sanlock_acquire error %d in %s\n",
+				       child_pid, rv, opt->str);
+				/* only one host should be trying to acquire
+				   so this should always succeed */
+				exit(-1);
+			}
+			printf("%d sanlock_acquire done\n", child_pid);
+
+			if (init)
+				goto skip_setowner;
+
+			wait_migrate_stopped(incoming);
+
+			rv = sanlock_setowner(sock, -1);
+			if (rv < 0) {
+				printf("%d sanlock_setowner error %d\n",
+				       child_pid, rv);
+				exit(-1);
+			}
+			printf("%d sanlock_setowner done\n", child_pid);
+ skip_setowner:
+			execv(av[0], av);
+			perror("execv devcount problem");
+			exit(EXIT_FAILURE);
+		}
+
+		/* let the child run for 10 seconds before stopping it;
+		   if the child exits before the 10 seconds, the sanlock_migrate
+		   call should return an error */
+
+		sleep(10);
+
+		rv = sanlock_migrate(-1, pid, 0, &state);
+		if (rv < 0 || !state) {
+			printf("%d sanlock_migrate error %d\n", parent_pid, rv);
+			goto fail;
+		}
+
+		write_migrate_incoming(state);
+
+		kill(pid, SIGSTOP);
+
+		write_migrate_stopped(state);
+
+		kill(pid, SIGKILL);
+
+		waitpid(pid, &status, 0);
+
+		free(state);
+
+		/* TODO: goto fail if exit status is an error */
+	}
+
+ fail:
+	printf("test failed...\n");
+	sleep(10000000);
 }
 
 /* 
  * devcount init <lock_disk> <count_disk>
  * sanlock direct init -n 8 -s devcount:0:<lock_disk>:0
  * sanlock direct init -n 8 -r devcount:resource<count_disk>:<lock_disk>:1024000
+ * dd if=/dev/zero of=<count_disk> bs=512 count=24
  */
 
 int do_init(int argc, char *argv[])
@@ -414,6 +840,16 @@ int do_init(int argc, char *argv[])
 	printf("%s\n", command);
 
 	system(command);
+
+	memset(command, 0, sizeof(command));
+
+	snprintf(command, sizeof(command),
+		 "dd if=/dev/zero of=%s bs=512 count=24",
+		 count_path);
+
+	printf("%s\n", command);
+
+	system(command);
 }
 
 int main(int argc, char *argv[])
@@ -426,11 +862,14 @@ int main(int argc, char *argv[])
 	if (!strcmp(argv[1], "init"))
 		rv = do_init(argc, argv);
 
-	else if (!strcmp(argv[1], "count"))
+	else if (!strcmp(argv[1], "rw") || !strcmp(argv[1], "wr"))
 		rv = do_count(argc, argv);
 
 	else if (!strcmp(argv[1], "lock"))
 		rv = do_lock(argc, argv);
+
+	else if (!strcmp(argv[1], "migrate"))
+		rv = do_migrate(argc, argv);
 
 	if (!rv)
 		return 0;
@@ -447,14 +886,19 @@ int main(int argc, char *argv[])
 	printf("devcount init <lock_disk> <count_disk>\n");
 	printf("  sanlock direct init -n 8 -s devcount:0:<lock_disk>:0\n");
 	printf("  sanlock direct init -n 8 -r devcount:resource<count_disk>:<lock_disk>:1024000\n");
+	printf("  dd if=/dev/zero of=<count_disk> bs=512 count=24\n");
 	printf("\n");
-	printf("devcount lock <lock_disk> count <count_disk> <rsec> <wsec> <hostid>\n");
+	printf("devcount migrate <lock_disk> rw <count_disk> <sec1> <sec2> <hostid> <max_hostid>\n");
 	printf("  sanlock add_lockspace -s devcount:<hostid>:<lock_disk>:0\n");
-	printf("  loop around fork, sanlock_acquire, exec devcount count\n");
+	printf("  loop around fork, sanlock_acquire, exec devcount rw\n");
 	printf("\n");
-	printf("devcount count <count_disk> <rsec> <wsec> <hostid>\n");
-	printf("  read disk count for rsec seconds, looking for any writes\n");
-	printf("  write disk count for wsec seconds, (wsec 0 indefinite)\n");
+	printf("devcount lock <lock_disk> rw <count_disk> <sec1> <sec2> <hostid>\n");
+	printf("  sanlock add_lockspace -s devcount:<hostid>:<lock_disk>:0\n");
+	printf("  loop around fork, sanlock_acquire, exec devcount rw\n");
+	printf("\n");
+	printf("devcount rw <count_disk> <sec1> <sec2> <hostid>\n");
+	printf("  rw: read count for sec1, looking for writes, then write for sec2\n");
+	printf("  wr: write count for sec1, then read for sec2, looking for writes\n");
 	printf("\n");
 	return -1;
 }
