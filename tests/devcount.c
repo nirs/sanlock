@@ -399,7 +399,7 @@ static int do_lock(int argc, char *argv[])
 			sock = sanlock_register();
 			if (sock < 0) {
 				printf("%d sanlock_register error %d\n",
-				       child_pid, rv);
+				       child_pid, sock);
 				exit(-1);
 			}
 
@@ -476,6 +476,7 @@ static void write_migrate(char *state, int offset)
 		goto fail;
 	}
 
+	close(fd);
 	return;
 
  fail:
@@ -572,6 +573,7 @@ static int wait_migrate_incoming(char *state_out)
 		goto fail;
 	}
 
+	close(fd);
 	return 0;
 
  fail:
@@ -639,6 +641,7 @@ static void wait_migrate_stopped(char *state_in)
 		goto fail;
 	}
 
+	close(fd);
 	return;
 
  fail:
@@ -735,7 +738,7 @@ static int do_migrate(int argc, char *argv[])
 			sock = sanlock_register();
 			if (sock < 0) {
 				printf("%d sanlock_register error %d\n",
-				       child_pid, rv);
+				       child_pid, sock);
 				exit(-1);
 			}
 

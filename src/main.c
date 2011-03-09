@@ -192,7 +192,7 @@ static void client_pid_dead(int ci)
 	int delay_release = 0;
 	int i, pid;
 
-	log_debug("client_pid_dead ci %d pid %d", ci, cl->pid);
+	log_debug("client_pid_dead ci %d fd %d pid %d", ci, cl->fd, cl->pid);
 
 	/* cmd_acquire_thread may still be waiting for the tokens
 	   to be acquired.  if it is, tell it to release them when
@@ -427,9 +427,6 @@ static int main_loop(void)
 	return 0;
 }
 
-/* FIXME: allow setowner on the source to "cancel" a migration by clearing
-   next_owner.  This means allowing CMD_SETOWNER when cmd_active == CMD_MIGRATE */
-
 static int set_cmd_active(int ci_target, int cmd)
 {
 	struct client *cl = &client[ci_target];
@@ -447,6 +444,12 @@ static int set_cmd_active(int ci_target, int cmd)
 
 	if (cl->need_setowner && cmd == SM_CMD_SETOWNER)
 		cl->need_setowner = 0;
+
+	if (cl->cmd_active == SM_CMD_MIGRATE && cmd == SM_CMD_SETOWNER) {
+		cl->cmd_active = SM_CMD_SETOWNER;
+		pthread_mutex_unlock(&cl->mutex);
+		return 0;
+	}
 
 	cmd_active = cl->cmd_active;
 
@@ -636,7 +639,7 @@ static void *cmd_acquire_thread(void *args_in)
 	int fd, rv, i, j, disks_len, num_disks, empty_slots, opened;
 	int alloc_count = 0, add_count = 0, open_count = 0, acquire_count = 0;
 	int pos = 0, need_setowner = 0, pid_dead = 0;
-	int new_tokens_count, migrate_result;
+	int new_tokens_count;
 
 	cl = &client[ca->ci_target];
 	fd = client[ca->ci_in].fd;
@@ -873,28 +876,19 @@ static void *cmd_acquire_thread(void *args_in)
 	for (i = 0; i < new_tokens_count; i++) {
 		token = new_tokens[i];
 
+		if (opt.flags & SANLK_FLG_REACQUIRE)
+			reacquire_lver = token->prev_lver;
+
 		if (opt.flags & SANLK_FLG_INCOMING) {
-			rv = check_incoming_state(token, opt_str, &migrate_result);
-			if (rv < 0) {
-				log_errot(token, "cmd_acquire incoming state %d", rv);
-				goto fail_release;
-			}
-
-			/* source set_next_owner_other() wasn't called or failed */
-			if (migrate_result != DP_OK)
-				rv = set_next_owner_self(token);
-
+			rv = incoming_token(token, opt_str);
 		} else {
-			if (opt.flags & SANLK_FLG_REACQUIRE)
-				reacquire_lver = token->prev_lver;
-
 			rv = acquire_token(token, reacquire_lver, new_num_hosts);
 		}
 
 		save_resource_leader(token);
 
 		if (rv < 0) {
-			log_errot(token, "cmd_acquire lease %d flags %x",
+			log_errot(token, "cmd_acquire %d flags %x",
 				  rv, opt.flags);
 			goto fail_release;
 		}
@@ -1131,23 +1125,7 @@ static void *cmd_migrate_thread(void *args_in)
 		if (!token)
 			continue;
 
-		/* the migrating flag causes the source to avoid freeing the lease
-		 * if the pid exits before the dest has written itself as next_owner.
-		 * i.e. we can't rely on paxos_lease_release seeing next_owner_id
-		 * non-zero because the cmd_migrate can be called on the source,
-		 * followed by the source pid exiting before the dest gets to write
-		 * next_owner_id to itself */
-
-		token->migrating = 1;
-
-		if (target_host_id) {
-			rv = set_next_owner_other(token, target_host_id);
-			token->migrate_result = rv;
-		} else {
-			/* acquire-incoming on the destination will call
-			   set_next_owner_self() */
-			token->migrate_result = 0;
-		}
+		migrate_token(token, target_host_id);
 
 		ret = snprintf(reply_str + pos, reply_len - pos,
 				"lockspace_name=%s "
@@ -1178,6 +1156,8 @@ static void *cmd_migrate_thread(void *args_in)
 	reply_str[reply_len-1] = '\0';
 
  reply:
+	/* no set_cmd_active(0), only setowner is allowed after this */
+
 	log_debug("cmd_migrate done result %d", result);
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
@@ -1198,10 +1178,6 @@ static void *cmd_migrate_thread(void *args_in)
 	free(ca);
 	return NULL;
 }
-
-/* become the full owner of leases that were migrated to us;
-   go through each of the pid's tokens, set next_owner_id for each,
-   then reply to client with result */
 
 static void *cmd_setowner_thread(void *args_in)
 {
@@ -1389,9 +1365,12 @@ static int print_token_state(struct token *t, char *str)
 
 	snprintf(str, SANLK_STATE_MAXSTR-1,
 		 "token_id=%u "
+		 "migrating=%d "
+		 "incoming=%d "
 		 "acquire_result=%d "
-		 "migrate_result=%d "
 		 "release_result=%d "
+		 "migrate_result=%d "
+		 "incoming_result=%d "
 		 "setowner_result=%d "
 		 "leader.lver=%llu "
 		 "leader.timestamp=%llu "
@@ -1399,9 +1378,12 @@ static int print_token_state(struct token *t, char *str)
 		 "leader.owner_generation=%llu "
 		 "leader.next_owner_id=%llu",
 		 t->token_id,
+		 t->migrating,
+		 t->incoming,
 		 t->acquire_result,
-		 t->migrate_result,
 		 t->release_result,
+		 t->migrate_result,
+		 t->incoming_result,
 		 t->setowner_result,
 		 (unsigned long long)t->leader.lver,
 		 (unsigned long long)t->leader.timestamp,
@@ -1699,8 +1681,10 @@ static void process_cmd_daemon(int ci, struct sm_header *h_recv)
 	switch (h_recv->cmd) {
 	case SM_CMD_REGISTER:
 		rv = get_peer_pid(fd, &pid);
-		if (rv < 0)
+		if (rv < 0) {
+			log_error("cmd_register ci %d fd %d get pid failed", ci, fd);
 			break;
+		}
 		log_debug("cmd_register ci %d fd %d pid %d", ci, fd, pid);
 		client[ci].pid = pid;
 		client[ci].deadfn = client_pid_dead;

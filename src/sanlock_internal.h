@@ -85,11 +85,13 @@ struct token {
 	struct sync_disk *disks;
 
 	/* internal */
-	int migrating;
 	int token_id; /* used to refer to this token instance in log messages */
+	int migrating;
+	int incoming;
 	int acquire_result;
-	int migrate_result;
 	int release_result;
+	int migrate_result;
+	int incoming_result;
 	int setowner_result;
 	uint64_t prev_lver; /* just used to pass a value between functions */
 	struct leader_record leader; /* copy of last leader_record we wrote */
