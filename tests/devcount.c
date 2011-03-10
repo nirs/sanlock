@@ -659,7 +659,7 @@ static int do_migrate(int argc, char *argv[])
 	struct sanlk_lockspace lockspace;
 	struct sanlk_resource *res;
 	struct sanlk_options *opt;
-	int i, j, pid, rv, sock, len, status, init;
+	int i, j, pid, rv, sock, len, status, init, target;
 	uint32_t parent_pid = getpid();
 
 	if (argc < MIGRATE_ARGS)
@@ -776,7 +776,14 @@ static int do_migrate(int argc, char *argv[])
 
 		sleep(10);
 
-		rv = sanlock_migrate(-1, pid, 0, &state);
+		/* exercise both migrate options: giving target on host or not */
+
+		if (rand_int(1,3) == 1)
+			target = (our_hostid % max_hostid) + 1;
+		else
+			target = 0;
+
+		rv = sanlock_migrate(-1, pid, target, &state);
 		if (rv < 0 || !state) {
 			printf("%d sanlock_migrate error %d\n", parent_pid, rv);
 			goto fail;

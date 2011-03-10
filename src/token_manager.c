@@ -364,7 +364,7 @@ static int check_incoming_state(struct token *token, char *opt_str,
 		    leader_src.lver == leader_ret.lver &&
 		    leader_src.timestamp == leader_ret.timestamp) {
 			log_token(token, "check_incoming_state all match");
-			return DP_OK;
+			goto out_ok;
 		} else {
 			log_errot(token, "check_incoming_state mismatch "
 				  "next_owner %llu %llu %llu "
@@ -399,6 +399,8 @@ static int check_incoming_state(struct token *token, char *opt_str,
 		return -1;
 	}
 
+ out_ok:
+	memcpy(&token->leader, &leader_ret, sizeof(struct leader_record));
 	return DP_OK;
 }
 
@@ -495,7 +497,18 @@ static int setowner_token_incoming(struct token *token)
 	if (rv < 0)
 		return rv;
 
-	if (token->leader.next_owner_id != leader.next_owner_id) {
+	/* the owner should be the same (the source) as when we last read
+	   the leader in incoming_token */
+
+	if (token->leader.owner_id != leader.owner_id) {
+		log_errot(token, "setowner incoming bad owner %llu %llu",
+			  (unsigned long long)token->leader.owner_id,
+			  (unsigned long long)leader.owner_id);
+		return DP_ERROR;
+	}
+
+	if (token->leader.next_owner_id != leader.next_owner_id ||
+	    token->host_id != leader.next_owner_id) {
 		log_errot(token, "setowner incoming bad next_owner %llu %llu",
 			  (unsigned long long)token->leader.next_owner_id,
 			  (unsigned long long)leader.next_owner_id);
@@ -529,7 +542,7 @@ int setowner_token(struct token *token)
 {
 	int rv;
 
-	log_token(token, "setowner incoming %d migrating %d",
+	log_token(token, "setowner migrating %d incoming %d",
 		  token->migrating, token->incoming);
 
 	if (token->migrating) {
