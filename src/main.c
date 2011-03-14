@@ -394,12 +394,12 @@ static int main_loop(void)
 		list_for_each_entry_safe(sp, safe, &spaces, list) {
 			if (sp->killing_pids) {
 				if (all_pids_dead(sp)) {
-					unlink_watchdog_file(sp);
 					log_space(sp, "set thread_stop");
 					pthread_mutex_lock(&sp->mutex);
 					sp->thread_stop = 1;
 					pthread_cond_broadcast(&sp->cond);
 					pthread_mutex_unlock(&sp->mutex);
+					unlink_watchdog_file(sp);
 					list_move(&sp->list, &spaces_remove);
 				} else {
 					kill_pids(sp);
