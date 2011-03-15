@@ -42,7 +42,6 @@
 
 #define SANLK_RUN_DIR "/var/run/sanlock"
 #define SANLK_LOG_DIR "/var/log"
-#define SANLK_WDTEST_DIR "/var/run/sanlock/wdtest"
 #define SANLK_SOCKET_NAME "sanlock_sock"
 #define SANLK_LOGFILE_NAME "sanlock.log"
 #define SANLK_LOCKFILE_NAME "sanlock.pid"
@@ -126,7 +125,6 @@ struct space {
 	pthread_cond_t cond;
 	struct lease_status lease_status;
 	int wd_fd;
-	char wdtest_path[PATH_MAX];
 };
 
 struct sm_header {
@@ -306,7 +304,6 @@ struct command_line {
 #define COM_DAEMON      1
 #define COM_CLIENT      2
 #define COM_DIRECT      3
-#define COM_WDTEST      4
 
 enum {
 	ACT_STATUS = 1,

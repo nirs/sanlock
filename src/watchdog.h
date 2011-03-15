@@ -17,6 +17,4 @@ void close_watchdog_file(struct space *sp);
 int setup_watchdog(void);
 void close_watchdog(void);
 
-int do_wdtest(void);
-
 #endif

@@ -1805,10 +1805,6 @@ static int make_dirs(void)
 	if (rv < 0 && errno != EEXIST)
 		goto out;
 
-	rv = mkdir(SANLK_WDTEST_DIR, 0777);
-	if (rv < 0 && errno != EEXIST)
-		goto out;
-
 	rv = 0;
  out:
 	umask(old_umask);
@@ -2216,7 +2212,6 @@ static void print_usage(void)
 	printf("  daemon		start daemon\n");
 	printf("  client		send request to daemon (default type if none given)\n");
 	printf("  direct		access storage directly (no coordination with daemon)\n");
-	printf("  wdtest		watchdog test for expired host_id lease\n");
 	printf("\n");
 	printf("client actions:		ask daemon to:\n");
 	printf("  status		send internal state\n");
@@ -2363,10 +2358,6 @@ static int read_command_line(int argc, char *argv[])
 		com.type = COM_CLIENT;
 		act = argv[2];
 		i = 3;
-	} else if (!strcmp(arg1, "wdtest")) {
-		com.type = COM_WDTEST;
-		act = argv[2];
-		i = 3;
 	} else {
 		com.type = COM_CLIENT;
 		act = argv[1];
@@ -2425,9 +2416,6 @@ static int read_command_line(int argc, char *argv[])
 			log_tool("direct action \"%s\" is unknown", act);
 			exit(EXIT_FAILURE);
 		}
-		break;
-
-	case COM_WDTEST:
 		break;
 	};
 
@@ -2746,10 +2734,6 @@ int main(int argc, char *argv[])
 
 	case COM_DIRECT:
 		rv = do_direct();
-		break;
-
-	case COM_WDTEST:
-		rv = do_wdtest();
 		break;
 	};
  out:
