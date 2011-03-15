@@ -235,6 +235,7 @@ static void *host_id_thread(void *arg_in)
 
 		result = delta_lease_renew(sp, &sp->host_id_disk, sp->space_name,
 					   our_host_id, sp->host_id, &leader);
+		dl_result = result;
 		t = leader.timestamp;
 
 		pthread_mutex_lock(&sp->mutex);
@@ -251,20 +252,19 @@ static void *host_id_thread(void *arg_in)
 				sp->lease_status.max_renewal_interval = good_diff;
 				sp->lease_status.max_renewal_time = t;
 			}
-		}
-		pthread_mutex_unlock(&sp->mutex);
 
-		if (result < 0) {
-			log_erros(sp, "host_id %llu renewal error %d last good %llu",
-				  (unsigned long long)sp->host_id, result,
-				  (unsigned long long)sp->lease_status.renewal_good_time);
-		} else {
 			log_space(sp, "host_id %llu renewal %llu interval %d",
 				  (unsigned long long)sp->host_id,
 				  (unsigned long long)t, good_diff);
 
-			update_watchdog_file(sp, t);
+			if (!sp->thread_stop)
+				update_watchdog_file(sp, t);
+		} else {
+			log_erros(sp, "host_id %llu renewal error %d last good %llu",
+				  (unsigned long long)sp->host_id, result,
+				  (unsigned long long)sp->lease_status.renewal_good_time);
 		}
+		pthread_mutex_unlock(&sp->mutex);
 	}
 
 	/* unlink called below to get it done ASAP */

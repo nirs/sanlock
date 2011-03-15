@@ -102,6 +102,8 @@ void unlink_watchdog_file(struct space *sp)
 	if (!options.use_watchdog)
 		return;
 
+	log_space(sp, "wdmd_test_live 0 0 to disable");
+
 	rv = wdmd_test_live(sp->wd_fd, 0, 0);
 	if (rv < 0)
 		log_erros(sp, "wdmd_test_live failed %d", rv);
@@ -209,7 +211,7 @@ static int do_write(int fd, void *buf, size_t count)
 	if (rv == -1 && errno == EINTR)
 		goto retry;
 	if (rv < 0) {
-		return -errno;
+		return -1;
 	}
 
 	if (rv != count) {

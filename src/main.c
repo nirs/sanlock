@@ -397,9 +397,9 @@ static int main_loop(void)
 					log_space(sp, "set thread_stop");
 					pthread_mutex_lock(&sp->mutex);
 					sp->thread_stop = 1;
+					unlink_watchdog_file(sp);
 					pthread_cond_broadcast(&sp->cond);
 					pthread_mutex_unlock(&sp->mutex);
-					unlink_watchdog_file(sp);
 					list_move(&sp->list, &spaces_remove);
 				} else {
 					kill_pids(sp);

@@ -45,7 +45,7 @@ int sanlock_shutdown(void)
 
 	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv != sizeof(h))
-		rv = -errno;
+		rv = -1;
 	else
 		rv = 0;
 
@@ -67,7 +67,7 @@ int sanlock_log_dump(void)
 
 	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv != sizeof(h)) {
-		rv = -errno;
+		rv = -1;
 		goto out;
 	}
 
@@ -82,7 +82,7 @@ int sanlock_log_dump(void)
 
 	rv = recv(fd, buf, len, MSG_WAITALL);
 	if (rv != len) {
-		rv = -errno;
+		rv = -1;
 		goto out;
 	}
 
@@ -178,7 +178,7 @@ int sanlock_status(int debug)
 
 	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv != sizeof(h))
-		return -errno;
+		return -1;
 
 
 	while (1) {
@@ -186,12 +186,12 @@ int sanlock_status(int debug)
 		if (!rv)
 			break;
 		if (rv != sizeof(st))
-			return -errno;
+			return -1;
 
 		if (st.str_len) {
 			rv = recv(fd, str, st.str_len, MSG_WAITALL);
 			if (rv != st.str_len)
-				return -errno;
+				return -1;
 		}
 
 		switch (st.type) {
@@ -228,7 +228,7 @@ static int cmd_lockspace(int cmd, struct sanlk_lockspace *ls, uint32_t flags)
 
 	rv = send(fd, (void *)ls, sizeof(struct sanlk_lockspace), 0);
 	if (rv < 0) {
-		rv = -errno;
+		rv = -1;
 		goto out;
 	}
 
@@ -236,7 +236,7 @@ static int cmd_lockspace(int cmd, struct sanlk_lockspace *ls, uint32_t flags)
 
 	rv = recv(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
 	if (rv != sizeof(h)) {
-		rv = -errno;
+		rv = -1;
 		goto out;
 	}
 

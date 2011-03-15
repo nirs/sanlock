@@ -104,27 +104,27 @@ int sanlock_acquire(int sock, int pid, int res_count,
 		res = res_args[i];
 		rv = send(fd, res, sizeof(struct sanlk_resource), 0);
 		if (rv < 0) {
-			rv = -errno;
+			rv = -1;
 			goto out;
 		}
 
 		rv = send(fd, res->disks, sizeof(struct sanlk_disk) * res->num_disks, 0);
 		if (rv < 0) {
-			rv = -errno;
+			rv = -1;
 			goto out;
 		}
 	}
 
 	rv = send(fd, &opt, sizeof(struct sanlk_options), 0);
 	if (rv < 0) {
-		rv = -errno;
+		rv = -1;
 		goto out;
 	}
 
 	if (opt.len) {
 		rv = send(fd, opt_in->str, opt.len, 0);
 		if (rv < 0) {
-			rv = -errno;
+			rv = -1;
 			goto out;
 		}
 	}
@@ -133,7 +133,7 @@ int sanlock_acquire(int sock, int pid, int res_count,
 
 	rv = recv(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
 	if (rv != sizeof(h)) {
-		rv = -errno;
+		rv = -1;
 		goto out;
 	}
 
@@ -177,7 +177,7 @@ int sanlock_migrate(int sock, int pid, uint64_t target_host_id, char **state)
 
 	rv = send(fd, &target_host_id, sizeof(uint64_t), 0);
 	if (rv < 0) {
-		rv = -errno;
+		rv = -1;
 		goto out;
 	}
 
@@ -185,7 +185,7 @@ int sanlock_migrate(int sock, int pid, uint64_t target_host_id, char **state)
 
 	rv = recv(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
 	if (rv != sizeof(h)) {
-		rv = -errno;
+		rv = -1;
 		goto out;
 	}
 
@@ -199,7 +199,7 @@ int sanlock_migrate(int sock, int pid, uint64_t target_host_id, char **state)
 	rv = recv(fd, reply_str, len, MSG_WAITALL);
 	if (rv != len) {
 		free(reply_str);
-		rv = -errno;
+		rv = -1;
 		goto out;
 	}
 
@@ -255,7 +255,7 @@ int sanlock_release(int sock, int pid, int res_count,
 	for (i = 0; i < res_count; i++) {
 		rv = send(fd, res_args[i], sizeof(struct sanlk_resource), 0);
 		if (rv < 0) {
-			rv = -errno;
+			rv = -1;
 			goto out;
 		}
 	}
@@ -265,13 +265,13 @@ int sanlock_release(int sock, int pid, int res_count,
 
 	rv = recv(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
 	if (rv != sizeof(h)) {
-		rv = -errno;
+		rv = -1;
 		goto out;
 	}
 
 	rv = recv(fd, &results, sizeof(int) * res_count, MSG_WAITALL);
 	if (rv != sizeof(int) * res_count) {
-		rv = -errno;
+		rv = -1;
 		goto out;
 	}
 
@@ -317,7 +317,7 @@ int sanlock_setowner(int sock, int pid)
 
 	rv = recv(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
 	if (rv != sizeof(h)) {
-		rv = -errno;
+		rv = -1;
 		goto out;
 	}
 

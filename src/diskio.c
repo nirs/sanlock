@@ -149,14 +149,14 @@ static int do_write(int fd, uint64_t offset, const char *buf, int len)
 
 	ret = lseek(fd, offset, SEEK_SET);
 	if (ret != offset)
-		return -errno;
+		return -1;
 
  retry:
 	rv = write(fd, buf + pos, len);
 	if (rv == -1 && errno == EINTR)
 		goto retry;
 	if (rv < 0)
-		return -errno;
+		return -1;
 
 	/* if (rv != len && len == sector_size) return error?
 	   partial sector writes should not happen AFAIK, and
@@ -178,7 +178,7 @@ static int do_read(int fd, uint64_t offset, char *buf, int len)
 
 	ret = lseek(fd, offset, SEEK_SET);
 	if (ret != offset)
-		return -errno;
+		return -1;
 
 	while (pos < len) {
 		rv = read(fd, buf + pos, len - pos);
@@ -187,7 +187,7 @@ static int do_read(int fd, uint64_t offset, char *buf, int len)
 		if (rv == -1 && errno == EINTR)
 			continue;
 		if (rv < 0)
-			return -errno;
+			return -1;
 		pos += rv;
 	}
 
@@ -215,7 +215,7 @@ static int do_write_aio(int fd, uint64_t offset, char *buf, int len,
 
 	rv = aio_write(&cb);
 	if (rv < 0)
-		return -errno;
+		return -1;
 
 	rv = aio_suspend(&p_cb, 1, &ts);
 	if (!rv)
@@ -225,7 +225,7 @@ static int do_write_aio(int fd, uint64_t offset, char *buf, int len,
 
 	rv = aio_cancel(fd, &cb);
 	if (rv < 0)
-		return -errno;
+		return -1;
 
 	if (rv == AIO_ALLDONE)
 		return 0;
@@ -264,7 +264,7 @@ static int do_read_aio(int fd, uint64_t offset, char *buf, int len, int io_timeo
 
 	rv = aio_read(&cb);
 	if (rv < 0)
-		return -errno;
+		return -1;
 
 	rv = aio_suspend(&p_cb, 1, &ts);
 	if (!rv)
@@ -274,7 +274,7 @@ static int do_read_aio(int fd, uint64_t offset, char *buf, int len, int io_timeo
 
 	rv = aio_cancel(fd, &cb);
 	if (rv < 0)
-		return -errno;
+		return -1;
 
 	if (rv == AIO_ALLDONE)
 		return 0;

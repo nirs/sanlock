@@ -50,7 +50,7 @@ int setup_listener_socket(int *listener_socket)
 
 	s = socket(AF_LOCAL, SOCK_STREAM, 0);
 	if (s < 0)
-		return -errno;
+		return -1;
 
 	rv = get_socket_address(&addr);
 	if (rv < 0)
@@ -59,21 +59,21 @@ int setup_listener_socket(int *listener_socket)
 	unlink(addr.sun_path);
 	rv = bind(s, (struct sockaddr *) &addr, sizeof(struct sockaddr_un));
 	if (rv < 0) {
-		rv = -errno;
+		rv = -1;
 		close(s);
 		return rv;
 	}
 
 	rv = listen(s, 5);
 	if (rv < 0) {
-		rv = -errno;
+		rv = -1;
 		close(s);
 		return rv;
 	}
 
 	rv = fchmod(s, 666);
 	if (rv < 0) {
-		rv = -errno;
+		rv = -1;
 		close(s);
 		return rv;
 	}
@@ -88,7 +88,7 @@ int connect_socket(int *sock_fd)
 
 	s = socket(AF_LOCAL, SOCK_STREAM, 0);
 	if (s < 0)
-		return -errno;
+		return -1;
 
 	rv = get_socket_address(&addr);
 	if (rv < 0)
@@ -96,7 +96,7 @@ int connect_socket(int *sock_fd)
 
 	rv = connect(s, (struct sockaddr *) &addr, sizeof(struct sockaddr_un));
 	if (rv < 0) {
-		rv = -errno;
+		rv = -1;
 		close(s);
 		return rv;
 	}
@@ -118,7 +118,7 @@ int send_header(int sock, int cmd, int datalen, uint32_t data, uint32_t data2)
 
 	rv = send(sock, (void *) &header, sizeof(struct sm_header), 0);
 	if (rv < 0)
-		return -errno;
+		return -1;
 
 	return 0;
 }
