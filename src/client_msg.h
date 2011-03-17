@@ -20,8 +20,7 @@ enum {
 	SM_CMD_LOG_DUMP,
 	SM_CMD_ACQUIRE,
 	SM_CMD_RELEASE,
-	SM_CMD_MIGRATE,
-	SM_CMD_SETOWNER,
+	SM_CMD_INQUIRE,
 };
 
 #define SANLK_STATE_MAXSTR	4096
@@ -43,7 +42,8 @@ struct sanlk_state {
 
 int setup_listener_socket(int *listener_socket);
 int connect_socket(int *sock_fd);
-int send_header(int sock, int cmd, int datalen, uint32_t data, uint32_t data2);
+int send_header(int sock, int cmd, uint32_t cmd_flags, int datalen,
+		uint32_t data, uint32_t data2);
 int send_command(int cmd, uint32_t data);
 
 #endif

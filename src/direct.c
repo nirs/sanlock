@@ -107,24 +107,6 @@ static int do_paxos_action(void)
 				return -1;
 			}
 			break;
-
-		case ACT_MIGRATE:
-			rv = paxos_lease_leader_read(token, &leader_read);
-			if (rv < 0) {
-				log_tool("cannot read lease on %s",
-				 	 token->resource_name);
-				return -1;
-			}
-
-			leader_read.next_owner_id = com.target_host_id;
-
-			rv = paxos_lease_leader_write(token, &leader_read);
-			if (rv < 0) {
-				log_tool("cannot write lease on %s",
-				 	 token->resource_name);
-				return -1;
-			}
-			break;
 		}
 
 		free_token(token);
@@ -136,7 +118,6 @@ static int do_paxos_action(void)
 /*
  * sanlock direct acquire -i <local_host_id> -g <local_host_generation> -r RESOURCE
  * sanlock direct release -r RESOURCE
- * sanlock direct migrate -t <target_host_id> -r RESOURCE
  */
 
 int sanlock_direct_acquire(void)
@@ -145,11 +126,6 @@ int sanlock_direct_acquire(void)
 }
 
 int sanlock_direct_release(void)
-{
-	return do_paxos_action();
-}
-
-int sanlock_direct_migrate(void)
 {
 	return do_paxos_action();
 }

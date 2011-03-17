@@ -222,7 +222,7 @@ static int cmd_lockspace(int cmd, struct sanlk_lockspace *ls, uint32_t flags)
 	if (rv < 0)
 		return rv;
 
-	rv = send_header(fd, cmd, sizeof(struct sanlk_lockspace), flags, 0);
+	rv = send_header(fd, cmd, flags, sizeof(struct sanlk_lockspace), 0, 0);
 	if (rv < 0)
 		return rv;
 

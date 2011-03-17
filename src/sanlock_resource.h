@@ -21,12 +21,28 @@
 
 int sanlock_register(void);
 
-int sanlock_acquire(int sock, int pid, int res_count,
+int sanlock_acquire(int sock, int pid, uint32_t flags, int res_count,
 		    struct sanlk_resource *res_args[],
 		    struct sanlk_options *opt_in);
-int sanlock_release(int sock, int pid, int res_count,
+
+int sanlock_release(int sock, int pid, uint32_t flags, int res_count,
 		    struct sanlk_resource *res_args[]);
-int sanlock_migrate(int sock, int pid, uint64_t target_host_id, char **state);
-int sanlock_setowner(int sock, int pid);
+
+/*
+ * SANLK_INQ_STRING
+ * allocates and returns a state string, caller frees.
+ * "RESOURCE1 RESOURCE2 RESOURCE3 ..."
+ * RESOURCE = <lockspace_name>:<resource_name>:<path>:<offset>[:<path>:<offset>...]:<version>
+ *
+ * SANLK_INQ_STRUCT
+ * allocates and returns an array of sanlk_resource structs, caller frees.
+ * [sanlk_resource][sanlk_disk...][sanlk_resource][sanlk_disk...]...
+ */
+
+#define SANLK_INQ_STRING 0x1
+#define SANLK_INQ_STRUCT 0x2
+
+int sanlock_inquire(int sock, int pid, uint32_t flags, int *res_count,
+		    void **res_out);
 
 #endif

@@ -597,7 +597,7 @@ static int write_new_leader(struct token *token, struct leader_record *nl)
 
 int paxos_lease_acquire(struct token *token, int force,
 		        struct leader_record *leader_ret,
-		        uint64_t reacquire_lver,
+		        uint64_t acquire_lver,
 		        int new_num_hosts)
 {
 	struct leader_record prev_leader;
@@ -729,9 +729,9 @@ int paxos_lease_acquire(struct token *token, int force,
 		sleep(1);
 	}
  run:
-	if (reacquire_lver && prev_leader.lver != reacquire_lver) {
-		log_errot(token, "paxos_acquire reacquire %llu prev_leader %llu",
-			  (unsigned long long)reacquire_lver,
+	if (acquire_lver && prev_leader.lver != acquire_lver) {
+		log_errot(token, "paxos_acquire acquire_lver %llu prev_leader %llu",
+			  (unsigned long long)acquire_lver,
 			  (unsigned long long)prev_leader.lver);
 		error = DP_REACQUIRE_LVER;
 		goto out;
@@ -782,7 +782,6 @@ int paxos_lease_acquire(struct token *token, int force,
 
 	new_leader.owner_id = token->host_id;
 	new_leader.owner_generation = token->host_generation;
-	new_leader.next_owner_id = 0;
 	new_leader.lver = dblock.lver;
 	new_leader.timestamp = time(NULL);
 	if (new_num_hosts)
@@ -799,6 +798,7 @@ int paxos_lease_acquire(struct token *token, int force,
 	return error;
 }
 
+#if 0
 int paxos_lease_leader_write(struct token *token,
 			     struct leader_record *leader_new)
 {
@@ -813,6 +813,7 @@ int paxos_lease_leader_write(struct token *token,
 	log_token(token, "paxos_lease_leader_write done %d", error);
 	return error;
 }
+#endif
 
 #if 0
 int paxos_lease_renew(struct token *token,
@@ -872,12 +873,6 @@ int paxos_lease_release(struct token *token,
 		log_errot(token, "release error other owner_id %llu",
 			  (unsigned long long)leader.owner_id);
 		return DP_OTHER_OWNER;
-	}
-
-	if (leader.next_owner_id) {
-		log_errot(token, "release error next_owner_id %llu",
-			  (unsigned long long)leader.next_owner_id);
-		return DP_LEADER_MIGRATE;
 	}
 
 	leader.timestamp = LEASE_FREE;

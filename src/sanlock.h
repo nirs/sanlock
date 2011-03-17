@@ -36,12 +36,17 @@ struct sanlk_disk {
 	uint32_t pad2;
 };
 
+#define SANLK_RES_LVER		0x1
+
 struct sanlk_resource {
 	char lockspace_name[SANLK_NAME_LEN]; /* terminating \0 not required */
 	char name[SANLK_NAME_LEN]; /* terminating \0 not required */
-	uint32_t num_disks;
-	uint32_t data32;   /* per-resource command-specific data */
+	uint64_t lver;     /* use with SANLK_RES_LVER */
 	uint64_t data64;   /* per-resource command-specific data */
+	uint32_t data32;   /* per-resource command-specific data */
+	uint32_t unused;
+	uint32_t flags;
+	uint32_t num_disks;
 	/* followed by num_disks sanlk_disk structs */
 	struct sanlk_disk disks[0];
 };
@@ -49,9 +54,7 @@ struct sanlk_resource {
 /* command-specific command options (can include per resource data, but
    that requires the extra work of segmenting it by resource name) */
 
-#define SANLK_FLG_REACQUIRE	0x1
-#define SANLK_FLG_INCOMING	0x2
-#define SANLK_FLG_NUM_HOSTS	0x4
+#define SANLK_OPT_NUM_HOSTS	0x1
 
 struct sanlk_options {
 	char owner_name[SANLK_NAME_LEN]; /* optional user friendly name */

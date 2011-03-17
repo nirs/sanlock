@@ -104,7 +104,8 @@ int connect_socket(int *sock_fd)
 	return 0;
 }
 
-int send_header(int sock, int cmd, int datalen, uint32_t data, uint32_t data2)
+int send_header(int sock, int cmd, uint32_t cmd_flags, int datalen,
+		uint32_t data, uint32_t data2)
 {
 	struct sm_header header;
 	int rv;
@@ -112,6 +113,7 @@ int send_header(int sock, int cmd, int datalen, uint32_t data, uint32_t data2)
 	memset(&header, 0, sizeof(struct sm_header));
 	header.magic = SM_MAGIC;
 	header.cmd = cmd;
+	header.cmd_flags = cmd_flags;
 	header.length = sizeof(header) + datalen;
 	header.data = data;
 	header.data2 = data2;
@@ -131,7 +133,7 @@ int send_command(int cmd, uint32_t data)
 	if (rv < 0)
 		return rv;
 
-	rv = send_header(sock, cmd, 0, data, 0);
+	rv = send_header(sock, cmd, 0, 0, data, 0);
 	if (rv < 0) {
 		close(sock);
 		return rv;

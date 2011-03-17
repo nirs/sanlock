@@ -39,7 +39,7 @@ int sanlock_register(void)
 	if (rv < 0)
 		return rv;
 
-	rv = send_header(sock, SM_CMD_REGISTER, 0, 0, 0);
+	rv = send_header(sock, SM_CMD_REGISTER, 0, 0, 0, 0);
 	if (rv < 0) {
 		close(sock);
 		return rv;
@@ -48,7 +48,7 @@ int sanlock_register(void)
 	return sock;
 }
 
-int sanlock_acquire(int sock, int pid, int res_count,
+int sanlock_acquire(int sock, int pid, uint32_t flags, int res_count,
 		    struct sanlk_resource *res_args[],
 		    struct sanlk_options *opt_in)
 {
@@ -96,7 +96,7 @@ int sanlock_acquire(int sock, int pid, int res_count,
 		fd = sock;
 	}
 
-	rv = send_header(fd, SM_CMD_ACQUIRE, datalen, res_count, data2);
+	rv = send_header(fd, SM_CMD_ACQUIRE, flags, datalen, res_count, data2);
 	if (rv < 0)
 		return rv;
 
@@ -148,11 +148,16 @@ int sanlock_acquire(int sock, int pid, int res_count,
 	return rv;
 }
 
-int sanlock_migrate(int sock, int pid, uint64_t target_host_id, char **state)
+int sanlock_inquire(int sock, int pid, uint32_t flags, int *res_count, void **res_out)
 {
 	struct sm_header h;
-	char *reply_str = NULL;
+	char *reply_data = NULL;
 	int rv, fd, data2, len;
+
+	*res_count = 0;
+
+	if (res_out)
+		*res_out = NULL;
 
 	if (sock == -1) {
 		/* connect to daemon and ask it to acquire a lease for
@@ -171,15 +176,9 @@ int sanlock_migrate(int sock, int pid, uint64_t target_host_id, char **state)
 		fd = sock;
 	}
 
-	rv = send_header(fd, SM_CMD_MIGRATE, sizeof(uint64_t), 0, data2);
+	rv = send_header(fd, SM_CMD_INQUIRE, flags, 0, 0, data2);
 	if (rv < 0)
 		return rv;
-
-	rv = send(fd, &target_host_id, sizeof(uint64_t), 0);
-	if (rv < 0) {
-		rv = -1;
-		goto out;
-	}
 
 	memset(&h, 0, sizeof(h));
 
@@ -190,27 +189,36 @@ int sanlock_migrate(int sock, int pid, uint64_t target_host_id, char **state)
 	}
 
 	len = h.length - sizeof(h);
-	reply_str = malloc(len);
-	if (!reply_str) {
+	if (!len) {
+		rv = (int)h.data;
+		goto out;
+	}
+
+	reply_data = malloc(len);
+	if (!reply_data) {
 		rv = -ENOMEM;
 		goto out;
 	}
 
-	rv = recv(fd, reply_str, len, MSG_WAITALL);
+	rv = recv(fd, reply_data, len, MSG_WAITALL);
 	if (rv != len) {
-		free(reply_str);
+		free(reply_data);
 		rv = -1;
 		goto out;
 	}
 
 	if (h.data) {
-		free(reply_str);
+		free(reply_data);
 		rv = (int)h.data;
 		goto out;
 	}
 
-	if (state)
-		*state = reply_str;
+	if (res_out)
+		*res_out = reply_data;
+	else
+		free(reply_data);
+
+	*res_count = (int)h.data2;
 	rv = 0;
  out:
 	if (sock == -1)
@@ -222,7 +230,7 @@ int sanlock_migrate(int sock, int pid, uint64_t target_host_id, char **state)
    I don't think the pid itself will usually tell sm to release leases,
    but it will be requested by a manager overseeing the pid */
 
-int sanlock_release(int sock, int pid, int res_count,
+int sanlock_release(int sock, int pid, uint32_t flags, int res_count,
 		    struct sanlk_resource *res_args[])
 {
 	struct sm_header h;
@@ -248,7 +256,7 @@ int sanlock_release(int sock, int pid, int res_count,
 
 	datalen = res_count * sizeof(struct sanlk_resource);
 
-	rv = send_header(fd, SM_CMD_RELEASE, datalen, res_count, data2);
+	rv = send_header(fd, SM_CMD_RELEASE, flags, datalen, res_count, data2);
 	if (rv < 0)
 		goto out;
 
@@ -287,47 +295,3 @@ int sanlock_release(int sock, int pid, int res_count,
 	return rv;
 }
 
-int sanlock_setowner(int sock, int pid)
-{
-	struct sm_header h;
-	int rv, fd, data2;
-
-	if (sock == -1) {
-		/* connect to daemon and ask it to acquire a lease for
-		   another registered pid */
-
-		data2 = pid;
-
-		rv = connect_socket(&fd);
-		if (rv < 0)
-			return rv;
-	} else {
-		/* use our own existing registered connection and ask daemon
-		   to acquire a lease for self */
-
-		data2 = -1;
-		fd = sock;
-	}
-
-	rv = send_header(fd, SM_CMD_SETOWNER, 0, 0, data2);
-	if (rv < 0)
-		return rv;
-
-	memset(&h, 0, sizeof(h));
-
-	rv = recv(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
-	if (rv != sizeof(h)) {
-		rv = -1;
-		goto out;
-	}
-
-	if (h.data) {
-		rv = (int)h.data;
-		goto out;
-	}
-	rv = 0;
- out:
-	if (sock == -1)
-		close(fd);
-	return rv;
-}

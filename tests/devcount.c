@@ -403,7 +403,7 @@ static int do_lock(int argc, char *argv[])
 				exit(-1);
 			}
 
-			rv = sanlock_acquire(sock, -1, 1, &res, NULL);
+			rv = sanlock_acquire(sock, -1, 0, 1, &res, NULL);
 			if (rv < 0) {
 				printf("%d sanlock_acquire error %d\n",
 				       child_pid, rv);
@@ -431,6 +431,7 @@ static int do_lock(int argc, char *argv[])
 	sleep(1000000);
 }
 
+#if 0
 /* counting block: count_path offset 0
  * incoming block: count_path offset 4K
  * stopped block: count_path offset 8K */
@@ -808,6 +809,7 @@ static int do_migrate(int argc, char *argv[])
 	printf("test failed...\n");
 	sleep(10000000);
 }
+#endif
 
 /* 
  * devcount init <lock_disk> <count_disk>
@@ -878,8 +880,10 @@ int main(int argc, char *argv[])
 	else if (!strcmp(argv[1], "lock"))
 		rv = do_lock(argc, argv);
 
+#if 0
 	else if (!strcmp(argv[1], "migrate"))
 		rv = do_migrate(argc, argv);
+#endif
 
 	if (!rv)
 		return 0;

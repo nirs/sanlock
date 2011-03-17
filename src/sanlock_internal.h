@@ -72,9 +72,11 @@ struct token {
 	/* mirror external sanlk_resource from acquire */
 	char space_name[NAME_ID_SIZE];
 	char resource_name[NAME_ID_SIZE];
-	int num_disks;
-	uint32_t acquire_data32;
+	uint64_t acquire_lver;
 	uint64_t acquire_data64;
+	uint32_t acquire_data32;
+	uint32_t acquire_flags;
+	int num_disks;
 
 	/* copied from the sp with space_name */
 	uint64_t host_id;
@@ -85,14 +87,8 @@ struct token {
 
 	/* internal */
 	int token_id; /* used to refer to this token instance in log messages */
-	int migrating;
-	int incoming;
 	int acquire_result;
 	int release_result;
-	int migrate_result;
-	int incoming_result;
-	int setowner_result;
-	uint64_t prev_lver; /* just used to pass a value between functions */
 	struct leader_record leader; /* copy of last leader_record we wrote */
 };
 
@@ -131,9 +127,9 @@ struct sm_header {
 	uint32_t magic;
 	uint32_t version;
 	uint32_t cmd;
+	uint32_t cmd_flags;
 	uint32_t length;
 	uint32_t seq;
-	uint32_t pad;
 	uint32_t data;
 	uint32_t data2;
 };
@@ -290,7 +286,6 @@ struct command_line {
 	int pid;				/* -p */
 	uint64_t local_host_id;			/* -i */
 	uint64_t local_host_generation;		/* -g */
-	uint64_t target_host_id;		/* -t */
 	int num_hosts;				/* -n */
 	int max_hosts;				/* -m */
 	int res_count;
@@ -314,8 +309,7 @@ enum {
 	ACT_COMMAND, 
 	ACT_ACQUIRE, 
 	ACT_RELEASE,
-	ACT_MIGRATE, 
-	ACT_SETOWNER,
+	ACT_INQUIRE, 
 	ACT_ACQUIRE_ID,
 	ACT_RELEASE_ID,
 	ACT_RENEW_ID,

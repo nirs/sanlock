@@ -40,8 +40,7 @@ enum {
 	DP_BAD_SECTORSIZE = -26,
 	DP_REACQUIRE_LVER = -27,
 	DP_BAD_LOCKSPACE = -28,
-	DP_LEADER_MIGRATE = -29,
-	DP_OTHER_OWNER = -30,
+	DP_OTHER_OWNER = -29,
 };
 
 /* does not include terminating null byte */
@@ -71,11 +70,7 @@ enum {
    The leader may be partially through updating the timestamp on
    multiple leader blocks in a lease, but for the purpose of counting
    repetitions of a leader block owned by a single host they should be
-   counted together, so COMPARE_LEN should exclude timestamp.
-
-   The leader may also be partially through updating next_owner_id on
-   multiple leader blocks in a lease, but this potential inconsistency,
-   like timestamp, should not factor against the repetition count. */
+   counted together, so COMPARE_LEN should exclude timestamp. */
 
 #define LEADER_COMPARE_LEN 152
 #define LEADER_CHECKSUM_LEN 168
@@ -94,9 +89,9 @@ struct leader_record {
 	char space_name[NAME_ID_SIZE]; /* lockspace for resource */
 	char resource_name[NAME_ID_SIZE]; /* resource being locked */
 	uint64_t timestamp;
-	uint64_t next_owner_id;
+	uint64_t unused1;
 	uint32_t checksum;
-	uint32_t pad2;
+	uint32_t unused2;
 };
 
 #endif
