@@ -844,7 +844,8 @@ static void *cmd_acquire_thread(void *args_in)
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
 	h.length = sizeof(h);
-	h.data = new_tokens_count;
+	h.data = 0;
+	h.data2 = 0;
 	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
 
 	client_back(ca->ci_in, fd);
@@ -886,7 +887,8 @@ static void *cmd_acquire_thread(void *args_in)
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
 	h.length = sizeof(h);
-	h.data = rv;
+	h.data = -1;
+	h.data2 = 0;
 	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
 
 	if (pid_dead)
@@ -903,9 +905,8 @@ static void *cmd_release_thread(void *args_in)
 	struct sm_header h;
 	struct token *token;
 	struct sanlk_resource res;
-	int results[SANLK_MAX_RESOURCES];
 	struct client *cl;
-	int fd, rv, i, j, found, rem_tokens_count;
+	int fd, rv, i, j, found, result = 0;
 
 	cl = &client[ca->ci_target];
 	fd = client[ca->ci_in].fd;
@@ -913,15 +914,31 @@ static void *cmd_release_thread(void *args_in)
 	log_debug("cmd_release ci_in %d ci_target %d pid %d",
 		  ca->ci_in, ca->ci_target, cl->pid);
 
-	memset(results, 0, sizeof(results));
-	rem_tokens_count = ca->header.data;
+	/* caller wants to release all resources */
 
-	for (i = 0; i < rem_tokens_count; i++) {
+	if (ca->header.cmd_flags & SANLK_REL_ALL) {
+		for (j = 0; j < SANLK_MAX_RESOURCES; j++) {
+			token = cl->tokens[j];
+			if (!token)
+				continue;
+
+			rv = release_token(token);
+			if (rv < 0)
+				result = -1;
+			free_token(token);
+			cl->tokens[j] = NULL;
+		}
+		goto reply;
+	}
+
+	/* caller is specifying specific resources to release */
+
+	for (i = 0; i < ca->header.data; i++) {
 		rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
 		if (rv != sizeof(struct sanlk_resource)) {
 			log_error("cmd_release recv fd %d %d %d", fd, rv, errno);
-			results[i] = -1;
-			break;
+			result = -1;
+			goto reply;
 		}
 
 		found = 0;
@@ -937,9 +954,10 @@ static void *cmd_release_thread(void *args_in)
 				continue;
 
 			rv = release_token(token);
+			if (rv < 0)
+				result = -1;
 			free_token(token);
 			cl->tokens[j] = NULL;
-			results[i] = rv;
 			found = 1;
 			break;
 		}
@@ -947,18 +965,20 @@ static void *cmd_release_thread(void *args_in)
 		if (!found) {
 			log_error("cmd_release pid %d no resource %s",
 				  cl->pid, res.name);
-			results[i] = -ENOENT;
+			result = -1;
 		}
 	}
 
+ reply:
 	set_cmd_active(ca->ci_target, 0);
 
-	log_debug("cmd_release done %d", rem_tokens_count);
+	log_debug("cmd_release done");
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
-	h.length = sizeof(h) + sizeof(int) * rem_tokens_count;
-	send(fd, &h, sizeof(struct sm_header), MSG_NOSIGNAL);
-	send(fd, &results, sizeof(int) * rem_tokens_count, MSG_NOSIGNAL);
+	h.length = sizeof(h);
+	h.data = result;
+	h.data2 = 0;
+	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
 
 	client_back(ca->ci_in, fd);
 	free(ca);
@@ -1066,7 +1086,6 @@ static void *cmd_inquire_thread(void *args_in)
 		  result, total, pos, reply_str_len);
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
-
 	h.data = result;
 	h.data2 = total;
 
@@ -1143,6 +1162,7 @@ static void *cmd_add_lockspace_thread(void *args_in)
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
 	h.length = sizeof(h);
 	h.data = result;
+	h.data2 = 0;
 	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
 
 	client_back(ca->ci_in, fd);
@@ -1190,6 +1210,7 @@ static void *cmd_rem_lockspace_thread(void *args_in)
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
 	h.length = sizeof(h);
 	h.data = result;
+	h.data2 = 0;
 	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
 
 	client_back(ca->ci_in, fd);
@@ -1441,7 +1462,8 @@ static void process_cmd_thread_lockspace(int ci_in, struct sm_header *h_recv)
 	memcpy(&h, h_recv, sizeof(struct sm_header));
 	h.length = sizeof(h);
 	h.data = rv;
-	send(client[ci_in].fd, &h, sizeof(struct sm_header), MSG_NOSIGNAL);
+	h.data2 = 0;
+	send(client[ci_in].fd, &h, sizeof(h), MSG_NOSIGNAL);
 	close(client[ci_in].fd);
 }
 
@@ -1520,7 +1542,8 @@ static void process_cmd_thread_resource(int ci_in, struct sm_header *h_recv)
 	memcpy(&h, h_recv, sizeof(struct sm_header));
 	h.length = sizeof(h);
 	h.data = rv;
-	send(client[ci_in].fd, &h, sizeof(struct sm_header), MSG_NOSIGNAL);
+	h.data2 = 0;
+	send(client[ci_in].fd, &h, sizeof(h), MSG_NOSIGNAL);
 	client_back(ci_in, client[ci_in].fd);
 }
 

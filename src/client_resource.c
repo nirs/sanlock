@@ -129,19 +129,16 @@ int sanlock_acquire(int sock, int pid, uint32_t flags, int res_count,
 		}
 	}
 
+	/* get result */
+
 	memset(&h, 0, sizeof(h));
 
-	rv = recv(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
+	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv != sizeof(h)) {
 		rv = -1;
 		goto out;
 	}
-
-	if (h.data != res_count) {
-		rv = -1;
-		goto out;
-	}
-	rv = 0;
+	rv = (int)h.data;
  out:
 	if (sock == -1)
 		close(fd);
@@ -180,9 +177,11 @@ int sanlock_inquire(int sock, int pid, uint32_t flags, int *res_count, void **re
 	if (rv < 0)
 		return rv;
 
+	/* get result */
+
 	memset(&h, 0, sizeof(h));
 
-	rv = recv(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
+	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv != sizeof(h)) {
 		rv = -1;
 		goto out;
@@ -207,19 +206,13 @@ int sanlock_inquire(int sock, int pid, uint32_t flags, int *res_count, void **re
 		goto out;
 	}
 
-	if (h.data) {
-		free(reply_data);
-		rv = (int)h.data;
-		goto out;
-	}
-
 	if (res_out)
 		*res_out = reply_data;
 	else
 		free(reply_data);
 
 	*res_count = (int)h.data2;
-	rv = 0;
+	rv = (int)h.data;
  out:
 	if (sock == -1)
 		close(fd);
@@ -234,7 +227,6 @@ int sanlock_release(int sock, int pid, uint32_t flags, int res_count,
 		    struct sanlk_resource *res_args[])
 {
 	struct sm_header h;
-	int results[SANLK_MAX_RESOURCES];
 	int fd, rv, i, data2, datalen;
 
 	if (sock == -1) {
@@ -268,27 +260,16 @@ int sanlock_release(int sock, int pid, uint32_t flags, int res_count,
 		}
 	}
 
-	memset(&h, 0, sizeof(h));
-	memset(&results, 0, sizeof(results));
+	/* get result */
 
-	rv = recv(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
+	memset(&h, 0, sizeof(h));
+
+	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv != sizeof(h)) {
 		rv = -1;
 		goto out;
 	}
-
-	rv = recv(fd, &results, sizeof(int) * res_count, MSG_WAITALL);
-	if (rv != sizeof(int) * res_count) {
-		rv = -1;
-		goto out;
-	}
-
-	rv = 0;
-	for (i = 0; i < res_count; i++) {
-		if (results[i] != 1) {
-			rv = -1;
-		}
-	}
+	rv = (int)h.data;
  out:
 	if (sock == -1)
 		close(fd);

@@ -35,22 +35,14 @@
 int sanlock_shutdown(void)
 {
 	struct sm_header h;
-	int fd, rv;
+	int fd;
 
 	fd = send_command(SM_CMD_SHUTDOWN, 0);
 	if (fd < 0)
 		return fd;
 
-	memset(&h, 0, sizeof(h));
-
-	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
-	if (rv != sizeof(h))
-		rv = -1;
-	else
-		rv = 0;
-
 	close(fd);
-	return rv;
+	return 0;
 }
 
 int sanlock_log_dump(void)
