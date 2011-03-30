@@ -28,7 +28,7 @@
 
 /* max disks in a single lease */
 
-#define MAX_DISKS 8
+#define MAX_DISKS 4
 
 /* default max number of hosts supported */
 
@@ -53,15 +53,13 @@
    points to 1 leader_record + 1 request_record + MAX_HOSTS paxos_dblock's =
    256 blocks = 128KB, ref: lease_item_record */
 
+/* must mirror external sanlk_disk */
+
 struct sync_disk {
-	/* mirror external sanlk_disk */
 	char path[SANLK_PATH_LEN];
 	uint64_t offset;
-	uint32_t units;
-
-	/* internal */
-	uint32_t sector_size;
-	int fd;
+	uint32_t sector_size;	/* sanlk_disk pad1 */
+	int fd;			/* sanlk_disk pad2 */
 };
 
 /* Once token and token->disks are initialized by the main loop, the only

@@ -107,23 +107,6 @@ int open_disks(struct sync_disk *disks, int num_disks)
 
 		orig_offset = disk->offset;
 
-		switch (disk->units) {
-		case SANLK_UNITS_BYTES:
-			break;
-		case SANLK_UNITS_SECTORS:
-			disk->offset = orig_offset * ss;
-			break;
-		case SANLK_UNITS_KB:
-			disk->offset = orig_offset * 1024;
-			break;
-		case SANLK_UNITS_MB:
-			disk->offset = orig_offset * 1024 * 1024;
-			break;
-		default:
-			log_error("invalid offset units %d", disk->units);
-			goto fail;
-		}
-
 		if (disk->offset % disk->sector_size) {
 			log_error("invalid offset %llu sector size %u %s",
 				  (unsigned long long)disk->offset,

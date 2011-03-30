@@ -21,22 +21,30 @@
 
 #define SANLK_PATH_LEN		1024
 
-/* disk offset units */
+/*
+ * max length of a sanlk_resource in string format
+ * <lockspace_name>:<resource_name>:<path>:<offset>[:<path>:<offset>...]:<lver>
+ *     48 SANLK_NAME_LEN
+ * +    1 colon
+ * +   48 SANLK_NAME_LEN
+ * +    1 colon
+ * + 4184 (4 MAX_DISKS * (1024 SANLK_PATH_LEN + 1 colon + 20 offset + 1 colon))
+ * +   20 lver
+ * ------
+ *   4302
+ */
 
-#define SANLK_UNITS_BYTES	0
-#define SANLK_UNITS_SECTORS	1
-#define SANLK_UNITS_KB		2
-#define SANLK_UNITS_MB		3
+#define SANLK_MAX_RES_STR	4400
 
 struct sanlk_disk {
 	char path[SANLK_PATH_LEN]; /* must include terminating \0 */
 	uint64_t offset;
-	uint32_t units;
 	uint32_t pad1;
 	uint32_t pad2;
 };
 
-#define SANLK_RES_LVER		0x1
+#define SANLK_RES_LVER		0x1	/* lver field is set */
+#define SANLK_RES_NUM_HOSTS	0x2	/* data32 field is new num_hosts */
 
 struct sanlk_resource {
 	char lockspace_name[SANLK_NAME_LEN]; /* terminating \0 not required */
@@ -53,8 +61,6 @@ struct sanlk_resource {
 
 /* command-specific command options (can include per resource data, but
    that requires the extra work of segmenting it by resource name) */
-
-#define SANLK_OPT_NUM_HOSTS	0x1
 
 struct sanlk_options {
 	char owner_name[SANLK_NAME_LEN]; /* optional user friendly name */

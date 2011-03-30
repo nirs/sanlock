@@ -477,59 +477,6 @@ static void client_recv_all(int ci, struct sm_header *h_recv, int pos)
 	log_debug("recv_all ci %d rem %d total %d", ci, rem, total);
 }
 
-/* str format: "abc=123 def=456 ghi=780" */
-
-static int parse_key_val(char *str, const char *key_arg, char *val_arg, int len)
-{
-	int copy_key, copy_val, i, kvi;
-	char key[64], val[64];
-
-	memset(val_arg, 0, len);
-
-	copy_key = 1;
-	copy_val = 0;
-	kvi = 0;
-
-	for (i = 0; i < strlen(str); i++) {
-		if (str[i] == ' ') {
-			if (!strcmp(key, key_arg)) {
-				strncpy(val_arg, val, len);
-				return 0;
-			}
-			memset(key, 0, sizeof(key));
-			memset(val, 0, sizeof(val));
-			copy_key = 1;
-			copy_val = 0;
-			kvi = 0;
-			continue;
-		}
-
-		if (str[i] == '=') {
-			copy_key = 0;
-			copy_val = 1;
-			kvi = 0;
-			continue;
-		}
-
-		if (copy_key)
-			key[kvi++] = str[i];
-		else if (copy_val)
-			val[kvi++] = str[i];
-
-		if (kvi > 62) {
-			log_error("invalid timeout parameter");
-			return -1;
-		}
-	}
-
-	if (!strcmp(key, key_arg)) {
-		strncpy(val_arg, val, len);
-		return 0;
-	}
-
-	return -1;
-}
-
 static void *cmd_acquire_thread(void *args_in)
 {
 	struct cmd_args *ca = args_in;
@@ -540,11 +487,10 @@ static void *cmd_acquire_thread(void *args_in)
 	struct token *new_tokens[SANLK_MAX_RESOURCES];
 	struct sanlk_resource res;
 	struct sanlk_options opt;
-	char *opt_str;
-	char num_hosts_str[16];
-	uint64_t acquire_lver = 0;
 	struct space space;
-	int new_num_hosts = 0;
+	char *opt_str;
+	uint64_t acquire_lver = 0;
+	uint32_t new_num_hosts = 0;
 	int fd, rv, i, j, disks_len, num_disks, empty_slots, opened;
 	int alloc_count = 0, add_count = 0, open_count = 0, acquire_count = 0;
 	int pos = 0, pid_dead = 0;
@@ -721,21 +667,6 @@ static void *cmd_acquire_thread(void *args_in)
 	 * all command input has been received, start doing the acquire
 	 */
 
-	if (opt.flags & SANLK_OPT_NUM_HOSTS) {
-		if (!opt_str)
-			goto fail_free;
-
-		memset(num_hosts_str, 0, sizeof(num_hosts_str));
-
-		rv = parse_key_val(opt_str, "num_hosts", num_hosts_str, 15);
-		if (rv < 0) {
-			log_error("cmd_acquire num_hosts error");
-			goto fail_free;
-		}
-
-		new_num_hosts = atoi(num_hosts_str);
-	}
-
 	for (i = 0; i < new_tokens_count; i++) {
 		token = new_tokens[i];
 		rv = get_space_info(token->space_name, &space);
@@ -774,6 +705,8 @@ static void *cmd_acquire_thread(void *args_in)
 
 		if (token->acquire_flags & SANLK_RES_LVER)
 			acquire_lver = token->acquire_lver;
+		if (token->acquire_flags & SANLK_RES_NUM_HOSTS)
+			new_num_hosts = token->acquire_data32;
 
 		rv = acquire_token(token, acquire_lver, new_num_hosts);
 		if (rv < 0) {
@@ -1006,13 +939,9 @@ static void *cmd_inquire_thread(void *args_in)
 			total++;
 	}
 
-	/*
-	 * struct output [sanlk_resource][sanlk_disk...][sanlk_resource][sanlk_disk...]...
-	 * string output "RESOURCE1 RESOURCE2 RESOURCE3 ..."
-	 * RESOURCE = <lockspace_name>:<resource_name>:<path>:<offset>[:<path>:<offset>...]:<lver>
-	 */
+	/* TODO: use sanlock_res_to_str() */
 
-	reply_len = total * SANLK_STATE_MAXSTR;  /* rough estimate */
+	reply_len = total * SANLK_MAX_RES_STR;
 	reply_str = malloc(reply_len);
 	if (!reply_str) {
 		result = -ENOMEM;
@@ -1028,51 +957,35 @@ static void *cmd_inquire_thread(void *args_in)
 		if (!token)
 			continue;
 
-		if (ca->header.cmd_flags & SANLK_INQ_STRUCT) {
-			strcpy(res->lockspace_name, token->space_name);
-			strcpy(res->name, token->resource_name);
-			res->lver = token->leader.lver;
-			res->flags |= SANLK_RES_LVER;
-			res->num_disks = token->num_disks;
-			pos += sizeof(struct sanlk_resource);
+		ret = snprintf(reply_str + pos, reply_len - pos, "%s:%s",
+			       token->space_name, token->resource_name);
 
-			for (d = 0; d < token->num_disks; d++) {
-				strcpy(res->disks[d].path, token->disks[d].path);
-				res->disks[d].offset = token->disks[d].offset;
-				pos += sizeof(struct sanlk_disk);
-			}
-			res++;
-		} else {
-			ret = snprintf(reply_str + pos, reply_len - pos, "%s:%s",
-				       token->space_name, token->resource_name);
+		if (ret >= reply_len - pos)
+			goto out;
+		pos += ret;
 
-			if (ret >= reply_len - pos)
-				goto out;
-			pos += ret;
-
-			for (d = 0; d < token->num_disks; d++) {
-				ret = snprintf(reply_str + pos, reply_len - pos, ":%s:%llu",
-					       token->disks[d].path,
-					       (unsigned long long)token->disks[d].offset);
-
-				if (ret >= reply_len - pos)
-					goto out;
-				pos += ret;
-			}
-
-			ret = snprintf(reply_str + pos, reply_len - pos, ":%llu ",
-				       (unsigned long long)token->leader.lver);
+		for (d = 0; d < token->num_disks; d++) {
+			ret = snprintf(reply_str + pos, reply_len - pos, ":%s:%llu",
+				       token->disks[d].path,
+				       (unsigned long long)token->disks[d].offset);
 
 			if (ret >= reply_len - pos)
 				goto out;
 			pos += ret;
 		}
+
+		ret = snprintf(reply_str + pos, reply_len - pos, ":%llu ",
+			       (unsigned long long)token->leader.lver);
+
+		if (ret >= reply_len - pos)
+			goto out;
+		pos += ret;
 	}
 
-	if (ca->header.cmd_flags & SANLK_INQ_STRING) {
-		reply_str_len = strlen(reply_str);
-		reply_str[pos++] = '\0';
-	}
+	/* remove trailing space */
+	pos--;
+	reply_str[pos++] = '\0';
+	reply_str_len = strlen(reply_str);
 
 	ret = 0;
  out:
@@ -1778,25 +1691,6 @@ static int do_daemon(void)
 	return rv;
 }
 
-static int create_sanlk_resource(int num_disks, struct sanlk_resource **res_out)
-{
-	struct sanlk_resource *res;
-	int len;
-
-	len = sizeof(struct sanlk_resource) +
-	      num_disks * sizeof(struct sanlk_disk);
-
-	res = malloc(sizeof(struct sanlk_resource) +
-		     (num_disks * sizeof(struct sanlk_disk)));
-	if (!res)
-		return -ENOMEM;
-	memset(res, 0, len);
-
-	res->num_disks = num_disks;
-	*res_out = res;
-        return 0;
-}
-
 /* arg = <lockspace_name>:<host_id>:<path>:<offset> */
 
 static int parse_arg_lockspace(char *arg)
@@ -1834,7 +1728,7 @@ static int parse_arg_lockspace(char *arg)
 	if (offset)
 		com.lockspace.host_id_disk.offset = atoll(offset);
 
-	log_debug("lockspace arg %s %llu %s %llu",
+	log_debug("lockspace %s host_id %llu path %s offset %llu",
 		  com.lockspace.name,
 		  (unsigned long long)com.lockspace.host_id,
 		  com.lockspace.host_id_disk.path,
@@ -1843,150 +1737,33 @@ static int parse_arg_lockspace(char *arg)
 	return 0;
 }
 
-/* arg = <lockspace_name>:<resource_name>:<path>:<offset>[:<path>:<offset>...][:<lver>] */
-
 static int parse_arg_resource(char *arg)
 {
 	struct sanlk_resource *res;
-	char sub[SANLK_PATH_LEN + 1];
-	char unit[SANLK_PATH_LEN + 1];
-	int sub_count;
-	int colons;
-	int num_disks;
-	int have_lver;
-	int rv, i, j, d;
-	int len = strlen(arg);
+	int rv, i;
 
 	if (com.res_count >= SANLK_MAX_RESOURCES) {
 		log_tool("resource args over max %d", SANLK_MAX_RESOURCES);
 		return -1;
 	}
 
-	colons = 0;
-	for (i = 0; i < strlen(arg); i++) {
-		if (arg[i] == '\\') {
-			i++;
-			continue;
-		}
-
-		if (arg[i] == ':')
-			colons++;
-	}
-	if (!colons || (colons == 2)) {
-		log_tool("invalid resource arg");
-		return -1;
-	}
-
-	num_disks = (colons - 1) / 2;
-	have_lver = (colons - 1) % 2;
-
-	if (num_disks > MAX_DISKS) {
-		log_tool("invalid resource arg num_disks %d", num_disks);
-		return -1;
-	}
-
-	rv = create_sanlk_resource(num_disks, &res);
+	rv = sanlock_str_to_res(arg, &res);
 	if (rv < 0) {
-		log_tool("resource arg create error %d num_disks %d", rv, num_disks);
+		log_tool("resource arg parse error %d\n", rv);
 		return rv;
 	}
 
 	com.res_args[com.res_count] = res;
 	com.res_count++;
 
-	d = 0;
-	sub_count = 0;
-	j = 0;
-	memset(sub, 0, sizeof(sub));
-
-	for (i = 0; i < len + 1; i++) {
-		if (arg[i] == '\\') {
-			if (i == (len - 1)) {
-				log_tool("invalid resource arg string");
-				goto fail;
-			}
-
-			i++;
-			sub[j++] = arg[i];
-			continue;
-		}
-		if (i < len && arg[i] != ':') {
-			if (j >= SANLK_PATH_LEN) {
-				log_tool("resource arg length error");
-				goto fail;
-			}
-			sub[j++] = arg[i];
-			continue;
-		}
-
-		/* do something with sub when we hit ':' or end of arg,
-		   first and second subs are lockspace and resource names,
-		   then even sub is path, odd sub is offset */
-
-		if (sub_count < 2 && strlen(sub) > NAME_ID_SIZE) {
-			log_tool("option arg component %s too long", sub);
-			goto fail;
-		}
-		if (sub_count >= 2 && (strlen(sub) > SANLK_PATH_LEN-1 || strlen(sub) < 1)) {
-			log_tool("option arg component %s too long", sub);
-			goto fail;
-		}
-
-		if (sub_count == 0) {
-			strncpy(res->lockspace_name, sub, NAME_ID_SIZE);
-
-		} else if (sub_count == 1) {
-			strncpy(res->name, sub, NAME_ID_SIZE);
-
-		} else if (!(sub_count % 2)) {
-			if (have_lver && (d == num_disks)) {
-				res->flags |= SANLK_RES_LVER;
-				res->lver = strtoull(sub, NULL, 0);
-			} else {
-				strncpy(res->disks[d].path, sub, SANLK_PATH_LEN - 1);
-			}
-		} else {
-			memset(&unit, 0, sizeof(unit));
-			rv = sscanf(sub, "%llu%s", (unsigned long long *)&res->disks[d].offset, unit);
-			if (!rv || rv > 2) {
-				log_tool("lease arg offset error");
-				goto fail;
-			}
-			if (rv > 1) {
-				if (unit[0] == 's')
-					res->disks[d].units = SANLK_UNITS_SECTORS;
-				else if (unit[0] == 'K' && unit[1] == 'B')
-					res->disks[d].units = SANLK_UNITS_KB;
-				else if (unit[0] == 'M' && unit[1] == 'B')
-					res->disks[d].units = SANLK_UNITS_MB;
-				else {
-					log_tool("unit unknkown: %s", unit);
-					goto fail;
-				}
-			}
-			d++;
-		}
-
-		sub_count++;
-		j = 0;
-		memset(sub, 0, sizeof(sub));
-	}
-
-	log_debug("resource arg %s %s num_disks %d flags %x",
-		  res->lockspace_name, res->name, res->num_disks, res->flags);
-	if (res->flags & SANLK_RES_LVER)
-		log_debug("resource lver %llu", (unsigned long long)res->lver);
+	log_debug("resource %s %s num_disks %d flags %x lver %llu",
+		  res->lockspace_name, res->name, res->num_disks, res->flags,
+		  (unsigned long long)res->lver);
 	for (i = 0; i < res->num_disks; i++) {
-		log_debug("resource arg disk %s %llu %u",
-			   res->disks[i].path,
-			   (unsigned long long)res->disks[i].offset,
-			   res->disks[i].units);
+		log_debug("resource disk %s %llu", res->disks[i].path,
+			  (unsigned long long)res->disks[i].offset);
 	}
 	return 0;
-
- fail:
-	free(res);
-	return -1;
 }
 
 static void set_timeout(char *key, char *val)
@@ -2186,8 +1963,7 @@ static void print_usage(void)
 	printf("  <lockspace_name>	name of lockspace\n");
 	printf("  <resource_name>	name of resource being leased\n");
 	printf("  <path>		disk path where resource leases are written\n");
-	printf("  <offset>[s|KB|MB]	offset on disk, default unit bytes\n");
-	printf("                        [s = sectors, KB = 1024 bytes, MB = 1024 KB]\n");
+	printf("  <offset>		offset on disk in bytes\n");
 	printf("  <lver>                optional disk leader version of resource for acquire\n");
 	printf("\n");
 }
@@ -2416,9 +2192,20 @@ static int read_command_line(int argc, char *argv[])
 
 static int do_client(void)
 {
-	struct sanlk_options *opt = NULL;
-	char *res_str = NULL;
+	struct sanlk_resource **res_args = NULL;
+	struct sanlk_resource *res;
+	char *res_state = NULL;
 	int i, fd, rv = 0;
+
+	if (com.action == ACT_COMMAND || com.action == ACT_ACQUIRE) {
+		if (com.num_hosts) {
+			for (i = 0; i < com.res_count; i++) {
+				res = com.res_args[i];
+				res->flags |= SANLK_RES_NUM_HOSTS;
+				res->data32 = com.num_hosts;
+			}
+		}
+	}
 
 	switch (com.action) {
 	case ACT_STATUS:
@@ -2443,22 +2230,12 @@ static int do_client(void)
 		if (fd < 0)
 			goto out;
 
-		if (com.num_hosts) {
-			opt = malloc(sizeof(struct sanlk_options) + 16);
-			memset(opt, 0, sizeof(struct sanlk_options) + 16);
-			snprintf(opt->str, 15, "num_hosts=%d", com.num_hosts);
-			opt->flags = SANLK_OPT_NUM_HOSTS;
-			opt->len = strlen(opt->str);
-		}
-
 		log_tool("acquire fd %d", fd);
-		rv = sanlock_acquire(fd, -1, 0, com.res_count, com.res_args, opt);
+		rv = sanlock_acquire(fd, -1, 0, com.res_count, com.res_args, NULL);
 		log_tool("acquire done %d", rv);
 
 		if (rv < 0)
 			goto out;
-		if (opt)
-			free(opt);
 
 		if (!command[0]) {
 			while (1)
@@ -2497,29 +2274,38 @@ static int do_client(void)
 
 	case ACT_INQUIRE:
 		log_tool("inquire pid %d", com.pid);
-		rv = sanlock_inquire(-1, com.pid, SANLK_INQ_STRING, &com.res_count, (void *)&res_str);
+		rv = sanlock_inquire(-1, com.pid, 0, &com.res_count, &res_state);
 		log_tool("inquire done %d res_count %d", rv, com.res_count);
-		if (res_str) {
-			log_tool("%s", res_str);
-			free(res_str);
-		}
+		if (rv < 0)
+			break;
+		log_tool("\"%s\"", res_state);
 
 		if (!options.debug)
 			break;
 
-		log_tool("inquire pid %d STRUCT", com.pid);
-		rv = sanlock_inquire(-1, com.pid, SANLK_INQ_STRUCT, &com.res_count, (void *)&com.res_args);
-		log_tool("inquire done %d res_count %d", rv, com.res_count);
-		if (com.res_args[0]) {
-			for (i = 0; i < com.res_count; i++) {
-				struct sanlk_resource *res = com.res_args[i];
-				log_tool("%s:%s:%s:%llu:%llu",
-					 res->lockspace_name, res->name, res->disks[0].path,
-					 (unsigned long long)res->disks[0].offset,
-					 (unsigned long long)res->lver);
-				free(res);
-			}
+		com.res_count = 0;
+
+		rv = sanlock_state_to_args(res_state, &com.res_count, &res_args);
+		log_tool("\nstate_to_args done %d res_count %d", rv, com.res_count);
+		if (rv < 0)
+			break;
+
+		free(res_state);
+		res_state = NULL;
+
+		for (i = 0; i < com.res_count; i++) {
+			res = res_args[i];
+			log_tool("\"%s:%s:%s:%llu:%llu\"",
+				 res->lockspace_name, res->name, res->disks[0].path,
+				 (unsigned long long)res->disks[0].offset,
+				 (unsigned long long)res->lver);
 		}
+
+		rv = sanlock_args_to_state(com.res_count, res_args, &res_state);
+		log_tool("\nargs_to_state done %d", rv);
+		if (rv < 0)
+			break;
+		log_tool("\"%s\"", res_state);
 		break;
 
 	default:
