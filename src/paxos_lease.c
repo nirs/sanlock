@@ -49,7 +49,7 @@ struct paxos_dblock {
 
 int majority_disks(struct token *token, int num)
 {
-	int num_disks = token->num_disks;
+	int num_disks = token->r.num_disks;
 
 	/* odd number of disks */
 
@@ -187,7 +187,7 @@ static int run_disk_paxos(struct token *token, uint64_t host_id, uint64_t inp,
 	struct paxos_dblock bk[num_hosts];
 	struct paxos_dblock bk_max;
 	struct paxos_dblock dblock;
-	int num_disks = token->num_disks;
+	int num_disks = token->r.num_disks;
 	int num_writes, num_reads;
 	int d, q, rv;
 
@@ -427,15 +427,15 @@ static int verify_leader(struct token *token, struct sync_disk *disk,
 		return DP_BAD_SECTORSIZE;
 	}
 
-	if (strncmp(lr->space_name, token->space_name, NAME_ID_SIZE)) {
+	if (strncmp(lr->space_name, token->r.lockspace_name, NAME_ID_SIZE)) {
 		log_errot(token, "verify_leader wrong space name %.48s %.48s %s",
-			  lr->space_name, token->space_name, disk->path);
+			  lr->space_name, token->r.lockspace_name, disk->path);
 		return DP_BAD_LOCKSPACE;
 	}
 
-	if (strncmp(lr->resource_name, token->resource_name, NAME_ID_SIZE)) {
+	if (strncmp(lr->resource_name, token->r.name, NAME_ID_SIZE)) {
 		log_errot(token, "verify_leader wrong resource name %.48s %.48s %s",
-			  lr->resource_name, token->resource_name, disk->path);
+			  lr->resource_name, token->r.name, disk->path);
 		return DP_BAD_RESOURCEID;
 	}
 
@@ -471,7 +471,7 @@ int paxos_lease_leader_read(struct token *token, struct leader_record *leader_re
 	int *leader_reps;
 	int leaders_len, leader_reps_len;
 	int num_reads;
-	int num_disks = token->num_disks;
+	int num_disks = token->r.num_disks;
 	int rv, d, i, found;
 	int error;
 
@@ -570,7 +570,7 @@ int paxos_lease_leader_read(struct token *token, struct leader_record *leader_re
 
 static int write_new_leader(struct token *token, struct leader_record *nl)
 {
-	int num_disks = token->num_disks;
+	int num_disks = token->r.num_disks;
 	int num_writes = 0;
 	int error = DP_OK;
 	int rv, d;
@@ -824,7 +824,7 @@ int paxos_lease_renew(struct token *token,
 	int rv, d;
 	int error;
 
-	for (d = 0; d < token->num_disks; d++) {
+	for (d = 0; d < token->r.num_disks; d++) {
 		memset(&new_leader, 0, sizeof(struct leader_record));
 
 		rv = read_leader(&token->disks[d], &new_leader);
@@ -896,8 +896,8 @@ int paxos_lease_init(struct token *token, int num_hosts, int max_hosts)
 	uint32_t offset, ss;
 	uint64_t bb, be, sb, se;
 
-	printf("initialize lease for resource %.48s\n", token->resource_name);
-	for (d = 0; d < token->num_disks; d++) {
+	printf("initialize lease for resource %.48s\n", token->r.name);
+	for (d = 0; d < token->r.num_disks; d++) {
 		printf("disk %s offset %llu/%llu sector_size %d\n",
 		       token->disks[d].path,
 		       (unsigned long long)token->disks[d].offset,
@@ -931,11 +931,11 @@ int paxos_lease_init(struct token *token, int num_hosts, int max_hosts)
 	leader.num_hosts = num_hosts;
 	leader.max_hosts = max_hosts;
 	leader.timestamp = LEASE_FREE;
-	strncpy(leader.space_name, token->space_name, NAME_ID_SIZE);
-	strncpy(leader.resource_name, token->resource_name, NAME_ID_SIZE);
+	strncpy(leader.space_name, token->r.lockspace_name, NAME_ID_SIZE);
+	strncpy(leader.resource_name, token->r.name, NAME_ID_SIZE);
 	leader.checksum = leader_checksum(&leader);
 
-	for (d = 0; d < token->num_disks; d++) {
+	for (d = 0; d < token->r.num_disks; d++) {
 		write_leader(&token->disks[d], &leader);
 		write_request(&token->disks[d], &req);
 		for (q = 0; q < max_hosts; q++)

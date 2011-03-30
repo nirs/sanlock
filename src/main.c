@@ -237,7 +237,7 @@ static int client_using_space(struct client *cl, struct space *sp)
 		token = cl->tokens[i];
 		if (!token)
 			continue;
-		if (strncmp(token->space_name, sp->space_name, NAME_ID_SIZE))
+		if (strncmp(token->r.lockspace_name, sp->space_name, NAME_ID_SIZE))
 			continue;
 		rv = 1;
 		log_spoke(sp, token, "client_using_space pid %d", cl->pid);
@@ -482,7 +482,6 @@ static void *cmd_acquire_thread(void *args_in)
 	struct cmd_args *ca = args_in;
 	struct sm_header h;
 	struct client *cl;
-	struct sync_disk *disks = NULL;
 	struct token *token = NULL;
 	struct token *new_tokens[SANLK_MAX_RESOURCES];
 	struct sanlk_resource res;
@@ -491,7 +490,8 @@ static void *cmd_acquire_thread(void *args_in)
 	char *opt_str;
 	uint64_t acquire_lver = 0;
 	uint32_t new_num_hosts = 0;
-	int fd, rv, i, j, disks_len, num_disks, empty_slots, opened;
+	int token_len, disks_len;
+	int fd, rv, i, j, empty_slots, opened;
 	int alloc_count = 0, add_count = 0, open_count = 0, acquire_count = 0;
 	int pos = 0, pid_dead = 0;
 	int new_tokens_count;
@@ -534,80 +534,69 @@ static void *cmd_acquire_thread(void *args_in)
 	 */
 
 	for (i = 0; i < new_tokens_count; i++) {
-		token = malloc(sizeof(struct token));
-		if (!token) {
-			rv = -ENOMEM;
-			goto fail_free;
-		}
-		memset(token, 0, sizeof(struct token));
-
 
 		/*
-		 * receive sanlk_resource, copy into token
+		 * receive sanlk_resource, create token for it
 		 */
 
 		rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
 		if (rv > 0)
 			pos += rv;
 		if (rv != sizeof(struct sanlk_resource)) {
-			log_error("cmd_acquire recv %d %d", rv, errno);
-			free(token);
+			log_error("cmd_acquire recv res %d %d", rv, errno);
 			rv = -EIO;
 			goto fail_free;
 		}
 
-		strncpy(token->space_name, res.lockspace_name, SANLK_NAME_LEN);
-		strncpy(token->resource_name, res.name, SANLK_NAME_LEN);
+		if (res.num_disks > MAX_DISKS) {
+			rv = -ERANGE;
+			goto fail_free;
+		}
+
+		disks_len = res.num_disks * sizeof(struct sync_disk);
+		token_len = sizeof(struct token) + disks_len;
+
+		token = malloc(token_len);
+		if (!token) {
+			rv = -ENOMEM;
+			goto fail_free;
+		}
+		memset(token, 0, token_len);
+		token->disks = (struct sync_disk *)&token->r.disks[0]; /* shorthand */
+		token->r.num_disks = res.num_disks;
+		memcpy(token->r.lockspace_name, res.lockspace_name, SANLK_NAME_LEN);
+		memcpy(token->r.name, res.name, SANLK_NAME_LEN);
+
 		token->acquire_lver = res.lver;
 		token->acquire_data64 = res.data64;
 		token->acquire_data32 = res.data32;
 		token->acquire_flags = res.flags;
-		token->num_disks = res.num_disks;
 
 		/*
 		 * receive sanlk_disk's / sync_disk's
 		 *
 		 * WARNING: as a shortcut, this requires that sync_disk and
 		 * sanlk_disk match; this is the reason for the pad fields
-		 * in sanlk_disk (TODO: let these differ)
+		 * in sanlk_disk (TODO: let these differ?)
 		 */
 
-		num_disks = token->num_disks;
-		if (num_disks > MAX_DISKS) {
-			free(token);
-			rv = -ERANGE;
-			goto fail_free;
-		}
-
-		disks = malloc(num_disks * sizeof(struct sync_disk));
-		if (!disks) {
-			free(token);
-			rv = -ENOMEM;
-			goto fail_free;
-		}
-
-		disks_len = num_disks * sizeof(struct sync_disk);
-		memset(disks, 0, disks_len);
-
-		rv = recv(fd, disks, disks_len, MSG_WAITALL);
+		rv = recv(fd, token->disks, disks_len, MSG_WAITALL);
 		if (rv > 0)
 			pos += rv;
 		if (rv != disks_len) {
-			log_error("cmd_acquire recv %d %d", rv, errno);
-			free(disks);
+			log_error("cmd_acquire recv disks %d %d", rv, errno);
 			free(token);
 			rv = -EIO;
 			goto fail_free;
 		}
 
 		/* zero out pad1 and pad2, see WARNING above */
-		for (j = 0; j < num_disks; j++) {
-			disks[j].sector_size = 0;
-			disks[j].fd = 0;
+		for (j = 0; j < token->r.num_disks; j++) {
+			token->disks[j].sector_size = 0;
+			token->disks[j].fd = 0;
 		}
 
 		token->token_id = token_id_counter++;
-		token->disks = disks;
 		new_tokens[i] = token;
 		alloc_count++;
 
@@ -618,7 +607,7 @@ static void *cmd_acquire_thread(void *args_in)
 		 * represents for reference from later log messages. */
 
 		log_errot(token, "lockspace %.48s resource %.48s has token_id %u for pid %u",
-			  token->space_name, token->resource_name, token->token_id, cl->pid);
+			  token->r.lockspace_name, token->r.name, token->token_id, cl->pid);
 	}
 
 	/*
@@ -629,7 +618,7 @@ static void *cmd_acquire_thread(void *args_in)
 	if (rv > 0)
 		pos += rv;
 	if (rv != sizeof(struct sanlk_options)) {
-		log_error("cmd_acquire recv %d %d", rv, errno);
+		log_error("cmd_acquire recv opt %d %d", rv, errno);
 		rv = -EIO;
 		goto fail_free;
 	}
@@ -651,7 +640,7 @@ static void *cmd_acquire_thread(void *args_in)
 	if (rv > 0)
 		pos += rv;
 	if (rv != opt.len) {
-		log_error("cmd_acquire recv %d %d", rv, errno);
+		log_error("cmd_acquire recv opt_str %d %d", rv, errno);
 		free(opt_str);
 		rv = -EIO;
 		goto fail_free;
@@ -669,10 +658,10 @@ static void *cmd_acquire_thread(void *args_in)
 
 	for (i = 0; i < new_tokens_count; i++) {
 		token = new_tokens[i];
-		rv = get_space_info(token->space_name, &space);
+		rv = get_space_info(token->r.lockspace_name, &space);
 		if (rv < 0 || space.killing_pids) {
 			log_errot(token, "cmd_acquire bad space %.48s",
-				  token->space_name);
+				  token->r.lockspace_name);
 			goto fail_free;
 		}
 		token->host_id = space.host_id;
@@ -691,7 +680,7 @@ static void *cmd_acquire_thread(void *args_in)
 
 	for (i = 0; i < new_tokens_count; i++) {
 		token = new_tokens[i];
-		opened = open_disks(token->disks, token->num_disks);
+		opened = open_disks(token->disks, token->r.num_disks);
 		if (!majority_disks(token, opened)) {
 			log_errot(token, "cmd_acquire open_disks %d", opened);
 			rv = -ENODEV;
@@ -751,11 +740,12 @@ static void *cmd_acquire_thread(void *args_in)
 	/* space may have failed while new tokens were being acquired */
 	for (i = 0; i < new_tokens_count; i++) {
 		token = new_tokens[i];
-		rv = get_space_info(token->space_name, &space);
+		rv = get_space_info(token->r.lockspace_name, &space);
 		if (!rv && !space.killing_pids && space.host_id == token->host_id)
 			continue;
 		pthread_mutex_unlock(&cl->mutex);
-		log_errot(token, "cmd_acquire bad space %.48s", token->space_name);
+		log_errot(token, "cmd_acquire bad space %.48s",
+			  token->r.lockspace_name);
 		rv = -EINVAL;
 		goto fail_release;
 	}
@@ -792,9 +782,9 @@ static void *cmd_acquire_thread(void *args_in)
 		if (!token)
 			continue;
 		release_token(token);
-		close_disks(token->disks, token->num_disks);
+		close_disks(token->disks, token->r.num_disks);
 		del_resource(token);
-		free_token(token);
+		free(token);
 	}
 
  fail_release:
@@ -803,7 +793,7 @@ static void *cmd_acquire_thread(void *args_in)
 
  fail_close:
 	for (i = 0; i < open_count; i++)
-		close_disks(new_tokens[i]->disks, new_tokens[i]->num_disks);
+		close_disks(new_tokens[i]->disks, new_tokens[i]->r.num_disks);
 
  fail_del:
 	for (i = 0; i < add_count; i++)
@@ -811,7 +801,7 @@ static void *cmd_acquire_thread(void *args_in)
 
  fail_free:
 	for (i = 0; i < alloc_count; i++)
-		free_token(new_tokens[i]);
+		free(new_tokens[i]);
 
  fail_reply:
 	set_cmd_active(ca->ci_target, 0);
@@ -858,7 +848,7 @@ static void *cmd_release_thread(void *args_in)
 			rv = release_token(token);
 			if (rv < 0)
 				result = -1;
-			free_token(token);
+			free(token);
 			cl->tokens[j] = NULL;
 		}
 		goto reply;
@@ -881,15 +871,15 @@ static void *cmd_release_thread(void *args_in)
 			if (!token)
 				continue;
 
-			if (memcmp(token->space_name, res.lockspace_name, NAME_ID_SIZE))
+			if (memcmp(token->r.lockspace_name, res.lockspace_name, NAME_ID_SIZE))
 				continue;
-			if (memcmp(token->resource_name, res.name, NAME_ID_SIZE))
+			if (memcmp(token->r.name, res.name, NAME_ID_SIZE))
 				continue;
 
 			rv = release_token(token);
 			if (rv < 0)
 				result = -1;
-			free_token(token);
+			free(token);
 			cl->tokens[j] = NULL;
 			found = 1;
 			break;
@@ -923,10 +913,12 @@ static void *cmd_inquire_thread(void *args_in)
 	struct cmd_args *ca = args_in;
 	struct sm_header h;
 	struct token *token;
-	struct sanlk_resource *res;
-	char *reply_str;
 	struct client *cl;
-	int fd, i, d, reply_len, result = 0, total = 0, ret, pos, reply_str_len = 0;
+	char *state, *str;
+	int state_maxlen = 0, state_strlen = 0;
+	int res_count = 0, cat_count = 0;
+	int result = 0;
+	int fd, i, rv;
 
 	cl = &client[ca->ci_target];
 	fd = client[ca->ci_in].fd;
@@ -936,77 +928,85 @@ static void *cmd_inquire_thread(void *args_in)
 
 	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
 		if (cl->tokens[i])
-			total++;
+			res_count++;
 	}
 
-	/* TODO: use sanlock_res_to_str() */
+	state_maxlen = res_count * (SANLK_MAX_RES_STR + 1);
 
-	reply_len = total * SANLK_MAX_RES_STR;
-	reply_str = malloc(reply_len);
-	if (!reply_str) {
+	state = malloc(state_maxlen);
+	if (!state) {
 		result = -ENOMEM;
 		goto reply;
 	}
-	memset(reply_str, 0, reply_len);
-	res = (struct sanlk_resource *)reply_str;
-	pos = 0;
-	ret = 0;
+	memset(state, 0, state_maxlen);
+
+	/* should match sanlock_args_to_state() */
 
 	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
 		token = cl->tokens[i];
 		if (!token)
 			continue;
 
-		ret = snprintf(reply_str + pos, reply_len - pos, "%s:%s",
-			       token->space_name, token->resource_name);
+		/* check number of tokens hasn't changed since first count */
 
-		if (ret >= reply_len - pos)
-			goto out;
-		pos += ret;
-
-		for (d = 0; d < token->num_disks; d++) {
-			ret = snprintf(reply_str + pos, reply_len - pos, ":%s:%llu",
-				       token->disks[d].path,
-				       (unsigned long long)token->disks[d].offset);
-
-			if (ret >= reply_len - pos)
-				goto out;
-			pos += ret;
+		if (cat_count >= res_count) {
+			log_error("cmd_inquire count changed %d %d",
+				  res_count, cat_count);
+			result = -1;
+			goto reply;
 		}
 
-		ret = snprintf(reply_str + pos, reply_len - pos, ":%llu ",
-			       (unsigned long long)token->leader.lver);
+		str = NULL;
 
-		if (ret >= reply_len - pos)
-			goto out;
-		pos += ret;
+		rv = sanlock_res_to_str(&token->r, &str);
+		if (rv < 0 || !str) {
+			log_errot(token, "cmd_inquire res_to_str error %d", rv);
+			result = -2;
+			goto reply;
+		}
+
+		if (strlen(str) > SANLK_MAX_RES_STR - 1) {
+			log_errot(token, "cmd_inquire str too long %zu", strlen(str));
+			free(str);
+			result = -3;
+			goto reply;
+		}
+
+		/* space is str separator, so it's invalid within each str */
+
+		if (strstr(str, " ")) {
+			log_errot(token, "cmd_inquire str has space");
+			free(str);
+			result = -4;
+			goto reply;
+		}
+
+		if (i)
+			strcat(state, " ");
+		strcat(state, str);
+		cat_count++;
+		free(str);
 	}
 
-	/* remove trailing space */
-	pos--;
-	reply_str[pos++] = '\0';
-	reply_str_len = strlen(reply_str);
-
-	ret = 0;
- out:
-	if (ret)
-		result = -ENOSPC;
+	state[state_maxlen - 1] = '\0';
+	state_strlen = strlen(state);
+	result = 0;
 
  reply:
 	set_cmd_active(ca->ci_target, 0);
 
-	log_debug("cmd_inquire done result %d total %d pos %d reply_str_len %d",
-		  result, total, pos, reply_str_len);
+	log_debug("cmd_inquire done result %d res_count %d strlen %d",
+		  result, res_count, state_strlen);
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
 	h.data = result;
-	h.data2 = total;
+	h.data2 = res_count;
 
-	if (reply_str) {
-		h.length = sizeof(h) + pos;
+	if (state) {
+		h.length = sizeof(h) + state_strlen + 1;
 		send(fd, &h, sizeof(h), MSG_NOSIGNAL);
-		send(fd, reply_str, pos, MSG_NOSIGNAL);
-		free(reply_str);
+		send(fd, state, state_strlen + 1, MSG_NOSIGNAL);
+		free(state);
 	} else {
 		h.length = sizeof(h);
 		send(fd, &h, sizeof(h), MSG_NOSIGNAL);
@@ -1208,7 +1208,6 @@ static void cmd_status(int fd, struct sm_header *h_recv)
 	struct sanlk_state cst;
 	struct sanlk_state rst;
 	struct sanlk_lockspace lockspace;
-	struct sanlk_resource resource;
 	char str[SANLK_STATE_MAXSTR];
 	struct token *token;
 	struct space *sp;
@@ -1301,21 +1300,16 @@ static void cmd_status(int fd, struct sm_header *h_recv)
 			str_len = print_token_state(token, str);
 			memset(&rst, 0, sizeof(rst));
 			rst.type = SANLK_STATE_RESOURCE;
-			strncpy(rst.name, token->resource_name, NAME_ID_SIZE);
+			strncpy(rst.name, token->r.name, NAME_ID_SIZE);
 			rst.str_len = str_len;
 
 			send(fd, &rst, sizeof(rst), MSG_NOSIGNAL);
 			if (str_len)
 				send(fd, str, str_len, MSG_NOSIGNAL);
 
-			memset(&resource, 0, sizeof(resource));
-			strncpy(resource.lockspace_name, token->space_name, NAME_ID_SIZE);
-			strncpy(resource.name, token->resource_name, NAME_ID_SIZE);
-			resource.num_disks = token->num_disks;
+			send(fd, &token->r, sizeof(struct sanlk_resource), MSG_NOSIGNAL);
 
-			send(fd, &resource, sizeof(resource), MSG_NOSIGNAL);
-
-			for (j = 0; j < token->num_disks; j++) {
+			for (j = 0; j < token->r.num_disks; j++) {
 				send(fd, &token->disks[j], sizeof(struct sanlk_disk), MSG_NOSIGNAL);
 			}
 		}

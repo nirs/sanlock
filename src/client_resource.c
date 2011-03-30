@@ -465,7 +465,7 @@ int sanlock_args_to_state(int res_count,
 			return rv;
 		}
 
-		if (strlen(str) > SANLK_MAX_RES_STR) {
+		if (strlen(str) > SANLK_MAX_RES_STR - 1) {
 			free(str);
 			free(state);
 			return -EINVAL;

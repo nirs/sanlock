@@ -49,9 +49,9 @@ static struct resource *find_resource(struct token *token,
 	struct resource *r;
 
 	list_for_each_entry(r, head, list) {
-		if (strncmp(r->space_name, token->space_name, NAME_ID_SIZE))
+		if (strncmp(r->space_name, token->r.lockspace_name, NAME_ID_SIZE))
 			continue;
-		if (strncmp(r->resource_name, token->resource_name, NAME_ID_SIZE))
+		if (strncmp(r->resource_name, token->r.name, NAME_ID_SIZE))
 			continue;
 		return r;
 	}
@@ -86,8 +86,8 @@ int add_resource(struct token *token, int pid)
 	}
 
 	memset(r, 0, sizeof(struct resource));
-	strncpy(r->space_name, token->space_name, NAME_ID_SIZE);
-	strncpy(r->resource_name, token->resource_name, NAME_ID_SIZE);
+	strncpy(r->space_name, token->r.lockspace_name, NAME_ID_SIZE);
+	strncpy(r->resource_name, token->r.name, NAME_ID_SIZE);
 	r->token = token;
 	r->pid = pid;
 	list_add_tail(&r->list, &resources);
@@ -160,37 +160,6 @@ int release_token(struct token *token)
 	return rv; /* DP_OK */
 }
 
-/* return < 0 on error, 1 on success */
-
-int create_token(int num_disks, struct token **token_out)
-{
-	struct token *token;
-	struct sync_disk *disks;
-
-	token = malloc(sizeof(struct token));
-	if (!token)
-		return -ENOMEM;
-	memset(token, 0, sizeof(struct token));
-
-	disks = malloc(num_disks * sizeof(struct sync_disk));
-	if (!disks) {
-		free(token);
-		return -ENOMEM;
-	}
-
-	token->disks = disks;
-	token->num_disks = num_disks;
-	*token_out = token;
-	return 0;
-}
-
-void free_token(struct token *token)
-{
-	if (token->disks)
-		free(token->disks);
-	free(token);
-}
-
 /* thread that releases tokens of pid's that die */
 
 static void *async_release_thread(void *arg GNUC_UNUSED)
@@ -216,7 +185,7 @@ static void *async_release_thread(void *arg GNUC_UNUSED)
 		if (token->acquire_result == 1)
 			release_token(token);
 
-		close_disks(token->disks, token->num_disks);
+		close_disks(token->disks, token->r.num_disks);
 
 		/* we don't want to remove r from dispose_list until after the
 		   lease is released because we don't want a new token for
@@ -226,7 +195,7 @@ static void *async_release_thread(void *arg GNUC_UNUSED)
 		pthread_mutex_lock(&resource_mutex);
 		_del_resource(r);
 		pthread_mutex_unlock(&resource_mutex);
-		free_token(token);
+		free(token);
 	}
  out:
 	return NULL;

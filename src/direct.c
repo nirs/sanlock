@@ -35,15 +35,33 @@ static int do_paxos_action(void)
 	struct sanlk_resource *res;
 	struct token *token;
 	struct leader_record leader_read, leader_ret;
+	int disks_len, token_len;
 	int num_opened;
 	int i, j, rv = 0;
 
 	for (i = 0; i < com.res_count; i++) {
 		res = com.res_args[i];
 
-		rv = create_token(res->num_disks, &token);
-		if (rv < 0)
-			return rv;
+		disks_len = res->num_disks * sizeof(struct sync_disk);
+		token_len = sizeof(struct token) + disks_len;
+
+		token = malloc(token_len);
+		if (!token)
+			return -ENOMEM;
+		memset(token, 0, token_len);
+		token->disks = (struct sync_disk *)&token->r.disks[0];
+		token->r.num_disks = res->num_disks;
+		memcpy(token->r.lockspace_name, res->lockspace_name, SANLK_NAME_LEN);
+		memcpy(token->r.name, res->name, SANLK_NAME_LEN);
+
+		/* WARNING sync_disk == sanlk_disk */
+
+		memcpy(token->disks, &res->disks, disks_len);
+
+		for (j = 0; j < token->r.num_disks; j++) {
+			token->disks[j].sector_size = 0;
+			token->disks[j].fd = 0;
+		}
 
 		/*
 		 * TODO: verify all resources are in the same lockspace?
@@ -54,21 +72,7 @@ static int do_paxos_action(void)
 		token->host_id = com.local_host_id;
 		token->host_generation = com.local_host_generation;
 
-		strncpy(token->space_name, res->lockspace_name, NAME_ID_SIZE);
-		strncpy(token->resource_name, res->name, NAME_ID_SIZE);
-
-		/* see WARNING above about sync_disk == sanlk_disk */
-
-		memcpy(token->disks, &res->disks,
-		       token->num_disks * sizeof(struct sync_disk));
-
-		/* zero out pad1 and pad2, see WARNING above */
-		for (j = 0; j < token->num_disks; j++) {
-			token->disks[j].sector_size = 0;
-			token->disks[j].fd = 0;
-		}
-
-		num_opened = open_disks(token->disks, token->num_disks);
+		num_opened = open_disks(token->disks, token->r.num_disks);
 		if (!majority_disks(token, num_opened)) {
 			log_tool("cannot open majority of disks");
 			return -1;
@@ -87,7 +91,7 @@ static int do_paxos_action(void)
 			rv = paxos_lease_acquire(token, 0, &leader_ret, 0, com.num_hosts);
 			if (rv < 0) {
 				log_tool("cannot acquire lease on %s",
-				 	 token->resource_name);
+				 	 token->r.name);
 				return -1;
 			}
 			break;
@@ -96,20 +100,20 @@ static int do_paxos_action(void)
 			rv = paxos_lease_leader_read(token, &leader_read);
 			if (rv < 0) {
 				log_tool("cannot read lease on %s",
-				 	 token->resource_name);
+				 	 token->r.name);
 				return -1;
 			}
 
 			rv = paxos_lease_release(token, &leader_read, &leader_ret);
 			if (rv < 0) {
 				log_tool("cannot release lease on %s",
-				 	 token->resource_name);
+				 	 token->r.name);
 				return -1;
 			}
 			break;
 		}
 
-		free_token(token);
+		free(token);
 	}
 
 	return 0;

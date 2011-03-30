@@ -67,27 +67,24 @@ struct sync_disk {
    threads. */
 
 struct token {
-	/* mirror external sanlk_resource from acquire */
-	char space_name[NAME_ID_SIZE];
-	char resource_name[NAME_ID_SIZE];
+	/* values copied from acquire res arg */
 	uint64_t acquire_lver;
 	uint64_t acquire_data64;
 	uint32_t acquire_data32;
 	uint32_t acquire_flags;
-	int num_disks;
 
-	/* copied from the sp with space_name */
+	/* copied from the sp with r.lockspace_name */
 	uint64_t host_id;
 	uint64_t host_generation;
-
-	/* disks from acquire */
-	struct sync_disk *disks;
 
 	/* internal */
 	int token_id; /* used to refer to this token instance in log messages */
 	int acquire_result;
 	int release_result;
 	struct leader_record leader; /* copy of last leader_record we wrote */
+
+	struct sync_disk *disks; /* shorthand, points to r.disks[0] */
+	struct sanlk_resource r;
 };
 
 struct lease_status {

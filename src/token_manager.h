@@ -12,8 +12,6 @@
 int acquire_token(struct token *token, uint64_t acquire_lver, int new_num_hosts);
 int release_token(struct token *token);
 
-int create_token(int num_disks, struct token **token_out);
-void free_token(struct token *token);
 void release_token_async(struct token *token);
 
 int add_resource(struct token *token, int pid);
