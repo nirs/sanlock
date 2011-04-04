@@ -1,6 +1,6 @@
 Name:           sanlock
 Version:        1.1.0
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        A shared disk lock manager
 
 Group:          System Environment/Base
@@ -66,9 +66,13 @@ developing applications that use %{name}.
 %doc COPYING
 %{_libdir}/libsanlock.so
 %{_includedir}/sanlock.h
+%{_includedir}/sanlock_admin.h
 %{_includedir}/sanlock_resource.h
 
 %changelog
+* Mon Apr  4 2011 Federico Simoncelli <fsimonce@redhat.com> - 1.1.0-3
+- Add sanlock_admin.h header
+
 * Fri Feb 18 2011 Chris Feist <cfeist@redhat.com> - 1.1.0-2
 - Fixed install for wdmd
 
@@ -77,7 +81,7 @@ developing applications that use %{name}.
 - Now include wdmd
 
 * Tue Feb 8 2011 Angus Salkeld <asalkeld@redhat.com> - 1.0-2
-* - SPEC: Add docs and make more consistent with the fedora template.
+- SPEC: Add docs and make more consistent with the fedora template
 
 * Mon Jan 10 2011 Fabio M. Di Nitto <fdinitto@redhat.com> - 1.0-1
 - first cut at rpm packaging
