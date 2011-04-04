@@ -1,12 +1,12 @@
 Name:           sanlock
-Version:        1.0
+Version:        1.1.0
 Release:        2%{?dist}
 Summary:        A shared disk lock manager
 
 Group:          System Environment/Base
 License:        GPLv2+
 URL:            https://fedorahosted.org/sanlock/
-Source0:        https://fedorahosted.org/releases/s/a/sanlock/%{name}-%{version}.tar.gz
+Source0:        https://fedorahosted.org/releases/s/a/sanlock/%{name}-%{version}.tar.bz2
 BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
 BuildRequires:  libblkid-devel
@@ -24,11 +24,15 @@ access to the shared disks.
 %build
 # upstream does not require configure
 # upstream does not support _smp_mflags
+CFLAGS=$RPM_OPT_FLAGS make -C wdmd
 CFLAGS=$RPM_OPT_FLAGS make -C src
 
 %install
 rm -rf $RPM_BUILD_ROOT
 make -C src \
+        install LIB_LIBDIR=%{_libdir} \
+        DESTDIR=$RPM_BUILD_ROOT
+make -C wdmd \
         install LIB_LIBDIR=%{_libdir} \
         DESTDIR=$RPM_BUILD_ROOT
 
@@ -43,7 +47,10 @@ rm -rf $RPM_BUILD_ROOT
 %defattr(-,root,root,-)
 %doc COPYING
 %{_sbindir}/sanlock
+%{_sbindir}/wdmd
 %{_libdir}/libsanlock.so.*
+%{_libdir}/libwdmd.*
+%{_includedir}/wdmd.h
 
 %package        devel
 Summary:        Development files for %{name}
@@ -62,6 +69,13 @@ developing applications that use %{name}.
 %{_includedir}/sanlock_resource.h
 
 %changelog
+* Fri Feb 18 2011 Chris Feist <cfeist@redhat.com> - 1.1.0-2
+- Fixed install for wdmd
+
+* Thu Feb 17 2011 Chris Feist <cfeist@redhat.com> - 1.1.0-1
+- Updated to latest sources
+- Now include wdmd
+
 * Tue Feb 8 2011 Angus Salkeld <asalkeld@redhat.com> - 1.0-2
 * - SPEC: Add docs and make more consistent with the fedora template.
 
