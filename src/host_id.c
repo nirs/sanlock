@@ -289,6 +289,7 @@ int add_space(struct space *sp)
 
 	if (space_exists(sp->space_name)) {
 		log_erros(sp, "add_space exists");
+		rv = -EEXIST;
 		goto fail;
 	}
 
