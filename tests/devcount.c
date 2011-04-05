@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <sys/un.h>
 #include <sys/mount.h>
 #include <inttypes.h>
@@ -409,11 +410,10 @@ static int do_relock(int argc, char *argv[])
 	 */
 
 	j = 0;
-	memset(av, 0, sizeof(char *) * COUNT_ARGS+1);
-
 	av[j++] = strdup(argv[0]);
 	for (i = 3; i < LOCK_ARGS; i++)
 		av[j++] = strdup(argv[i]);
+	av[j] = NULL;
 
 	while (1) {
 		pid = fork();
@@ -478,6 +478,10 @@ static int do_relock(int argc, char *argv[])
 			goto fail;
 		}
 		lver = res_inq->lver;
+
+		printf("%d sanlock_inquire %llu done\n", parent_pid,
+		       (unsigned long long)lver);
+
 		free(res_inq);
 		free(state);
 
@@ -488,6 +492,8 @@ static int do_relock(int argc, char *argv[])
 			printf("sanlock_release error %d\n", rv);
 			goto fail;
 		}
+
+		printf("%d sanlock_release done\n", parent_pid);
 
 		/* give a chance to someone else to acquire the lock in here */
 		usleep(1000000);
@@ -518,6 +524,7 @@ static int do_relock(int argc, char *argv[])
  fail:
 	printf("test failed...\n");
 	sleep(1000000);
+	return -1;
 }
 
 /*
@@ -579,11 +586,10 @@ static int do_lock(int argc, char *argv[])
 	 */
 
 	j = 0;
-	memset(av, 0, sizeof(char *) * COUNT_ARGS+1);
-
 	av[j++] = strdup(argv[0]);
 	for (i = 3; i < LOCK_ARGS; i++)
 		av[j++] = strdup(argv[i]);
+	av[j] = NULL;
 
 	while (1) {
 		pid = fork();
@@ -622,9 +628,9 @@ static int do_lock(int argc, char *argv[])
 		sleep(rand_int(0, 1));
 	}
 
- fail:
 	printf("test failed...\n");
 	sleep(1000000);
+	return -1;
 }
 
 #if 0
@@ -1017,7 +1023,6 @@ static int do_migrate(int argc, char *argv[])
 int do_init(int argc, char *argv[])
 {
 	char command[4096];
-	char *colon;
 
 	if (argc < 4)
 		return -1;
@@ -1058,6 +1063,7 @@ int do_init(int argc, char *argv[])
 	printf("%s\n", command);
 
 	system(command);
+	return 0;
 }
 
 int main(int argc, char *argv[])

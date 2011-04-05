@@ -137,6 +137,7 @@ int acquire_token(struct token *token, uint64_t acquire_lver,
 		return rv;
 
 	memcpy(&token->leader, &leader_ret, sizeof(struct leader_record));
+	token->r.lver = token->leader.lver;
 	return rv; /* DP_OK */
 }
 

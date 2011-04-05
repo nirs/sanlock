@@ -848,6 +848,8 @@ static void *cmd_release_thread(void *args_in)
 			rv = release_token(token);
 			if (rv < 0)
 				result = -1;
+			close_disks(token->disks, token->r.num_disks);
+			del_resource(token);
 			free(token);
 			cl->tokens[j] = NULL;
 		}
@@ -879,6 +881,8 @@ static void *cmd_release_thread(void *args_in)
 			rv = release_token(token);
 			if (rv < 0)
 				result = -1;
+			close_disks(token->disks, token->r.num_disks);
+			del_resource(token);
 			free(token);
 			cl->tokens[j] = NULL;
 			found = 1;

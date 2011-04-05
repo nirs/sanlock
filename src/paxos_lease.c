@@ -608,7 +608,8 @@ int paxos_lease_acquire(struct token *token, int force,
 	uint64_t last_timestamp = 0;
 	int error;
 
-	log_token(token, "paxos_acquire begin force %d", force);
+	log_token(token, "paxos_acquire begin lver %llu force %d",
+		  (unsigned long long)acquire_lver, force);
 
 	error = paxos_lease_leader_read(token, &prev_leader);
 	if (error < 0)
