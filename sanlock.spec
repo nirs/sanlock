@@ -11,7 +11,7 @@ BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
 BuildRequires:  libblkid-devel
 
-#Requires: <nothing>
+Requires:       %{name}-lib = %{version}-%{release}
 
 %description
 sanlock uses disk paxos to manage leases on shared storage.
@@ -35,22 +35,55 @@ make -C src \
 make -C wdmd \
         install LIB_LIBDIR=%{_libdir} \
         DESTDIR=$RPM_BUILD_ROOT
+install -D -m 755 init.d/sanlock $RPM_BUILD_ROOT/%{_initddir}/sanlock
+install -D -m 755 init.d/wdmd $RPM_BUILD_ROOT/%{_initddir}/wdmd
 
 %clean
 rm -rf $RPM_BUILD_ROOT
 
-%post -p /sbin/ldconfig
+%post
+/sbin/chkconfig --add sanlock
+/sbin/chkconfig --add wdmd
 
-%postun -p /sbin/ldconfig
+%preun
+if [ $1 = 0 ]; then
+	/sbin/service sanlock stop > /dev/null 2>&1
+	/sbin/service wdmd stop > /dev/null 2>&1
+	/sbin/chkconfig --del sanlock
+	/sbin/chkconfig --del wdmd
+fi
+
+%postun
+#/sbin/service sanlock condrestart >/dev/null 2>&1 || :
+#/sbin/service wdmd condrestart >/dev/null 2>&1 || :
 
 %files
 %defattr(-,root,root,-)
 %doc COPYING
+%{_initddir}/sanlock
+%{_initddir}/wdmd
 %{_sbindir}/sanlock
 %{_sbindir}/wdmd
+
+%package        lib
+Summary:        A shared disk lock manager library
+Group:          System Environment/Libraries
+
+%description    lib
+The %{name}-lib package contains the runtime libraries for sanlock,
+a shared disk lock manager.
+Hosts connected to a common SAN can use this to synchronize their
+access to the shared disks.
+
+%post lib -p /sbin/ldconfig
+
+%postun lib -p /sbin/ldconfig
+
+%files          lib
+%defattr(-,root,root,-)
+%doc COPYING
 %{_libdir}/libsanlock.so.*
-%{_libdir}/libwdmd.*
-%{_includedir}/wdmd.h
+%{_libdir}/libwdmd.so.*
 
 %package        devel
 Summary:        Development files for %{name}
@@ -64,6 +97,8 @@ developing applications that use %{name}.
 %files          devel
 %defattr(-,root,root,-)
 %doc COPYING
+%{_libdir}/libwdmd.so
+%{_includedir}/wdmd.h
 %{_libdir}/libsanlock.so
 %{_includedir}/sanlock.h
 %{_includedir}/sanlock_admin.h
