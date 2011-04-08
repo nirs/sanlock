@@ -129,7 +129,7 @@ static void status_lockspace(int fd, struct sanlk_state *st, char *str, int debu
 
 static void status_client(int fd GNUC_UNUSED, struct sanlk_state *st, char *str, int debug)
 {
-	printf("pid %u ", st->data32);
+	printf("pid %d ", st->data32);
 	printf("%.48s\n", st->name);
 
 	if (st->str_len && debug)

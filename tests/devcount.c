@@ -395,6 +395,10 @@ static int do_relock(int argc, char *argv[])
 	lockspace.host_id = our_hostid;
 
 	rv = sanlock_add_lockspace(&lockspace, 0);
+	if (rv == -EEXIST) {
+		printf("%d sanlock_add_lockspace exists\n", parent_pid);
+		rv = 0;
+	}
 	if (rv < 0) {
 		printf("%d sanlock_add_lockspace error %d\n", parent_pid, rv);
 		exit(EXIT_FAILURE);
@@ -571,6 +575,10 @@ static int do_lock(int argc, char *argv[])
 	lockspace.host_id = our_hostid;
 
 	rv = sanlock_add_lockspace(&lockspace, 0);
+	if (rv == -EEXIST) {
+		printf("%d sanlock_add_lockspace exists\n", parent_pid);
+		rv = 0;
+	}
 	if (rv < 0) {
 		printf("%d sanlock_add_lockspace error %d\n", parent_pid, rv);
 		exit(EXIT_FAILURE);
@@ -631,6 +639,71 @@ static int do_lock(int argc, char *argv[])
 	printf("test failed...\n");
 	sleep(1000000);
 	return -1;
+}
+
+static int do_wrap(int argc, char *argv[])
+{
+	char *av[COUNT_ARGS+1];
+	struct sanlk_resource *res;
+	int i, j, rv, sock, len;
+	uint32_t pid = getpid();
+
+	if (argc < LOCK_ARGS)
+		return -1;
+
+	count_offset = 0;
+
+	strcpy(lock_path, argv[2]);
+	strcpy(count_path, argv[4]);
+	our_hostid = atoi(argv[7]);
+
+	len = sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk);
+	res = malloc(len);
+	memset(res, 0, len);
+	strcpy(res->lockspace_name, "devcount");
+	snprintf(res->name, SANLK_NAME_LEN, "resource%s", count_path);
+	res->name[SANLK_NAME_LEN-1] = '\0';
+	res->num_disks = 1;
+	strncpy(res->disks[0].path, lock_path, SANLK_PATH_LEN);
+	res->disks[0].path[SANLK_PATH_LEN-1] = '\0';
+	res->disks[0].offset = 1024000;
+
+	printf("%d lock_disk %s count_disk %s our_hostid %d\n",
+	       pid, lock_path, count_path, our_hostid);
+
+	/* 
+	 * argv[0] = devcount
+	 * argv[1] = wrap 
+	 * argv[2] = <lock_disk>
+	 * argv[3] = rw
+	 * start copying at argv[3]
+	 */
+
+	j = 0;
+	av[j++] = strdup(argv[0]);
+	for (i = 3; i < LOCK_ARGS; i++)
+		av[j++] = strdup(argv[i]);
+	av[j] = NULL;
+
+	sock = sanlock_register();
+	if (sock < 0) {
+		printf("%d sanlock_register error %d\n", pid, sock);
+		exit(-1);
+	}
+
+	rv = sanlock_acquire(sock, -1, 0, 1, &res, NULL);
+	if (rv < 0) {
+		printf("%d sanlock_acquire error %d\n", pid, rv);
+		/* all hosts are trying to acquire so we
+		   expect this to acquire only sometimes;
+		   TODO: exit with an error for some rv's */
+		exit(0);
+	}
+	printf("%d sanlock_acquire done\n", pid);
+
+	execv(av[0], av);
+	perror("execv devcount problem");
+	exit(EXIT_FAILURE);
 }
 
 #if 0
@@ -900,6 +973,10 @@ static int do_migrate(int argc, char *argv[])
 	lockspace.host_id = our_hostid;
 
 	rv = sanlock_add_lockspace(&lockspace, 0);
+	if (rv == -EEXIST) {
+		printf("%d sanlock_add_lockspace exists\n", parent_pid);
+		rv = 0;
+	}
 	if (rv < 0) {
 		printf("%d sanlock_add_lockspace error %d\n", parent_pid, rv);
 		exit(EXIT_FAILURE);
@@ -1082,6 +1159,9 @@ int main(int argc, char *argv[])
 	else if (!strcmp(argv[1], "lock"))
 		rv = do_lock(argc, argv);
 
+	else if (!strcmp(argv[1], "wrap"))
+		rv = do_wrap(argc, argv);
+
 	else if (!strcmp(argv[1], "relock"))
 		rv = do_relock(argc, argv);
 
@@ -1119,6 +1199,9 @@ int main(int argc, char *argv[])
 	printf("  sanlock add_lockspace -s devcount:<hostid>:<lock_disk>:0\n");
 	printf("  loop around fork, sanlock_acquire, exec devcount rw\n");
 	printf("  sigstop child, inquire, release, re-acquire, sigcont|sigkill\n");
+	printf("\n");
+	printf("devcount wrap <lock_disk> rw <count_disk> <sec1> <sec2> <hostid>\n");
+	printf("  sanlock_acquire, exec devcount rw\n");
 	printf("\n");
 	printf("devcount rw <count_disk> <sec1> <sec2> <hostid>\n");
 	printf("  rw: read count for sec1, looking for writes, then write for sec2\n");

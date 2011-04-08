@@ -83,22 +83,31 @@ static struct space *_search_space(char *space_name, struct list_head *head)
 	return NULL;
 }
 
-int get_space_info(char *space_name, struct space *sp_out)
+int _get_space_info(char *space_name, struct space *sp_out)
 {
 	struct space *sp;
 
-	pthread_mutex_lock(&spaces_mutex);
 	list_for_each_entry(sp, &spaces, list) {
 		if (strncmp(sp->space_name, space_name, NAME_ID_SIZE))
 			continue;
 		memcpy(sp_out, sp, sizeof(struct space));
-		pthread_mutex_unlock(&spaces_mutex);
 		return 0;
 	}
-	pthread_mutex_unlock(&spaces_mutex);
 	return -1;
 }
 
+int get_space_info(char *space_name, struct space *sp_out)
+{
+	int rv;
+
+	pthread_mutex_lock(&spaces_mutex);
+	rv = _get_space_info(space_name, sp_out);
+	pthread_mutex_unlock(&spaces_mutex);
+
+	return rv;
+}
+
+#if 0
 uint64_t get_our_host_id(char *space_name)
 {
 	struct space *sp;
@@ -111,6 +120,7 @@ uint64_t get_our_host_id(char *space_name)
 	pthread_mutex_unlock(&spaces_mutex);
 	return id;
 }
+#endif
 
 int host_id_leader_read(char *space_name, uint64_t host_id,
 			struct leader_record *leader_ret)

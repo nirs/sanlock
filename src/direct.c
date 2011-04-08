@@ -141,6 +141,15 @@ static int do_delta_action(void)
 	struct space space;
 	int rv;
 
+	if (!com.lockspace.name[0])
+		return -1;
+
+	if (!com.lockspace.host_id_disk.path[0])
+		return -1;
+
+	if (!com.lockspace.host_id)
+		return -1;
+
 	/* for log_space in delta functions */
 	memset(&space, 0, sizeof(space));
 

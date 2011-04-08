@@ -51,11 +51,13 @@ int log_stderr_priority = LOG_ERR;
 
 struct client {
 	int used;
-	int fd;
-	int pid;
+	int fd;  /* unset is -1 */
+	int pid; /* unset is -1 */
 	int cmd_active;
-	int acquire_done;
+	int cmd_last;
 	int pid_dead;
+	int suspend;
+	int need_free;
 	int killing;
 	char owner_name[SANLK_NAME_LEN+1];
 	pthread_mutex_t mutex;
@@ -64,7 +66,7 @@ struct client {
 	struct token *tokens[SANLK_MAX_RESOURCES];
 };
 
-#define CLIENT_NALLOC 32 /* TODO: test using a small value here */
+#define CLIENT_NALLOC 1024
 static int client_maxi;
 static int client_size = 0;
 static struct client *client = NULL;
@@ -80,6 +82,8 @@ static int space_id_counter = 1;
 struct cmd_args {
 	int ci_in;
 	int ci_target;
+	int cl_fd;
+	int cl_pid;
 	struct sm_header header;
 };
 
@@ -87,88 +91,222 @@ extern struct list_head spaces;
 extern struct list_head spaces_remove;
 extern pthread_mutex_t spaces_mutex;
 
-static void client_alloc(void)
+/* FIXME: add a mutex for client array so we don't try to expand it
+   while a cmd thread is using it.  Or, with a thread pool we know
+   when cmd threads are running and can expand when none are. */
+
+static int client_alloc(void)
 {
 	int i;
 
-	if (!client) {
-		client = malloc(CLIENT_NALLOC * sizeof(struct client));
-		pollfd = malloc(CLIENT_NALLOC * sizeof(struct pollfd));
-	} else {
-		client = realloc(client, (client_size + CLIENT_NALLOC) *
-					 sizeof(struct client));
-		pollfd = realloc(pollfd, (client_size + CLIENT_NALLOC) *
-					 sizeof(struct pollfd));
-		if (!pollfd)
-			log_error("can't alloc for pollfd");
-	}
-	if (!client || !pollfd)
-		log_error("can't alloc for client array");
+	client = malloc(CLIENT_NALLOC * sizeof(struct client));
+	pollfd = malloc(CLIENT_NALLOC * sizeof(struct pollfd));
 
-	for (i = client_size; i < client_size + CLIENT_NALLOC; i++) {
+	if (!client || !pollfd) {
+		log_error("can't alloc for client or pollfd array");
+		return -ENOMEM;
+	}
+
+	for (i = 0; i < CLIENT_NALLOC; i++) {
 		memset(&client[i], 0, sizeof(struct client));
+		memset(&pollfd[i], 0, sizeof(struct pollfd));
+
 		pthread_mutex_init(&client[i].mutex, NULL);
 		client[i].fd = -1;
+		client[i].pid = -1;
+
 		pollfd[i].fd = -1;
-		pollfd[i].revents = 0;
+		pollfd[i].events = 0;
 	}
-	client_size += CLIENT_NALLOC;
+	client_size = CLIENT_NALLOC;
+	return 0;
 }
 
-static void client_ignore(int ci)
+static void _client_free(int ci)
 {
+	struct client *cl = &client[ci];
+
+	if (!cl->used) {
+		/* should never happen */
+		log_error("client_free ci %d not used", ci);
+		goto out;
+	}
+
+	if (cl->pid != -1) {
+		/* client_pid_dead() should have set pid to -1 */
+		/* should never happen */
+		log_error("client_free ci %d live pid %d", ci, cl->pid);
+		goto out;
+	}
+
+	if (cl->fd == -1) {
+		/* should never happen */
+		log_error("client_free ci %d is free", ci);
+		goto out;
+	}
+
+	if (cl->suspend) {
+		/* could happen, use log_debug */
+		log_error("client_free ci %d is suspended", ci);
+		cl->need_free = 1;
+		goto out;
+	}
+
+	if (cl->fd != -1)
+		close(cl->fd);
+
+	cl->used = 0;
+	cl->fd = -1;
+	cl->pid = -1;
+	cl->cmd_active = 0;
+	cl->pid_dead = 0;
+	cl->suspend = 0;
+	cl->need_free = 0;
+	cl->killing = 0;
+	memset(cl->owner_name, 0, sizeof(cl->owner_name));
+	cl->workfn = NULL;
+	cl->deadfn = NULL;
+	memset(cl->tokens, 0, sizeof(struct token *) * SANLK_MAX_RESOURCES);
+
+	/* make poll() ignore this connection */
 	pollfd[ci].fd = -1;
 	pollfd[ci].events = 0;
+ out:
+	return;
 }
 
-static void client_back(int ci, int fd)
+static void client_free(int ci)
 {
-	pollfd[ci].fd = fd;
-	pollfd[ci].events = POLLIN;
+	struct client *cl = &client[ci];
+
+	pthread_mutex_lock(&cl->mutex);
+	_client_free(ci);
+	pthread_mutex_unlock(&cl->mutex);
 }
 
-static void client_dead(int ci)
+/* the connection that we suspend and resume may or may not be the
+   same connection as the target client where we set cmd_active */
+
+static int client_suspend(int ci)
 {
-	close(client[ci].fd);
-	client[ci].used = 0;
-	memset(&client[ci], 0, sizeof(struct client));
-	client[ci].fd = -1;
+	struct client *cl = &client[ci];
+	int rv = 0;
+
+	pthread_mutex_lock(&cl->mutex);
+
+	if (!cl->used) {
+		/* should never happen */
+		log_error("client_suspend ci %d not used", ci);
+		rv = -1;
+		goto out;
+	}
+
+	if (cl->fd == -1) {
+		/* should never happen */
+		log_error("client_suspend ci %d is free", ci);
+		rv = -1;
+		goto out;
+	}
+
+	if (cl->suspend) {
+		/* should never happen */
+		log_error("client_suspend ci %d is suspended", ci);
+		rv = -1;
+		goto out;
+	}
+
+	cl->suspend = 1;
+
+	/* make poll() ignore this connection */
 	pollfd[ci].fd = -1;
 	pollfd[ci].events = 0;
+ out:
+	pthread_mutex_unlock(&cl->mutex);
+
+	return rv;
+}
+
+static void client_resume(int ci)
+{
+	struct client *cl = &client[ci];
+
+	pthread_mutex_lock(&cl->mutex);
+
+	if (!cl->used) {
+		/* should never happen */
+		log_error("client_resume ci %d not used", ci);
+		goto out;
+	}
+
+	if (cl->fd == -1) {
+		/* should never happen */
+		log_error("client_resume ci %d is free", ci);
+		goto out;
+	}
+
+	if (!cl->suspend) {
+		/* should never happen */
+		log_error("client_resume ci %d not suspended", ci);
+		goto out;
+	}
+
+	cl->suspend = 0;
+
+	if (cl->need_free) {
+		/* could happen, use log_debug */
+		log_error("client_resume ci %d need_free", ci);
+		_client_free(ci);
+	} else {
+		/* make poll() watch this connection */
+		pollfd[ci].fd = cl->fd;
+		pollfd[ci].events = POLLIN;
+	}
+ out:
+	pthread_mutex_unlock(&cl->mutex);
 }
 
 static int client_add(int fd, void (*workfn)(int ci), void (*deadfn)(int ci))
 {
+	struct client *cl;
 	int i;
 
-	if (!client)
-		client_alloc();
- again:
 	for (i = 0; i < client_size; i++) {
-		if (!client[i].used) {
-			client[i].used = 1;
-			client[i].workfn = workfn;
-			client[i].deadfn = deadfn ? deadfn : client_dead;
-			client[i].fd = fd;
+		cl = &client[i];
+		pthread_mutex_lock(&cl->mutex);
+		if (!cl->used) {
+			cl->used = 1;
+			cl->fd = fd;
+			cl->workfn = workfn;
+			cl->deadfn = deadfn ? deadfn : client_free;
+
+			/* make poll() watch this connection */
 			pollfd[i].fd = fd;
 			pollfd[i].events = POLLIN;
+
 			if (i > client_maxi)
 				client_maxi = i;
+			pthread_mutex_unlock(&cl->mutex);
 			return i;
 		}
+		pthread_mutex_unlock(&cl->mutex);
 	}
 
-	client_alloc();
-	goto again;
+	return -1;
 }
 
 static int find_client_pid(int pid)
 {
+	struct client *cl;
 	int i;
 
 	for (i = 0; i < client_size; i++) {
-		if (client[i].used && client[i].pid == pid)
+		cl = &client[i];
+		pthread_mutex_lock(&cl->mutex);
+		if (cl->used && cl->pid == pid) {
+			pthread_mutex_unlock(&cl->mutex);
 			return i;
+		}
+		pthread_mutex_unlock(&cl->mutex);
 	}
 	return -1;
 }
@@ -176,9 +314,9 @@ static int find_client_pid(int pid)
 static int get_peer_pid(int fd, int *pid)
 {
 	struct ucred cred;
-	unsigned int cl = sizeof(cred);
+	unsigned int len = sizeof(cred);
 
-	if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &cl) != 0)
+	if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0)
 		return -1;
 
 	*pid = cred.pid;
@@ -188,51 +326,87 @@ static int get_peer_pid(int fd, int *pid)
 static void client_pid_dead(int ci)
 {
 	struct client *cl = &client[ci];
-	int delay_release = 0;
+	int cmd_active;
 	int i, pid;
 
-	log_debug("client_pid_dead ci %d fd %d pid %d", ci, cl->fd, cl->pid);
-
 	/* cmd_acquire_thread may still be waiting for the tokens
-	   to be acquired.  if it is, tell it to release them when
-	   finished */
+	   to be acquired.  if it is, cl->pid_dead tells it to release them
+	   when finished.  Similarly, cmd_release_thread, cmd_inquire_thread
+	   are accessing cl->tokens */
 
 	pthread_mutex_lock(&cl->mutex);
+	if (!cl->used || cl->fd == -1 || cl->pid == -1) {
+		/* should never happen */
+		pthread_mutex_unlock(&cl->mutex);
+		log_error("client_pid_dead %d,%d,%d u %d a %d s %d bad state",
+			  ci, cl->fd, cl->pid, cl->used,
+			  cl->cmd_active, cl->suspend);
+		return;
+	}
+
+	log_debug("client_pid_dead %d,%d,%d cmd_active %d suspend %d",
+		  ci, cl->fd, cl->pid, cl->cmd_active, cl->suspend);
+
+	cmd_active = cl->cmd_active;
 	pid = cl->pid;
 	cl->pid = -1;
 	cl->pid_dead = 1;
 
-	/* TODO: handle other cmds in progress */
-	if ((cl->cmd_active == SM_CMD_ACQUIRE) && !cl->acquire_done) {
-		delay_release = 1;
-		/* client_dead() also delayed */
-	}
+	/* when cmd_active is set and cmd_a,r,i_thread is done and takes
+	   cl->mutex to set cl->cmd_active to 0, it will see cl->pid_dead is 1
+	   and know they need to release cl->tokens and call client_free */
+
+	/* make poll() ignore this connection */
+	pollfd[ci].fd = -1;
+	pollfd[ci].events = 0;
+
 	pthread_mutex_unlock(&cl->mutex);
 
-	if (pid > 0)
-		kill(pid, SIGKILL);
+	kill(pid, SIGKILL);
 
-	if (delay_release) {
-		log_debug("client_pid_dead delay release");
+	if (cmd_active) {
+		log_debug("client_pid_dead %d,%d,%d defer to cmd %d",
+			  ci, cl->fd, pid, cmd_active);
 		return;
 	}
 
-	/* cmd_acquire_thread is done so we can release tokens here */
+	/* use async release here because this is the main thread that we don't
+	   want to block doing disk lease i/o */
 
+	pthread_mutex_lock(&cl->mutex);
 	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
 		if (cl->tokens[i])
 			release_token_async(cl->tokens[i]);
 	}
 
-	client_dead(ci);
+	_client_free(ci);
+	pthread_mutex_unlock(&cl->mutex);
 }
+
+/* At some point we may want to keep a record of each pid using a lockspace
+   in the sp struct to avoid walking through each client's cl->tokens to see if
+   it's using the lockspace.  It should be the uncommon situation where a
+   lockspace renewal fails and we need to walk through all client tokens like
+   this.  i.e. we'd probably not want to optimize for this case at the expense
+   of the more common case where a pid exits, but we do want it to be robust.
+
+   The locking is also made a bit ugly by these three routines that need to
+   correlate which clients are using which lockspaces.  (client_using_space,
+   kill_pids, all_pids_dead)  spaces_mutex is held when they are called, and
+   they need to take cl->mutex.  This means that cmd_acquire_thread has to
+   lock both spaces_mutex and cl->mutex when adding new tokens to the client.
+   (It needs to check that the lockspace for the new tokens hasn't failed
+   while the tokens were being acquired.)
+   
+   In kill_pids and all_pids_dead could we check cl->pid <= 0 without
+   taking cl->mutex, since client_pid_dead in the main thread is the
+   only place that changes that?  */
 
 static int client_using_space(struct client *cl, struct space *sp)
 {
 	struct token *token;
 	int i, rv = 0;
 
-	pthread_mutex_lock(&cl->mutex);
 	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
 		token = cl->tokens[i];
 		if (!token)
@@ -243,14 +417,18 @@ static int client_using_space(struct client *cl, struct space *sp)
 		log_spoke(sp, token, "client_using_space pid %d", cl->pid);
 		break;
 	}
-	pthread_mutex_unlock(&cl->mutex);
 	return rv;
 }
+
+/* FIXME: remove the usleep which intends to give the pid some time to exit so
+   we avoid calling kill_pids in quick repetition */
 
 static void kill_pids(struct space *sp)
 {
 	struct client *cl;
-	int ci, found = 0;
+	int ci, pid;
+	int sig = SIGTERM;
+	int found = 0;
 
 	log_space(sp, "kill_pids %d", sp->killing_pids);
 
@@ -259,93 +437,80 @@ static void kill_pids(struct space *sp)
 	if (sp->killing_pids > 11)
 		return;
 
-	if (sp->killing_pids > 10)
+	if (sp->killing_pids > 10) {
+		sp->killing_pids++;
 		goto do_dump;
+	}
 
 	if (sp->killing_pids > 1)
-		goto do_sigkill;
+		sig = SIGKILL;
+	sp->killing_pids++;
 
 	for (ci = 0; ci <= client_maxi; ci++) {
+		pid = -1;
+
 		cl = &client[ci];
+		pthread_mutex_lock(&cl->mutex);
 
 		if (!cl->used)
-			continue;
-		if (!cl->pid)
-			continue;
+			goto unlock;
+		if (cl->pid <= 0)
+			goto unlock;
 		if (!client_using_space(cl, sp))
-			continue;
-		if (cl->killing > 1)
-			continue;
+			goto unlock;
 
-		kill(cl->pid, SIGTERM);
+		pid = cl->pid;
 		cl->killing++;
 		found++;
+ unlock:
+		pthread_mutex_unlock(&cl->mutex);
+
+		if (pid > 0)
+			kill(pid, sig);
 	}
 
 	if (found) {
-		log_space(sp, "kill_pids SIGTERM found %d pids", found);
+		log_space(sp, "kill_pids %d found %d pids", sig, found);
 		usleep(500000);
 	}
 
-	sp->killing_pids++;
-	return;
-
- do_sigkill:
-
-	for (ci = 0; ci <= client_maxi; ci++) {
-		cl = &client[ci];
-
-		if (!cl->used)
-			continue;
-		if (!cl->pid)
-			continue;
-		if (!client_using_space(cl, sp))
-			continue;
-		if (cl->killing > 2)
-			continue;
-
-		kill(cl->pid, SIGKILL);
-		cl->killing++;
-		found++;
-	}
-
-	if (found) {
-		log_space(sp, "kill_pids SIGKILL found %d pids", found);
-		usleep(500000);
-	}
-
-	sp->killing_pids++;
 	return;
 
  do_dump:
 	for (ci = 0; ci <= client_maxi; ci++) {
 		if (client[ci].pid && client[ci].killing) {
 			log_error("kill_pids %d stuck", client[ci].pid);
-			found++;
 		}
 	}
-
-	sp->killing_pids++;
 }
 
 static int all_pids_dead(struct space *sp)
 {
 	struct client *cl;
-	int ci;
+	int ci, pid;
 
 	for (ci = 0; ci <= client_maxi; ci++) {
+		pid = -1;
+
 		cl = &client[ci];
+		pthread_mutex_lock(&cl->mutex);
 
 		if (!cl->used)
-			continue;
-		if (!cl->pid)
-			continue;
+			goto unlock;
+		if (cl->pid <= 0)
+			goto unlock;
 		if (!client_using_space(cl, sp))
-			continue;
+			goto unlock;
 
-		log_space(sp, "used by pid %d killing %d",
-			  cl->pid, cl->killing);
-		return 0;
+		pid = cl->pid;
+ unlock:
+		pthread_mutex_unlock(&cl->mutex);
+
+		if (pid > 0) {
+			log_space(sp, "used by pid %d killing %d",
+				  pid, cl->killing);
+			return 0;
+		}
 	}
 	log_space(sp, "used by no pids");
 	return 1;
@@ -420,39 +585,6 @@ static int main_loop(void)
 	return 0;
 }
 
-static int set_cmd_active(int ci_target, int cmd)
-{
-	struct client *cl = &client[ci_target];
-	int cmd_active = 0;
-
-	pthread_mutex_lock(&cl->mutex);
-
-	cmd_active = cl->cmd_active;
-
-	if (!cmd) {
-		/* active to inactive */
-		cl->cmd_active = 0;
-	} else {
-		/* inactive to active */
-		if (!cl->cmd_active)
-			cl->cmd_active = cmd;
-	}
-	pthread_mutex_unlock(&cl->mutex);
-
-	if (cmd && cmd_active) {
-		log_error("set_cmd_active ci %d cmd %d busy %d",
-			  ci_target, cmd, cmd_active);
-		return -EBUSY;
-	}
-
-	if (!cmd && !cmd_active) {
-		log_error("set_cmd_active ci %d already zero",
-			  ci_target);
-	}
-
-	return 0;
-}
-
 /* clear the unreceived portion of an aborted command */
 
 static void client_recv_all(int ci, struct sm_header *h_recv, int pos)
@@ -477,6 +609,77 @@ static void client_recv_all(int ci, struct sm_header *h_recv, int pos)
 	log_debug("recv_all ci %d rem %d total %d", ci, rem, total);
 }
 
+static void release_cl_tokens(struct client *cl)
+{
+	struct token *token;
+	int j;
+
+	for (j = 0; j < SANLK_MAX_RESOURCES; j++) {
+		token = cl->tokens[j];
+		if (!token)
+			continue;
+		release_token(token);
+		close_disks(token->disks, token->r.num_disks);
+		del_resource(token);
+		free(token);
+	}
+}
+
+static void release_new_tokens(struct token *new_tokens[],
+			       int alloc_count, int add_count,
+			       int open_count, int acquire_count)
+{
+	int i;
+
+	for (i = 0; i < acquire_count; i++)
+		release_token(new_tokens[i]);
+
+	for (i = 0; i < open_count; i++)
+		close_disks(new_tokens[i]->disks, new_tokens[i]->r.num_disks);
+
+	for (i = 0; i < add_count; i++)
+		del_resource(new_tokens[i]);
+
+	for (i = 0; i < alloc_count; i++)
+		free(new_tokens[i]);
+}
+
+/* called with both spaces_mutex and cl->mutex held */
+
+static int check_new_tokens_space(struct client *cl,
+				  struct token *new_tokens[],
+				  int new_tokens_count)
+{
+	struct space space;
+	struct token *token;
+	int i, rv, empty_slots = 0;
+
+	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
+		if (!cl->tokens[i])
+			empty_slots++;
+	}
+
+	if (empty_slots < new_tokens_count) {
+		/* shouldn't ever happen */
+		return -ENOENT;
+	}
+
+	/* space may have failed while new tokens were being acquired */
+
+	for (i = 0; i < new_tokens_count; i++) {
+		token = new_tokens[i];
+
+		rv = _get_space_info(token->r.lockspace_name, &space);
+
+		if (!rv && !space.killing_pids && space.host_id == token->host_id)
+			continue;
+
+		return -ENOSPC;
+	}
+
+	return 0;
+}
+
 static void *cmd_acquire_thread(void *args_in)
 {
 	struct cmd_args *ca = args_in;
@@ -495,23 +698,25 @@ static void *cmd_acquire_thread(void *args_in)
 	int alloc_count = 0, add_count = 0, open_count = 0, acquire_count = 0;
 	int pos = 0, pid_dead = 0;
 	int new_tokens_count;
+	int recv_done = 0;
+	int result = 0;
+	int cl_ci = ca->ci_target;
+	int cl_fd = ca->cl_fd;
+	int cl_pid = ca->cl_pid;
 
-	cl = &client[ca->ci_target];
+	cl = &client[cl_ci];
 	fd = client[ca->ci_in].fd;
 
-	log_debug("cmd_acquire ci_in %d ci_target %d pid %d",
-		  ca->ci_in, ca->ci_target, cl->pid);
-
-	/*
-	 * check if we can we add this many new leases
-	 */
-
 	new_tokens_count = ca->header.data;
+
+	log_debug("cmd_acquire %d,%d,%d ci_in %d fd %d count %d",
+		  cl_ci, cl_fd, cl_pid, ca->ci_in, fd, new_tokens_count);
+
 	if (new_tokens_count > SANLK_MAX_RESOURCES) {
-		log_error("cmd_acquire new_tokens_count %d max %d",
-			  new_tokens_count, SANLK_MAX_RESOURCES);
-		rv = -E2BIG;
-		goto fail_reply;
+		log_error("cmd_acquire %d,%d,%d new %d max %d",
+			  cl_ci, cl_fd, cl_pid, new_tokens_count, SANLK_MAX_RESOURCES);
+		result = -E2BIG;
+		goto done;
 	}
 
 	pthread_mutex_lock(&cl->mutex);
@@ -523,10 +728,10 @@ static void *cmd_acquire_thread(void *args_in)
 	pthread_mutex_unlock(&cl->mutex);
 
 	if (empty_slots < new_tokens_count) {
-		log_error("cmd_acquire new_tokens_count %d empty %d",
-			  new_tokens_count, empty_slots);
-		rv = -ENOSPC;
-		goto fail_reply;
+		log_error("cmd_acquire %d,%d,%d new %d slots %d",
+			  cl_ci, cl_fd, cl_pid, new_tokens_count, empty_slots);
+		result = -ENOENT;
+		goto done;
 	}
 
 	/*
@@ -543,14 +748,15 @@ static void *cmd_acquire_thread(void *args_in)
 		if (rv > 0)
 			pos += rv;
 		if (rv != sizeof(struct sanlk_resource)) {
-			log_error("cmd_acquire recv res %d %d", rv, errno);
-			rv = -EIO;
-			goto fail_free;
+			log_error("cmd_acquire %d,%d,%d recv res %d %d",
+				  cl_ci, cl_fd, cl_pid, rv, errno);
+			result = -ENOTCONN;
+			goto done;
 		}
 
 		if (res.num_disks > MAX_DISKS) {
-			rv = -ERANGE;
-			goto fail_free;
+			result = -ERANGE;
+			goto done;
 		}
 
 		disks_len = res.num_disks * sizeof(struct sync_disk);
@@ -558,8 +764,8 @@ static void *cmd_acquire_thread(void *args_in)
 
 		token = malloc(token_len);
 		if (!token) {
-			rv = -ENOMEM;
-			goto fail_free;
+			result = -ENOMEM;
+			goto done;
 		}
 		memset(token, 0, token_len);
 		token->disks = (struct sync_disk *)&token->r.disks[0]; /* shorthand */
@@ -584,10 +790,11 @@ static void *cmd_acquire_thread(void *args_in)
 		if (rv > 0)
 			pos += rv;
 		if (rv != disks_len) {
-			log_error("cmd_acquire recv disks %d %d", rv, errno);
+			log_error("cmd_acquire %d,%d,%d recv disks %d %d",
+				  cl_ci, cl_fd, cl_pid, rv, errno);
 			free(token);
-			rv = -EIO;
-			goto fail_free;
+			result = -ENOTCONN;
+			goto done;
 		}
 
 		/* zero out pad1 and pad2, see WARNING above */
@@ -602,55 +809,45 @@ static void *cmd_acquire_thread(void *args_in)
 
 		/* We use the token_id in log messages because the combination
 		 * of full length space_name+resource_name in each log message
-		 * would make excessively long lines.  Use an error message
-		 * here to make a more permanent record of what the token_id
-		 * represents for reference from later log messages. */
+		 * would make excessively long lines. */
 
-		log_errot(token, "lockspace %.48s resource %.48s has token_id %u for pid %u",
-			  token->r.lockspace_name, token->r.name, token->token_id, cl->pid);
+		log_token(token, "lockspace %.48s resource %.48s has token_id %u for pid %u",
+			  token->r.lockspace_name, token->r.name, token->token_id, cl_pid);
 	}
-
-	/*
-	 * receive per-command sanlk_options and opt string (if any)
-	 */
 
 	rv = recv(fd, &opt, sizeof(struct sanlk_options), MSG_WAITALL);
 	if (rv > 0)
 		pos += rv;
 	if (rv != sizeof(struct sanlk_options)) {
-		log_error("cmd_acquire recv opt %d %d", rv, errno);
-		rv = -EIO;
-		goto fail_free;
+		log_error("cmd_acquire %d,%d,%d recv opt %d %d",
+			  cl_ci, cl_fd, cl_pid, rv, errno);
+		result = -ENOTCONN;
+		goto done;
 	}
 
-	log_debug("cmd_acquire recv opt %d %x %u", rv, opt.flags, opt.len);
+	strncpy(cl->owner_name, opt.owner_name, SANLK_NAME_LEN);
 
-	strcpy(cl->owner_name, opt.owner_name);
+	if (opt.len) {
+		opt_str = malloc(opt.len);
+		if (!opt_str) {
+			result = -ENOMEM;
+			goto done;
+		}
 
-	if (!opt.len)
-		goto skip_opt_str;
-
-	opt_str = malloc(opt.len);
-	if (!opt_str) {
-		rv = -ENOMEM;
-		goto fail_free;
+		rv = recv(fd, opt_str, opt.len, MSG_WAITALL);
+		if (rv > 0)
+			pos += rv;
+		if (rv != opt.len) {
+			log_error("cmd_acquire %d,%d,%d recv str %d %d",
+			  	  cl_ci, cl_fd, cl_pid, rv, errno);
+			free(opt_str);
+			result = -ENOTCONN;
+			goto done;
+		}
 	}
 
-	rv = recv(fd, opt_str, opt.len, MSG_WAITALL);
-	if (rv > 0)
-		pos += rv;
-	if (rv != opt.len) {
-		log_error("cmd_acquire recv opt_str %d %d", rv, errno);
-		free(opt_str);
-		rv = -EIO;
-		goto fail_free;
-	}
-
-	log_debug("cmd_acquire recv opt str %d", rv);
-
-
- skip_opt_str:
 	/* TODO: warn if header.length != sizeof(header) + pos ? */
+	recv_done = 1;
 
 	/*
 	 * all command input has been received, start doing the acquire
@@ -660,9 +857,12 @@ static void *cmd_acquire_thread(void *args_in)
 		token = new_tokens[i];
 		rv = get_space_info(token->r.lockspace_name, &space);
 		if (rv < 0 || space.killing_pids) {
-			log_errot(token, "cmd_acquire bad space %.48s",
+			log_errot(token, "cmd_acquire %d,%d,%d invalid lockspace "
+				  "found %d failed %d name %.48s",
+				  cl_ci, cl_fd, cl_pid, rv, space.killing_pids,
 				  token->r.lockspace_name);
-			goto fail_free;
+			result = -ENOSPC;
+			goto done;
 		}
 		token->host_id = space.host_id;
 		token->host_generation = space.host_generation;
@@ -670,10 +870,12 @@ static void *cmd_acquire_thread(void *args_in)
 
 	for (i = 0; i < new_tokens_count; i++) {
 		token = new_tokens[i];
-		rv = add_resource(token, cl->pid);
+		rv = add_resource(token, cl_pid);
 		if (rv < 0) {
-			log_errot(token, "cmd_acquire add_resource %d", rv);
-			goto fail_del;
+			log_errot(token, "cmd_acquire %d,%d,%d add_resource %d",
+				  cl_ci, cl_fd, cl_pid, rv);
+			result = rv;
+			goto done;
 		}
 		add_count++;
 	}
@@ -682,9 +884,10 @@ static void *cmd_acquire_thread(void *args_in)
 		token = new_tokens[i];
 		opened = open_disks(token->disks, token->r.num_disks);
 		if (!majority_disks(token, opened)) {
-			log_errot(token, "cmd_acquire open_disks %d", opened);
-			rv = -ENODEV;
-			goto fail_close;
+			log_errot(token, "cmd_acquire %d,%d,%d open_disks %d",
+				  cl_ci, cl_fd, cl_pid, opened);
+			result = -ENODEV;
+			goto done;
 		}
 		open_count++;
 	}
@@ -699,125 +902,142 @@ static void *cmd_acquire_thread(void *args_in)
 
 		rv = acquire_token(token, acquire_lver, new_num_hosts);
 		if (rv < 0) {
-			log_errot(token, "cmd_acquire acquire error %d", rv);
-			goto fail_release;
+			log_errot(token, "cmd_acquire %d,%d,%d paxos_lease %d",
+				  cl_ci, cl_fd, cl_pid, rv);
+			result = rv;
+			goto done;
 		}
 		acquire_count++;
 	}
 
-	/* 
-	 * if pid dead and success|fail, release all
-	 * if pid not dead and success, reply
-	 * if pid not dead and fail, release new, reply
+	/*
+	 * Success acquiring the leases:
+	 * lock mutex,
+	 * 1. if pid is live, move new_tokens to cl->tokens, clear cmd_active, unlock mutex
+	 * 2. if pid is dead, clear cmd_active, unlock mutex, release new_tokens, release cl->tokens, client_free
 	 *
-	 * transfer all new_tokens into cl->tokens; client_pid_dead
-	 * is reponsible from here to release old and new from cl->tokens
+	 * Failure acquiring the leases:
+	 * lock mutex,
+	 * 3. if pid is live, clear cmd_active, unlock mutex, release new_tokens
+	 * 4. if pid is dead, clear cmd_active, unlock mutex, release new_tokens, release cl->tokens, client_free
+	 *
+	 * client_pid_dead() won't touch cl->tokens while cmd_active is set.
+	 * As soon as we clear cmd_active and unlock the mutex, client_pid_dead
+	 * will attempt to clear cl->tokens itself.  If we find client_pid_dead
+	 * has already happened when we look at pid_dead, then we know that it
+	 * won't be called again, and it's our responsibility to clear cl->tokens
+	 * and call client_free.
 	 */
 
+	/*
+	 * We hold both space_mutex and cl->mutex at once to create the crucial
+	 * linkage between the client pid and the lockspace.  Once we release
+	 * these two mutexes, if the lockspace fails, this pid will be killed.
+	 * Prior to inserting the new_tokens into the client, if the lockspace
+	 * fails, kill_pids/client_using_pid would not find this pid (assuming
+	 * it doesn't already hold other tokens using the lockspace).  If
+	 * the lockspace failed while we were acquring the tokens, kill_pids
+	 * has already run and not found us, so we must revert what we've done
+	 * in acquire.
+	 *
+	 * Warning:
+	 * We could deadlock if we hold cl->mutex and take spaces_mutex,
+	 * because all_pids_dead() and kill_pids() hold spaces_mutex and take
+	 * cl->mutex.  So, lock spaces_mutex first, then cl->mutex to avoid the
+	 * deadlock.
+	 *
+	 * Other approaches:
+	 * A solution may be to record in each sp all the pids/cis using it
+	 * prior to starting the acquire.  Then we would not need to do this
+	 * check here to see if the lockspace has been killed (if it was, the
+	 * pid for this ci would have been killed in kill_pids), and
+	 * all_pids_dead() and kill_pids() would not need to go through each cl
+	 * and each cl->token to check if it's using the sp (it would know by
+	 * just looking at sp->pids[] and killing each).
+	 */
+
+ done:
+	pthread_mutex_lock(&spaces_mutex);
 	pthread_mutex_lock(&cl->mutex);
+	log_debug("cmd_acquire %d,%d,%d result %d pid_dead %d",
+		  cl_ci, cl_fd, cl_pid, result, cl->pid_dead);
 
-	if (cl->pid_dead) {
-		pthread_mutex_unlock(&cl->mutex);
-		log_error("cmd_acquire pid %d dead", cl->pid);
-		pid_dead = 1;
-		rv = -ENOTTY;
-		goto fail_dead;
-	}
+	pid_dead = cl->pid_dead;
+	cl->cmd_active = 0;
 
-	empty_slots = 0;
-	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
-		if (!cl->tokens[i])
-			empty_slots++;
-	}
-	if (empty_slots < new_tokens_count) {
-		pthread_mutex_unlock(&cl->mutex);
-		log_error("cmd_acquire new_tokens_count %d slots %d",
-			  new_tokens_count, empty_slots);
-		rv = -ENOSPC;
-		goto fail_release;
-	}
-
-	/* space may have failed while new tokens were being acquired */
-	for (i = 0; i < new_tokens_count; i++) {
-		token = new_tokens[i];
-		rv = get_space_info(token->r.lockspace_name, &space);
-		if (!rv && !space.killing_pids && space.host_id == token->host_id)
-			continue;
-		pthread_mutex_unlock(&cl->mutex);
-		log_errot(token, "cmd_acquire bad space %.48s",
-			  token->r.lockspace_name);
-		rv = -EINVAL;
-		goto fail_release;
-	}
-
-	for (i = 0; i < new_tokens_count; i++) {
-		for (j = 0; j < SANLK_MAX_RESOURCES; j++) {
-			if (!cl->tokens[j]) {
-				cl->tokens[j] = new_tokens[i];
-				break;
-			}
+	if (!result && !pid_dead) {
+		if (check_new_tokens_space(cl, new_tokens, new_tokens_count)) {
+			/* case 1 becomes case 3 */
+			log_error("cmd_acquire %d,%d,%d invalid lockspace",
+				  cl_ci, cl_fd, cl_pid);
+			result = -ENOSPC;
 		}
 	}
 
-	cl->acquire_done = 1;
-	cl->cmd_active = 0;   /* instead of set_cmd_active(0) */
+	/* 1. Success acquiring leases, and pid is live */
+
+	if (!result && !pid_dead) {
+		for (i = 0; i < new_tokens_count; i++) {
+			for (j = 0; j < SANLK_MAX_RESOURCES; j++) {
+				if (!cl->tokens[j]) {
+					cl->tokens[j] = new_tokens[i];
+					break;
+				}
+			}
+		}
+		/* goto reply after mutex unlock */
+	}
 	pthread_mutex_unlock(&cl->mutex);
+	pthread_mutex_unlock(&spaces_mutex);
 
-	log_debug("cmd_acquire done %d", new_tokens_count);
 
-	memcpy(&h, &ca->header, sizeof(struct sm_header));
-	h.length = sizeof(h);
-	h.data = 0;
-	h.data2 = 0;
-	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
+	/* 1. Success acquiring leases, and pid is live */
 
-	client_back(ca->ci_in, fd);
-	free(ca);
-	return NULL;
-
- fail_dead:
-	/* clear out all the old tokens */
-	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
-		token = cl->tokens[i];
-		if (!token)
-			continue;
-		release_token(token);
-		close_disks(token->disks, token->r.num_disks);
-		del_resource(token);
-		free(token);
+	if (!result && !pid_dead) {
+		/* work done before mutex unlock */
+		goto reply;
 	}
 
- fail_release:
-	for (i = 0; i < acquire_count; i++)
-		release_token(new_tokens[i]);
+	/* 2. Success acquiring leases, and pid is dead */
 
- fail_close:
-	for (i = 0; i < open_count; i++)
-		close_disks(new_tokens[i]->disks, new_tokens[i]->r.num_disks);
+	if (!result && pid_dead) {
+		release_new_tokens(new_tokens, alloc_count, add_count,
+				   open_count, acquire_count);
+		release_cl_tokens(cl);
+		client_free(cl_ci);
+		result = -ENOTTY;
+		goto reply;
+	}
 
- fail_del:
-	for (i = 0; i < add_count; i++)
-		del_resource(new_tokens[i]);
+	/* 3. Failure acquiring leases, and pid is live */
 
- fail_free:
-	for (i = 0; i < alloc_count; i++)
-		free(new_tokens[i]);
+	if (result && !pid_dead) {
+		release_new_tokens(new_tokens, alloc_count, add_count,
+				   open_count, acquire_count);
+		goto reply;
+	}
 
- fail_reply:
-	set_cmd_active(ca->ci_target, 0);
+	/* 4. Failure acquiring leases, and pid is dead */
 
-	client_recv_all(ca->ci_in, &ca->header, pos);
+	if (result && pid_dead) {
+		release_new_tokens(new_tokens, alloc_count, add_count,
+				   open_count, acquire_count);
+		release_cl_tokens(cl);
+		client_free(cl_ci);
+		goto reply;
+	}
 
+ reply:
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
 	h.length = sizeof(h);
-	h.data = -1;
+	h.data = result;
 	h.data2 = 0;
 	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
 
-	if (pid_dead)
-		client_dead(ca->ci_target);
+	if (!recv_done)
+		client_recv_all(ca->ci_in, &ca->header, pos);
 
-	client_back(ca->ci_in, fd);
+	client_resume(ca->ci_in);
 	free(ca);
 	return NULL;
 }
@@ -826,34 +1046,37 @@ static void *cmd_release_thread(void *args_in)
 {
 	struct cmd_args *ca = args_in;
 	struct sm_header h;
-	struct token *token;
-	struct sanlk_resource res;
 	struct client *cl;
-	int fd, rv, i, j, found, result = 0;
+	struct token *token;
+	struct token *rem_tokens[SANLK_MAX_RESOURCES];
+	struct sanlk_resource res;
+	int fd, rv, i, j, found, pid_dead;
+	int rem_tokens_count = 0;
+	int result = 0;
+	int cl_ci = ca->ci_target;
+	int cl_fd = ca->cl_fd;
+	int cl_pid = ca->cl_pid;
 
-	cl = &client[ca->ci_target];
+	cl = &client[cl_ci];
 	fd = client[ca->ci_in].fd;
 
-	log_debug("cmd_release ci_in %d ci_target %d pid %d",
-		  ca->ci_in, ca->ci_target, cl->pid);
+	log_debug("cmd_release %d,%d,%d ci_in %d fd %d count %d flags %x",
+		  cl_ci, cl_fd, cl_pid, ca->ci_in, fd,
+		  ca->header.data, ca->header.cmd_flags);
 
 	/* caller wants to release all resources */
 
 	if (ca->header.cmd_flags & SANLK_REL_ALL) {
+		pthread_mutex_lock(&cl->mutex);
 		for (j = 0; j < SANLK_MAX_RESOURCES; j++) {
 			token = cl->tokens[j];
 			if (!token)
 				continue;
-
-			rv = release_token(token);
-			if (rv < 0)
-				result = -1;
-			close_disks(token->disks, token->r.num_disks);
-			del_resource(token);
-			free(token);
+			rem_tokens[rem_tokens_count++] = token;
 			cl->tokens[j] = NULL;
 		}
-		goto reply;
+		pthread_mutex_unlock(&cl->mutex);
+		goto do_remove;
 	}
 
 	/* caller is specifying specific resources to release */
@@ -861,13 +1084,15 @@ static void *cmd_release_thread(void *args_in)
 	for (i = 0; i < ca->header.data; i++) {
 		rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
 		if (rv != sizeof(struct sanlk_resource)) {
-			log_error("cmd_release recv fd %d %d %d", fd, rv, errno);
-			result = -1;
-			goto reply;
+			log_error("cmd_release %d,%d,%d recv res %d %d",
+				  cl_ci, cl_fd, cl_pid, rv, errno);
+			result = -ENOTCONN;
+			break;
 		}
 
 		found = 0;
 
+		pthread_mutex_lock(&cl->mutex);
 		for (j = 0; j < SANLK_MAX_RESOURCES; j++) {
 			token = cl->tokens[j];
 			if (!token)
@@ -878,28 +1103,47 @@ static void *cmd_release_thread(void *args_in)
 			if (memcmp(token->r.name, res.name, NAME_ID_SIZE))
 				continue;
 
-			rv = release_token(token);
-			if (rv < 0)
-				result = -1;
-			close_disks(token->disks, token->r.num_disks);
-			del_resource(token);
-			free(token);
+			rem_tokens[rem_tokens_count++] = token;
 			cl->tokens[j] = NULL;
 			found = 1;
 			break;
 		}
+		pthread_mutex_unlock(&cl->mutex);
 
 		if (!found) {
-			log_error("cmd_release pid %d no resource %s",
-				  cl->pid, res.name);
+			log_error("cmd_release %d,%d,%d no resource %.48s",
+				  cl_ci, cl_fd, cl_pid, res.name);
 			result = -1;
 		}
 	}
 
- reply:
-	set_cmd_active(ca->ci_target, 0);
+ do_remove:
 
-	log_debug("cmd_release done");
+	for (i = 0; i < rem_tokens_count; i++) {
+		token = rem_tokens[i];
+		rv = release_token(token);
+		if (rv < 0)
+			result = rv;
+		close_disks(token->disks, token->r.num_disks);
+		del_resource(token);
+		free(token);
+	}
+
+
+	pthread_mutex_lock(&cl->mutex);
+	log_debug("cmd_release %d,%d,%d result %d pid_dead %d count %d",
+		  cl_ci, cl_fd, cl_pid, result, cl->pid_dead,
+		  rem_tokens_count);
+
+	pid_dead = cl->pid_dead;
+	cl->cmd_active = 0;
+	pthread_mutex_unlock(&cl->mutex);
+
+	if (pid_dead) {
+		/* release any tokens not already released above */
+		release_cl_tokens(cl);
+		client_free(cl_ci);
+	}
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
 	h.length = sizeof(h);
@@ -907,7 +1151,7 @@ static void *cmd_release_thread(void *args_in)
 	h.data2 = 0;
 	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
 
-	client_back(ca->ci_in, fd);
+	client_resume(ca->ci_in);
 	free(ca);
 	return NULL;
 }
@@ -921,14 +1165,19 @@ static void *cmd_inquire_thread(void *args_in)
 	char *state, *str;
 	int state_maxlen = 0, state_strlen = 0;
 	int res_count = 0, cat_count = 0;
+	int fd, i, rv, pid_dead;
 	int result = 0;
-	int fd, i, rv;
+	int cl_ci = ca->ci_target;
+	int cl_fd = ca->cl_fd;
+	int cl_pid = ca->cl_pid;
 
-	cl = &client[ca->ci_target];
+	cl = &client[cl_ci];
 	fd = client[ca->ci_in].fd;
 
-	log_debug("cmd_inquire ci_in %d ci_target %d pid %d",
-		  ca->ci_in, ca->ci_target, cl->pid);
+	log_debug("cmd_inquire %d,%d,%d ci_in %d fd %d",
+		  cl_ci, cl_fd, cl_pid, ca->ci_in, fd);
+
+	pthread_mutex_lock(&cl->mutex);
 
 	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
 		if (cl->tokens[i])
@@ -940,7 +1189,7 @@ static void *cmd_inquire_thread(void *args_in)
 	state = malloc(state_maxlen);
 	if (!state) {
 		result = -ENOMEM;
-		goto reply;
+		goto done;
 	}
 	memset(state, 0, state_maxlen);
 
@@ -954,35 +1203,38 @@ static void *cmd_inquire_thread(void *args_in)
 		/* check number of tokens hasn't changed since first count */
 
 		if (cat_count >= res_count) {
-			log_error("cmd_inquire count changed %d %d",
-				  res_count, cat_count);
-			result = -1;
-			goto reply;
+			log_error("cmd_inquire %d,%d,%d count changed %d %d",
+				  cl_ci, cl_fd, cl_pid, res_count, cat_count);
+			result = -ENOENT;
+			goto done;
 		}
 
 		str = NULL;
 
 		rv = sanlock_res_to_str(&token->r, &str);
 		if (rv < 0 || !str) {
-			log_errot(token, "cmd_inquire res_to_str error %d", rv);
-			result = -2;
-			goto reply;
+			log_errot(token, "cmd_inquire %d,%d,%d res_to_str %d",
+				  cl_ci, cl_fd, cl_pid, rv);
+			result = -ELIBACC;
+			goto done;
 		}
 
 		if (strlen(str) > SANLK_MAX_RES_STR - 1) {
-			log_errot(token, "cmd_inquire str too long %zu", strlen(str));
+			log_errot(token, "cmd_inquire %d,%d,%d strlen %zu",
+				  cl_ci, cl_fd, cl_pid, strlen(str));
 			free(str);
-			result = -3;
-			goto reply;
+			result = -ELIBBAD;
+			goto done;
 		}
 
 		/* space is str separator, so it's invalid within each str */
 
 		if (strstr(str, " ")) {
-			log_errot(token, "cmd_inquire str has space");
+			log_errot(token, "cmd_inquire %d,%d,%d str space",
+				  cl_ci, cl_fd, cl_pid);
 			free(str);
-			result = -4;
-			goto reply;
+			result = -ELIBSCN;
+			goto done;
 		}
 
 		if (i)
@@ -995,12 +1247,18 @@ static void *cmd_inquire_thread(void *args_in)
 	state[state_maxlen - 1] = '\0';
 	state_strlen = strlen(state);
 	result = 0;
+ done:
+	pid_dead = cl->pid_dead;
+	cl->cmd_active = 0;
+	pthread_mutex_unlock(&cl->mutex);
 
- reply:
-	set_cmd_active(ca->ci_target, 0);
+	log_debug("cmd_inquire %d,%d,%d result %d pid_dead %d count %d strlen %d",
+		  cl_ci, cl_fd, cl_pid, result, pid_dead, res_count, state_strlen);
 
-	log_debug("cmd_inquire done result %d res_count %d strlen %d",
-		  result, res_count, state_strlen);
+	if (pid_dead) {
+		release_cl_tokens(cl);
+		client_free(cl_ci);
+	}
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
 	h.data = result;
@@ -1016,7 +1274,7 @@ static void *cmd_inquire_thread(void *args_in)
 		send(fd, &h, sizeof(h), MSG_NOSIGNAL);
 	}
 
-	client_back(ca->ci_in, fd);
+	client_resume(ca->ci_in);
 	free(ca);
 	return NULL;
 }
@@ -1031,7 +1289,7 @@ static void *cmd_add_lockspace_thread(void *args_in)
 
 	fd = client[ca->ci_in].fd;
 
-	log_debug("cmd_add_lockspace ci_in %d", ca->ci_in);
+	log_debug("cmd_add_lockspace %d,%d", ca->ci_in, fd);
 
 	sp = malloc(sizeof(struct space));
 	if (!sp) {
@@ -1041,7 +1299,9 @@ static void *cmd_add_lockspace_thread(void *args_in)
 
 	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_lockspace)) {
-		result = -EIO;
+		log_error("cmd_add_lockspace %d,%d recv %d %d",
+			   ca->ci_in, fd, rv, errno);
+		result = -ENOTCONN;
 		goto reply;
 	}
 
@@ -1058,11 +1318,9 @@ static void *cmd_add_lockspace_thread(void *args_in)
 	pthread_mutex_unlock(&spaces_mutex);
 
 	/* We use the space_id in log messages because the full length
-	 * space_name in each log message woul dmake excessively long lines.
-	 * Use an error message here to make a more permanent record of what
-	 * the space_id represents for reference from later log messages. */
+	 * space_name in each log message woul dmake excessively long lines. */
 
-	log_erros(sp, "lockspace %.48s host_id %llu has space_id %u",
+	log_space(sp, "lockspace %.48s host_id %llu has space_id %u",
 		  sp->space_name, (unsigned long long)sp->host_id,
 		  sp->space_id);
 
@@ -1074,7 +1332,7 @@ static void *cmd_add_lockspace_thread(void *args_in)
 	if (result)
 		free(sp);
  reply:
-	log_debug("cmd_add_lockspace done %d", result);
+	log_debug("cmd_add_lockspace %d,%d done %d", ca->ci_in, fd, result);
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
 	h.length = sizeof(h);
@@ -1082,7 +1340,7 @@ static void *cmd_add_lockspace_thread(void *args_in)
 	h.data2 = 0;
 	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
 
-	client_back(ca->ci_in, fd);
+	client_resume(ca->ci_in);
 	free(ca);
 	return NULL;
 }
@@ -1096,11 +1354,13 @@ static void *cmd_rem_lockspace_thread(void *args_in)
 
 	fd = client[ca->ci_in].fd;
 
-	log_debug("cmd_rem_lockspace ci_in %d", ca->ci_in);
+	log_debug("cmd_rem_lockspace %d,%d", ca->ci_in, fd);
 
 	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_lockspace)) {
-		result = -EIO;
+		log_error("cmd_rem_lockspace %d,%d recv %d %d",
+			  ca->ci_in, fd, rv, errno);
+		result = -ENOTCONN;
 		goto reply;
 	}
 
@@ -1108,7 +1368,9 @@ static void *cmd_rem_lockspace_thread(void *args_in)
 	   wait loop until it's actually gone */
 
 	/* TODO: we should probably prevent add_lockspace during an
-	   outstanding rem_lockspace and v.v. */
+	   outstanding rem_lockspace and v.v.  This would prevent problems
+	   with the space_exists name check below when the same lockspace
+	   name was removed and added at once */
 
 	result = rem_space(lockspace.name);
 
@@ -1122,7 +1384,7 @@ static void *cmd_rem_lockspace_thread(void *args_in)
 	}
 
  reply:
-	log_debug("cmd_rem_lockspace done %d", result);
+	log_debug("cmd_rem_lockspace %d,%d done %d", ca->ci_in, fd, result);
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
 	h.length = sizeof(h);
@@ -1130,7 +1392,7 @@ static void *cmd_rem_lockspace_thread(void *args_in)
 	h.data2 = 0;
 	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
 
-	client_back(ca->ci_in, fd);
+	client_resume(ca->ci_in);
 	free(ca);
 	return NULL;
 }
@@ -1150,15 +1412,29 @@ static int print_daemon_state(char *str)
 	return strlen(str) + 1;
 }
 
-static int print_client_state(struct client *cl, char *str)
+static int print_client_state(struct client *cl, int ci, char *str)
 {
 	memset(str, 0, SANLK_STATE_MAXSTR);
 
 	snprintf(str, SANLK_STATE_MAXSTR-1,
-		 "cmd_active=%d acquire_done=%d pid_dead=%d",
+		 "ci=%d "
+		 "fd=%d "
+		 "pid=%d "
+		 "cmd_active=%d "
+		 "cmd_last=%d "
+		 "pid_dead=%d "
+		 "killing=%d "
+		 "suspend=%d "
+		 "need_free=%d",
+		 ci,
+		 cl->fd,
+		 cl->pid,
 		 cl->cmd_active,
-		 cl->acquire_done,
-		 cl->pid_dead);
+		 cl->cmd_last,
+		 cl->pid_dead,
+		 cl->killing,
+		 cl->suspend,
+		 cl->need_free);
 
 	return strlen(str) + 1;
 }
@@ -1282,10 +1558,10 @@ static void cmd_status(int fd, struct sm_header *h_recv)
 	for (ci = 0; ci <= client_maxi; ci++) {
 		cl = &client[ci];
 
-		if (!cl->used || !cl->pid)
+		if (!cl->used)
 			continue;
 
-		str_len = print_client_state(cl, str);
+		str_len = print_client_state(cl, ci, str);
 		memset(&cst, 0, sizeof(cst));
 		cst.type = SANLK_STATE_CLIENT;
 		cst.data32 = cl->pid;
@@ -1352,9 +1628,11 @@ static void process_cmd_thread_lockspace(int ci_in, struct sm_header *h_recv)
 
 	switch (h_recv->cmd) {
 	case SM_CMD_ADD_LOCKSPACE:
+		strcpy(client[ci_in].owner_name, "add_lockspace");
 		rv = pthread_create(&cmd_thread, &attr, cmd_add_lockspace_thread, ca);
 		break;
 	case SM_CMD_REM_LOCKSPACE:
+		strcpy(client[ci_in].owner_name, "rem_lockspace");
 		rv = pthread_create(&cmd_thread, &attr, cmd_rem_lockspace_thread, ca);
 		break;
 	};
@@ -1384,38 +1662,91 @@ static void process_cmd_thread_resource(int ci_in, struct sm_header *h_recv)
 	pthread_attr_t attr;
 	struct cmd_args *ca;
 	struct sm_header h;
+	struct client *cl;
+	int result = 0;
 	int rv, ci_target;
 
 	if (h_recv->data2 != -1) {
 		/* lease for another registered client with pid specified by data2 */
 		ci_target = find_client_pid(h_recv->data2);
 		if (ci_target < 0) {
-			rv = -ENOENT;
-			goto fail;
+			result = -ENOENT;
+			goto out;
 		}
 	} else {
 		/* lease for this registered client */
 		ci_target = ci_in;
 	}
 
-	/* the target client must be registered */
-
-	if (client[ci_target].pid <= 0) {
-		rv = -EPERM;
-		goto fail;
-	}
-
-	rv = set_cmd_active(ci_target, h_recv->cmd);
-	if (rv < 0)
-		goto fail;
-
 	ca = malloc(sizeof(struct cmd_args));
 	if (!ca) {
-		rv = -ENOMEM;
-		goto fail_active;
+		result = -ENOMEM;
+		goto out;
 	}
+
+	cl = &client[ci_target];
+
+	pthread_mutex_lock(&cl->mutex);
+
+	if (!cl->used) {
+		log_error("cmd %d %d,%d,%d not used",
+			  h_recv->cmd, ci_target, cl->fd, cl->pid);
+		result = -EBUSY;
+		goto out;
+	}
+
+	if (cl->pid <= 0) {
+		log_error("cmd %d %d,%d,%d no pid",
+			  h_recv->cmd, ci_target, cl->fd, cl->pid);
+		result = -EBUSY;
+		goto out;
+	}
+
+	if (cl->pid_dead) {
+		log_error("cmd %d %d,%d,%d pid_dead",
+			  h_recv->cmd, ci_target, cl->fd, cl->pid);
+		result = -EBUSY;
+		goto out;
+	}
+
+	if (cl->need_free) {
+		log_error("cmd %d %d,%d,%d need_free",
+			  h_recv->cmd, ci_target, cl->fd, cl->pid);
+		result = -EBUSY;
+		goto out;
+	}
+
+	if (cl->killing) {
+		log_error("cmd %d %d,%d,%d killing",
+			  h_recv->cmd, ci_target, cl->fd, cl->pid);
+		result = -EBUSY;
+		goto out;
+	}
+
+	if (cl->cmd_active) {
+		log_error("cmd %d %d,%d,%d cmd_active %d",
+			  h_recv->cmd, ci_target, cl->fd, cl->pid,
+			  cl->cmd_active);
+		result = -EBUSY;
+		goto out;
+	}
+
+	cl->cmd_active = h_recv->cmd;
+
+	/* once cmd_active is set, client_pid_dead() will not clear cl->tokens
+	   or call client_free, so it's the responsiblity of cmd_a,r,i_thread
+	   to check if pid_dead when clearing cmd_active, and doing the cleanup
+	   if pid is dead */
+ out:
+	pthread_mutex_unlock(&cl->mutex);
+
+	if (result < 0)
+		goto fail;
+
 	ca->ci_in = ci_in;
 	ca->ci_target = ci_target;
+	ca->cl_pid = cl->pid;
+	ca->cl_fd = cl->fd;
 	memcpy(&ca->header, h_recv, sizeof(struct sm_header));
 
 	/* TODO: use a thread pool? */
@@ -1436,26 +1767,34 @@ static void process_cmd_thread_resource(int ci_in, struct sm_header *h_recv)
 	};
 
 	pthread_attr_destroy(&attr);
-	if (rv < 0) {
-		log_error("create cmd thread failed");
-		goto fail_free;
-	}
 
+	if (rv < 0) {
+		/* we don't have to worry about client_pid_dead having
+		   been called while mutex was unlocked with cmd_active set,
+		   because client_pid_dead is called from the main thread which
+		   is running this function */
+
+		log_error("create cmd thread failed");
+		pthread_mutex_lock(&cl->mutex);
+		cl->cmd_active = 0;
+		pthread_mutex_unlock(&cl->mutex);
+		result = rv;
+		goto fail;
+	}
 	return;
 
- fail_free:
-	free(ca);
- fail_active:
-	set_cmd_active(ci_target, 0);
  fail:
-	client_recv_all(ci_in, h_recv, 0);
-
 	memcpy(&h, h_recv, sizeof(struct sm_header));
 	h.length = sizeof(h);
-	h.data = rv;
+	h.data = result;
 	h.data2 = 0;
 	send(client[ci_in].fd, &h, sizeof(h), MSG_NOSIGNAL);
-	client_back(ci_in, client[ci_in].fd);
+
+	client_recv_all(ci_in, h_recv, 0);
+
+	client_resume(ci_in);
+	if (ca)
+		free(ca);
 }
 
 static void process_cmd_daemon(int ci, struct sm_header *h_recv)
@@ -1471,17 +1810,21 @@ static void process_cmd_daemon(int ci, struct sm_header *h_recv)
 			break;
 		}
 		log_debug("cmd_register ci %d fd %d pid %d", ci, fd, pid);
+		snprintf(client[ci].owner_name, SANLK_NAME_LEN, "%d", pid);
 		client[ci].pid = pid;
 		client[ci].deadfn = client_pid_dead;
 		auto_close = 0;
 		break;
 	case SM_CMD_SHUTDOWN:
+		strcpy(client[ci].owner_name, "shutdown");
 		external_shutdown = 1;
 		break;
 	case SM_CMD_STATUS:
+		strcpy(client[ci].owner_name, "status");
 		cmd_status(fd, h_recv);
 		break;
 	case SM_CMD_LOG_DUMP:
+		strcpy(client[ci].owner_name, "log_dump");
 		cmd_log_dump(fd, h_recv);
 		break;
 	};
@@ -1515,6 +1858,8 @@ static void process_connection(int ci)
 		goto dead;
 	}
 
+	client[ci].cmd_last = h.cmd;
+
 	switch (h.cmd) {
 	case SM_CMD_REGISTER:
 	case SM_CMD_SHUTDOWN:
@@ -1524,7 +1869,9 @@ static void process_connection(int ci)
 		break;
 	case SM_CMD_ADD_LOCKSPACE:
 	case SM_CMD_REM_LOCKSPACE:
-		client_ignore(ci);
+		rv = client_suspend(ci);
+		if (rv < 0)
+			return;
 		process_cmd_thread_lockspace(ci, &h);
 		break;
 	case SM_CMD_ACQUIRE:
@@ -1532,7 +1879,9 @@ static void process_connection(int ci)
 	case SM_CMD_INQUIRE:
 		/* the main_loop needs to ignore this connection
 		   while the thread is working on it */
-		client_ignore(ci);
+		rv = client_suspend(ci);
+		if (rv < 0)
+			return;
 		process_cmd_thread_resource(ci, &h);
 		break;
 	default:
@@ -1570,6 +1919,9 @@ static int setup_listener(void)
 		return rv;
 
 	ci = client_add(fd, process_listener, NULL);
+	if (ci < 0)
+		return -1;
+
 	strcpy(client[ci].owner_name, "listener");
 	return 0;
 }
@@ -1637,11 +1989,15 @@ static int do_daemon(void)
 		umask(0);
 	}
 
+	rv = client_alloc();
+	if (rv < 0)
+		return rv;
+
 	memset(&act, 0, sizeof(act));
 	act.sa_handler = sigterm_handler;
 	rv = sigaction(SIGTERM, &act, NULL);
 	if (rv < 0)
-		return -rv;
+		return rv;
 
 	/*
 	 * after creating dirs and setting up logging the daemon can
@@ -1651,7 +2007,7 @@ static int do_daemon(void)
 	rv = make_dirs();
 	if (rv < 0) {
 		log_tool("cannot create logging dirs\n");
-		return -1;
+		return rv;
 	}
 
 	setup_logging();
@@ -1993,10 +2349,18 @@ static int read_command_line(int argc, char *argv[])
 		i = 2;
 	} else if (!strcmp(arg1, "direct")) {
 		com.type = COM_DIRECT;
+		if (argc < 3) {
+			print_usage();
+			exit(EXIT_FAILURE);
+		}
 		act = argv[2];
 		i = 3;
 	} else if (!strcmp(arg1, "client")) {
 		com.type = COM_CLIENT;
+		if (argc < 3) {
+			print_usage();
+			exit(EXIT_FAILURE);
+		}
 		act = argv[2];
 		i = 3;
 	} else {
