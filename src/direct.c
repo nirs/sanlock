@@ -90,24 +90,21 @@ static int do_paxos_action(void)
 		case ACT_ACQUIRE:
 			rv = paxos_lease_acquire(token, 0, &leader_ret, 0, com.num_hosts);
 			if (rv < 0) {
-				log_tool("cannot acquire lease on %s",
-				 	 token->r.name);
+				log_tool("cannot acquire lease on %s", token->r.name);
 				return -1;
 			}
 			break;
 
 		case ACT_RELEASE:
-			rv = paxos_lease_leader_read(token, &leader_read);
+			rv = paxos_lease_leader_read(token, &leader_read, "direct_release");
 			if (rv < 0) {
-				log_tool("cannot read lease on %s",
-				 	 token->r.name);
+				log_tool("cannot read lease on %s", token->r.name);
 				return -1;
 			}
 
 			rv = paxos_lease_release(token, &leader_read, &leader_ret);
 			if (rv < 0) {
-				log_tool("cannot release lease on %s",
-				 	 token->r.name);
+				log_tool("cannot release lease on %s", token->r.name);
 				return -1;
 			}
 			break;

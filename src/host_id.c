@@ -263,9 +263,11 @@ static void *host_id_thread(void *arg_in)
 				sp->lease_status.max_renewal_time = t;
 			}
 
+			/*
 			log_space(sp, "host_id %llu renewal %llu interval %d",
 				  (unsigned long long)sp->host_id,
 				  (unsigned long long)t, good_diff);
+			*/
 
 			if (!sp->thread_stop)
 				update_watchdog_file(sp, t);

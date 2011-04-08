@@ -464,7 +464,8 @@ static int leaders_match(struct leader_record *a, struct leader_record *b)
 	return 0;
 }
 
-int paxos_lease_leader_read(struct token *token, struct leader_record *leader_ret)
+int paxos_lease_leader_read(struct token *token, struct leader_record *leader_ret,
+			    const char *caller)
 {
 	struct leader_record prev_leader;
 	struct leader_record *leaders;
@@ -551,8 +552,9 @@ int paxos_lease_leader_read(struct token *token, struct leader_record *leader_re
 		goto fail;
 	}
 
-	log_token(token, "leader_read owner %llu lver %llu hosts %llu "
+	log_token(token, "%s leader_read owner %llu lver %llu hosts %llu "
 		  "time %llu res %s",
+		  caller ? caller : "unknown",
 		  (unsigned long long)prev_leader.owner_id,
 		  (unsigned long long)prev_leader.lver,
 		  (unsigned long long)prev_leader.num_hosts,
@@ -611,7 +613,7 @@ int paxos_lease_acquire(struct token *token, int force,
 	log_token(token, "paxos_acquire begin lver %llu force %d",
 		  (unsigned long long)acquire_lver, force);
 
-	error = paxos_lease_leader_read(token, &prev_leader);
+	error = paxos_lease_leader_read(token, &prev_leader, "paxos_acquire");
 	if (error < 0)
 		goto out;
 
@@ -859,7 +861,7 @@ int paxos_lease_release(struct token *token,
 	struct leader_record leader;
 	int error;
 
-	error = paxos_lease_leader_read(token, &leader);
+	error = paxos_lease_leader_read(token, &leader, "paxos_release");
 	if (error < 0) {
 		log_errot(token, "release error cannot read leader");
 		goto out;

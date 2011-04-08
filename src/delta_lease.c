@@ -211,7 +211,7 @@ int delta_lease_renew(struct space *sp, struct sync_disk *disk,
 	uint64_t new_ts;
 	int error, delay;
 
-	log_space(sp, "delta_renew %llu begin", (unsigned long long)host_id);
+	/* log_space(sp, "delta_renew %llu begin", (unsigned long long)host_id); */
 
 	error = delta_lease_leader_read(disk, space_name, host_id, &leader);
 	if (error < 0)
@@ -229,7 +229,7 @@ int delta_lease_renew(struct space *sp, struct sync_disk *disk,
 	leader.timestamp = new_ts;
 	leader.checksum = leader_checksum(&leader);
 
-	log_space(sp, "delta_renew write new %llu", (unsigned long long)new_ts);
+	/* log_space(sp, "delta_renew write new %llu", (unsigned long long)new_ts); */
 
 	error = write_sector(disk, host_id - 1, (char *)&leader,
 			     sizeof(struct leader_record),
@@ -238,7 +238,7 @@ int delta_lease_renew(struct space *sp, struct sync_disk *disk,
 		return error;
 
 	delay = 2 * to.io_timeout_seconds;
-	log_space(sp, "delta_renew sleep 2d %d", delay);
+	/* log_space(sp, "delta_renew sleep 2d %d", delay); */
 	sleep(delay);
 
 	error = delta_lease_leader_read(disk, space_name, host_id, &leader);
