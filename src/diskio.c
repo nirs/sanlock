@@ -20,6 +20,7 @@
 #include <syslog.h>
 #include <sys/types.h>
 #include <sys/time.h>
+#include <sys/stat.h>
 #include <aio.h>
 #include <blkid/blkid.h>
 
@@ -82,6 +83,7 @@ int open_disks(struct sync_disk *disks, int num_disks)
 	int d, fd, rv;
 	uint32_t ss = 0;
 	uint64_t orig_offset;
+	struct stat st;
 
 	for (d = 0; d < num_disks; d++) {
 		disk = &disks[d];
@@ -91,10 +93,20 @@ int open_disks(struct sync_disk *disks, int num_disks)
 			continue;
 		}
 
-		rv = set_disk_properties(disk);
-		if (rv < 0) {
+		if (fstat(fd, &st) < 0) {
+		        log_error("fstat error %d %s", fd, disk->path);
 			close(fd);
 			continue;
+		}
+
+		if (S_ISREG(st.st_mode)) {
+		        disk->sector_size = 512;
+		} else {
+		        rv = set_disk_properties(disk);
+			if (rv < 0) {
+			      close(fd);
+			      continue;
+			}
 		}
 
 		if (!ss) {
