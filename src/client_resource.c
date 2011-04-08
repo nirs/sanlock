@@ -551,7 +551,6 @@ int sanlock_state_to_args(char *res_state,
 			free(args[i]);
 	}
 	free(args);
- fail:
 	return rv;
 }
 

@@ -34,7 +34,6 @@
 
 int sanlock_shutdown(void)
 {
-	struct sm_header h;
 	int fd;
 
 	fd = send_command(SM_CMD_SHUTDOWN, 0);
