@@ -23,6 +23,7 @@
 #include <signal.h>
 #include <sched.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <sys/un.h>
@@ -84,6 +85,7 @@ static int client_maxi;
 static int client_size = 0;
 static struct client *client = NULL;
 static struct pollfd *pollfd = NULL;
+const char *client_built = " client";
 
 
 #define log_debug(fmt, args...) \
@@ -377,6 +379,7 @@ static int active_clients(void)
 
 
 #ifdef TEST_FILES
+const char *files_built = " files";
 static DIR *files_dir;
 
 static void close_files(void)
@@ -452,6 +455,7 @@ static int test_files(void)
 
 #else
 
+const char *files_built = NULL;
 static void close_files(void) { }
 static int setup_files(void) { return 0; }
 static int test_files(void) { return 0; }
@@ -461,6 +465,7 @@ static int test_files(void) { return 0; }
 
 #ifdef TEST_SCRIPTS
 static DIR *scripts_dir;
+const char *scripts_built = " scripts";
 
 static void close_scripts(void)
 {
@@ -469,10 +474,22 @@ static void close_scripts(void)
 
 static int setup_scripts(void)
 {
+	mode_t old_umask;
+	int rv;
+
+	old_umask = umask(0022);
+	rv = mkdir(SCRIPTS_DIR, 0777);
+	if (rv < 0 && errno != EEXIST)
+		goto out;
+
 	scripts_dir = opendir(SCRIPTS_DIR);
 	if (!scripts_dir)
-		return -1;
-	return 0;
+		rv = -errno;
+	else
+		rv = 0;
+ out:
+	umask(old_umask);
+	return rv;
 }
 
 static int run_script(char *name, int i)
@@ -480,7 +497,7 @@ static int run_script(char *name, int i)
 	int pid;
 
 	if (i >= MAX_SCRIPTS) {
-		log_error("max scripts %d, ignore %s", MAX_SCRIPTS, de->d_name);
+		log_error("max scripts %d, ignore %s", MAX_SCRIPTS, name);
 		return -1;
 	}
 
@@ -491,6 +508,7 @@ static int run_script(char *name, int i)
 		return -errno;
 
 	if (pid) {
+		log_debug("run_script %d %s", pid, name);
 		scripts[i].pid = pid;
 		return 0;
 	} else {
@@ -542,6 +560,9 @@ static int check_script(int i)
 		}
 	}
  out:
+	log_debug("check_script %d rv %d begin %llu",
+		  scripts[i].pid, rv, (unsigned long long)begin);
+
 	scripts[i].pid = 0;
 	return rv;
 }
@@ -555,7 +576,9 @@ static int test_scripts(void)
 
 	memset(scripts, 0, sizeof(scripts));
 
-	while ((de = readdir(script_dir))) {
+	rewinddir(scripts_dir);
+
+	while ((de = readdir(scripts_dir))) {
 		if (de->d_name[0] == '.')
 			continue;
 
@@ -577,6 +600,7 @@ static int test_scripts(void)
 
 #else
 
+const char *scripts_built = NULL;
 static void close_scripts(void) { }
 static int setup_scripts(void) { return 0; }
 static int test_scripts(void) { return 0; }
@@ -827,6 +851,15 @@ static void setup_priority(void)
 	}
 }
 
+static void print_usage(void)
+{
+	printf("Usage:\n");
+	printf("wdmd [options]\n\n");
+	printf("version               print version\n");
+	printf("help                  print usage\n");
+	printf("-D                    debug: no fork and print all logging to stderr\n");
+}
+
 /* If wdmd exits abnormally, /dev/watchdog will eventually fire, and clients
    can detect wdmd is gone and begin to shut down cleanly ahead of the reset.
    But what if wdmd is restarted before the wd fires?  It will begin petting
@@ -834,15 +867,40 @@ static void setup_priority(void)
    know if this situation is important enough to try to prevent.  One way
    would be for wdmd to fail starting if it found a pid file left over from
    its previous run. */
+
+#define RELEASE_VERSION "1.0"
    
 int main(int argc, char *argv[])
 {
 	int rv;
 
-	/* TODO: real option parsing, including -h 0 */
+	/*
+	 * TODO: real option parsing, including
+	 * -h <num> use high priority features (1 yes, 0 no, default 1)
+	 * -c <num> enable test clients (1 yes, 0 no, default ...)
+	 * -s <num> enable test scripts (1 yes, 0 no, default ...)
+	 * -f <num> enable test files (1 yes, 0 no, default ...)
+	 */
 
-	if (argc > 1 && !strcmp(argv[1], "-D"))
+	if ((argc > 1) &&
+	    !strcmp(argv[1], "version")) {
+		printf("wdmd version %s tests_built%s%s%s\n", RELEASE_VERSION,
+		       scripts_built ? scripts_built : "",
+		       client_built ? client_built : "",
+		       files_built ? files_built : "");
+		return 0;
+	}
+
+	if ((argc > 1) &&
+	    (!strcmp(argv[1], "help") || !strcmp(argv[1], "--help") || !strcmp(argv[1], "-h"))) {
+		print_usage();
+		return 0;
+	}
+
+	if ((argc > 1) &&
+	    !strcmp(argv[1], "-D")) {
 		daemon_debug = 1;
+	}
 
 	if (!daemon_debug) {
 		if (daemon(0, 0) < 0) {
@@ -854,6 +912,11 @@ int main(int argc, char *argv[])
 
 	openlog("wdmd", LOG_CONS | LOG_PID, LOG_DAEMON);
 
+	log_error("wdmd started tests_built%s%s%s\n",
+		  scripts_built ? scripts_built : "",
+		  client_built ? client_built : "",
+		  files_built ? files_built : "");
+		  
 	setup_priority();
 
 	rv = lockfile();
