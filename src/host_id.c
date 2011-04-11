@@ -71,12 +71,17 @@ int print_space_state(struct space *sp, char *str)
 	return strlen(str);
 }
 
-static struct space *_search_space(char *space_name, struct list_head *head)
+static struct space *_search_space(char *name, struct sync_disk *disk,
+				   uint64_t host_id, struct list_head *head)
 {
 	struct space *sp;
 
 	list_for_each_entry(sp, head, list) {
-		if (strncmp(sp->space_name, space_name, NAME_ID_SIZE))
+		if (strncmp(sp->space_name, name, NAME_ID_SIZE))
+			continue;
+		if (disk && strncmp(sp->host_id_disk.path, disk->path, SANLK_PATH_LEN))
+			continue;
+		if (host_id && sp->host_id != host_id)
 			continue;
 		return sp;
 	}
@@ -106,21 +111,6 @@ int get_space_info(char *space_name, struct space *sp_out)
 
 	return rv;
 }
-
-#if 0
-uint64_t get_our_host_id(char *space_name)
-{
-	struct space *sp;
-	uint64_t id = 0;
-
-	pthread_mutex_lock(&spaces_mutex);
-	sp = _search_space(space_name, &spaces);
-	if (sp)
-		id = sp->host_id;
-	pthread_mutex_unlock(&spaces_mutex);
-	return id;
-}
-#endif
 
 int host_id_leader_read(char *space_name, uint64_t host_id,
 			struct leader_record *leader_ret)
@@ -299,9 +289,15 @@ int add_space(struct space *sp)
 {
 	int rv, result;
 
-	if (space_exists(sp->space_name)) {
+	if (space_exists(sp->space_name, &sp->host_id_disk, sp->host_id)) {
 		log_erros(sp, "add_space exists");
 		rv = -EEXIST;
+		goto fail;
+	}
+
+	if (space_exists(sp->space_name, NULL, 0)) {
+		log_erros(sp, "add_space name exists with other host info");
+		rv = -EINVAL;
 		goto fail;
 	}
 
@@ -340,8 +336,8 @@ int add_space(struct space *sp)
 
 	pthread_mutex_lock(&spaces_mutex);
 	/* TODO: repeating check here unnecessary if we serialize adds and removes */
-	if (_search_space(sp->space_name, &spaces) ||
-	    _search_space(sp->space_name, &spaces_remove)) {
+	if (_search_space(sp->space_name, NULL, 0, &spaces) ||
+	    _search_space(sp->space_name, NULL, 0, &spaces_remove)) {
 		pthread_mutex_unlock(&spaces_mutex);
 		log_erros(sp, "add_space duplicate name");
 		goto fail_stop;
@@ -360,13 +356,13 @@ int add_space(struct space *sp)
 	return rv;
 }
 
-int rem_space(char *space_name)
+int rem_space(char *name, struct sync_disk *disk, uint64_t host_id)
 {
 	struct space *sp;
 	int rv = -ENOENT;
 
 	pthread_mutex_lock(&spaces_mutex);
-	sp = _search_space(space_name, &spaces);
+	sp = _search_space(name, disk, host_id, &spaces);
 	if (sp) {
 		sp->external_remove = 1;
 		rv = 0;
@@ -429,14 +425,14 @@ void clear_spaces(int wait)
 	pthread_mutex_unlock(&spaces_mutex);
 }
 
-int space_exists(char *space_name)
+int space_exists(char *name, struct sync_disk *disk, uint64_t host_id)
 {
 	struct space *sp;
 
 	pthread_mutex_lock(&spaces_mutex);
-	sp = _search_space(space_name, &spaces);
+	sp = _search_space(name, disk, host_id, &spaces);
 	if (!sp)
-		sp = _search_space(space_name, &spaces_remove);
+		sp = _search_space(name, disk, host_id, &spaces_remove);
 	pthread_mutex_unlock(&spaces_mutex);
 	if (sp)
 		return 1;

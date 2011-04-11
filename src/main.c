@@ -1372,13 +1372,17 @@ static void *cmd_rem_lockspace_thread(void *args_in)
 	   with the space_exists name check below when the same lockspace
 	   name was removed and added at once */
 
-	result = rem_space(lockspace.name);
+	result = rem_space(lockspace.name,
+			   (struct sync_disk *)&lockspace.host_id_disk,
+			   lockspace.host_id);
 
 	if (result < 0)
 		goto reply;
 
 	while (1) {
-		if (!space_exists(lockspace.name))
+		if (!space_exists(lockspace.name,
+				  (struct sync_disk *)&lockspace.host_id_disk,
+				  lockspace.host_id))
 			break;
 		sleep(1);
 	}

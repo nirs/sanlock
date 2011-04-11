@@ -15,9 +15,9 @@ int get_space_info(char *space_name, struct space *sp_out);
 int host_id_leader_read(char *space_name, uint64_t host_id, struct leader_record *leader_ret);
 int host_id_renewed(struct space *sp);
 int add_space(struct space *sp);
-int rem_space(char *space_name);
+int rem_space(char *name, struct sync_disk *disk, uint64_t host_id);
 void clear_spaces(int wait);
-int space_exists(char *space_name);
+int space_exists(char *name, struct sync_disk *disk, uint64_t host_id);
 void setup_spaces(void);
 
 #endif
