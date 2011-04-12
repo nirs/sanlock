@@ -706,15 +706,34 @@ static int do_wrap(int argc, char *argv[])
 	exit(EXIT_FAILURE);
 }
 
-#if 0
-/* counting block: count_path offset 0
- * incoming block: count_path offset 4K
- * stopped block: count_path offset 8K */
 
-static void write_migrate(char *state, int offset)
+/*
+ * dest forks (libvirtd creates qemu pid)
+ * dest child does sanlock_register, waits for parent (e.g. qemu incoming paused)
+ * dest parent (libvirtd) reads state from disk, waits for source...
+ * source parent sigstop child, sanlock_release, writes flag to disk
+ * dest parent reads flag from disk, sanlock_acquire(child_pid, lver)
+ * dest parent tells child to run (e.g. qemu incoming resumed)
+ * dest child execs rw
+ * source parent sigkill child
+ */
+
+static void write_migrate_incoming(char *state_in)
 {
+	char target_str[32];
+	char state[1024];
 	char *wbuf, **p_wbuf;
 	int fd, rv;
+	int offset = 4096;
+	int target;
+
+	target = (our_hostid % max_hostid) + 1;
+
+	memset(state, 0, sizeof(state));
+	memset(target_str, 0, sizeof(target_str));
+	sprintf(target_str, " target=%d", target);
+	strcat(state, state_in);
+	strcat(state, target_str);
 
 	if (strlen(state) > 512) {
 		printf("state string too long\n");
@@ -752,6 +771,8 @@ static void write_migrate(char *state, int offset)
 		goto fail;
 	}
 
+	printf("write state \"%s\"\n", wbuf);
+
 	close(fd);
 	return;
 
@@ -760,22 +781,13 @@ static void write_migrate(char *state, int offset)
 	sleep(10000000);
 }
 
-static void write_migrate_incoming(char *state)
-{
-	write_migrate(state, 4096);
-}
-
-static void write_migrate_stopped(char *state)
-{
-	write_migrate(state, 4096*2);
-}
-
 /* read incoming block until it's set and our_hostid is next */
 
-static int wait_migrate_incoming(char *state_out)
+static int wait_migrate_incoming(uint64_t *lver)
 {
+	struct sanlk_resource *res;
 	char *rbuf, **p_rbuf, *wbuf, **p_wbuf;
-	char *owner_id, *val_str;
+	char *target_str, *val_str;
 	int fd, rv, val;
 	int offset = 4096;
 
@@ -821,12 +833,12 @@ static int wait_migrate_incoming(char *state_out)
 		return 1;
 	}
 
-	owner_id = strstr(rbuf, "leader.owner_id=");
-	if (!owner_id) {
+	target_str = strstr(rbuf, " target=");
+	if (!target_str) {
 		goto retry;
 	}
 
-	val_str = strstr(owner_id, "=") + 1;
+	val_str = strstr(target_str, "=") + 1;
 	if (!val_str) {
 		goto retry;
 	}
@@ -836,10 +848,19 @@ static int wait_migrate_incoming(char *state_out)
 		goto retry;
 	}
 
-	strcpy(state_out, rbuf);
+	*target_str = '\0';
+
+	rv = sanlock_str_to_res(rbuf, &res);
+	if (rv < 0) {
+		printf("str_to_res error %d\n", rv);
+		goto fail;
+	}
+	*lver = res->lver;
+	free(res);
+	/* strcpy(state_out, rbuf); */
 
 	memset(wbuf, 0, 512);
-	strcpy(wbuf, "empty");
+	sprintf(wbuf, "%s", "empty");
 
 	lseek(fd, offset, SEEK_SET);
 
@@ -853,90 +874,23 @@ static int wait_migrate_incoming(char *state_out)
 	return 0;
 
  fail:
-	printf("wait_migrate_incoming failed %s\n", state_out);
+	printf("wait_migrate_incoming failed\n");
 	sleep(10000000);
-}
-
-/* read stopped block until it matches state_in */
-
-static void wait_migrate_stopped(char *state_in)
-{
-	char *rbuf, **p_rbuf, *wbuf, **p_wbuf;
-	int fd, rv;
-	int offset = 4096 * 2;
-
-	fd = open(count_path, O_RDWR | O_DIRECT | O_SYNC, 0);
-	if (fd < 0) {
-		perror("open failed");
-		goto fail;
-	}
-
-	rv = ioctl(fd, BLKFLSBUF);
-	if (rv) {
-		perror("BLKFLSBUF failed");
-		goto fail;
-	}
-
-	p_rbuf = &rbuf;
-	p_wbuf = &wbuf;
-
-	rv = posix_memalign((void *)p_rbuf, getpagesize(), 512);
-	if (rv) {
-		perror("posix_memalign failed");
-		goto fail;
-	}
-
-	rv = posix_memalign((void *)p_wbuf, getpagesize(), 512);
-	if (rv) {
-		perror("posix_memalign failed");
-		goto fail;
-	}
-
- retry:
-	lseek(fd, offset, SEEK_SET);
-
-	rv = read(fd, rbuf, 512);
-	if (rv != 512) {
-		perror("read failed");
-		goto fail;
-	}
-	rbuf[511] = '\0';
-
-	if (strcmp(rbuf, state_in)) {
-		sleep(1);
-		goto retry;
-	}
-
-	memset(wbuf, 0, 512);
-
-	lseek(fd, offset, SEEK_SET);
-
-	rv = write(fd, wbuf, 512);
-	if (rv != 512) {
-		perror("write failed");
-		goto fail;
-	}
-
-	close(fd);
-	return;
-
- fail:
-	printf("wait_migrate_stopped failed %s\n", state_in);
-	sleep(10000000);
+	return -1;
 }
 
 #define MAX_MIGRATE_STATE 512 /* keep in one block for simplicity */
 
 static int do_migrate(int argc, char *argv[])
 {
-	char incoming[MAX_MIGRATE_STATE];
 	char *av[MIGRATE_ARGS+1];
-	char *state;
 	struct sanlk_lockspace lockspace;
 	struct sanlk_resource *res;
-	struct sanlk_options *opt;
-	int i, j, pid, rv, sock, len, status, init, target;
+	int i, j, pid, rv, sock, len, status, init;
+	int res_count;
 	uint32_t parent_pid = getpid();
+	uint64_t lver;
+	char *state;
 
 	if (argc < MIGRATE_ARGS)
 		return -1;
@@ -959,11 +913,7 @@ static int do_migrate(int argc, char *argv[])
 	res->disks[0].path[SANLK_PATH_LEN-1] = '\0';
 	res->disks[0].offset = 1024000;
 
-	len = sizeof(struct sanlk_options) + MAX_MIGRATE_STATE;
-	opt = malloc(len);
-	memset(opt, 0, len);
-
-	printf("%d lock_disk %s count_disk %s our_hostid %d max_hostid\n",
+	printf("%d lock_disk %s count_disk %s our_hostid %d max_hostid %d\n",
 	       parent_pid, lock_path, count_path, our_hostid, max_hostid);
 
 	memset(&lockspace, 0, sizeof(lockspace));
@@ -992,28 +942,17 @@ static int do_migrate(int argc, char *argv[])
 	 */
 
 	j = 0;
-	memset(av, 0, sizeof(char *) * MIGRATE_ARGS+1);
-
 	av[j++] = strdup(argv[0]);
 	for (i = 3; i < MIGRATE_ARGS; i++)
 		av[j++] = strdup(argv[i]);
-
-	memset(incoming, 0, sizeof(incoming));
+	av[j] = NULL;
 
 	while (1) {
-		init = wait_migrate_incoming(incoming);
-
 		pid = fork();
 		if (!pid) {
 			int child_pid = getpid();
 
 			printf("\n");
-
-			if (!init) {
-				opt->flags = SANLK_FLG_INCOMING;
-				opt->len = strlen(incoming);
-				strncpy(opt->str, incoming, MAX_MIGRATE_STATE);
-			}
 
 			sock = sanlock_register();
 			if (sock < 0) {
@@ -1022,73 +961,70 @@ static int do_migrate(int argc, char *argv[])
 				exit(-1);
 			}
 
-			rv = sanlock_acquire(sock, -1, 1, &res, opt);
-			if (rv < 0) {
-				printf("%d sanlock_acquire error %d in %s\n",
-				       child_pid, rv, opt->str);
-				/* only one host should be trying to acquire
-				   so this should always succeed */
-				exit(-1);
-			}
-			printf("%d sanlock_acquire done\n", child_pid);
+			printf("%d pause\n", child_pid);
+			pause(); /* pause child until parent resumes */
+			printf("%d resume\n", child_pid);
 
-			if (init)
-				goto skip_setowner;
-
-			wait_migrate_stopped(incoming);
-
-			rv = sanlock_setowner(sock, -1);
-			if (rv < 0) {
-				printf("%d sanlock_setowner error %d\n",
-				       child_pid, rv);
-				exit(-1);
-			}
-			printf("%d sanlock_setowner done\n", child_pid);
- skip_setowner:
 			execv(av[0], av);
 			perror("execv devcount problem");
 			exit(EXIT_FAILURE);
 		}
 
+		init = wait_migrate_incoming(&lver); /* from source */
+
+		if (init) {
+			res->flags = 0;
+			res->lver = 0;
+		} else {
+			res->flags = SANLK_RES_LVER;
+			res->lver = lver;
+		}
+
+		rv = sanlock_acquire(-1, pid, 0, 1, &res, NULL);
+		if (rv < 0) {
+			printf("%d sanlock_acquire error %d\n", parent_pid, rv);
+			exit(0);
+		}
+		printf("%d sanlock_acquire done init %d lver %llu\n", parent_pid,
+		       init, (unsigned long long)lver);
+
+		kill(pid, SIGCONT); /* resume child */
+
 		/* let the child run for 10 seconds before stopping it;
-		   if the child exits before the 10 seconds, the sanlock_migrate
+		   if the child exits before the 10 seconds, the sanlock_inquire
 		   call should return an error */
 
 		sleep(10);
 
-		/* exercise both migrate options: giving target on host or not */
-
-		if (rand_int(1,3) == 1)
-			target = (our_hostid % max_hostid) + 1;
-		else
-			target = 0;
-
-		rv = sanlock_migrate(-1, pid, target, &state);
-		if (rv < 0 || !state) {
-			printf("%d sanlock_migrate error %d\n", parent_pid, rv);
+		rv = sanlock_inquire(-1, pid, 0, &res_count, &state);
+		if (rv < 0) {
+			printf("sanlock_inquire error %d\n", rv);
 			goto fail;
 		}
-
-		write_migrate_incoming(state);
+		printf("%d sanlock_inquire done\n", parent_pid);
 
 		kill(pid, SIGSTOP);
 
-		write_migrate_stopped(state);
+		rv = sanlock_release(-1, pid, SANLK_REL_ALL, 0, NULL);
+		if (rv < 0) {
+			printf("sanlock_release error %d\n", rv);
+			goto fail;
+		}
+		printf("%d sanlock_release done\n", parent_pid);
+
+		write_migrate_incoming(state); /* to dest */
 
 		kill(pid, SIGKILL);
 
 		waitpid(pid, &status, 0);
 
 		free(state);
-
-		/* TODO: goto fail if exit status is an error */
 	}
 
  fail:
 	printf("test failed...\n");
 	sleep(10000000);
 }
-#endif
 
 /* 
  * devcount init <lock_disk> <count_disk>
@@ -1165,10 +1101,8 @@ int main(int argc, char *argv[])
 	else if (!strcmp(argv[1], "relock"))
 		rv = do_relock(argc, argv);
 
-#if 0
 	else if (!strcmp(argv[1], "migrate"))
 		rv = do_migrate(argc, argv);
-#endif
 
 	if (!rv)
 		return 0;
