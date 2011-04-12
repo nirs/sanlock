@@ -131,27 +131,28 @@ int sanlock_direct_release(void)
 	return do_paxos_action();
 }
 
-static int do_delta_action(void)
+static int do_delta_action(int action, struct sanlk_lockspace *ls,
+			   struct leader_record *leader_ret)
 {
 	struct leader_record leader;
 	struct sync_disk sd;
 	struct space space;
 	int rv;
 
-	if (!com.lockspace.name[0])
+	if (!ls->name[0])
 		return -1;
 
-	if (!com.lockspace.host_id_disk.path[0])
+	if (!ls->host_id_disk.path[0])
 		return -1;
 
-	if (!com.lockspace.host_id)
+	if (!ls->host_id)
 		return -1;
 
 	/* for log_space in delta functions */
 	memset(&space, 0, sizeof(space));
 
 	memset(&sd, 0, sizeof(struct sync_disk));
-	memcpy(&sd, &com.lockspace.host_id_disk, sizeof(struct sanlk_disk));
+	memcpy(&sd, &ls->host_id_disk, sizeof(struct sanlk_disk));
 
 	rv = open_disks(&sd, 1);
 	if (rv != 1) {
@@ -159,34 +160,46 @@ static int do_delta_action(void)
 		return -1;
 	}
 
-	switch (com.action) {
+	switch (action) {
 	case ACT_ACQUIRE_ID:
 		rv = delta_lease_acquire(&space, &sd,
-					 com.lockspace.name,
-					 com.lockspace.host_id,
-					 com.lockspace.host_id,
+					 ls->name,
+					 ls->host_id,
+					 ls->host_id,
 					 &leader);
 		break;
 	case ACT_RENEW_ID:
 		rv = delta_lease_renew(&space, &sd,
-				       com.lockspace.name,
-				       com.lockspace.host_id,
-				       com.lockspace.host_id,
+				       ls->name,
+				       ls->host_id,
+				       ls->host_id,
 				       &leader);
 		break;
 	case ACT_RELEASE_ID:
 		rv = delta_lease_leader_read(&sd,
-					     com.lockspace.name,
-					     com.lockspace.host_id,
+					     ls->name,
+					     ls->host_id,
 					     &leader);
 		if (rv < 0)
 			return rv;
 		rv = delta_lease_release(&space, &sd,
-					 com.lockspace.name,
-					 com.lockspace.host_id,
+					 ls->name,
+					 ls->host_id,
 					 &leader, &leader);
 		break;
+	case ACT_READ_ID:
+		rv = delta_lease_leader_read(&sd,
+					     ls->name,
+					     ls->host_id,
+					     &leader);
+		break;
 	}
+
+	if (rv == DP_OK)
+		rv = 0;
+
+	if (leader_ret)
+		memcpy(leader_ret, &leader, sizeof(struct leader_record));
 
 	return rv;
 }
@@ -198,19 +211,89 @@ static int do_delta_action(void)
  * sanlock client add_lockspace|rem_lockspace -s LOCKSPACE
  */
 
-int sanlock_direct_acquire_id(void)
+int sanlock_direct_acquire_id(struct sanlk_lockspace *ls)
 {
-	return do_delta_action();
+	return do_delta_action(ACT_ACQUIRE_ID, ls, NULL);
 }
 
-int sanlock_direct_release_id(void)
+int sanlock_direct_release_id(struct sanlk_lockspace *ls)
 {
-	return do_delta_action();
+	return do_delta_action(ACT_RELEASE_ID, ls, NULL);
 }
 
-int sanlock_direct_renew_id(void)
+int sanlock_direct_renew_id(struct sanlk_lockspace *ls)
 {
-	return do_delta_action();
+	return do_delta_action(ACT_RENEW_ID, ls, NULL);
+}
+
+int sanlock_direct_read_id(struct sanlk_lockspace *ls,
+			   uint64_t *timestamp,
+			   uint64_t *owner_id,
+			   uint64_t *owner_generation)
+{
+	struct leader_record leader;
+	int rv;
+
+	memset(&leader, 0, sizeof(struct leader_record));
+
+	rv = do_delta_action(ACT_READ_ID, ls, &leader);
+
+	*timestamp = leader.timestamp;
+	*owner_id = leader.owner_id;
+	*owner_generation = leader.owner_generation;
+
+	return rv;
+}
+
+int sanlock_direct_live_id(struct sanlk_lockspace *ls,
+			   uint64_t *timestamp,
+			   uint64_t *owner_id,
+			   uint64_t *owner_generation,
+			   int *live)
+{
+	struct leader_record leader_begin;
+	struct leader_record leader;
+	time_t start;
+	int rv;
+
+	rv = do_delta_action(ACT_READ_ID, ls, &leader_begin);
+	if (rv < 0)
+		return rv;
+
+	start = time(NULL);
+
+	while (1) {
+		sleep(1);
+
+		rv = do_delta_action(ACT_READ_ID, ls, &leader);
+		if (rv < 0)
+			return rv;
+
+		if (leader.timestamp != leader_begin.timestamp) {
+			*live = 1;
+			break;
+		}
+
+		if (leader.owner_id != leader_begin.owner_id) {
+			*live = 2;
+			break;
+		}
+
+		if (leader.owner_generation != leader_begin.owner_generation) {
+			*live = 3;
+			break;
+		}
+
+		if (time(NULL) - start > to.host_id_timeout_seconds) {
+			*live = 0;
+			break;
+		}
+	}
+
+	*timestamp = leader.timestamp;
+	*owner_id = leader.owner_id;
+	*owner_generation = leader.owner_generation;
+	return 0;
 }
 
 /* 

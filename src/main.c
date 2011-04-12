@@ -2211,6 +2211,8 @@ static void print_usage(void)
 	printf("  acquire_id		acquire a host_id lease\n");
 	printf("  release_id		release a host_id lease\n");
 	printf("  renew_id		renew a host_id lease\n");
+	printf("  read_id		read a host_id lease, print the state\n");
+	printf("  live_id		monitor a host_id lease for liveness\n");
 	printf("\n");
 	printf("daemon\n");
 	printf("  -D			debug: no fork and print all logging to stderr\n");
@@ -2274,7 +2276,7 @@ static void print_usage(void)
 	printf("  -i <num>		host_id of local host\n");
 	printf("  -g <num>		host_id generation of local host\n");
 	printf("\n");
-	printf("direct acquire_id|renew_id|release_id -s LOCKSPACE\n");
+	printf("direct acquire_id|renew_id|release_id|read_id|live_id -s LOCKSPACE\n");
 	printf("  -a <num>		use async io (1 yes, 0 no)\n");
 	printf("\n");
 
@@ -2384,6 +2386,10 @@ static int read_command_line(int argc, char *argv[])
 			com.action = ACT_RELEASE_ID;
 		else if (!strcmp(act, "renew_id"))
 			com.action = ACT_RENEW_ID;
+		else if (!strcmp(act, "read_id"))
+			com.action = ACT_READ_ID;
+		else if (!strcmp(act, "live_id"))
+			com.action = ACT_LIVE_ID;
 		else {
 			log_tool("direct action \"%s\" is unknown", act);
 			exit(EXIT_FAILURE);
@@ -2651,6 +2657,8 @@ static int do_client(void)
 
 static int do_direct(void)
 {
+	uint64_t timestamp, owner_id, owner_generation;
+	int live;
 	int rv;
 
 	switch (com.action) {
@@ -2671,15 +2679,42 @@ static int do_direct(void)
 		break;
 
 	case ACT_ACQUIRE_ID:
-		rv = sanlock_direct_acquire_id();
+		rv = sanlock_direct_acquire_id(&com.lockspace);
 		break;
 
 	case ACT_RELEASE_ID:
-		rv = sanlock_direct_release_id();
+		rv = sanlock_direct_release_id(&com.lockspace);
 		break;
 
 	case ACT_RENEW_ID:
-		rv = sanlock_direct_renew_id();
+		rv = sanlock_direct_renew_id(&com.lockspace);
+		break;
+
+	case ACT_READ_ID:
+		rv = sanlock_direct_read_id(&com.lockspace,
+					    &timestamp,
+					    &owner_id,
+					    &owner_generation);
+
+		log_tool("result %d timestamp %llu owner_id %llu owner_generation %llu",
+			 rv,
+			 (unsigned long long)timestamp,
+			 (unsigned long long)owner_id,
+			 (unsigned long long)owner_generation);
+		break;
+
+	case ACT_LIVE_ID:
+		rv = sanlock_direct_live_id(&com.lockspace,
+					    &timestamp,
+					    &owner_id,
+					    &owner_generation,
+					    &live);
+
+		log_tool("result %d live %d timestamp %llu owner_id %llu owner_generation %llu",
+			 rv, live,
+			 (unsigned long long)timestamp,
+			 (unsigned long long)owner_id,
+			 (unsigned long long)owner_generation);
 		break;
 
 	default:

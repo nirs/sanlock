@@ -13,9 +13,19 @@ int sanlock_direct_init(void);
 int sanlock_direct_dump(void);
 int sanlock_direct_acquire(void);
 int sanlock_direct_release(void);
-int sanlock_direct_migrate(void);
-int sanlock_direct_acquire_id(void);
-int sanlock_direct_release_id(void);
-int sanlock_direct_renew_id(void);
 
+int sanlock_direct_acquire_id(struct sanlk_lockspace *ls);
+int sanlock_direct_release_id(struct sanlk_lockspace *ls);
+int sanlock_direct_renew_id(struct sanlk_lockspace *ls);
+
+int sanlock_direct_read_id(struct sanlk_lockspace *ls,
+                           uint64_t *timestamp,
+                           uint64_t *owner_id,
+                           uint64_t *owner_generation);
+
+int sanlock_direct_live_id(struct sanlk_lockspace *ls,
+                           uint64_t *timestamp,
+                           uint64_t *owner_id,
+                           uint64_t *owner_generation,
+                           int *live);
 #endif
