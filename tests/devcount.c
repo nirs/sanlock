@@ -706,13 +706,14 @@ static int do_wrap(int argc, char *argv[])
 	exit(EXIT_FAILURE);
 }
 
-
 /*
- * dest forks (libvirtd creates qemu pid)
+ * Test migration sequence (source inquires/releases, dest acquires lver)
+ *
+ * dest forks (e.g. libvirtd creates qemu pid)
  * dest child does sanlock_register, waits for parent (e.g. qemu incoming paused)
- * dest parent (libvirtd) reads state from disk, waits for source...
- * source parent sigstop child, sanlock_release, writes flag to disk
- * dest parent reads flag from disk, sanlock_acquire(child_pid, lver)
+ * source parent does sanlock_inquire
+ * source parent sigstop child, sanlock_release, writes state to disk
+ * dest parent reads state from disk, sanlock_acquire(child_pid, state.lver)
  * dest parent tells child to run (e.g. qemu incoming resumed)
  * dest child execs rw
  * source parent sigkill child
@@ -771,8 +772,8 @@ static void write_migrate_incoming(char *state_in)
 		goto fail;
 	}
 
-	printf("write state \"%s\"\n", wbuf);
-
+	/* printf("write_migrate_incoming \"%s\"\n", wbuf); */
+ 
 	close(fd);
 	return;
 
@@ -830,6 +831,7 @@ static int wait_migrate_incoming(uint64_t *lver)
 
 	/* init case to get things going */
 	if (!rbuf[0] && our_hostid == 1) {
+		*lver = 0;
 		return 1;
 	}
 
@@ -844,9 +846,11 @@ static int wait_migrate_incoming(uint64_t *lver)
 	}
 
 	val = atoi(val_str);
-	if ((val % max_hostid)+1 != our_hostid) {
+	if (val != our_hostid) {
 		goto retry;
 	}
+
+	/* printf("wait_migrate_incoming \"%s\"\n", rbuf); */
 
 	*target_str = '\0';
 
@@ -887,6 +891,7 @@ static int do_migrate(int argc, char *argv[])
 	struct sanlk_lockspace lockspace;
 	struct sanlk_resource *res;
 	int i, j, pid, rv, sock, len, status, init;
+	int pfd[2];
 	int res_count;
 	uint32_t parent_pid = getpid();
 	uint64_t lver;
@@ -948,9 +953,11 @@ static int do_migrate(int argc, char *argv[])
 	av[j] = NULL;
 
 	while (1) {
+		pipe(pfd);
 		pid = fork();
 		if (!pid) {
 			int child_pid = getpid();
+			char junk;
 
 			printf("\n");
 
@@ -962,7 +969,11 @@ static int do_migrate(int argc, char *argv[])
 			}
 
 			printf("%d pause\n", child_pid);
-			pause(); /* pause child until parent resumes */
+
+			read(pfd[0], &junk, 1);
+			close(pfd[0]);
+			close(pfd[1]);
+
 			printf("%d resume\n", child_pid);
 
 			execv(av[0], av);
@@ -988,7 +999,10 @@ static int do_migrate(int argc, char *argv[])
 		printf("%d sanlock_acquire done init %d lver %llu\n", parent_pid,
 		       init, (unsigned long long)lver);
 
-		kill(pid, SIGCONT); /* resume child */
+		/* tell child to resume */
+		write(pfd[1], "\n", 1);
+		close(pfd[0]);
+		close(pfd[1]);
 
 		/* let the child run for 10 seconds before stopping it;
 		   if the child exits before the 10 seconds, the sanlock_inquire
@@ -1024,6 +1038,7 @@ static int do_migrate(int argc, char *argv[])
  fail:
 	printf("test failed...\n");
 	sleep(10000000);
+	return -1;
 }
 
 /* 
