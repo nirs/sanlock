@@ -74,5 +74,11 @@ int sanlock_state_to_args(char *res_state,
 			  int *res_count,
 			  struct sanlk_resource ***res_args);
 
+/*
+ * convert to struct sanlk_lockspace from string with format:
+ * <lockspace_name>:<host_id>:<path>:<offset>
+ */
+
+int sanlock_str_to_lockspace(char *str, struct sanlk_lockspace *ls);
 
 #endif

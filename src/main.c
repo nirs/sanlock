@@ -2049,42 +2049,9 @@ static int do_daemon(void)
 	return rv;
 }
 
-/* arg = <lockspace_name>:<host_id>:<path>:<offset> */
-
 static int parse_arg_lockspace(char *arg)
 {
-	char *host_id = NULL;
-	char *path = NULL;
-	char *offset = NULL;
-
-	if (arg)
-		host_id = strstr(arg, ":");
-	if (host_id)
-		path = strstr(host_id+1, ":");
-	if (host_id && path)
-		offset = strstr(path+1, ":");
-
-	if (host_id) {
-		*host_id = '\0';
-		host_id++;
-	}
-	if (path) {
-		*path = '\0';
-		path++;
-	}
-	if (offset) {
-		*offset= '\0';
-		offset++;
-	}
-
-	if (arg)
-		strncpy(com.lockspace.name, arg, NAME_ID_SIZE);
-	if (host_id)
-		com.lockspace.host_id = atoll(host_id);
-	if (path)
-		strncpy(com.lockspace.host_id_disk.path, path, SANLK_PATH_LEN-1);
-	if (offset)
-		com.lockspace.host_id_disk.offset = atoll(offset);
+	sanlock_str_to_lockspace(arg, &com.lockspace);
 
 	log_debug("lockspace %s host_id %llu path %s offset %llu",
 		  com.lockspace.name,

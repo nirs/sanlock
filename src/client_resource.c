@@ -554,3 +554,46 @@ int sanlock_state_to_args(char *res_state,
 	return rv;
 }
 
+/*
+ * convert to struct sanlk_lockspace from string with format:
+ * <lockspace_name>:<host_id>:<path>:<offset>
+ */
+
+int sanlock_str_to_lockspace(char *str, struct sanlk_lockspace *ls)
+{
+	char *host_id = NULL;
+	char *path = NULL;
+	char *offset = NULL;
+
+	if (str)
+		host_id = strstr(str, ":");
+	if (host_id)
+		path = strstr(host_id+1, ":");
+	if (host_id && path)
+		offset = strstr(path+1, ":");
+
+	if (host_id) {
+		*host_id = '\0';
+		host_id++;
+	}
+	if (path) {
+		*path = '\0';
+		path++;
+	}
+	if (offset) {
+		*offset= '\0';
+		offset++;
+	}
+
+	if (str)
+		strncpy(ls->name, str, NAME_ID_SIZE);
+	if (host_id)
+		ls->host_id = atoll(host_id);
+	if (path)
+		strncpy(ls->host_id_disk.path, path, SANLK_PATH_LEN-1);
+	if (offset)
+		ls->host_id_disk.offset = atoll(offset);
+
+	return 0;
+}
+
