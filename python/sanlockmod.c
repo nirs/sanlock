@@ -11,21 +11,21 @@
 #include <sanlock_resource.h>
 #include <sanlock_admin.h>
 
-int __sanlock_fd = -1;
+int __sanlockmod_fd = -1;
 PyObject *py_module;
 
 /* SANLock exception */
-static PyObject *sanlock_exception;
+static PyObject *sanlockmod_exception;
 
 static PyObject *
 py_register(PyObject *self, PyObject *args)
 {
     Py_BEGIN_ALLOW_THREADS
-    __sanlock_fd = sanlock_register();
+    __sanlockmod_fd = sanlock_register();
     Py_END_ALLOW_THREADS
 
-    if (__sanlock_fd < 0) {
-        PyErr_SetString(sanlock_exception, "SANLock registration failed");
+    if (__sanlockmod_fd < 0) {
+        PyErr_SetString(sanlockmod_exception, "SANLock registration failed");
         return NULL;
     }
 
@@ -44,7 +44,7 @@ __parse_lockspace(PyObject *args, struct sanlk_lockspace *ret_ls)
 
     /* convert lockspace string to structure */
     if (sanlock_str_to_lockspace(lockspace, ret_ls) != 0) {
-        PyErr_SetString(sanlock_exception, "Invalid SANLock lockspace");
+        PyErr_SetString(sanlockmod_exception, "Invalid SANLock lockspace");
         return -1;
     }
 
@@ -67,7 +67,7 @@ py_add_lockspace(PyObject *self, PyObject *args)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        PyErr_SetString(sanlock_exception, "SANLock lockspace add failure");
+        PyErr_SetString(sanlockmod_exception, "SANLock lockspace add failure");
         return NULL;
     }
 
@@ -90,7 +90,7 @@ py_rem_lockspace(PyObject *self, PyObject *args)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        PyErr_SetString(sanlock_exception, "SANLock lockspace remove failure");
+        PyErr_SetString(sanlockmod_exception, "SANLock lockspace remove failure");
         return NULL;
     }
 
@@ -109,7 +109,7 @@ __parse_resource(PyObject *args, struct sanlk_resource **ret_res)
 
     /* convert resource string to structure */
     if (sanlock_str_to_res(resource, ret_res) != 0) {
-        PyErr_SetString(sanlock_exception, "Invalid SANLock resource");
+        PyErr_SetString(sanlockmod_exception, "Invalid SANLock resource");
         return -1;
     }
 
@@ -128,11 +128,11 @@ py_acquire(PyObject *self, PyObject *args)
 
     /* acquire resource (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_acquire(__sanlock_fd, -1, 0, 1, &res, 0);
+    rv = sanlock_acquire(__sanlockmod_fd, -1, 0, 1, &res, 0);
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        PyErr_SetString(sanlock_exception, "SANLock resource not acquired");
+        PyErr_SetString(sanlockmod_exception, "SANLock resource not acquired");
         goto exit_fail;
     }
 
@@ -156,11 +156,11 @@ py_release(PyObject *self, PyObject *args)
 
     /* release resource (gil disabled)*/
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_release(__sanlock_fd, -1, 0, 1, &res);
+    rv = sanlock_release(__sanlockmod_fd, -1, 0, 1, &res);
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        PyErr_SetString(sanlock_exception, "SANLock resource not released");
+        PyErr_SetString(sanlockmod_exception, "SANLock resource not released");
         goto exit_fail;
     }
 
@@ -173,8 +173,8 @@ exit_fail:
 }
 
 static PyMethodDef
-sanlock_methods[] = {
-    {"register", py_register, METH_NOARGS, "Register to sanlock daemon."},
+sanlockmod_methods[] = {
+    {"register", py_register, METH_NOARGS, "Register to SANLock daemon."},
     {"add_lockspace", py_add_lockspace, METH_VARARGS,
                       "Add a lockspace, acquiring a host_id in it."},
     {"rem_lockspace", py_rem_lockspace, METH_VARARGS,
@@ -187,16 +187,16 @@ sanlock_methods[] = {
 };
 
 PyMODINIT_FUNC
-initsanlock(void)
+initsanlockmod(void)
 {
-    py_module = Py_InitModule("sanlock", sanlock_methods);
+    py_module = Py_InitModule("sanlockmod", sanlockmod_methods);
 
     /* Python's module loader doesn't support clean recovery from errors */
     if (py_module == NULL)
         return;
 
     /* Initializing sanlock exception */
-    sanlock_exception = PyErr_NewException("sanlock.exception", NULL, NULL);
-    Py_INCREF(sanlock_exception);
-    PyModule_AddObject(py_module, "exception", sanlock_exception);
+    sanlockmod_exception = PyErr_NewException("sanlockmod.exception", NULL, NULL);
+    Py_INCREF(sanlockmod_exception);
+    PyModule_AddObject(py_module, "exception", sanlockmod_exception);
 }

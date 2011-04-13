@@ -6,9 +6,10 @@
 
 from distutils.core import setup, Extension
 
-module1 = Extension('sanlock', sources=['sanlock.c'], libraries=['sanlock'])
+sanlockmod = Extension('sanlockmod', sources=['sanlockmod.c'], libraries=['sanlock'])
 
 setup(name = 'SANLock',
       version = '1.0',
       description = 'SANLock python package',
-      ext_modules = [module1])
+      ext_modules = [sanlockmod],
+      py_modules = ['sanlock'])
