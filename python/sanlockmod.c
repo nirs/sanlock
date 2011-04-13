@@ -35,20 +35,33 @@ py_register(PyObject *self, PyObject *args)
 static int
 __parse_lockspace(PyObject *args, struct sanlk_lockspace *ret_ls)
 {
-    char *lockspace;
+    char *lockspace, *lockspace_arg;
 
     /* parse python tuple */
     if (!PyArg_ParseTuple(args, "s", &lockspace)) {
         return -1;
     }
 
-    /* convert lockspace string to structure */
-    if (sanlock_str_to_lockspace(lockspace, ret_ls) != 0) {
-        PyErr_SetString(sanlockmod_exception, "Invalid SANLock lockspace");
+    /* sanlock_str_to_lockspace is destructive */
+    lockspace_arg = strdup(lockspace);
+
+    if (lockspace_arg == NULL) {
+        PyErr_SetString(sanlockmod_exception, "SANLock extension memory error");
         return -1;
     }
 
+    /* convert lockspace string to structure */
+    if (sanlock_str_to_lockspace(lockspace_arg, ret_ls) != 0) {
+        PyErr_SetString(sanlockmod_exception, "Invalid SANLock lockspace");
+        goto exit_fail;
+    }
+
+    free(lockspace_arg);
     return 0;
+
+exit_fail:
+    free(lockspace_arg);
+    return -1;
 }
 
 static PyObject *
