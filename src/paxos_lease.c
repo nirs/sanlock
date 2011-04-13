@@ -415,12 +415,6 @@ static int verify_leader(struct token *token, struct sync_disk *disk,
 		return DP_BAD_VERSION;
 	}
 
-	if (lr->cluster_mode != options.cluster_mode) {
-		log_errot(token, "verify_leader wrong cluster mode %d %d %s",
-			  lr->cluster_mode, options.cluster_mode, disk->path);
-		return DP_BAD_CLUSTERMODE;
-	}
-
 	if (lr->sector_size != disk->sector_size) {
 		log_errot(token, "verify_leader wrong sector size %d %d %s",
 			  lr->sector_size, disk->sector_size, disk->path);
@@ -929,7 +923,6 @@ int paxos_lease_init(struct token *token, int num_hosts, int max_hosts)
 
 	leader.magic = PAXOS_DISK_MAGIC;
 	leader.version = PAXOS_DISK_VERSION_MAJOR | PAXOS_DISK_VERSION_MINOR;
-	leader.cluster_mode = options.cluster_mode;
 	leader.sector_size = token->disks[0].sector_size;
 	leader.num_hosts = num_hosts;
 	leader.max_hosts = max_hosts;

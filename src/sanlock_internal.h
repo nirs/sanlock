@@ -270,7 +270,6 @@ struct options {
 	int use_aio;
 	int use_watchdog;
 	int high_priority;
-	uint32_t cluster_mode;
 };
 
 /* values used while processing command, not afterward */

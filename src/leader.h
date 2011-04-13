@@ -79,7 +79,7 @@ enum {
 struct leader_record {
 	uint32_t magic;
 	uint32_t version;
-	uint32_t cluster_mode;
+	uint32_t unused0;
 	uint32_t sector_size;
 	uint64_t num_hosts;
 	uint64_t max_hosts;

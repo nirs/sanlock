@@ -289,7 +289,7 @@ int add_space(struct space *sp)
 {
 	int rv, result;
 
-	if (!sp->name[0]) {
+	if (!sp->space_name[0]) {
 		log_erros(sp, "add_space no name");
 		rv = -EINVAL;
 		goto fail;

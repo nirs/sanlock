@@ -53,12 +53,6 @@ static int verify_leader(struct sync_disk *disk,
 		return DP_BAD_VERSION;
 	}
 
-	if (lr->cluster_mode != options.cluster_mode) {
-		log_error("verify_leader wrong cluster mode %d %d %s",
-			  lr->cluster_mode, options.cluster_mode, disk->path);
-		return DP_BAD_CLUSTERMODE;
-	}
-
 	if (lr->sector_size != disk->sector_size) {
 		log_error("verify_leader wrong sector size %d %d %s",
 			  lr->sector_size, disk->sector_size, disk->path);
@@ -312,7 +306,6 @@ int delta_lease_init(struct sync_disk *disk, char *space_name, int max_hosts)
 
 	leader.magic = DELTA_DISK_MAGIC;
 	leader.version = DELTA_DISK_VERSION_MAJOR | DELTA_DISK_VERSION_MINOR;
-	leader.cluster_mode = options.cluster_mode;
 	leader.sector_size = disk->sector_size;
 	leader.max_hosts = 1;
 	leader.timestamp = LEASE_FREE;
