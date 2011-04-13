@@ -6,7 +6,11 @@
 
 from distutils.core import setup, Extension
 
-sanlockmod = Extension('sanlockmod', sources=['sanlockmod.c'], libraries=['sanlock'])
+sanlockmod = Extension(name = 'sanlockmod',
+                       sources = ['sanlockmod.c'],
+                       include_dirs = ['../src'],
+                       library_dirs = ['../src'],
+                       libraries = ['sanlock'])
 
 setup(name = 'SANLock',
       version = '1.0',

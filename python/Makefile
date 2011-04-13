@@ -7,6 +7,9 @@
 all:
 	python setup.py build
 
+install:
+	python setup.py install --root=$(DESTDIR)
+
 clean:
 	rm -rf build
 

@@ -1,3 +1,5 @@
+%{!?python_sitearch: %global python_sitearch %(%{__python} -c "from distutils.sysconfig import get_python_lib; print(get_python_lib(1))")}
+
 Name:           sanlock
 Version:        1.1.0
 Release:        3%{?dist}
@@ -26,6 +28,7 @@ access to the shared disks.
 # upstream does not support _smp_mflags
 CFLAGS=$RPM_OPT_FLAGS make -C wdmd
 CFLAGS=$RPM_OPT_FLAGS make -C src
+CFLAGS=$RPM_OPT_FLAGS make -C python
 
 %install
 rm -rf $RPM_BUILD_ROOT
@@ -33,6 +36,9 @@ make -C src \
         install LIB_LIBDIR=%{_libdir} \
         DESTDIR=$RPM_BUILD_ROOT
 make -C wdmd \
+        install LIB_LIBDIR=%{_libdir} \
+        DESTDIR=$RPM_BUILD_ROOT
+make -C python \
         install LIB_LIBDIR=%{_libdir} \
         DESTDIR=$RPM_BUILD_ROOT
 install -D -m 755 init.d/sanlock $RPM_BUILD_ROOT/%{_initddir}/sanlock
@@ -84,6 +90,22 @@ access to the shared disks.
 %doc COPYING
 %{_libdir}/libsanlock.so.*
 %{_libdir}/libwdmd.so.*
+
+%package        python
+Summary:        Python bindings for the sanlock library
+Group:          Development/Libraries
+
+%description    python
+The %{name}-python package contains a module that permits applications
+written in the Python programming language to use the interface
+supplied by the sanlock library.
+
+%files          python
+%defattr(-,root,root,-)
+%doc COPYING
+%{python_sitearch}/SANLock-1.0-py2.6.egg-info
+%{python_sitearch}/sanlock.py*
+%{python_sitearch}/sanlockmod.so
 
 %package        devel
 Summary:        Development files for %{name}
