@@ -289,6 +289,18 @@ int add_space(struct space *sp)
 {
 	int rv, result;
 
+	if (!sp->name[0]) {
+		log_erros(sp, "add_space no name");
+		rv = -EINVAL;
+		goto fail;
+	}
+
+	if (!sp->host_id) {
+		log_erros(sp, "add_space zero host_id");
+		rv = -EINVAL;
+		goto fail;
+	}
+
 	if (space_exists(sp->space_name, &sp->host_id_disk, sp->host_id)) {
 		log_erros(sp, "add_space exists");
 		rv = -EEXIST;
@@ -305,7 +317,7 @@ int add_space(struct space *sp)
 	if (rv != 1) {
 		log_erros(sp, "add_space open_disk failed %d %s",
 			  rv, sp->host_id_disk.path);
-		rv = -1;
+		rv = -ENODEV;
 		goto fail;
 	}
 
