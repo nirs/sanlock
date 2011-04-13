@@ -20,7 +20,9 @@ static PyObject *sanlock_exception;
 static PyObject *
 py_register(PyObject *self, PyObject *args)
 {
+    Py_BEGIN_ALLOW_THREADS
     __sanlock_fd = sanlock_register();
+    Py_END_ALLOW_THREADS
 
     if (__sanlock_fd < 0) {
         PyErr_SetString(sanlock_exception, "SANLock registration failed");
@@ -42,7 +44,7 @@ __parse_lockspace(PyObject *args, struct sanlk_lockspace *ret_ls)
 
     /* convert lockspace string to structure */
     if (sanlock_str_to_lockspace(lockspace, ret_ls) != 0) {
-        PyErr_SetString(sanlock_exception, "Invalid sanlock resource");
+        PyErr_SetString(sanlock_exception, "Invalid SANLock lockspace");
         return -1;
     }
 
@@ -52,14 +54,19 @@ __parse_lockspace(PyObject *args, struct sanlk_lockspace *ret_ls)
 static PyObject *
 py_add_lockspace(PyObject *self, PyObject *args)
 {
+    int rv;
     struct sanlk_lockspace ls;
 
     if (__parse_lockspace(args, &ls) != 0) {
         return NULL;
     }
 
-    /* add sanlock lockspace */
-    if (sanlock_add_lockspace(&ls, 0 ) != 0) {
+    /* add sanlock lockspace (gil disabled) */
+    Py_BEGIN_ALLOW_THREADS
+    rv = sanlock_add_lockspace(&ls, 0 );
+    Py_END_ALLOW_THREADS
+
+    if (rv != 0) {
         PyErr_SetString(sanlock_exception, "SANLock lockspace add failure");
         return NULL;
     }
@@ -70,14 +77,19 @@ py_add_lockspace(PyObject *self, PyObject *args)
 static PyObject *
 py_rem_lockspace(PyObject *self, PyObject *args)
 {
+    int rv;
     struct sanlk_lockspace ls;
 
     if (__parse_lockspace(args, &ls) != 0) {
         return NULL;
     }
 
-    /* remove sanlock lockspace */
-    if (sanlock_rem_lockspace(&ls, 0 ) != 0) {
+    /* remove sanlock lockspace (gil disabled) */
+    Py_BEGIN_ALLOW_THREADS
+    rv = sanlock_rem_lockspace(&ls, 0);
+    Py_END_ALLOW_THREADS
+
+    if (rv != 0) {
         PyErr_SetString(sanlock_exception, "SANLock lockspace remove failure");
         return NULL;
     }
@@ -97,7 +109,7 @@ __parse_resource(PyObject *args, struct sanlk_resource **ret_res)
 
     /* convert resource string to structure */
     if (sanlock_str_to_res(resource, ret_res) != 0) {
-        PyErr_SetString(sanlock_exception, "Invalid sanlock resource");
+        PyErr_SetString(sanlock_exception, "Invalid SANLock resource");
         return -1;
     }
 
@@ -107,14 +119,19 @@ __parse_resource(PyObject *args, struct sanlk_resource **ret_res)
 static PyObject *
 py_acquire(PyObject *self, PyObject *args)
 {
+    int rv;
     struct sanlk_resource *res;
 
     if (__parse_resource(args, &res) != 0) {
         return NULL;
     }
 
-    /* acquire resource */
-    if (sanlock_acquire(__sanlock_fd, -1, 0, 1, &res, 0) != 0) {
+    /* acquire resource (gil disabled) */
+    Py_BEGIN_ALLOW_THREADS
+    rv = sanlock_acquire(__sanlock_fd, -1, 0, 1, &res, 0);
+    Py_END_ALLOW_THREADS
+
+    if (rv != 0) {
         PyErr_SetString(sanlock_exception, "SANLock resource not acquired");
         goto exit_fail;
     }
@@ -130,14 +147,19 @@ exit_fail:
 static PyObject *
 py_release(PyObject *self, PyObject *args)
 {
+    int rv;
     struct sanlk_resource *res;
 
     if (__parse_resource(args, &res) != 0) {
         return NULL;
     }
 
-    /* release resource */
-    if (sanlock_release(__sanlock_fd, -1, 0, 1, &res) != 0) {
+    /* release resource (gil disabled)*/
+    Py_BEGIN_ALLOW_THREADS
+    rv = sanlock_release(__sanlock_fd, -1, 0, 1, &res);
+    Py_END_ALLOW_THREADS
+
+    if (rv != 0) {
         PyErr_SetString(sanlock_exception, "SANLock resource not released");
         goto exit_fail;
     }
