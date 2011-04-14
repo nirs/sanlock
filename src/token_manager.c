@@ -124,7 +124,7 @@ int acquire_token(struct token *token, uint64_t acquire_lver,
 	struct leader_record leader_ret;
 	int rv;
 
-	rv = paxos_lease_acquire(token, 0, &leader_ret, acquire_lver,
+	rv = paxos_lease_acquire(&to, token, 0, &leader_ret, acquire_lver,
 				 new_num_hosts);
 
 	token->acquire_result = rv;
@@ -148,7 +148,7 @@ int release_token(struct token *token)
 	struct leader_record leader_ret;
 	int rv;
 
-	rv = paxos_lease_release(token, &token->leader, &leader_ret);
+	rv = paxos_lease_release(&to, token, &token->leader, &leader_ret);
 
 	token->release_result = rv;
 

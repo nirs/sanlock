@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/un.h>
@@ -19,6 +18,7 @@
 #include "sanlock.h"
 #include "sanlock_admin.h"
 #include "sanlock_resource.h"
+#include "sanlock_direct.h"
 
 FILE *turn_file;
 
@@ -1050,11 +1050,18 @@ static int do_migrate(int argc, char *argv[])
 
 int do_init(int argc, char *argv[])
 {
+	char resbuf[sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk)];
+	struct sanlk_resource *res;
+	struct sanlk_lockspace ls;
 	char command[4096];
+	int rv;
 
 	if (argc < 4)
 		return -1;
 
+	strcpy(count_path, argv[3]);
+
+#if 0
 	/* initialize host_id lease area at offset 0 */
 
 	memset(command, 0, sizeof(command));
@@ -1071,7 +1078,6 @@ int do_init(int argc, char *argv[])
 
 	memset(command, 0, sizeof(command));
 
-	strcpy(count_path, argv[3]);
 
 	snprintf(command, sizeof(command),
 		 "sanlock direct init -n 8 -r devcount:resource%s:%s:1024000",
@@ -1081,7 +1087,31 @@ int do_init(int argc, char *argv[])
 	printf("%s\n", command);
 
 	system(command);
+#else
+	memset(&ls, 0, sizeof(ls));
+	strcpy(ls.name, "devcount");
+	strcpy(ls.host_id_disk.path, argv[2]);
 
+	rv = sanlock_direct_init(&ls, NULL, 0, 8, 0);
+	if (rv < 0) {
+		printf("sanlock_direct_init lockspace error %d\n", rv);
+		return -1;
+	}
+
+	memset(resbuf, 0, sizeof(resbuf));
+	res = (struct sanlk_resource *)&resbuf;
+	strcpy(res->lockspace_name, "devcount");
+	sprintf(res->name, "resource%s", argv[3]);
+	res->num_disks = 1;
+	strcpy(res->disks[0].path, argv[2]);
+	res->disks[0].offset = 1024000;
+
+	rv = sanlock_direct_init(NULL, res, 0, 8, 0);
+	if (rv < 0) {
+		printf("sanlock_direct_init resource error %d\n", rv);
+		return -1;
+	}
+#endif
 	memset(command, 0, sizeof(command));
 
 	snprintf(command, sizeof(command),

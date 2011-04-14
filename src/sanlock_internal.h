@@ -245,13 +245,15 @@ struct sm_header {
  * /dev/watchdog keepalive's, and the machine will not be reset.
  */
 
+#define DEFAULT_USE_AIO 1
 #define DEFAULT_IO_TIMEOUT_SECONDS 1
+#define DEFAULT_HOST_ID_TIMEOUT_SECONDS 90
 #define DEFAULT_HOST_ID_RENEWAL_SECONDS 5
 #define DEFAULT_HOST_ID_RENEWAL_FAIL_SECONDS 30
 #define DEFAULT_HOST_ID_RENEWAL_WARN_SECONDS 25
-#define DEFAULT_HOST_ID_TIMEOUT_SECONDS 90
 
-struct timeouts {
+struct timeout {
+	int use_aio;
 	int io_timeout_seconds;
 	int host_id_timeout_seconds;
 	int host_id_renewal_seconds;
@@ -259,24 +261,17 @@ struct timeouts {
 	int host_id_renewal_warn_seconds;
 };
 
-/* values used after processing command, while running */
+EXTERN struct timeout to;
 
-#define DEFAULT_USE_AIO 1
 #define DEFAULT_USE_WATCHDOG 1
 #define DEFAULT_HIGH_PRIORITY 1
-
-struct options {
-	int debug;
-	int use_aio;
-	int use_watchdog;
-	int high_priority;
-};
-
-/* values used while processing command, not afterward */
 
 struct command_line {
 	int type;				/* COM_ */
 	int action;				/* ACT_ */
+	int debug;
+	int use_watchdog;
+	int high_priority;
 	int pid;				/* -p */
 	uint64_t local_host_id;			/* -i */
 	uint64_t local_host_generation;		/* -g */
@@ -285,8 +280,10 @@ struct command_line {
 	int res_count;
 	char *dump_path;
 	struct sanlk_lockspace lockspace;	/* -s LOCKSPACE */
-	struct sanlk_resource *res_args[];	/* -r RESOURCE */
+	struct sanlk_resource *res_args[SANLK_MAX_RESOURCES]; /* -r RESOURCE */
 };
+
+EXTERN struct command_line com;
 
 /* command line types and actions */
 
@@ -312,10 +309,6 @@ enum {
 	ACT_INIT,
 	ACT_DUMP,
 };
-
-EXTERN struct options options;
-EXTERN struct timeouts to;
-EXTERN struct command_line com;
 
 #endif
 

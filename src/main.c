@@ -37,12 +37,12 @@
 #include "delta_lease.h"
 #include "host_id.h"
 #include "token_manager.h"
+#include "direct.h"
 #include "lockfile.h"
 #include "watchdog.h"
 #include "client_msg.h"
 #include "sanlock_resource.h"
 #include "sanlock_admin.h"
-#include "sanlock_direct.h"
 
 /* priorities are LOG_* from syslog.h */
 int log_logfile_priority = LOG_ERR;
@@ -1406,12 +1406,18 @@ static int print_daemon_state(char *str)
 	memset(str, 0, SANLK_STATE_MAXSTR);
 
 	snprintf(str, SANLK_STATE_MAXSTR-1,
-		 "io_timeout=%d host_id_timeout=%d "
-		 "host_id_renewal=%d host_id_renewal_fail=%d",
+		 "use_aio=%d "
+		 "io_timeout=%d "
+		 "host_id_renewal=%d "
+		 "host_id_renewal_fail=%d "
+		 "host_id_renewal_warn=%d "
+		 "host_id_timeout=%d ",
+		 to.use_aio,
 		 to.io_timeout_seconds,
-		 to.host_id_timeout_seconds,
 		 to.host_id_renewal_seconds,
-		 to.host_id_renewal_fail_seconds);
+		 to.host_id_renewal_fail_seconds,
+		 to.host_id_renewal_warn_seconds,
+		 to.host_id_timeout_seconds);
 
 	return strlen(str) + 1;
 }
@@ -1956,7 +1962,7 @@ static void setup_priority(void)
 	struct sched_param sched_param;
 	int rv;
 
-	if (!options.high_priority)
+	if (!com.high_priority)
 		return;
 
 	rv = mlockall(MCL_CURRENT | MCL_FUTURE);
@@ -1985,7 +1991,7 @@ static int do_daemon(void)
 
 	/* TODO: copy comprehensive daemonization method from libvirtd */
 
-	if (!options.debug) {
+	if (!com.debug) {
 		if (daemon(0, 0) < 0) {
 			log_tool("cannot fork daemon\n");
 			exit(EXIT_FAILURE);
@@ -2418,7 +2424,7 @@ static int read_command_line(int argc, char *argv[])
 
 		/* the only option that does not have optionarg */
 		if (optchar == 'D') {
-			options.debug = 1;
+			com.debug = 1;
 			log_stderr_priority = LOG_DEBUG;
 			continue;
 		}
@@ -2438,13 +2444,13 @@ static int read_command_line(int argc, char *argv[])
 			log_syslog_priority = atoi(optionarg);
 			break;
 		case 'a':
-			options.use_aio = atoi(optionarg);
+			to.use_aio = atoi(optionarg);
 			break;
 		case 'w':
-			options.use_watchdog = atoi(optionarg);
+			com.use_watchdog = atoi(optionarg);
 			break;
 		case 'h':
-			options.high_priority = atoi(optionarg);
+			com.high_priority = atoi(optionarg);
 			break;
 		case 'o':
 			parse_arg_timeout(optionarg); /* to */
@@ -2548,7 +2554,7 @@ static int do_client(void)
 
 	switch (com.action) {
 	case ACT_STATUS:
-		rv = sanlock_status(options.debug);
+		rv = sanlock_status(com.debug);
 		break;
 
 	case ACT_LOG_DUMP:
@@ -2619,7 +2625,7 @@ static int do_client(void)
 			break;
 		log_tool("\"%s\"", res_state);
 
-		if (!options.debug)
+		if (!com.debug)
 			break;
 
 		com.res_count = 0;
@@ -2663,40 +2669,50 @@ static int do_direct(void)
 
 	switch (com.action) {
 	case ACT_INIT:
-		rv = sanlock_direct_init();
+		rv = direct_init(&to, &com.lockspace, com.res_args[0],
+				 com.max_hosts, com.num_hosts);
+		log_tool("init done %d", rv);
 		break;
 
 	case ACT_DUMP:
-		rv = sanlock_direct_dump();
+		rv = direct_dump(&to, com.dump_path);
+		log_tool("dump done %d", rv);
 		break;
 
 	case ACT_ACQUIRE:
-		rv = sanlock_direct_acquire();
+		rv = direct_acquire(&to, com.res_args[0], com.num_hosts,
+				    com.local_host_id, com.local_host_generation);
+		log_tool("acquire done %d", rv);
 		break;
 
 	case ACT_RELEASE:
-		rv = sanlock_direct_release();
+		rv = direct_release(&to, com.res_args[0]);
+		log_tool("release done %d", rv);
 		break;
 
 	case ACT_ACQUIRE_ID:
-		rv = sanlock_direct_acquire_id(&com.lockspace);
+		rv = direct_acquire_id(&to, &com.lockspace);
+		log_tool("acquire_id done %d", rv);
 		break;
 
 	case ACT_RELEASE_ID:
-		rv = sanlock_direct_release_id(&com.lockspace);
+		rv = direct_release_id(&to, &com.lockspace);
+		log_tool("release_id done %d", rv);
 		break;
 
 	case ACT_RENEW_ID:
-		rv = sanlock_direct_renew_id(&com.lockspace);
+		rv = direct_renew_id(&to, &com.lockspace);
+		log_tool("rewew_id done %d", rv);
 		break;
 
 	case ACT_READ_ID:
-		rv = sanlock_direct_read_id(&com.lockspace,
-					    &timestamp,
-					    &owner_id,
-					    &owner_generation);
+		rv = direct_read_id(&to,
+				    &com.lockspace,
+				    &timestamp,
+				    &owner_id,
+				    &owner_generation);
 
-		log_tool("result %d timestamp %llu owner_id %llu owner_generation %llu",
+		log_tool("read_id done %d timestamp %llu owner_id %llu owner_generation %llu",
 			 rv,
 			 (unsigned long long)timestamp,
 			 (unsigned long long)owner_id,
@@ -2704,13 +2720,14 @@ static int do_direct(void)
 		break;
 
 	case ACT_LIVE_ID:
-		rv = sanlock_direct_live_id(&com.lockspace,
-					    &timestamp,
-					    &owner_id,
-					    &owner_generation,
-					    &live);
+		rv = direct_live_id(&to,
+				    &com.lockspace,
+				    &timestamp,
+				    &owner_id,
+				    &owner_generation,
+				    &live);
 
-		log_tool("result %d live %d timestamp %llu owner_id %llu owner_generation %llu",
+		log_tool("live_id done %d live %d timestamp %llu owner_id %llu owner_generation %llu",
 			 rv, live,
 			 (unsigned long long)timestamp,
 			 (unsigned long long)owner_id,
@@ -2731,19 +2748,18 @@ int main(int argc, char *argv[])
 	
 	memset(&com, 0, sizeof(com));
 	com.max_hosts = DEFAULT_MAX_HOSTS;
+	com.use_watchdog = DEFAULT_USE_WATCHDOG;
+	com.high_priority = DEFAULT_HIGH_PRIORITY;
 	com.pid = -1;
 
-	memset(&options, 0, sizeof(options));
-	options.use_aio = DEFAULT_USE_AIO;
-	options.use_watchdog = DEFAULT_USE_WATCHDOG;
-	options.high_priority = DEFAULT_HIGH_PRIORITY;
-
-	memset(&to, 0, sizeof(to));
+	to.use_aio = DEFAULT_USE_AIO;
 	to.io_timeout_seconds = DEFAULT_IO_TIMEOUT_SECONDS;
+	to.host_id_timeout_seconds = DEFAULT_HOST_ID_TIMEOUT_SECONDS;
 	to.host_id_renewal_seconds = DEFAULT_HOST_ID_RENEWAL_SECONDS;
 	to.host_id_renewal_fail_seconds = DEFAULT_HOST_ID_RENEWAL_FAIL_SECONDS;
 	to.host_id_renewal_warn_seconds = DEFAULT_HOST_ID_RENEWAL_WARN_SECONDS;
-	to.host_id_timeout_seconds = DEFAULT_HOST_ID_TIMEOUT_SECONDS;
+
+	/* com and to values can be altered via command line options */
 
 	rv = read_command_line(argc, argv);
 	if (rv < 0)

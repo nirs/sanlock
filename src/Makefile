@@ -8,12 +8,16 @@ CMD_TARGET = sanlock
 
 LIB_TARGET = libsanlock
 
-HEADER_TARGET = sanlock.h sanlock_resource.h sanlock_admin.h
+LIB2_TARGET = libsanlock_direct
+
+HEADER_TARGET = sanlock.h sanlock_resource.h sanlock_admin.h sanlock_direct.h
 
 SOMAJOR=1
 SOMINOR=0
 
 SHLIB_TARGET = $(LIB_TARGET).so.$(SOMAJOR).$(SOMINOR)
+
+SHLIB2_TARGET = $(LIB2_TARGET).so.$(SOMAJOR).$(SOMINOR)
 
 CMD_SOURCE = \
 	crc32c.c \
@@ -32,6 +36,14 @@ LIB_SOURCE = \
 	client_msg.c \
 	client_resource.c \
 	client_admin.c
+
+LIB2_SOURCE = \
+	crc32c.c \
+	diskio.c \
+	delta_lease.c \
+	paxos_lease.c \
+	direct.c \
+	direct_lib.c
 
 CFLAGS += -D_GNU_SOURCE -g \
 	-Wall \
@@ -56,7 +68,7 @@ CFLAGS += -D_GNU_SOURCE -g \
 CMD_LDFLAGS = -lpthread -lrt -lblkid -lsanlock -lwdmd
 
 
-all: $(SHLIB_TARGET) $(CMD_TARGET)
+all: $(SHLIB_TARGET) $(CMD_TARGET) $(SHLIB2_TARGET)
 
 $(SHLIB_TARGET): $(LIB_SOURCE)
 	$(CC) $(CFLAGS) -shared -fPIC -o $@ -Wl,-soname=$(LIB_TARGET).so.$(SOMAJOR) $^
@@ -65,6 +77,11 @@ $(SHLIB_TARGET): $(LIB_SOURCE)
 
 $(CMD_TARGET): $(SHLIB_TARGET) $(CMD_SOURCE)
 	$(CC) $(CFLAGS) $(CMD_LDFLAGS) $(CMD_SOURCE) -o $@ -L. -L../wdmd
+
+$(SHLIB2_TARGET): $(LIB2_SOURCE)
+	$(CC) $(CFLAGS) -shared -fPIC -o $@ -Wl,-soname=$(LIB2_TARGET).so.$(SOMAJOR) $^
+	ln -sf $(SHLIB2_TARGET) $(LIB2_TARGET).so
+	ln -sf $(SHLIB2_TARGET) $(LIB2_TARGET).so.$(SOMAJOR)
 
 clean:
 	rm -f *.o *.so *.so.* $(CMD_TARGET)
@@ -83,6 +100,7 @@ install: all
 	mkdir -p $(DESTDIR)/$(HEADER_DIR)
 	$(INSTALL) -c -m 755 $(CMD_TARGET) $(DESTDIR)/$(CMD_BINDIR)
 	$(INSTALL) -c -m 755 $(SHLIB_TARGET) $(DESTDIR)/$(LIB_LIBDIR)
+	$(INSTALL) -c -m 755 $(SHLIB2_TARGET) $(DESTDIR)/$(LIB_LIBDIR)
 	cp -a $(LIB_TARGET).so $(DESTDIR)/$(LIB_LIBDIR)
-	cp -a $(LIB_TARGET).so.$(SOMAJOR) $(DESTDIR)/$(LIB_LIBDIR)
+	cp -a $(LIB2_TARGET).so.$(SOMAJOR) $(DESTDIR)/$(LIB_LIBDIR)
 	$(INSTALL) -c -m 644 $(HEADER_TARGET) $(DESTDIR)/$(HEADER_DIR)

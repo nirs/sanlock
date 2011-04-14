@@ -89,6 +89,7 @@ access to the shared disks.
 %defattr(-,root,root,-)
 %doc COPYING
 %{_libdir}/libsanlock.so.*
+%{_libdir}/libsanlock_direct.so.*
 %{_libdir}/libwdmd.so.*
 
 %package        python
@@ -122,6 +123,7 @@ developing applications that use %{name}.
 %{_libdir}/libwdmd.so
 %{_includedir}/wdmd.h
 %{_libdir}/libsanlock.so
+%{_libdir}/libsanlock_direct.so
 %{_includedir}/sanlock.h
 %{_includedir}/sanlock_admin.h
 %{_includedir}/sanlock_resource.h

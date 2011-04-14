@@ -11,15 +11,17 @@
 
 uint32_t leader_checksum(struct leader_record *lr);
 int majority_disks(struct token *token, int num);
-int paxos_lease_leader_read(struct token *token, struct leader_record *leader_ret,
+int paxos_lease_leader_read(struct timeout *ti,
+			    struct token *token, struct leader_record *leader_ret,
 			    const char *caller);
-int paxos_lease_acquire(struct token *token, int force,
+int paxos_lease_acquire(struct timeout *ti, struct token *token, int force,
 		        struct leader_record *leader_ret,
 		        uint64_t acquire_lver,
 		        int new_num_hosts);
-int paxos_lease_release(struct token *token,
+int paxos_lease_release(struct timeout *ti, struct token *token,
 			struct leader_record *leader_last,
 			struct leader_record *leader_ret);
-int paxos_lease_init(struct token *token, int num_hosts, int max_hosts);
+int paxos_lease_init(struct timeout *ti,
+		     struct token *token, int num_hosts, int max_hosts);
 
 #endif

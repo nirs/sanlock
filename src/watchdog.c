@@ -45,7 +45,7 @@ void update_watchdog_file(struct space *sp, uint64_t timestamp)
 {
 	int rv;
 
-	if (!options.use_watchdog)
+	if (!com.use_watchdog)
 		return;
 
 	rv = wdmd_test_live(sp->wd_fd, timestamp, timestamp + to.host_id_renewal_fail_seconds);
@@ -58,7 +58,7 @@ int create_watchdog_file(struct space *sp, uint64_t timestamp)
 	char name[WDMD_NAME_SIZE];
 	int con, rv;
 
-	if (!options.use_watchdog)
+	if (!com.use_watchdog)
 		return 0;
 
 	con = wdmd_connect();
@@ -97,7 +97,7 @@ void unlink_watchdog_file(struct space *sp)
 {
 	int rv;
 
-	if (!options.use_watchdog)
+	if (!com.use_watchdog)
 		return;
 
 	log_space(sp, "wdmd_test_live 0 0 to disable");
@@ -109,7 +109,7 @@ void unlink_watchdog_file(struct space *sp)
 
 void close_watchdog_file(struct space *sp)
 {
-	if (!options.use_watchdog)
+	if (!com.use_watchdog)
 		return;
 
 	close(sp->wd_fd);
@@ -117,7 +117,7 @@ void close_watchdog_file(struct space *sp)
 
 void close_watchdog(void)
 {
-	if (!options.use_watchdog)
+	if (!com.use_watchdog)
 		return;
 
 	wdmd_refcount_clear(daemon_wdmd_con);
@@ -133,7 +133,7 @@ int setup_watchdog(void)
 	uint64_t last_keepalive;
 	int con, rv;
 
-	if (!options.use_watchdog)
+	if (!com.use_watchdog)
 		return 0;
 
 	memset(name, 0, sizeof(name));

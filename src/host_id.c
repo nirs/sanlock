@@ -112,7 +112,8 @@ int get_space_info(char *space_name, struct space *sp_out)
 	return rv;
 }
 
-int host_id_leader_read(char *space_name, uint64_t host_id,
+int host_id_leader_read(struct timeout *ti,
+			char *space_name, uint64_t host_id,
 			struct leader_record *leader_ret)
 {
 	struct space space;
@@ -122,7 +123,7 @@ int host_id_leader_read(char *space_name, uint64_t host_id,
 	if (rv < 0)
 		return rv;
 
-	rv = delta_lease_leader_read(&space.host_id_disk, space_name,
+	rv = delta_lease_leader_read(ti, &space.host_id_disk, space_name,
 				     host_id, leader_ret);
 	if (rv < 0)
 		return rv;
@@ -172,7 +173,7 @@ static void *host_id_thread(void *arg_in)
 
 	our_host_id = sp->host_id;
 
-	result = delta_lease_acquire(sp, &sp->host_id_disk, sp->space_name,
+	result = delta_lease_acquire(&to, sp, &sp->host_id_disk, sp->space_name,
 				     our_host_id, sp->host_id, &leader);
 	dl_result = result;
 	t = leader.timestamp;
@@ -233,8 +234,9 @@ static void *host_id_thread(void *arg_in)
 
 		clock_gettime(CLOCK_REALTIME, &renew_time);
 
-		result = delta_lease_renew(sp, &sp->host_id_disk, sp->space_name,
-					   our_host_id, sp->host_id, &leader);
+		result = delta_lease_renew(&to, sp, &sp->host_id_disk,
+					   sp->space_name, our_host_id,
+					   sp->host_id, &leader);
 		dl_result = result;
 		t = leader.timestamp;
 
@@ -273,7 +275,7 @@ static void *host_id_thread(void *arg_in)
 	close_watchdog_file(sp);
  out:
 	if (dl_result == DP_OK)
-		delta_lease_release(sp, &sp->host_id_disk, sp->space_name,
+		delta_lease_release(&to, sp, &sp->host_id_disk, sp->space_name,
 				    sp->host_id, &leader, &leader);
 
 	return NULL;
