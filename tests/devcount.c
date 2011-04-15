@@ -26,9 +26,9 @@ char count_path[PATH_MAX];
 char lock_path[PATH_MAX];
 int count_offset;
 int lock_offset;
-
 int our_hostid;
 int max_hostid;
+struct sanlk_lockspace lockspace;
 
 struct entry {
 	uint32_t turn;
@@ -329,6 +329,19 @@ static int do_count(int argc, char *argv[])
 	return -1;
 }
 
+static void add_lockspace(void)
+{
+	int rv;
+
+	strcpy(lockspace.name, "devcount");
+	strcpy(lockspace.host_id_disk.path, lock_path);
+	lockspace.host_id_disk.offset = lock_offset;
+	lockspace.host_id = our_hostid;
+
+	rv = sanlock_add_lockspace(&lockspace, 0);
+	printf("%d sanlock_add_lockspace %d\n", getpid(), rv);
+}
+
 /*
  * Test inquire and acquire with version
  *
@@ -361,7 +374,6 @@ static int do_count(int argc, char *argv[])
 static int do_relock(int argc, char *argv[])
 {
 	char *av[COUNT_ARGS+1];
-	struct sanlk_lockspace lockspace;
 	struct sanlk_resource *res, *res_inq;
 	int i, j, pid, rv, sock, len, status;
 	int res_count;
@@ -378,25 +390,18 @@ static int do_relock(int argc, char *argv[])
 	strcpy(count_path, argv[4]);
 	our_hostid = atoi(argv[7]);
 
+	add_lockspace();
+
 	len = sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk);
 	res = malloc(len);
 	memset(res, 0, len);
-	strcpy(res->lockspace_name, "devcount");
+	strcpy(res->lockspace_name, lockspace.name);
 	snprintf(res->name, SANLK_NAME_LEN, "resource%s", count_path);
 	res->name[SANLK_NAME_LEN-1] = '\0';
 	res->num_disks = 1;
 	strncpy(res->disks[0].path, lock_path, SANLK_PATH_LEN);
 	res->disks[0].path[SANLK_PATH_LEN-1] = '\0';
 	res->disks[0].offset = 1024000;
-
-	memset(&lockspace, 0, sizeof(lockspace));
-	strcpy(lockspace.name, "devcount");
-	strcpy(lockspace.host_id_disk.path, lock_path);
-	lockspace.host_id_disk.offset = lock_offset;
-	lockspace.host_id = our_hostid;
-
-	rv = sanlock_add_lockspace(&lockspace, 0);
-	printf("%d sanlock_add_lockspace %d\n", parent_pid, rv);
 
 	/* 
 	 * argv[0] = devcount
@@ -416,8 +421,6 @@ static int do_relock(int argc, char *argv[])
 		pid = fork();
 		if (!pid) {
 			int child_pid = getpid();
-
-			printf("\n");
 
 			sock = sanlock_register();
 			if (sock < 0) {
@@ -465,9 +468,9 @@ static int do_relock(int argc, char *argv[])
 
 		rv = sanlock_inquire(-1, pid, 0, &res_count, &state);
 		if (rv < 0) {
-			/* FIXME: if child exited this should just continue */
+			/* pid may have exited */
 			printf("sanlock_inquire error %d\n", rv);
-			goto fail;
+			goto run_more;
 		}
 		rv = sanlock_str_to_res(state, &res_inq);
 		if (rv < 0) {
@@ -486,8 +489,9 @@ static int do_relock(int argc, char *argv[])
 
 		rv = sanlock_release(-1, pid, SANLK_REL_ALL, 0, NULL);
 		if (rv < 0) {
+			/* pid may have exited */
 			printf("sanlock_release error %d\n", rv);
-			goto fail;
+			goto run_more;
 		}
 
 		printf("%d sanlock_release done\n", parent_pid);
@@ -533,10 +537,8 @@ static int do_relock(int argc, char *argv[])
 static int do_lock(int argc, char *argv[])
 {
 	char *av[COUNT_ARGS+1];
-	struct sanlk_lockspace lockspace;
 	struct sanlk_resource *res;
 	int i, j, pid, rv, sock, len, status;
-	uint32_t parent_pid = getpid();
 
 	if (argc < LOCK_ARGS)
 		return -1;
@@ -547,25 +549,18 @@ static int do_lock(int argc, char *argv[])
 	strcpy(count_path, argv[4]);
 	our_hostid = atoi(argv[7]);
 
+	add_lockspace();
+
 	len = sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk);
 	res = malloc(len);
 	memset(res, 0, len);
-	strcpy(res->lockspace_name, "devcount");
+	strcpy(res->lockspace_name, lockspace.name);
 	snprintf(res->name, SANLK_NAME_LEN, "resource%s", count_path);
 	res->name[SANLK_NAME_LEN-1] = '\0';
 	res->num_disks = 1;
 	strncpy(res->disks[0].path, lock_path, SANLK_PATH_LEN);
 	res->disks[0].path[SANLK_PATH_LEN-1] = '\0';
 	res->disks[0].offset = 1024000;
-
-	memset(&lockspace, 0, sizeof(lockspace));
-	strcpy(lockspace.name, "devcount");
-	strcpy(lockspace.host_id_disk.path, lock_path);
-	lockspace.host_id_disk.offset = lock_offset;
-	lockspace.host_id = our_hostid;
-
-	rv = sanlock_add_lockspace(&lockspace, 0);
-	printf("%d sanlock_add_lockspace %d\n", parent_pid, rv);
 
 	/* 
 	 * argv[0] = devcount
@@ -585,8 +580,6 @@ static int do_lock(int argc, char *argv[])
 		pid = fork();
 		if (!pid) {
 			int child_pid = getpid();
-
-			printf("\n");
 
 			sock = sanlock_register();
 			if (sock < 0) {
@@ -639,10 +632,12 @@ static int do_wrap(int argc, char *argv[])
 	strcpy(count_path, argv[4]);
 	our_hostid = atoi(argv[7]);
 
+	add_lockspace();
+
 	len = sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk);
 	res = malloc(len);
 	memset(res, 0, len);
-	strcpy(res->lockspace_name, "devcount");
+	strcpy(res->lockspace_name, lockspace.name);
 	snprintf(res->name, SANLK_NAME_LEN, "resource%s", count_path);
 	res->name[SANLK_NAME_LEN-1] = '\0';
 	res->num_disks = 1;
@@ -867,7 +862,6 @@ static int wait_migrate_incoming(uint64_t *lver)
 static int do_migrate(int argc, char *argv[])
 {
 	char *av[MIGRATE_ARGS+1];
-	struct sanlk_lockspace lockspace;
 	struct sanlk_resource *res;
 	int i, j, pid, rv, sock, len, status, init;
 	int pfd[2];
@@ -886,25 +880,18 @@ static int do_migrate(int argc, char *argv[])
 	our_hostid = atoi(argv[7]);
 	max_hostid = atoi(argv[8]);
 
+	add_lockspace();
+
 	len = sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk);
 	res = malloc(len);
 	memset(res, 0, len);
-	strcpy(res->lockspace_name, "devcount");
+	strcpy(res->lockspace_name, lockspace.name);
 	snprintf(res->name, SANLK_NAME_LEN, "resource%s", count_path);
 	res->name[SANLK_NAME_LEN-1] = '\0';
 	res->num_disks = 1;
 	strncpy(res->disks[0].path, lock_path, SANLK_PATH_LEN);
 	res->disks[0].path[SANLK_PATH_LEN-1] = '\0';
 	res->disks[0].offset = 1024000;
-
-	memset(&lockspace, 0, sizeof(lockspace));
-	strcpy(lockspace.name, "devcount");
-	strcpy(lockspace.host_id_disk.path, lock_path);
-	lockspace.host_id_disk.offset = lock_offset;
-	lockspace.host_id = our_hostid;
-
-	rv = sanlock_add_lockspace(&lockspace, 0);
-	printf("%d sanlock_add_lockspace %d\n", parent_pid, rv);
 
 	/*
 	 * argv[0] = devcount
@@ -926,8 +913,6 @@ static int do_migrate(int argc, char *argv[])
 		if (!pid) {
 			int child_pid = getpid();
 			char junk;
-
-			printf("\n");
 
 			sock = sanlock_register();
 			if (sock < 0) {
@@ -1134,9 +1119,9 @@ int main(int argc, char *argv[])
 	printf("  sanlock direct init -n 8 -r devcount:resource<count_disk>:<lock_disk>:1024000\n");
 	printf("  dd if=/dev/zero of=<count_disk> bs=512 count=24\n");
 	printf("\n");
-	printf("devcount migrate <lock_disk> rw <count_disk> <sec1> <sec2> <hostid> <max_hostid>\n");
-	printf("  sanlock add_lockspace -s devcount:<hostid>:<lock_disk>:0\n");
-	printf("  loop around fork, sanlock_acquire, exec devcount rw\n");
+	printf("devcount rw <count_disk> <sec1> <sec2> <hostid>\n");
+	printf("  rw: read count for sec1, looking for writes, then write for sec2\n");
+	printf("  wr: write count for sec1, then read for sec2, looking for writes\n");
 	printf("\n");
 	printf("devcount lock <lock_disk> rw <count_disk> <sec1> <sec2> <hostid>\n");
 	printf("  sanlock add_lockspace -s devcount:<hostid>:<lock_disk>:0\n");
@@ -1148,11 +1133,12 @@ int main(int argc, char *argv[])
 	printf("  sigstop child, inquire, release, re-acquire, sigcont|sigkill\n");
 	printf("\n");
 	printf("devcount wrap <lock_disk> rw <count_disk> <sec1> <sec2> <hostid>\n");
+	printf("  sanlock add_lockspace -s devcount:<hostid>:<lock_disk>:0\n");
 	printf("  sanlock_acquire, exec devcount rw\n");
+	printf("devcount migrate <lock_disk> rw <count_disk> <sec1> <sec2> <hostid> <max_hostid>\n");
+	printf("  sanlock add_lockspace -s devcount:<hostid>:<lock_disk>:0\n");
+	printf("  loop around fork, sanlock_acquire, exec devcount rw\n");
 	printf("\n");
-	printf("devcount rw <count_disk> <sec1> <sec2> <hostid>\n");
-	printf("  rw: read count for sec1, looking for writes, then write for sec2\n");
-	printf("  wr: write count for sec1, then read for sec2, looking for writes\n");
 	printf("\n");
 	return -1;
 }
