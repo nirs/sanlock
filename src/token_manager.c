@@ -138,7 +138,7 @@ int acquire_token(struct token *token, uint64_t acquire_lver,
 
 	memcpy(&token->leader, &leader_ret, sizeof(struct leader_record));
 	token->r.lver = token->leader.lver;
-	return rv; /* DP_OK */
+	return rv; /* SANLK_OK */
 }
 
 /* return < 0 on error, 1 on success */
@@ -158,7 +158,7 @@ int release_token(struct token *token)
 		return rv;
 
 	memcpy(&token->leader, &leader_ret, sizeof(struct leader_record));
-	return rv; /* DP_OK */
+	return rv; /* SANLK_OK */
 }
 
 /* thread that releases tokens of pid's that die */

@@ -125,6 +125,7 @@ developing applications that use %{name}.
 %{_libdir}/libsanlock.so
 %{_libdir}/libsanlock_direct.so
 %{_includedir}/sanlock.h
+%{_includedir}/sanlock_rv.h
 %{_includedir}/sanlock_admin.h
 %{_includedir}/sanlock_resource.h
 %{_includedir}/sanlock_direct.h

@@ -211,7 +211,7 @@ static int do_delta_action(int action,
 		break;
 	}
 
-	if (rv == DP_OK)
+	if (rv == SANLK_OK)
 		rv = 0;
 
 	if (leader_ret)

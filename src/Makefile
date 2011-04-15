@@ -10,7 +10,7 @@ LIB_TARGET = libsanlock
 
 LIB2_TARGET = libsanlock_direct
 
-HEADER_TARGET = sanlock.h sanlock_resource.h sanlock_admin.h sanlock_direct.h
+HEADER_TARGET = sanlock.h sanlock_rv.h sanlock_resource.h sanlock_admin.h sanlock_direct.h
 
 SOMAJOR=1
 SOMINOR=0

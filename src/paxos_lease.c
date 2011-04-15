@@ -201,12 +201,12 @@ static int run_disk_paxos(struct timeout *ti,
 
 	if (!host_id) {
 		log_errot(token, "invalid host_id");
-		return DP_INVAL;
+		return SANLK_INVAL;
 	}
 
 	if (!inp) {
 		log_errot(token, "invalid inp");
-		return DP_INVAL;
+		return SANLK_INVAL;
 	}
 
 	/* read one of our own dblock's to get initial dblock values */
@@ -223,7 +223,7 @@ static int run_disk_paxos(struct timeout *ti,
 
 	if (rv < 0) {
 		log_errot(token, "no initial dblock found");
-		return DP_OWN_DBLOCK;
+		return SANLK_OWN_DBLOCK;
 	}
 
 	log_token(token, "initial dblock %u mbal %llu bal %llu inp %llu lver %llu", d,
@@ -267,7 +267,7 @@ static int run_disk_paxos(struct timeout *ti,
 
 	if (!majority_disks(token, num_writes)) {
 		log_errot(token, "cannot write dblock to majority of disks");
-		return DP_WRITE1_DBLOCKS;
+		return SANLK_WRITE1_DBLOCKS;
 	}
 
 	num_reads = 0;
@@ -287,7 +287,7 @@ static int run_disk_paxos(struct timeout *ti,
 					  d, q,
 					  (unsigned long long)bk[q].lver,
 					  (unsigned long long)dblock.lver);
-				return DP_READ1_LVER;
+				return SANLK_READ1_LVER;
 			}
 
 			/* see "It aborts the ballot" in comment above */
@@ -297,7 +297,7 @@ static int run_disk_paxos(struct timeout *ti,
 					  d, q,
 					  (unsigned long long)bk[q].mbal,
 					  (unsigned long long)dblock.mbal);
-				return DP_READ1_MBAL;
+				return SANLK_READ1_MBAL;
 			}
 
 			/* see choosing inp for phase 2 in comment below */
@@ -312,7 +312,7 @@ static int run_disk_paxos(struct timeout *ti,
 
 	if (!majority_disks(token, num_reads)) {
 		log_errot(token, "cannot read dblocks on majority of disks");
-		return DP_READ1_DBLOCKS;
+		return SANLK_READ1_DBLOCKS;
 	}
 
 	/*
@@ -354,7 +354,7 @@ static int run_disk_paxos(struct timeout *ti,
 
 	if (!majority_disks(token, num_writes)) {
 		log_errot(token, "cannot write dblock to majority of disks 2");
-		return DP_WRITE2_DBLOCKS;
+		return SANLK_WRITE2_DBLOCKS;
 	}
 
 	num_reads = 0;
@@ -374,7 +374,7 @@ static int run_disk_paxos(struct timeout *ti,
 					  d, q,
 					  (unsigned long long)bk[q].lver,
 					  (unsigned long long)dblock.lver);
-				return DP_READ2_LVER;
+				return SANLK_READ2_LVER;
 			}
 
 			/* see "It aborts the ballot" in comment above */
@@ -384,21 +384,21 @@ static int run_disk_paxos(struct timeout *ti,
 					  d, q,
 					  (unsigned long long)bk[q].mbal,
 					  (unsigned long long)dblock.mbal);
-				return DP_READ2_MBAL;
+				return SANLK_READ2_MBAL;
 			}
 		}
 	}
 
 	if (!majority_disks(token, num_reads)) {
 		log_errot(token, "cannot read dblocks from majority of disks 2");
-		return DP_READ2_DBLOCKS;
+		return SANLK_READ2_DBLOCKS;
 	}
 
 	/* "When it completes phase 2, p has committed dblock[p].inp." */
 
 	memcpy(dblock_out, &dblock, sizeof(struct paxos_dblock));
 
-	return DP_OK;
+	return SANLK_OK;
 }
 
 uint32_t leader_checksum(struct leader_record *lr)
@@ -414,38 +414,38 @@ static int verify_leader(struct token *token, struct sync_disk *disk,
 	if (lr->magic != PAXOS_DISK_MAGIC) {
 		log_errot(token, "verify_leader wrong magic %x %s",
 			  lr->magic, disk->path);
-		return DP_BAD_MAGIC;
+		return SANLK_BAD_MAGIC;
 	}
 
 	if ((lr->version & 0xFFFF0000) != PAXOS_DISK_VERSION_MAJOR) {
 		log_errot(token, "verify_leader wrong version %x %s",
 			  lr->version, disk->path);
-		return DP_BAD_VERSION;
+		return SANLK_BAD_VERSION;
 	}
 
 	if (lr->sector_size != disk->sector_size) {
 		log_errot(token, "verify_leader wrong sector size %d %d %s",
 			  lr->sector_size, disk->sector_size, disk->path);
-		return DP_BAD_SECTORSIZE;
+		return SANLK_BAD_SECTORSIZE;
 	}
 
 	if (strncmp(lr->space_name, token->r.lockspace_name, NAME_ID_SIZE)) {
 		log_errot(token, "verify_leader wrong space name %.48s %.48s %s",
 			  lr->space_name, token->r.lockspace_name, disk->path);
-		return DP_BAD_LOCKSPACE;
+		return SANLK_BAD_LOCKSPACE;
 	}
 
 	if (strncmp(lr->resource_name, token->r.name, NAME_ID_SIZE)) {
 		log_errot(token, "verify_leader wrong resource name %.48s %.48s %s",
 			  lr->resource_name, token->r.name, disk->path);
-		return DP_BAD_RESOURCEID;
+		return SANLK_BAD_RESOURCEID;
 	}
 
 	if (lr->num_hosts < token->host_id) {
 		log_errot(token, "verify_leader num_hosts too small %llu %llu %s",
 			  (unsigned long long)lr->num_hosts,
 			  (unsigned long long)token->host_id, disk->path);
-		return DP_BAD_NUMHOSTS;
+		return SANLK_BAD_NUMHOSTS;
 	}
 
 	sum = leader_checksum(lr);
@@ -453,10 +453,10 @@ static int verify_leader(struct token *token, struct sync_disk *disk,
 	if (lr->checksum != sum) {
 		log_errot(token, "verify_leader wrong checksum %x %x %s",
 			  lr->checksum, sum, disk->path);
-		return DP_BAD_CHECKSUM;
+		return SANLK_BAD_CHECKSUM;
 	}
 
-	return DP_OK;
+	return SANLK_OK;
 }
 
 static int leaders_match(struct leader_record *a, struct leader_record *b)
@@ -484,12 +484,12 @@ int paxos_lease_leader_read(struct timeout *ti,
 
 	leaders = malloc(leaders_len);
 	if (!leaders)
-		return DP_NOMEM;
+		return SANLK_NOMEM;
 
 	leader_reps = malloc(leader_reps_len);
 	if (!leader_reps) {
 		free(leaders);
-		return DP_NOMEM;
+		return SANLK_NOMEM;
 	}
 
 	/*
@@ -529,7 +529,7 @@ int paxos_lease_leader_read(struct timeout *ti,
 
 	if (!majority_disks(token, num_reads)) {
 		log_errot(token, "paxos_leader_read no majority reads");
-		error = DP_READ_LEADERS;
+		error = SANLK_READ_LEADERS;
 		goto fail;
 	}
 
@@ -551,7 +551,7 @@ int paxos_lease_leader_read(struct timeout *ti,
 
 	if (!found) {
 		log_errot(token, "paxos_leader_read no majority reps");
-		error = DP_DIFF_LEADERS;
+		error = SANLK_DIFF_LEADERS;
 		goto fail;
 	}
 
@@ -565,7 +565,7 @@ int paxos_lease_leader_read(struct timeout *ti,
 		  prev_leader.resource_name);
 
 	memcpy(leader_ret, &prev_leader, sizeof(struct leader_record));
-	return DP_OK;
+	return SANLK_OK;
 
  fail:
 	free(leaders);
@@ -578,7 +578,7 @@ static int write_new_leader(struct timeout *ti,
 {
 	int num_disks = token->r.num_disks;
 	int num_writes = 0;
-	int error = DP_OK;
+	int error = SANLK_OK;
 	int rv, d;
 
 	for (d = 0; d < num_disks; d++) {
@@ -590,7 +590,7 @@ static int write_new_leader(struct timeout *ti,
 
 	if (!majority_disks(token, num_writes)) {
 		log_errot(token, "write_new_leader no majority writes");
-		error = DP_WRITE_LEADERS;
+		error = SANLK_WRITE_LEADERS;
 	}
 
 	return error;
@@ -728,7 +728,7 @@ int paxos_lease_acquire(struct timeout *ti,
 		if (last_timestamp && (host_id_leader.timestamp != last_timestamp)) {
 			log_errot(token, "paxos_acquire host_id %llu alive",
 				  (unsigned long long)prev_leader.owner_id);
-			error = DP_LIVE_LEADER;
+			error = SANLK_LIVE_LEADER;
 			goto out;
 		}
 
@@ -741,7 +741,7 @@ int paxos_lease_acquire(struct timeout *ti,
 		log_errot(token, "paxos_acquire acquire_lver %llu prev_leader %llu",
 			  (unsigned long long)acquire_lver,
 			  (unsigned long long)prev_leader.lver);
-		error = DP_REACQUIRE_LVER;
+		error = SANLK_REACQUIRE_LVER;
 		goto out;
 	}
 
@@ -782,7 +782,7 @@ int paxos_lease_acquire(struct timeout *ti,
 			  (unsigned long long)dblock.bal,
 			  (unsigned long long)dblock.inp,
 			  (unsigned long long)dblock.lver);
-		error = DP_OTHER_INP;
+		error = SANLK_OTHER_INP;
 		goto out;
 	}
 
@@ -844,7 +844,7 @@ int paxos_lease_renew(struct timeout *ti,
 		if (memcmp(&new_leader, leader_last,
 			   sizeof(struct leader_record))) {
 			log_errot(token, "leader changed between renewals");
-			return DP_BAD_LEADER;
+			return SANLK_BAD_LEADER;
 		}
 	}
 
@@ -877,13 +877,13 @@ int paxos_lease_release(struct timeout *ti,
 
 	if (memcmp(&leader, leader_last, sizeof(struct leader_record))) {
 		log_errot(token, "release error leader changed");
-		return DP_BAD_LEADER;
+		return SANLK_BAD_LEADER;
 	}
 
 	if (leader.owner_id != token->host_id) {
 		log_errot(token, "release error other owner_id %llu",
 			  (unsigned long long)leader.owner_id);
-		return DP_OTHER_OWNER;
+		return SANLK_OTHER_OWNER;
 	}
 
 	leader.timestamp = LEASE_FREE;

@@ -181,22 +181,22 @@ static void *host_id_thread(void *arg_in)
 	/* we need to start the watchdog after we acquire the host_id but
 	   before we allow any pid's to begin running */
 
-	if (result == DP_OK) {
+	if (result == SANLK_OK) {
 		rv = create_watchdog_file(sp, t);
 		if (rv < 0) {
 			log_erros(sp, "create_watchdog failed %d", rv);
-			result = DP_ERROR;
+			result = SANLK_ERROR;
 		}
 	}
 
 	pthread_mutex_lock(&sp->mutex);
 	sp->lease_status.acquire_last_result = result;
 	sp->lease_status.acquire_last_time = t;
-	if (result == DP_OK)
+	if (result == SANLK_OK)
 		sp->lease_status.acquire_good_time = t;
 	sp->lease_status.renewal_last_result = result;
 	sp->lease_status.renewal_last_time = t;
-	if (result == DP_OK)
+	if (result == SANLK_OK)
 		sp->lease_status.renewal_good_time = t;
 	pthread_cond_broadcast(&sp->cond);
 	pthread_mutex_unlock(&sp->mutex);
@@ -244,7 +244,7 @@ static void *host_id_thread(void *arg_in)
 		sp->lease_status.renewal_last_result = result;
 		sp->lease_status.renewal_last_time = t;
 
-		if (result == DP_OK) {
+		if (result == SANLK_OK) {
 			sp->lease_status.renewal_good_time = t;
 
 			good_diff = t - good_time;
@@ -274,7 +274,7 @@ static void *host_id_thread(void *arg_in)
 	/* unlink called below to get it done ASAP */
 	close_watchdog_file(sp);
  out:
-	if (dl_result == DP_OK)
+	if (dl_result == SANLK_OK)
 		delta_lease_release(&to, sp, &sp->host_id_disk, sp->space_name,
 				    sp->host_id, &leader, &leader);
 
@@ -341,7 +341,7 @@ int add_space(struct space *sp)
 	result = sp->lease_status.acquire_last_result;
 	pthread_mutex_unlock(&sp->mutex);
 
-	if (result != DP_OK) {
+	if (result != SANLK_OK) {
 		/* the thread exits right away if acquire fails */
 		pthread_join(sp->thread, NULL);
 		rv = result;

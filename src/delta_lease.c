@@ -44,31 +44,31 @@ static int verify_leader(struct sync_disk *disk,
 	if (lr->magic != DELTA_DISK_MAGIC) {
 		log_error("verify_leader wrong magic %x %s",
 			  lr->magic, disk->path);
-		return DP_BAD_MAGIC;
+		return SANLK_BAD_MAGIC;
 	}
 
 	if ((lr->version & 0xFFFF0000) != DELTA_DISK_VERSION_MAJOR) {
 		log_error("verify_leader wrong version %x %s",
 			  lr->version, disk->path);
-		return DP_BAD_VERSION;
+		return SANLK_BAD_VERSION;
 	}
 
 	if (lr->sector_size != disk->sector_size) {
 		log_error("verify_leader wrong sector size %d %d %s",
 			  lr->sector_size, disk->sector_size, disk->path);
-		return DP_BAD_SECTORSIZE;
+		return SANLK_BAD_SECTORSIZE;
 	}
 
 	if (strncmp(lr->space_name, space_name, NAME_ID_SIZE)) {
 		log_error("verify_leader wrong space name %.48s %.48s %s",
 			  lr->space_name, space_name, disk->path);
-		return DP_BAD_LOCKSPACE;
+		return SANLK_BAD_LOCKSPACE;
 	}
 
 	if (strncmp(lr->resource_name, resource_name, NAME_ID_SIZE)) {
 		log_error("verify_leader wrong resource name %.48s %.48s %s",
 			  lr->resource_name, resource_name, disk->path);
-		return DP_BAD_RESOURCEID;
+		return SANLK_BAD_RESOURCEID;
 	}
 
 	sum = leader_checksum(lr);
@@ -76,10 +76,10 @@ static int verify_leader(struct sync_disk *disk,
 	if (lr->checksum != sum) {
 		log_error("verify_leader wrong checksum %x %x %s",
 			  lr->checksum, sum, disk->path);
-		return DP_BAD_CHECKSUM;
+		return SANLK_BAD_CHECKSUM;
 	}
 
-	return DP_OK;
+	return SANLK_OK;
 }
 
 int delta_lease_leader_read(struct timeout *ti,
@@ -97,7 +97,7 @@ int delta_lease_leader_read(struct timeout *ti,
 			  sizeof(struct leader_record),
 			  ti->io_timeout_seconds, ti->use_aio, "delta_leader");
 	if (rv < 0)
-		return DP_READ_LEADERS;
+		return SANLK_READ_LEADERS;
 
 	memset(resource_name, 0, NAME_ID_SIZE);
 	snprintf(resource_name, NAME_ID_SIZE, "host_id_%llu",
@@ -197,7 +197,7 @@ int delta_lease_acquire(struct timeout *ti,
 		goto retry;
 
 	memcpy(leader_ret, &leader, sizeof(struct leader_record));
-	return DP_OK;
+	return SANLK_OK;
 }
 
 int delta_lease_renew(struct timeout *ti,
@@ -219,7 +219,7 @@ int delta_lease_renew(struct timeout *ti,
 		return error;
 
 	if (leader.owner_id != our_host_id)
-		return DP_BAD_LEADER;
+		return SANLK_BAD_LEADER;
 
 	new_ts = time(NULL);
 
@@ -247,10 +247,10 @@ int delta_lease_renew(struct timeout *ti,
 		return error;
 
 	if ((leader.timestamp != new_ts) || (leader.owner_id != our_host_id))
-		return DP_BAD_LEADER;
+		return SANLK_BAD_LEADER;
 
 	memcpy(leader_ret, &leader, sizeof(struct leader_record));
-	return DP_OK;
+	return SANLK_OK;
 }
 
 int delta_lease_release(struct timeout *ti,
@@ -277,7 +277,7 @@ int delta_lease_release(struct timeout *ti,
 		return error;
 
 	memcpy(leader_ret, &leader, sizeof(struct leader_record));
-	return DP_OK;
+	return SANLK_OK;
 }
 
 /* the host_id lease area begins disk->offset bytes from the start of
