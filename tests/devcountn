@@ -1,0 +1,73 @@
+#!/bin/bash
+
+if [ $# -le 3 ]; then
+	echo ""
+	echo "Start N devcount commands"
+	echo ""
+	echo "devcountn N init    LOCKDEV_BASE COUNTDEV_BASE"
+	echo "devcountn N rw      COUNTDEV_BASE SEC1 SEC2 HOSTID"
+	echo "devcountn N lock    LOCKDEV_BASE rw COUNTDEV_BASE SEC1 SEC2 HOSTID"
+	echo "devcountn N relock  LOCKDEV_BASE rw COUNTDEV_BASE SEC1 SEC2 HOSTID"
+	echo "devcountn N wrap    LOCKDEV_BASE rw COUNTDEV_BASE SEC1 SEC2 HOSTID"
+	echo "devcountn N migrate LOCKDEV_BASE rw COUNTDEV_BASE SEC1 SEC2 HOSTID MAXID"
+	echo ""
+	echo "devcount <cmd> LOCKDEV1 rw COUNTDEV1 ..."
+	echo "devcount <cmd> LOCKDEV2 rw COUNTDEV2 ..."
+	echo "devcount <cmd> LOCKDEV3 rw COUNTDEV3 ..."
+	echo ...
+	echo "devcount <cmd> LOCKDEVN rw COUNTDEVN ..."
+	echo ""
+	echo "Examples"
+	echo ""
+	echo "devcountn 3 init /dev/lock /dev/count"
+	echo "  devcount init /dev/lock1 /dev/count1"
+	echo "  devcount init /dev/lock2 /dev/count2"
+	echo "  devcount init /dev/lock3 /dev/count3"
+	echo ""
+	echo "devcountn 3 rw /dev/count 5 5 1"
+	echo "  devcount rw /dev/count1 5 5 1"
+	echo "  devcount rw /dev/count2 5 5 1"
+	echo "  devcount rw /dev/count3 5 5 1"
+	echo ""
+	echo "devcountn 3 lock /dev/lock rw /dev/count 5 5 1"
+	echo "  sanlock add_lockspace -s devcount:1:/dev/lock1:0"
+	echo "  (the add_lockspace command from each subsequent devcount will fail)"
+	echo "  devcount lock /dev/lock1 rw /dev/count1 5 5 1"
+	echo "  devcount lock /dev/lock2 rw /dev/count2 5 5 1"
+	echo "  devcount lock /dev/lock3 rw /dev/count3 5 5 1"
+	echo ""
+	exit 0
+fi
+
+num=$1
+cmd1=$2
+
+if [ "$cmd1" != "init" ]; then
+	deva=$3
+	cmd2=$4
+	devb=$5
+	sec1=$6
+	sec2=$7
+	hostid=$8
+	maxid=$9
+
+	i=1
+	echo sanlock add_lockspace -s devcount:$hostid:$deva$i:0
+	sanlock add_lockspace -s devcount:$hostid:$deva$i:0
+fi
+
+for i in `seq 1 $num`; do
+	if [ "$cmd1" == "init" ]; then
+		deva=$3
+		devb=$4
+		echo ./devcount init $deva$i $devb$i
+		./devcount init $deva$i $devb$i
+	elif [ "$cmd1" == "rw" ] || [ "$cmd1" == "wr" ]; then
+		echo ./devcount $cmd1 $deva$i $sec1 $sec2 $hostid
+		./devcount $cmd1 $deva$i $sec1 $sec2 $hostid &
+	else
+		echo ./devcount $cmd1 $deva$i $cmd2 $devb$i $sec1 $sec2 $hostid $maxid
+		./devcount $cmd1 $deva$i $cmd2 $devb$i $sec1 $sec2 $hostid $maxid &
+	fi
+done
+

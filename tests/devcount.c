@@ -75,11 +75,12 @@ void print_entries(int pid, char *buf)
 	}
 }
 
-void print_our_we(int pid, struct entry *our_we)
+void print_our_we(int pid, int writes, struct entry *our_we)
 {
-	printf("%d w index %d turn %u time %llu %u:%llu:%llu "
+	printf("%d w %d index %d turn %u time %llu %u:%llu:%llu "
 		"last %u %llu %u:%llu:%llu\n",
 		pid,
+		writes,
 		our_hostid - 1,
 		our_we->turn,
 		(unsigned long long)our_we->time,
@@ -111,6 +112,7 @@ static int do_count(int argc, char *argv[])
 	uint32_t max_turn;
 	int sec1, sec2;
 	int read_seconds, write_seconds;
+	uint32_t writes = 0;
 
 	if (argc < COUNT_ARGS)
 		return -1;
@@ -128,8 +130,10 @@ static int do_count(int argc, char *argv[])
 		read_seconds = sec2;
 	}
 
+	/*
 	printf("%d %s count_disk %s sec1 %d sec2 %d our_hostid %d\n",
 	       our_pid, argv[1], count_path, sec1, sec2, our_hostid);
+	*/
 
 	fd = open(count_path, O_RDWR | O_DIRECT | O_SYNC, 0);
 	if (fd < 0) {
@@ -255,9 +259,9 @@ static int do_count(int argc, char *argv[])
 		perror("write failed");
 		goto fail;
 	}
+	writes = 1;
 
-	printf("%d first write\n", our_pid);
-	print_our_we(our_pid, our_we);
+	print_our_we(our_pid, writes, our_we);
 
 	start = time(NULL);
 
@@ -272,13 +276,13 @@ static int do_count(int argc, char *argv[])
 			perror("write failed");
 			goto fail;
 		}
+		writes++;
 
 		if (write_seconds && (our_we->time - start >= write_seconds))
 			break;
 	}
 
-	printf("%d last write\n", our_pid);
-	print_our_we(our_pid, our_we);
+	print_our_we(our_pid, writes, our_we);
 
 	if (turn_file) {
 		fprintf(turn_file, "turn %03u start %llu end %llu host %u pid %u\n",
@@ -385,9 +389,6 @@ static int do_relock(int argc, char *argv[])
 	res->disks[0].path[SANLK_PATH_LEN-1] = '\0';
 	res->disks[0].offset = 1024000;
 
-	printf("%d lock_disk %s count_disk %s our_hostid %d\n",
-	       parent_pid, lock_path, count_path, our_hostid);
-
 	memset(&lockspace, 0, sizeof(lockspace));
 	strcpy(lockspace.name, "devcount");
 	strcpy(lockspace.host_id_disk.path, lock_path);
@@ -395,15 +396,7 @@ static int do_relock(int argc, char *argv[])
 	lockspace.host_id = our_hostid;
 
 	rv = sanlock_add_lockspace(&lockspace, 0);
-	if (rv == -EEXIST) {
-		printf("%d sanlock_add_lockspace exists\n", parent_pid);
-		rv = 0;
-	}
-	if (rv < 0) {
-		printf("%d sanlock_add_lockspace error %d\n", parent_pid, rv);
-		exit(EXIT_FAILURE);
-	}
-	printf("%d sanlock_add_lockspace done\n", parent_pid);
+	printf("%d sanlock_add_lockspace %d\n", parent_pid, rv);
 
 	/* 
 	 * argv[0] = devcount
@@ -565,9 +558,6 @@ static int do_lock(int argc, char *argv[])
 	res->disks[0].path[SANLK_PATH_LEN-1] = '\0';
 	res->disks[0].offset = 1024000;
 
-	printf("%d lock_disk %s count_disk %s our_hostid %d\n",
-	       parent_pid, lock_path, count_path, our_hostid);
-
 	memset(&lockspace, 0, sizeof(lockspace));
 	strcpy(lockspace.name, "devcount");
 	strcpy(lockspace.host_id_disk.path, lock_path);
@@ -575,15 +565,7 @@ static int do_lock(int argc, char *argv[])
 	lockspace.host_id = our_hostid;
 
 	rv = sanlock_add_lockspace(&lockspace, 0);
-	if (rv == -EEXIST) {
-		printf("%d sanlock_add_lockspace exists\n", parent_pid);
-		rv = 0;
-	}
-	if (rv < 0) {
-		printf("%d sanlock_add_lockspace error %d\n", parent_pid, rv);
-		exit(EXIT_FAILURE);
-	}
-	printf("%d sanlock_add_lockspace done\n", parent_pid);
+	printf("%d sanlock_add_lockspace %d\n", parent_pid, rv);
 
 	/* 
 	 * argv[0] = devcount
@@ -667,9 +649,6 @@ static int do_wrap(int argc, char *argv[])
 	strncpy(res->disks[0].path, lock_path, SANLK_PATH_LEN);
 	res->disks[0].path[SANLK_PATH_LEN-1] = '\0';
 	res->disks[0].offset = 1024000;
-
-	printf("%d lock_disk %s count_disk %s our_hostid %d\n",
-	       pid, lock_path, count_path, our_hostid);
 
 	/* 
 	 * argv[0] = devcount
@@ -918,9 +897,6 @@ static int do_migrate(int argc, char *argv[])
 	res->disks[0].path[SANLK_PATH_LEN-1] = '\0';
 	res->disks[0].offset = 1024000;
 
-	printf("%d lock_disk %s count_disk %s our_hostid %d max_hostid %d\n",
-	       parent_pid, lock_path, count_path, our_hostid, max_hostid);
-
 	memset(&lockspace, 0, sizeof(lockspace));
 	strcpy(lockspace.name, "devcount");
 	strcpy(lockspace.host_id_disk.path, lock_path);
@@ -928,15 +904,7 @@ static int do_migrate(int argc, char *argv[])
 	lockspace.host_id = our_hostid;
 
 	rv = sanlock_add_lockspace(&lockspace, 0);
-	if (rv == -EEXIST) {
-		printf("%d sanlock_add_lockspace exists\n", parent_pid);
-		rv = 0;
-	}
-	if (rv < 0) {
-		printf("%d sanlock_add_lockspace error %d\n", parent_pid, rv);
-		exit(EXIT_FAILURE);
-	}
-	printf("%d sanlock_add_lockspace done\n", parent_pid);
+	printf("%d sanlock_add_lockspace %d\n", parent_pid, rv);
 
 	/*
 	 * argv[0] = devcount
