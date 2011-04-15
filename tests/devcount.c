@@ -469,7 +469,7 @@ static int do_relock(int argc, char *argv[])
 		rv = sanlock_inquire(-1, pid, 0, &res_count, &state);
 		if (rv < 0) {
 			/* pid may have exited */
-			printf("sanlock_inquire error %d\n", rv);
+			printf("%d sanlock_inquire error %d\n", parent_pid, rv);
 			goto run_more;
 		}
 		rv = sanlock_str_to_res(state, &res_inq);
@@ -490,7 +490,7 @@ static int do_relock(int argc, char *argv[])
 		rv = sanlock_release(-1, pid, SANLK_REL_ALL, 0, NULL);
 		if (rv < 0) {
 			/* pid may have exited */
-			printf("sanlock_release error %d\n", rv);
+			printf("%d sanlock_release error %d\n", parent_pid, rv);
 			goto run_more;
 		}
 
@@ -965,7 +965,7 @@ static int do_migrate(int argc, char *argv[])
 
 		rv = sanlock_inquire(-1, pid, 0, &res_count, &state);
 		if (rv < 0) {
-			printf("sanlock_inquire error %d\n", rv);
+			printf("%d sanlock_inquire error %d\n", parent_pid, rv);
 			goto fail;
 		}
 		printf("%d sanlock_inquire done\n", parent_pid);
@@ -974,7 +974,7 @@ static int do_migrate(int argc, char *argv[])
 
 		rv = sanlock_release(-1, pid, SANLK_REL_ALL, 0, NULL);
 		if (rv < 0) {
-			printf("sanlock_release error %d\n", rv);
+			printf("%d sanlock_release error %d\n", parent_pid, rv);
 			goto fail;
 		}
 		printf("%d sanlock_release done\n", parent_pid);

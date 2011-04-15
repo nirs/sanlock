@@ -1680,8 +1680,8 @@ static void process_cmd_thread_resource(int ci_in, struct sm_header *h_recv)
 		/* lease for another registered client with pid specified by data2 */
 		ci_target = find_client_pid(h_recv->data2);
 		if (ci_target < 0) {
-			result = -ENOENT;
-			goto out;
+			result = -ESRCH;
+			goto fail;
 		}
 	} else {
 		/* lease for this registered client */
@@ -1691,7 +1691,7 @@ static void process_cmd_thread_resource(int ci_in, struct sm_header *h_recv)
 	ca = malloc(sizeof(struct cmd_args));
 	if (!ca) {
 		result = -ENOMEM;
-		goto out;
+		goto fail;
 	}
 
 	cl = &client[ci_target];

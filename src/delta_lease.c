@@ -36,37 +36,47 @@
 
 static int verify_leader(struct sync_disk *disk,
 			 char *space_name,
-			 char *resource_name,
+			 uint64_t host_id,
 			 struct leader_record *lr)
 {
+	char resource_name[NAME_ID_SIZE];
 	uint32_t sum;
 
 	if (lr->magic != DELTA_DISK_MAGIC) {
-		log_error("verify_leader wrong magic %x %s",
+		log_error("verify_leader %llu wrong magic %x %s",
+			  (unsigned long long)host_id,
 			  lr->magic, disk->path);
 		return SANLK_BAD_MAGIC;
 	}
 
 	if ((lr->version & 0xFFFF0000) != DELTA_DISK_VERSION_MAJOR) {
-		log_error("verify_leader wrong version %x %s",
+		log_error("verify_leader %llu wrong version %x %s",
+			  (unsigned long long)host_id,
 			  lr->version, disk->path);
 		return SANLK_BAD_VERSION;
 	}
 
 	if (lr->sector_size != disk->sector_size) {
-		log_error("verify_leader wrong sector size %d %d %s",
+		log_error("verify_leader %llu wrong sector size %d %d %s",
+			  (unsigned long long)host_id,
 			  lr->sector_size, disk->sector_size, disk->path);
 		return SANLK_BAD_SECTORSIZE;
 	}
 
 	if (strncmp(lr->space_name, space_name, NAME_ID_SIZE)) {
-		log_error("verify_leader wrong space name %.48s %.48s %s",
+		log_error("verify_leader %llu wrong space name %.48s %.48s %s",
+			  (unsigned long long)host_id,
 			  lr->space_name, space_name, disk->path);
 		return SANLK_BAD_LOCKSPACE;
 	}
 
+	memset(resource_name, 0, NAME_ID_SIZE);
+	snprintf(resource_name, NAME_ID_SIZE, "host_id_%llu",
+		 (unsigned long long)host_id);
+
 	if (strncmp(lr->resource_name, resource_name, NAME_ID_SIZE)) {
-		log_error("verify_leader wrong resource name %.48s %.48s %s",
+		log_error("verify_leader %llu wrong resource name %.48s %.48s %s",
+			  (unsigned long long)host_id,
 			  lr->resource_name, resource_name, disk->path);
 		return SANLK_BAD_RESOURCEID;
 	}
@@ -74,7 +84,8 @@ static int verify_leader(struct sync_disk *disk,
 	sum = leader_checksum(lr);
 
 	if (lr->checksum != sum) {
-		log_error("verify_leader wrong checksum %x %x %s",
+		log_error("verify_leader %llu wrong checksum %x %x %s",
+			  (unsigned long long)host_id,
 			  lr->checksum, sum, disk->path);
 		return SANLK_BAD_CHECKSUM;
 	}
@@ -88,24 +99,23 @@ int delta_lease_leader_read(struct timeout *ti,
 			    uint64_t host_id,
 			    struct leader_record *leader_ret)
 {
-	char resource_name[NAME_ID_SIZE];
+	struct leader_record leader;
 	int rv, error;
 
 	/* host_id N is block offset N-1 */
 
-	rv = read_sectors(disk, host_id - 1, 1, (char *)leader_ret,
+	rv = read_sectors(disk, host_id - 1, 1, (char *)&leader,
 			  sizeof(struct leader_record),
 			  ti->io_timeout_seconds, ti->use_aio, "delta_leader");
 	if (rv < 0)
 		return SANLK_READ_LEADERS;
 
-	memset(resource_name, 0, NAME_ID_SIZE);
-	snprintf(resource_name, NAME_ID_SIZE, "host_id_%llu",
-		 (unsigned long long)host_id);
+	error = verify_leader(disk, space_name, host_id, &leader);
+	if (error < 0)
+		return error;
 
-	error = verify_leader(disk, space_name, resource_name, leader_ret);
-
-	return error;
+	memcpy(leader_ret, &leader, sizeof(struct leader_record));
+	return SANLK_OK;
 }
 
 int delta_lease_acquire(struct timeout *ti,
