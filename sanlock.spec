@@ -127,6 +127,7 @@ developing applications that use %{name}.
 %{_includedir}/sanlock.h
 %{_includedir}/sanlock_admin.h
 %{_includedir}/sanlock_resource.h
+%{_includedir}/sanlock_direct.h
 
 %changelog
 * Mon Apr  4 2011 Federico Simoncelli <fsimonce@redhat.com> - 1.1.0-3
