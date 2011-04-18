@@ -86,7 +86,7 @@ static int do_paxos_action(int action,
 		rv = paxos_lease_init(ti, token, num_hosts, max_hosts);
 		if (rv < 0) {
 			log_tool("cannot initialize disks");
-			return -1;
+			goto exit_fail;
 		}
 		break;
 
@@ -97,7 +97,7 @@ static int do_paxos_action(int action,
 		rv = paxos_lease_acquire(ti, token, 0, &leader_ret, 0, num_hosts);
 		if (rv < 0) {
 			log_tool("cannot acquire lease on %s", token->r.name);
-			return -1;
+			goto exit_fail;
 		}
 		break;
 
@@ -105,19 +105,21 @@ static int do_paxos_action(int action,
 		rv = paxos_lease_leader_read(ti, token, &leader_read, "direct_release");
 		if (rv < 0) {
 			log_tool("cannot read lease on %s", token->r.name);
-			return -1;
+			goto exit_fail;
 		}
 		rv = paxos_lease_release(ti, token, &leader_read, &leader_ret);
 		if (rv < 0) {
 			log_tool("cannot release lease on %s", token->r.name);
-			return -1;
+			goto exit_fail;
 		}
 		break;
 	}
 
+exit_fail:
+	close_disks(token->disks, token->r.num_disks);
 	free(token);
 
-	return 0;
+	return rv;
 }
 
 /*
@@ -366,6 +368,8 @@ int direct_init(struct timeout *ti,
 		}
 
 		rv = delta_lease_init(ti, &sd, ls->name, max_hosts);
+	        close_disks(&sd, 1);
+
 		if (rv < 0) {
 			log_tool("lockspace init failed %d", rv);
 			return -1;
