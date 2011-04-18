@@ -60,9 +60,9 @@ __parse_resource(char *resource, struct sanlk_resource **ret_res)
 static PyObject *
 py_register(PyObject *self, PyObject *args)
 {
-    Py_BEGIN_ALLOW_THREADS
-    __sanlockmod_fd = sanlock_register();
-    Py_END_ALLOW_THREADS
+    if (__sanlockmod_fd < 0) {
+        __sanlockmod_fd = sanlock_register();
+    }
 
     if (__sanlockmod_fd < 0) {
         PyErr_SetString(sanlockmod_exception, "SANLock registration failed");
