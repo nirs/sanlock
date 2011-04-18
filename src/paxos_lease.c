@@ -406,46 +406,88 @@ uint32_t leader_checksum(struct leader_record *lr)
 	return crc32c((uint32_t)~1, (char *)lr, LEADER_CHECKSUM_LEN);
 }
 
-static int verify_leader(struct token *token, struct sync_disk *disk,
-			 struct leader_record *lr)
+static void log_leader_error(int result,
+			     struct token *token,
+			     struct sync_disk *disk,
+			     struct leader_record *lr,
+			     const char *caller)
 {
+	log_errot(token, "leader1 %s error %d sn %.48s rn %.48s",
+		  caller ? caller : "unknown",
+		  result,
+		  token->r.lockspace_name,
+		  token->r.name);
+
+	log_errot(token, "leader2 path %s offset %llu",
+		  disk->path,
+		  (unsigned long long)disk->offset);
+
+	log_errot(token, "leader3 m %u v %u ss %u nh %llu mh %llu oi %llu og %llu lv %llu",
+		  lr->magic,
+		  lr->version,
+		  lr->sector_size,
+		  (unsigned long long)lr->num_hosts,
+		  (unsigned long long)lr->max_hosts,
+		  (unsigned long long)lr->owner_id,
+		  (unsigned long long)lr->owner_generation,
+		  (unsigned long long)lr->lver);
+
+	log_errot(token, "leader4 sn %.48s rn %.48s ts %llu cs %x",
+		  lr->space_name,
+		  lr->resource_name,
+		  (unsigned long long)lr->timestamp,
+		  lr->checksum);
+}
+
+static int verify_leader(struct token *token, struct sync_disk *disk,
+			 struct leader_record *lr,
+			 const char *caller)
+{
+	struct leader_record leader_rr;
 	uint32_t sum;
+	int result, rv;
 
 	if (lr->magic != PAXOS_DISK_MAGIC) {
 		log_errot(token, "verify_leader wrong magic %x %s",
 			  lr->magic, disk->path);
-		return SANLK_BAD_MAGIC;
+		result = SANLK_BAD_MAGIC;
+		goto fail;
 	}
 
 	if ((lr->version & 0xFFFF0000) != PAXOS_DISK_VERSION_MAJOR) {
 		log_errot(token, "verify_leader wrong version %x %s",
 			  lr->version, disk->path);
-		return SANLK_BAD_VERSION;
+		result = SANLK_BAD_VERSION;
+		goto fail;
 	}
 
 	if (lr->sector_size != disk->sector_size) {
 		log_errot(token, "verify_leader wrong sector size %d %d %s",
 			  lr->sector_size, disk->sector_size, disk->path);
-		return SANLK_BAD_SECTORSIZE;
+		result = SANLK_BAD_SECTORSIZE;
+		goto fail;
 	}
 
 	if (strncmp(lr->space_name, token->r.lockspace_name, NAME_ID_SIZE)) {
 		log_errot(token, "verify_leader wrong space name %.48s %.48s %s",
 			  lr->space_name, token->r.lockspace_name, disk->path);
-		return SANLK_BAD_LOCKSPACE;
+		result = SANLK_BAD_LOCKSPACE;
+		goto fail;
 	}
 
 	if (strncmp(lr->resource_name, token->r.name, NAME_ID_SIZE)) {
 		log_errot(token, "verify_leader wrong resource name %.48s %.48s %s",
 			  lr->resource_name, token->r.name, disk->path);
-		return SANLK_BAD_RESOURCEID;
+		result = SANLK_BAD_RESOURCEID;
+		goto fail;
 	}
 
 	if (lr->num_hosts < token->host_id) {
 		log_errot(token, "verify_leader num_hosts too small %llu %llu %s",
 			  (unsigned long long)lr->num_hosts,
 			  (unsigned long long)token->host_id, disk->path);
-		return SANLK_BAD_NUMHOSTS;
+		result = SANLK_BAD_NUMHOSTS;
+		goto fail;
 	}
 
 	sum = leader_checksum(lr);
@@ -453,10 +495,24 @@ static int verify_leader(struct token *token, struct sync_disk *disk,
 	if (lr->checksum != sum) {
 		log_errot(token, "verify_leader wrong checksum %x %x %s",
 			  lr->checksum, sum, disk->path);
-		return SANLK_BAD_CHECKSUM;
+		result = SANLK_BAD_CHECKSUM;
+		goto fail;
 	}
 
 	return SANLK_OK;
+
+ fail:
+	log_leader_error(result, token, disk, lr, caller);
+
+	memset(&leader_rr, 0, sizeof(leader_rr));
+
+	rv = read_sectors(disk, 0, 1, (char *)&leader_rr,
+			  sizeof(struct leader_record),
+			  0, 0, "paxos_verify");
+
+	log_leader_error(rv, token, disk, &leader_rr, "paxos_verify");
+
+	return result;
 }
 
 static int leaders_match(struct leader_record *a, struct leader_record *b)
@@ -509,7 +565,7 @@ int paxos_lease_leader_read(struct timeout *ti,
 		if (rv < 0)
 			continue;
 
-		rv = verify_leader(token, &token->disks[d], &leaders[d]);
+		rv = verify_leader(token, &token->disks[d], &leaders[d], caller);
 		if (rv < 0)
 			continue;
 

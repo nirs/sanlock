@@ -197,7 +197,8 @@ static int do_delta_action(int action,
 		rv = delta_lease_leader_read(ti, &sd,
 					     ls->name,
 					     ls->host_id,
-					     &leader);
+					     &leader,
+					     "direct_release");
 		if (rv < 0)
 			return rv;
 		rv = delta_lease_release(ti, &space, &sd,
@@ -209,7 +210,8 @@ static int do_delta_action(int action,
 		rv = delta_lease_leader_read(ti, &sd,
 					     ls->name,
 					     ls->host_id,
-					     &leader);
+					     &leader,
+					     "direct_read");
 		break;
 	}
 

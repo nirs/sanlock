@@ -13,7 +13,8 @@ int delta_lease_leader_read(struct timeout *ti,
 			    struct sync_disk *disk,
 			    char *space_name,
 			    uint64_t host_id,
-			    struct leader_record *leader_ret);
+			    struct leader_record *leader_ret,
+			    const char *caller);
 
 int delta_lease_acquire(struct timeout *ti,
 			struct space *sp,

@@ -34,40 +34,81 @@
 /* delta_leases are a series max_hosts leader_records, one leader per sector,
    host N's delta_lease is the leader_record in sectors N-1 */
 
+static void log_leader_error(int result,
+			     char *space_name,
+			     uint64_t host_id,
+			     struct sync_disk *disk,
+			     struct leader_record *lr,
+			     const char *caller)
+{
+	log_error("leader1 %s error %d lockspace %.48s host_id %llu",
+		  caller ? caller : "unknown",
+		  result,
+		  space_name,
+		  (unsigned long long)host_id);
+
+	log_error("leader2 path %s offset %llu",
+		  disk->path,
+		  (unsigned long long)disk->offset);
+
+	log_error("leader3 m %u v %u ss %u nh %llu mh %llu oi %llu og %llu lv %llu",
+		  lr->magic,
+		  lr->version,
+		  lr->sector_size,
+		  (unsigned long long)lr->num_hosts,
+		  (unsigned long long)lr->max_hosts,
+		  (unsigned long long)lr->owner_id,
+		  (unsigned long long)lr->owner_generation,
+		  (unsigned long long)lr->lver);
+
+	log_error("leader4 sn %.48s rn %.48s ts %llu cs %x",
+		  lr->space_name,
+		  lr->resource_name,
+		  (unsigned long long)lr->timestamp,
+		  lr->checksum);
+}
+
 static int verify_leader(struct sync_disk *disk,
 			 char *space_name,
 			 uint64_t host_id,
-			 struct leader_record *lr)
+			 struct leader_record *lr,
+			 const char *caller)
 {
+	struct leader_record leader_rr;
 	char resource_name[NAME_ID_SIZE];
 	uint32_t sum;
+	int result, rv;
 
 	if (lr->magic != DELTA_DISK_MAGIC) {
 		log_error("verify_leader %llu wrong magic %x %s",
 			  (unsigned long long)host_id,
 			  lr->magic, disk->path);
-		return SANLK_BAD_MAGIC;
+		result = SANLK_BAD_MAGIC;
+		goto fail;
 	}
 
 	if ((lr->version & 0xFFFF0000) != DELTA_DISK_VERSION_MAJOR) {
 		log_error("verify_leader %llu wrong version %x %s",
 			  (unsigned long long)host_id,
 			  lr->version, disk->path);
-		return SANLK_BAD_VERSION;
+		result = SANLK_BAD_VERSION;
+		goto fail;
 	}
 
 	if (lr->sector_size != disk->sector_size) {
 		log_error("verify_leader %llu wrong sector size %d %d %s",
 			  (unsigned long long)host_id,
 			  lr->sector_size, disk->sector_size, disk->path);
-		return SANLK_BAD_SECTORSIZE;
+		result = SANLK_BAD_SECTORSIZE;
+		goto fail;
 	}
 
 	if (strncmp(lr->space_name, space_name, NAME_ID_SIZE)) {
 		log_error("verify_leader %llu wrong space name %.48s %.48s %s",
 			  (unsigned long long)host_id,
 			  lr->space_name, space_name, disk->path);
-		return SANLK_BAD_LOCKSPACE;
+		result = SANLK_BAD_LOCKSPACE;
+		goto fail;
 	}
 
 	memset(resource_name, 0, NAME_ID_SIZE);
@@ -78,7 +119,8 @@ static int verify_leader(struct sync_disk *disk,
 		log_error("verify_leader %llu wrong resource name %.48s %.48s %s",
 			  (unsigned long long)host_id,
 			  lr->resource_name, resource_name, disk->path);
-		return SANLK_BAD_RESOURCEID;
+		result = SANLK_BAD_RESOURCEID;
+		goto fail;
 	}
 
 	sum = leader_checksum(lr);
@@ -87,22 +129,40 @@ static int verify_leader(struct sync_disk *disk,
 		log_error("verify_leader %llu wrong checksum %x %x %s",
 			  (unsigned long long)host_id,
 			  lr->checksum, sum, disk->path);
-		return SANLK_BAD_CHECKSUM;
+		result = SANLK_BAD_CHECKSUM;
+		goto fail;
 	}
 
 	return SANLK_OK;
+
+ fail:
+	log_leader_error(result, space_name, host_id, disk, lr, caller);
+
+	memset(&leader_rr, 0, sizeof(leader_rr));
+
+	rv = read_sectors(disk, host_id - 1, 1, (char *)&leader_rr,
+			  sizeof(struct leader_record),
+			  0, 0, "delta_verify");
+
+	log_leader_error(rv, space_name, host_id, disk, &leader_rr, "delta_verify");
+
+	return result;
 }
 
 int delta_lease_leader_read(struct timeout *ti,
 			    struct sync_disk *disk,
 			    char *space_name,
 			    uint64_t host_id,
-			    struct leader_record *leader_ret)
+			    struct leader_record *leader_ret,
+			    const char *caller)
 {
 	struct leader_record leader;
 	int rv, error;
 
 	/* host_id N is block offset N-1 */
+
+	memset(&leader, 0, sizeof(struct leader_record));
+	memset(leader_ret, 0, sizeof(struct leader_record));
 
 	rv = read_sectors(disk, host_id - 1, 1, (char *)&leader,
 			  sizeof(struct leader_record),
@@ -110,7 +170,7 @@ int delta_lease_leader_read(struct timeout *ti,
 	if (rv < 0)
 		return SANLK_READ_LEADERS;
 
-	error = verify_leader(disk, space_name, host_id, &leader);
+	error = verify_leader(disk, space_name, host_id, &leader, caller);
 	if (error < 0)
 		return error;
 
@@ -131,7 +191,8 @@ int delta_lease_acquire(struct timeout *ti,
 
 	log_space(sp, "delta_acquire %llu begin", (unsigned long long)host_id);
 
-	error = delta_lease_leader_read(ti, disk, space_name, host_id, &leader);
+	error = delta_lease_leader_read(ti, disk, space_name, host_id, &leader,
+					"delta_acquire_begin");
 	if (error < 0)
 		return error;
 
@@ -169,7 +230,8 @@ int delta_lease_acquire(struct timeout *ti,
 		log_space(sp, "delta_acquire long sleep %d", delay);
 		sleep(delay);
 
-		error = delta_lease_leader_read(ti, disk, space_name, host_id, &leader);
+		error = delta_lease_leader_read(ti, disk, space_name, host_id,
+						&leader, "delta_acquire_wait");
 		if (error < 0)
 			return error;
 
@@ -199,7 +261,8 @@ int delta_lease_acquire(struct timeout *ti,
 	log_space(sp, "delta_acquire sleep 2d %d", delay);
 	sleep(delay);
 
-	error = delta_lease_leader_read(ti, disk, space_name, host_id, &leader);
+	error = delta_lease_leader_read(ti, disk, space_name, host_id, &leader,
+					"delta_acquire_check");
 	if (error < 0)
 		return error;
 
@@ -224,7 +287,8 @@ int delta_lease_renew(struct timeout *ti,
 
 	/* log_space(sp, "delta_renew %llu begin", (unsigned long long)host_id); */
 
-	error = delta_lease_leader_read(ti, disk, space_name, host_id, &leader);
+	error = delta_lease_leader_read(ti, disk, space_name, host_id, &leader,
+					"delta_renew_begin");
 	if (error < 0)
 		return error;
 
@@ -252,7 +316,8 @@ int delta_lease_renew(struct timeout *ti,
 	/* log_space(sp, "delta_renew sleep 2d %d", delay); */
 	sleep(delay);
 
-	error = delta_lease_leader_read(ti, disk, space_name, host_id, &leader);
+	error = delta_lease_leader_read(ti, disk, space_name, host_id, &leader,
+					"delta_renew_check");
 	if (error < 0)
 		return error;
 

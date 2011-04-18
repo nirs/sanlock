@@ -124,7 +124,7 @@ int host_id_leader_read(struct timeout *ti,
 		return rv;
 
 	rv = delta_lease_leader_read(ti, &space.host_id_disk, space_name,
-				     host_id, leader_ret);
+				     host_id, leader_ret, "host_id");
 	if (rv < 0)
 		return rv;
 
