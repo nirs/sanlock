@@ -516,15 +516,29 @@ static int all_pids_dead(struct space *sp)
 	return 1;
 }
 
-#define MAIN_POLL_MS 2000
+static unsigned int time_diff(struct timeval *begin, struct timeval *end)
+{
+	struct timeval result;
+	timersub(end, begin, &result);
+	return (result.tv_sec * 1000) + (result.tv_usec / 1000);
+}
+
+#define STANDARD_CHECK_INTERVAL 1000 /* milliseconds */
+#define RECOVERY_CHECK_INTERVAL  200 /* milliseconds */
 
 static int main_loop(void)
 {
 	void (*workfn) (int ci);
 	void (*deadfn) (int ci);
 	struct space *sp, *safe;
-	int poll_timeout = MAIN_POLL_MS;
+	struct timeval now, last_check;
+	int poll_timeout, check_interval;
+	unsigned int ms;
 	int i, rv, empty;
+
+	gettimeofday(&last_check, NULL);
+	poll_timeout = STANDARD_CHECK_INTERVAL;
+	check_interval = STANDARD_CHECK_INTERVAL;
 
 	while (1) {
 		rv = poll(pollfd, client_maxi + 1, poll_timeout);
@@ -548,6 +562,15 @@ static int main_loop(void)
 			}
 		}
 
+
+		gettimeofday(&now, NULL);
+		ms = time_diff(&last_check, &now);
+		if (ms < check_interval) {
+			poll_timeout = check_interval - ms;
+			continue;
+		}
+		last_check = now;
+
 		pthread_mutex_lock(&spaces_mutex);
 		list_for_each_entry_safe(sp, safe, &spaces, list) {
 			if (sp->killing_pids) {
@@ -562,12 +585,16 @@ static int main_loop(void)
 				} else {
 					kill_pids(sp);
 				}
+				check_interval = RECOVERY_CHECK_INTERVAL;
 			} else {
 				if (external_shutdown || sp->external_remove ||
 				    !host_id_renewed(sp)) {
 					log_space(sp, "set killing_pids");
 					sp->killing_pids = 1;
 					kill_pids(sp);
+					check_interval = RECOVERY_CHECK_INTERVAL;
+				} else {
+					check_interval = STANDARD_CHECK_INTERVAL;
 				}
 			}
 		}
@@ -578,6 +605,13 @@ static int main_loop(void)
 			break;
 
 		clear_spaces(0);
+
+		gettimeofday(&now, NULL);
+		ms = time_diff(&last_check, &now);
+		if (ms < check_interval)
+			poll_timeout = check_interval - ms;
+		else
+			poll_timeout = 1;
 	}
 
 	clear_spaces(1);
