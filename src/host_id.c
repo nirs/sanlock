@@ -102,23 +102,20 @@ int get_space_info(char *space_name, struct space *sp_out)
 	return rv;
 }
 
-int host_id_leader_read(struct timeout *ti,
-			char *space_name, uint64_t host_id,
-			struct leader_record *leader_ret)
+int host_id_disk_info(char *name, struct sync_disk *disk)
 {
 	struct space space;
 	int rv;
 
-	rv = get_space_info(space_name, &space);
-	if (rv < 0)
-		return rv;
+	pthread_mutex_lock(&spaces_mutex);
+	rv = _get_space_info(name, &space);
+	if (!rv) {
+		memcpy(disk, &space.host_id_disk, sizeof(struct sync_disk));
+		disk->fd = -1;
+	}
+	pthread_mutex_unlock(&spaces_mutex);
 
-	rv = delta_lease_leader_read(ti, &space.host_id_disk, space_name,
-				     host_id, leader_ret, "host_id");
-	if (rv < 0)
-		return rv;
-
-	return 0;
+	return rv;
 }
 
 /*
@@ -146,10 +143,10 @@ int host_id_check(struct space *sp)
 			  gap, (unsigned long long)last_success);
 	}
 
-	/*
-	log_space(sp, "host_id_check good %d %llu",
-		  gap, (unsigned long long)last_success);
-	*/
+	if (com.debug_renew > 1) {
+		log_space(sp, "host_id_check good %d %llu",
+		  	  gap, (unsigned long long)last_success);
+	}
 
 	return 1;
 }
@@ -248,12 +245,12 @@ static void *host_id_thread(void *arg_in)
 			gap = last_success - sp->lease_status.renewal_last_success;
 			sp->lease_status.renewal_last_success = last_success;
 
-			/*
-			log_space(sp, "host_id %llu renewed %llu len %d interval %d",
-				  (unsigned long long)host_id,
-				  (unsigned long long)last_success,
-				  delta_length, gap);
-			*/
+			if (com.debug_renew) {
+				log_space(sp, "host_id %llu renewed %llu len %d interval %d",
+					  (unsigned long long)host_id,
+					  (unsigned long long)last_success,
+					  delta_length, gap);
+			}
 
 			if (!sp->thread_stop)
 				update_watchdog_file(sp, last_success);

@@ -123,8 +123,12 @@ int acquire_token(struct token *token, uint64_t acquire_lver,
 {
 	struct leader_record leader_ret;
 	int rv;
+	uint32_t flags = 0;
 
-	rv = paxos_lease_acquire(&to, token, 0, &leader_ret, acquire_lver,
+	if (com.quiet_fail)
+		flags |= PAXOS_ACQUIRE_QUIET_FAIL;
+
+	rv = paxos_lease_acquire(&to, token, flags, &leader_ret, acquire_lver,
 				 new_num_hosts);
 
 	token->acquire_result = rv;

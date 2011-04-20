@@ -23,16 +23,9 @@ void log_level(int space_id GNUC_UNUSED, int token_id GNUC_UNUSED,
 {
 }
 
-int host_id_leader_read(struct timeout *ti GNUC_UNUSED,
-                        char *space_name GNUC_UNUSED,
-			uint64_t host_id GNUC_UNUSED,
-                        struct leader_record *leader_ret GNUC_UNUSED);
+int host_id_disk_info(char *name GNUC_UNUSED, struct sync_disk *disk GNUC_UNUSED);
 
-int host_id_leader_read(struct timeout *ti GNUC_UNUSED,
-                        char *space_name GNUC_UNUSED,
-			uint64_t host_id GNUC_UNUSED,
-                        struct leader_record *leader_ret GNUC_UNUSED)
+int host_id_disk_info(char *name GNUC_UNUSED, struct sync_disk *disk GNUC_UNUSED)
 {
 	return -1;
 }
-

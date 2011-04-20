@@ -268,6 +268,8 @@ struct command_line {
 	int type;				/* COM_ */
 	int action;				/* ACT_ */
 	int debug;
+	int debug_renew;
+	int quiet_fail;
 	int use_watchdog;
 	int high_priority;
 	int uid;				/* -U */

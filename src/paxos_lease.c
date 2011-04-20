@@ -26,6 +26,7 @@
 #include "log.h"
 #include "crc32c.h"
 #include "host_id.h"
+#include "delta_lease.h"
 #include "paxos_lease.h"
 
 /*
@@ -658,7 +659,7 @@ static int write_new_leader(struct timeout *ti,
  */
 
 int paxos_lease_acquire(struct timeout *ti,
-			struct token *token, int force,
+			struct token *token, uint32_t flags,
 		        struct leader_record *leader_ret,
 		        uint64_t acquire_lver,
 		        int new_num_hosts)
@@ -666,19 +667,20 @@ int paxos_lease_acquire(struct timeout *ti,
 	struct leader_record prev_leader;
 	struct leader_record new_leader;
 	struct leader_record host_id_leader;
+	struct sync_disk host_id_disk;
 	struct paxos_dblock dblock;
 	time_t start;
 	uint64_t last_timestamp = 0;
-	int error;
+	int error, rv, disk_open = 0;
 
-	log_token(token, "paxos_acquire begin lver %llu force %d",
-		  (unsigned long long)acquire_lver, force);
+	log_token(token, "paxos_acquire begin lver %llu flags %x",
+		  (unsigned long long)acquire_lver, flags);
 
 	error = paxos_lease_leader_read(ti, token, &prev_leader, "paxos_acquire");
 	if (error < 0)
 		goto out;
 
-	if (force)
+	if (flags & PAXOS_ACQUIRE_FORCE)
 		goto run;
 
 	if (prev_leader.timestamp == LEASE_FREE) {
@@ -703,12 +705,31 @@ int paxos_lease_acquire(struct timeout *ti,
 	log_token(token, "paxos_acquire check owner_id %llu",
 		  (unsigned long long)prev_leader.owner_id);
 
+	memset(&host_id_disk, 0, sizeof(host_id_disk));
+
+	rv = host_id_disk_info(prev_leader.space_name, &host_id_disk);
+	if (rv < 0) {
+		log_errot(token, "paxos_acquire no lockspace info %.48s",
+			  prev_leader.space_name);
+		error = SANLK_BAD_SPACE_NAME;
+		goto out;
+	}
+
+	disk_open = open_disks_fd(&host_id_disk, 1);
+	if (disk_open != 1) {
+		log_errot(token, "paxos_acquire cannot open host_id_disk");
+		error = SANLK_BAD_SPACE_DISK;
+		goto out;
+	}
+
 	start = time(NULL);
 
 	while (1) {
-		error = host_id_leader_read(ti, prev_leader.space_name,
-					    prev_leader.owner_id,
-					    &host_id_leader);
+		error = delta_lease_leader_read(ti, &host_id_disk,
+						prev_leader.space_name,
+						prev_leader.owner_id,
+						&host_id_leader,
+						"paxos_acquire");
 		if (error < 0) {
 			log_errot(token, "paxos_acquire host_id %llu read %d",
 				  (unsigned long long)prev_leader.owner_id,
@@ -782,8 +803,13 @@ int paxos_lease_acquire(struct timeout *ti,
 		/* the owner is renewing its host_id so it's alive */
 
 		if (last_timestamp && (host_id_leader.timestamp != last_timestamp)) {
-			log_errot(token, "paxos_acquire host_id %llu alive",
-				  (unsigned long long)prev_leader.owner_id);
+			if (flags & PAXOS_ACQUIRE_QUIET_FAIL) {
+				log_token(token, "paxos_acquire host_id %llu alive",
+					  (unsigned long long)prev_leader.owner_id);
+			} else {
+				log_errot(token, "paxos_acquire host_id %llu alive",
+					  (unsigned long long)prev_leader.owner_id);
+			}
 			error = SANLK_LIVE_LEADER;
 			goto out;
 		}
@@ -857,8 +883,13 @@ int paxos_lease_acquire(struct timeout *ti,
 		goto out;
 
 	memcpy(leader_ret, &new_leader, sizeof(struct leader_record));
+
  out:
 	log_token(token, "paxos_acquire done %d", error);
+
+	if (disk_open)
+		close_disks(&host_id_disk, 1);
+
 	return error;
 }
 

@@ -920,8 +920,13 @@ static void *cmd_acquire_thread(void *args_in)
 
 		rv = acquire_token(token, acquire_lver, new_num_hosts);
 		if (rv < 0) {
-			log_errot(token, "cmd_acquire %d,%d,%d paxos_lease %d",
-				  cl_ci, cl_fd, cl_pid, rv);
+			if (rv == SANLK_LIVE_LEADER && com.quiet_fail) {
+				log_token(token, "cmd_acquire %d,%d,%d paxos_lease %d",
+					  cl_ci, cl_fd, cl_pid, rv);
+			} else {
+				log_errot(token, "cmd_acquire %d,%d,%d paxos_lease %d",
+					  cl_ci, cl_fd, cl_pid, rv);
+			}
 			result = rv;
 			goto done;
 		}
@@ -2273,6 +2278,8 @@ static void print_usage(void)
 	printf("\n");
 	printf("daemon\n");
 	printf("  -D			debug: no fork and print all logging to stderr\n");
+	printf("  -R <num>		debug renewal: log debug info about renewals\n");
+	printf("  -Q <num>		quiet error messages for common lock contention\n");
 	printf("  -L <level>		write logging at level and up to logfile (-1 none)\n");
 	printf("  -S <level>		write logging at level and up to syslog (-1 none)\n");
 	printf("  -w <num>		use watchdog through wdmd (1 yes, 0 no, default %d)\n", DEFAULT_USE_WATCHDOG);
@@ -2488,6 +2495,12 @@ static int read_command_line(int argc, char *argv[])
 		optionarg = argv[i];
 
 		switch (optchar) {
+		case 'Q':
+			com.quiet_fail = atoi(optionarg);
+			break;
+		case 'R':
+			com.debug_renew = atoi(optionarg);
+			break;
 		case 'L':
 			log_logfile_priority = atoi(optionarg);
 			break;

@@ -11,6 +11,7 @@
 
 void close_disks(struct sync_disk *disks, int num_disks);
 int open_disks(struct sync_disk *disks, int num_disks);
+int open_disks_fd(struct sync_disk *disks, int num_disks);
 
 int write_sector(const struct sync_disk *disk, uint64_t sector_nr,
 		 const char *data, int data_len, int io_timeout_seconds,

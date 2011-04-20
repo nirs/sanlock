@@ -74,6 +74,26 @@ void close_disks(struct sync_disk *disks, int num_disks)
 		close(disks[d].fd);
 }
 
+int open_disks_fd(struct sync_disk *disks, int num_disks)
+{
+	struct sync_disk *disk;
+	int num_opens = 0;
+	int d, fd;
+
+	for (d = 0; d < num_disks; d++) {
+		disk = &disks[d];
+		fd = open(disk->path, O_RDWR | O_DIRECT | O_SYNC, 0);
+		if (fd < 0) {
+			log_error("open error %d %s", fd, disk->path);
+			continue;
+		}
+
+		disk->fd = fd;
+		num_opens++;
+	}
+	return num_opens;
+}
+
 /* return number of opened disks */
 
 int open_disks(struct sync_disk *disks, int num_disks)
