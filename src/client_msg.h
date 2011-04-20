@@ -40,7 +40,8 @@ struct sanlk_state {
 	char str[0]; /* string of internal state */
 };
 
-int setup_listener_socket(int *listener_socket);
+int setup_listener_socket(int *listener_socket,
+                          uid_t owner, gid_t group, mode_t mode);
 int connect_socket(int *sock_fd);
 int send_header(int sock, int cmd, uint32_t cmd_flags, int datalen,
 		uint32_t data, uint32_t data2);

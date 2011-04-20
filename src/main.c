@@ -21,6 +21,8 @@
 #include <pthread.h>
 #include <poll.h>
 #include <sched.h>
+#include <pwd.h>
+#include <grp.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
@@ -1956,7 +1958,7 @@ static int setup_listener(void)
 {
 	int rv, fd, ci;
 
-	rv = setup_listener_socket(&fd);
+	rv = setup_listener_socket(&fd, com.uid, com.gid, DEFAULT_SOCKET_MODE);
 	if (rv < 0)
 		return rv;
 
@@ -2004,7 +2006,7 @@ static void setup_priority(void)
 
 	rv = sched_get_priority_max(SCHED_RR);
 	if (rv < 0) {
-                log_error("could not get max scheduler priority err %d", errno);
+		log_error("could not get max scheduler priority err %d", errno);
 		return;
 	}
 
@@ -2085,6 +2087,34 @@ static int do_daemon(void)
  out:
 	close_logging();
 	return rv;
+}
+
+static int user_to_uid(char *arg)
+{
+	struct passwd *pw;
+
+	pw = getpwnam(arg);
+	if (pw == NULL) {
+		log_error("user '%s' not found, "
+                          "using uid: %i", arg, DEFAULT_SOCKET_UID);
+		return DEFAULT_SOCKET_UID;
+	}
+
+	return pw->pw_uid;
+}
+
+static int group_to_gid(char *arg)
+{
+	struct group *gr;
+
+	gr = getgrnam(arg);
+	if (gr == NULL) {
+		log_error("group '%s' not found, "
+                          "using uid: %i", arg, DEFAULT_SOCKET_UID);
+		return DEFAULT_SOCKET_GID;
+	}
+
+	return gr->gr_gid;
 }
 
 static int parse_arg_lockspace(char *arg)
@@ -2511,6 +2541,13 @@ static int read_command_line(int argc, char *argv[])
 			parse_arg_resource(optionarg); /* com.res_args[] */
 			break;
 
+		case 'U':
+			com.uid = user_to_uid(optionarg);
+			break;
+		case 'G':
+			com.gid = group_to_gid(optionarg);
+			break;
+
 		case 'c':
 			begin_command = 1;
 			break;
@@ -2782,6 +2819,8 @@ int main(int argc, char *argv[])
 	com.max_hosts = DEFAULT_MAX_HOSTS;
 	com.use_watchdog = DEFAULT_USE_WATCHDOG;
 	com.high_priority = DEFAULT_HIGH_PRIORITY;
+	com.uid = DEFAULT_SOCKET_UID;
+	com.gid = DEFAULT_SOCKET_GID;
 	com.pid = -1;
 
 	to.use_aio = DEFAULT_USE_AIO;

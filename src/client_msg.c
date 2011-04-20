@@ -43,7 +43,8 @@ static int get_socket_address(struct sockaddr_un *addr)
 	return 0;
 }
 
-int setup_listener_socket(int *listener_socket)
+int setup_listener_socket(int *listener_socket,
+                          uid_t owner, gid_t group, mode_t mode)
 {
 	int rv, s;
 	struct sockaddr_un addr;
@@ -58,27 +59,27 @@ int setup_listener_socket(int *listener_socket)
 
 	unlink(addr.sun_path);
 	rv = bind(s, (struct sockaddr *) &addr, sizeof(struct sockaddr_un));
-	if (rv < 0) {
-		rv = -1;
-		close(s);
-		return rv;
-	}
+	if (rv < 0)
+		goto exit_fail;
+
+	rv = chmod(addr.sun_path, mode);
+	if (rv < 0)
+		goto exit_fail;
+
+	rv = chown(addr.sun_path, owner, group);
+	if (rv < 0)
+		goto exit_fail;
 
 	rv = listen(s, 5);
-	if (rv < 0) {
-		rv = -1;
-		close(s);
-		return rv;
-	}
+	if (rv < 0)
+		goto exit_fail;
 
-	rv = fchmod(s, 666);
-	if (rv < 0) {
-		rv = -1;
-		close(s);
-		return rv;
-	}
 	*listener_socket = s;
 	return 0;
+
+ exit_fail:
+	close(s);
+	return -1;
 }
 
 int connect_socket(int *sock_fd)

@@ -260,6 +260,9 @@ EXTERN struct timeout to;
 
 #define DEFAULT_USE_WATCHDOG 1
 #define DEFAULT_HIGH_PRIORITY 1
+#define DEFAULT_SOCKET_UID 0
+#define DEFAULT_SOCKET_GID 0
+#define DEFAULT_SOCKET_MODE (S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP)
 
 struct command_line {
 	int type;				/* COM_ */
@@ -267,6 +270,8 @@ struct command_line {
 	int debug;
 	int use_watchdog;
 	int high_priority;
+	int uid;				/* -U */
+	int gid;				/* -G */
 	int pid;				/* -p */
 	uint64_t local_host_id;			/* -i */
 	uint64_t local_host_generation;		/* -g */
