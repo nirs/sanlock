@@ -175,14 +175,9 @@ static void write_dropped(int level, int num)
 	write_entry(level, str);
 }
 
-void write_log_dump(int fd, struct sm_header *hd)
+void write_log_dump(int fd)
 {
 	pthread_mutex_lock(&log_mutex);
-
-	hd->length = sizeof(struct sm_header);
-	hd->length += log_wrap ? SM_LOG_DUMP_SIZE : log_point;
-
-	send(fd, hd, sizeof(struct sm_header), MSG_DONTWAIT);
 
 	if (log_wrap)
 		send(fd, log_dump + log_point, SM_LOG_DUMP_SIZE - log_point, MSG_DONTWAIT);

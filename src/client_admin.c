@@ -47,8 +47,8 @@ int sanlock_shutdown(void)
 int sanlock_log_dump(void)
 {
 	struct sm_header h;
-	char *buf;
-	int fd, rv, len;
+	char buf[4096];
+	int fd, rv;
 
 	fd = send_command(SM_CMD_LOG_DUMP, 0);
 	if (fd < 0)
@@ -62,23 +62,17 @@ int sanlock_log_dump(void)
 		goto out;
 	}
 
-	len = h.length - sizeof(h);
+	while (1) {
+		memset(buf, 0, sizeof(buf));
 
-	buf = malloc(len);
-	if (!buf) {
-		rv = -ENOMEM;
-		goto out;
+		rv = recv(fd, buf, sizeof(buf) - 1, MSG_WAITALL);
+
+		if (rv > 0)
+			printf("%s", buf);
+		else
+			break;
 	}
-	memset(buf, 0, len);
-
-	rv = recv(fd, buf, len, MSG_WAITALL);
-	if (rv != len) {
-		rv = -1;
-		goto out;
-	}
-
-	rv = 0;
-	printf("%s\n", buf);
+	printf("\n");
  out:
 	close(fd);
 	return rv;

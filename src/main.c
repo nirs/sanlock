@@ -1642,13 +1642,9 @@ static void cmd_status(int fd, struct sm_header *h_recv)
 
 static void cmd_log_dump(int fd, struct sm_header *h_recv)
 {
-	struct sm_header h;
+	send(fd, h_recv, sizeof(struct sm_header), MSG_DONTWAIT);
 
-	memcpy(&h, h_recv, sizeof(struct sm_header));
-
-	/* can't send header until taking log_mutex to find the length */
-
-	write_log_dump(fd, &h);
+	write_log_dump(fd);
 }
 
 static void process_cmd_thread_lockspace(int ci_in, struct sm_header *h_recv)
