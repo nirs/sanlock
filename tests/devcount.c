@@ -1001,6 +1001,8 @@ static int do_migrate(int argc, char *argv[])
  * dd if=/dev/zero of=<count_disk> bs=512 count=24
  */
 
+#define INIT_NUM_HOSTS 8
+
 int do_init(int argc, char *argv[])
 {
 	char resbuf[sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk)];
@@ -1020,8 +1022,8 @@ int do_init(int argc, char *argv[])
 	memset(command, 0, sizeof(command));
 
 	snprintf(command, sizeof(command),
-		 "sanlock direct init -n 8 -s devcount:0:%s:0",
-		 argv[2]);
+		 "sanlock direct init -n %d -s devcount:0:%s:0",
+		 INIT_NUM_HOSTS, argv[2]);
 
 	printf("%s\n", command);
 
@@ -1033,7 +1035,8 @@ int do_init(int argc, char *argv[])
 
 
 	snprintf(command, sizeof(command),
-		 "sanlock direct init -n 8 -r devcount:resource%s:%s:1024000",
+		 "sanlock direct init -n %d -r devcount:resource%s:%s:1024000",
+		 INIT_NUM_HOSTS,
 		 argv[3],
 		 argv[2]);
 
@@ -1045,7 +1048,7 @@ int do_init(int argc, char *argv[])
 	strcpy(ls.name, "devcount");
 	strcpy(ls.host_id_disk.path, argv[2]);
 
-	rv = sanlock_direct_init(&ls, NULL, 0, 8, 0);
+	rv = sanlock_direct_init(&ls, NULL, 0, INIT_NUM_HOSTS, 0);
 	if (rv < 0) {
 		printf("sanlock_direct_init lockspace error %d\n", rv);
 		return -1;
@@ -1059,7 +1062,7 @@ int do_init(int argc, char *argv[])
 	strcpy(res->disks[0].path, argv[2]);
 	res->disks[0].offset = 1024000;
 
-	rv = sanlock_direct_init(NULL, res, 0, 8, 0);
+	rv = sanlock_direct_init(NULL, res, 0, INIT_NUM_HOSTS, 0);
 	if (rv < 0) {
 		printf("sanlock_direct_init resource error %d\n", rv);
 		return -1;

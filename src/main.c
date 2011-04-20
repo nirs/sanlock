@@ -296,23 +296,6 @@ static int client_add(int fd, void (*workfn)(int ci), void (*deadfn)(int ci))
 	return -1;
 }
 
-static int find_client_pid(int pid)
-{
-	struct client *cl;
-	int i;
-
-	for (i = 0; i < client_size; i++) {
-		cl = &client[i];
-		pthread_mutex_lock(&cl->mutex);
-		if (cl->used && cl->pid == pid) {
-			pthread_mutex_unlock(&cl->mutex);
-			return i;
-		}
-		pthread_mutex_unlock(&cl->mutex);
-	}
-	return -1;
-}
-
 static int get_peer_pid(int fd, int *pid)
 {
 	struct ucred cred;
@@ -1704,19 +1687,7 @@ static void process_cmd_thread_resource(int ci_in, struct sm_header *h_recv)
 	struct sm_header h;
 	struct client *cl;
 	int result = 0;
-	int rv, ci_target;
-
-	if (h_recv->data2 != -1) {
-		/* lease for another registered client with pid specified by data2 */
-		ci_target = find_client_pid(h_recv->data2);
-		if (ci_target < 0) {
-			result = -ESRCH;
-			goto fail;
-		}
-	} else {
-		/* lease for this registered client */
-		ci_target = ci_in;
-	}
+	int rv, i, ci_target;
 
 	ca = malloc(sizeof(struct cmd_args));
 	if (!ca) {
@@ -1724,9 +1695,31 @@ static void process_cmd_thread_resource(int ci_in, struct sm_header *h_recv)
 		goto fail;
 	}
 
-	cl = &client[ci_target];
+	if (h_recv->data2 != -1) {
+		/* lease for another registered client with pid specified by data2 */
+		ci_target = -1;
 
-	pthread_mutex_lock(&cl->mutex);
+		for (i = 0; i < client_size; i++) {
+			cl = &client[i];
+			pthread_mutex_lock(&cl->mutex);
+			if (cl->pid != h_recv->data2) {
+				pthread_mutex_unlock(&cl->mutex);
+				continue;
+			}
+			ci_target = i;
+			break;
+		}
+		if (ci_target < 0) {
+			result = -ESRCH;
+			goto fail;
+		}
+	} else {
+		/* lease for this registered client */
+
+		ci_target = ci_in;
+		cl = &client[ci_target];
+		pthread_mutex_lock(&cl->mutex);
+	}
 
 	if (!cl->used) {
 		log_error("cmd %d %d,%d,%d not used",
