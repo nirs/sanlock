@@ -281,7 +281,7 @@ int delta_lease_renew(struct timeout *ti,
 		      uint64_t host_id,
 		      struct leader_record *leader_ret)
 {
-	struct leader_record leader;
+	struct leader_record leader, leader_read;
 	uint64_t new_ts;
 	int error, delay;
 
@@ -316,13 +316,23 @@ int delta_lease_renew(struct timeout *ti,
 	/* log_space(sp, "delta_renew sleep 2d %d", delay); */
 	sleep(delay);
 
-	error = delta_lease_leader_read(ti, disk, space_name, host_id, &leader,
+	error = delta_lease_leader_read(ti, disk, space_name, host_id, &leader_read,
 					"delta_renew_check");
 	if (error < 0)
 		return error;
 
+	/*
 	if ((leader.timestamp != new_ts) || (leader.owner_id != our_host_id))
 		return SANLK_BAD_LEADER;
+	*/
+
+	if (memcmp(&leader, &leader_read, sizeof(struct leader_record))) {
+		log_erros(sp, "delta_renew %llu reread mismatch",
+			  (unsigned long long)host_id);
+		log_leader_error(0, space_name, host_id, disk, &leader, "delta_renew_write");
+		log_leader_error(0, space_name, host_id, disk, &leader_read, "delta_renew_reread");
+		return SANLK_BAD_LEADER;
+	}
 
 	memcpy(leader_ret, &leader, sizeof(struct leader_record));
 	return SANLK_OK;

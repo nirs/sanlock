@@ -91,15 +91,10 @@ struct token {
 struct lease_status {
 	int acquire_last_result;
 	int renewal_last_result;
-	int release_last_result;
-	int max_renewal_interval;
-	uint64_t acquire_last_time;
-	uint64_t acquire_good_time;
-	uint64_t renewal_last_time;
-	uint64_t renewal_good_time;
-	uint64_t release_last_time;
-	uint64_t release_good_time;
-	uint64_t max_renewal_time;
+	uint64_t acquire_last_attempt;
+	uint64_t acquire_last_success;
+	uint64_t renewal_last_attempt;
+	uint64_t renewal_last_success;
 };
 
 struct space {
@@ -114,7 +109,6 @@ struct space {
 	int thread_stop;
 	pthread_t thread;
 	pthread_mutex_t mutex; /* protects lease_status, thread_stop  */
-	pthread_cond_t cond;
 	struct lease_status lease_status;
 	int wd_fd;
 };

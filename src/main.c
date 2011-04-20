@@ -579,7 +579,6 @@ static int main_loop(void)
 					pthread_mutex_lock(&sp->mutex);
 					sp->thread_stop = 1;
 					unlink_watchdog_file(sp);
-					pthread_cond_broadcast(&sp->cond);
 					pthread_mutex_unlock(&sp->mutex);
 					list_move(&sp->list, &spaces_remove);
 				} else {
@@ -588,7 +587,7 @@ static int main_loop(void)
 				check_interval = RECOVERY_CHECK_INTERVAL;
 			} else {
 				if (external_shutdown || sp->external_remove ||
-				    !host_id_renewed(sp)) {
+				    !host_id_check(sp)) {
 					log_space(sp, "set killing_pids");
 					sp->killing_pids = 1;
 					kill_pids(sp);
@@ -1345,7 +1344,6 @@ static void *cmd_add_lockspace_thread(void *args_in)
 	memcpy(&sp->host_id_disk, &lockspace.host_id_disk,
 	       sizeof(struct sanlk_disk));
 	pthread_mutex_init(&sp->mutex, NULL);
-	pthread_cond_init(&sp->cond, NULL);
 
 	pthread_mutex_lock(&spaces_mutex);
 	sp->space_id = space_id_counter++;

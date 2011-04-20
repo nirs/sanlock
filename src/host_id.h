@@ -13,7 +13,7 @@ int print_space_state(struct space *sp, char *str);
 int _get_space_info(char *space_name, struct space *sp_out);
 int get_space_info(char *space_name, struct space *sp_out);
 int host_id_leader_read(struct timeout *ti, char *space_name, uint64_t host_id, struct leader_record *leader_ret);
-int host_id_renewed(struct space *sp);
+int host_id_check(struct space *sp);
 int add_space(struct space *sp);
 int rem_space(char *name, struct sync_disk *disk, uint64_t host_id);
 void clear_spaces(int wait);
