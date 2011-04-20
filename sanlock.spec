@@ -47,6 +47,10 @@ install -D -m 755 init.d/wdmd $RPM_BUILD_ROOT/%{_initddir}/wdmd
 %clean
 rm -rf $RPM_BUILD_ROOT
 
+%pre
+/usr/sbin/useradd -c "Sanlock" -s /sbin/nologin -r \
+                  -d /var/run/sanlock sanlock 2> /dev/null || :
+
 %post
 /sbin/chkconfig --add sanlock
 /sbin/chkconfig --add wdmd
