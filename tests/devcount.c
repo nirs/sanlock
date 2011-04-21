@@ -44,6 +44,30 @@ struct entry {
 	uint64_t last_count;
 };
 
+#define log_debug(fmt, args...) \
+do { \
+	printf("%llu " fmt "\n", (unsigned long long)time(NULL), ##args); \
+} while (0)
+
+#define log_error(fmt, args...) \
+do { \
+	printf("ERROR %llu " fmt "\n", (unsigned long long)time(NULL), ##args); \
+} while (0)
+
+
+/* kill(pid, SIGSTOP) would be nice, but that won't guarantee
+   the pid has finished all i/o when it returns */
+
+static void pause_pid(int pid)
+{
+	kill(pid, SIGSTOP);
+}
+
+static void resume_pid(int pid)
+{
+	kill(pid, SIGCONT);
+}
+
 static int rand_int(int a, int b)
 {
 	return a + (int) (((float)(b - a + 1)) * random() / (RAND_MAX+1.0)); 
@@ -51,14 +75,15 @@ static int rand_int(int a, int b)
 
 /* 64 byte entry: can fit up to 8 nodes in a 512 byte block */
 
-void print_entries(int pid, char *buf)
+void print_entries(char *path, int pid, char *buf)
 {
 	struct entry *e = (struct entry *)buf;
 	int i;
 
 	for (i = 0; i < (512 / sizeof(struct entry)); i++) {
-		printf("%d index %d turn %u time %llu %u:%llu:%llu "
-		       "last %u %llu %u:%llu:%llu\n",
+		log_error("%s c %d index %d turn %u time %llu %u:%llu:%llu "
+		       "last %u %llu %u:%llu:%llu",
+		       path,
 		       pid,
 		       i,
 		       e->turn,
@@ -75,10 +100,11 @@ void print_entries(int pid, char *buf)
 	}
 }
 
-void print_our_we(int pid, int writes, struct entry *our_we)
+void print_our_we(char *path, int pid, int writes, struct entry *our_we)
 {
-	printf("%d w %d index %d turn %u time %llu %u:%llu:%llu "
-		"last %u %llu %u:%llu:%llu\n",
+	log_debug("%s c %d w %d index %d turn %u time %llu %u:%llu:%llu "
+		"last %u %llu %u:%llu:%llu",
+		path,
 		pid,
 		writes,
 		our_hostid - 1,
@@ -196,10 +222,10 @@ static int do_count(int argc, char *argv[])
 			}
 
 			if (memcmp(rbuf, vbuf, 512)) {
-				printf("%d rbuf:\n", our_pid);
-				print_entries(our_pid, rbuf);
-				printf("%d vbuf:\n", our_pid);
-				print_entries(our_pid, vbuf);
+				log_error("%s c %d rbuf:", count_path, our_pid);
+				print_entries(count_path, our_pid, rbuf);
+				log_error("%s c %d vbuf:", count_path, our_pid);
+				print_entries(count_path, our_pid, vbuf);
 				goto fail;
 			}
 		}
@@ -225,8 +251,8 @@ static int do_count(int argc, char *argv[])
 	}
 
 	if (max_turn != max_re->turn) {
-		printf("%d max_turn %d max_re->turn %d\n", our_pid,
-		       max_turn, max_re->turn);
+		log_error("%s c %d max_turn %d max_re->turn %d\n",
+			  count_path, our_pid, max_turn, max_re->turn);
 		goto fail;
 	}
 
@@ -261,7 +287,7 @@ static int do_count(int argc, char *argv[])
 	}
 	writes = 1;
 
-	print_our_we(our_pid, writes, our_we);
+	print_our_we(count_path, our_pid, writes, our_we);
 
 	start = time(NULL);
 
@@ -282,7 +308,7 @@ static int do_count(int argc, char *argv[])
 			break;
 	}
 
-	print_our_we(our_pid, writes, our_we);
+	print_our_we(count_path, our_pid, writes, our_we);
 
 	if (turn_file) {
 		fprintf(turn_file, "turn %03u start %llu end %llu host %u pid %u\n",
@@ -313,10 +339,10 @@ static int do_count(int argc, char *argv[])
 			}
 
 			if (memcmp(rbuf, vbuf, 512)) {
-				printf("%d rbuf:\n", our_pid);
-				print_entries(our_pid, rbuf);
-				printf("%d vbuf:\n", our_pid);
-				print_entries(our_pid, vbuf);
+				log_error("%s c %d rbuf:", count_path, our_pid);
+				print_entries(count_path, our_pid, rbuf);
+				log_error("%s c %d vbuf:", count_path, our_pid);
+				print_entries(count_path, our_pid, vbuf);
 				goto fail;
 			}
 		}
@@ -424,8 +450,8 @@ static int do_relock(int argc, char *argv[])
 
 			sock = sanlock_register();
 			if (sock < 0) {
-				printf("%d sanlock_register error %d\n",
-				       child_pid, sock);
+				log_error("%s c %d sanlock_register error %d",
+					  count_path, child_pid, sock);
 				exit(-1);
 			}
 
@@ -434,14 +460,15 @@ static int do_relock(int argc, char *argv[])
 
 			rv = sanlock_acquire(sock, -1, 0, 1, &res, NULL);
 			if (rv < 0) {
-				printf("%d sanlock_acquire error %d\n",
-				       child_pid, rv);
+				log_debug("%s c %d sanlock_acquire error %d",
+					  count_path, child_pid, rv);
 				/* all hosts are trying to acquire so we
 				   expect this to acquire only sometimes;
 				   TODO: exit with an error for some rv's */
 				exit(0);
 			}
-			printf("%d sanlock_acquire done\n", child_pid);
+			log_debug("%s c %d sanlock_acquire done",
+				  count_path, child_pid);
 
 			execv(av[0], av);
 			perror("execv devcount problem");
@@ -458,7 +485,7 @@ static int do_relock(int argc, char *argv[])
 			sleep(1);
 		}
 
-		/* we expect child to exit when it fails go acquire the lock
+		/* we expect child to exit when it fails to acquire the lock
 		   because it's held by someone else, or rw run time is up */
 
 		if (rv == pid) {
@@ -469,32 +496,36 @@ static int do_relock(int argc, char *argv[])
 		rv = sanlock_inquire(-1, pid, 0, &res_count, &state);
 		if (rv < 0) {
 			/* pid may have exited */
-			printf("%d sanlock_inquire error %d\n", parent_pid, rv);
+			log_error("%s p %d sanlock_inquire c %d error %d",
+				  count_path, parent_pid, pid, rv);
 			goto run_more;
 		}
 		rv = sanlock_str_to_res(state, &res_inq);
 		if (rv < 0) {
-			printf("sanlock_str_to_res error %d %s\n", rv, state);
+			log_error("%s p %d sanlock_str_to_res error %d %s",
+				  count_path, parent_pid, rv, state);
 			goto fail;
 		}
 		lver = res_inq->lver;
 
-		printf("%d sanlock_inquire %llu done\n", parent_pid,
-		       (unsigned long long)lver);
+		log_debug("%s p %d sanlock_inquire c %d lver %llu done",
+			  count_path, parent_pid, pid, (unsigned long long)lver);
 
 		free(res_inq);
 		free(state);
 
-		kill(pid, SIGSTOP);
+		pause_pid(pid);
 
 		rv = sanlock_release(-1, pid, SANLK_REL_ALL, 0, NULL);
 		if (rv < 0) {
 			/* pid may have exited */
-			printf("%d sanlock_release error %d\n", parent_pid, rv);
-			goto run_more;
+			log_error("%s p %d sanlock_release c %d error %d",
+				  count_path, parent_pid, pid, rv);
+			goto kill_child;
 		}
 
-		printf("%d sanlock_release done\n", parent_pid);
+		log_debug("%s p %d sanlock_release c %d done",
+			  count_path, parent_pid, pid);
 
 		/* give a chance to someone else to acquire the lock in here */
 		usleep(1000000);
@@ -506,19 +537,22 @@ static int do_relock(int argc, char *argv[])
 		if (!rv) {
 			/* we got the lock back in the same version */
 
-			printf("%d sanlock_acquire %llu done\n", parent_pid,
-			       (unsigned long long)lver);
+			log_debug("%s p %d sanlock_acquire c %d lver %llu done",
+				  count_path, parent_pid, pid,
+				  (unsigned long long)lver);
 
-			kill(pid, SIGCONT);
+			resume_pid(pid);
 			goto run_more;
 		}
 
 		/* someone got the lock between our release and reacquire */
 
-		printf("%d sanlock_acquire %llu error %d\n", parent_pid,
-		       (unsigned long long)lver, rv);
+		log_debug("%s p %d sanlock_acquire c %d lver %llu error %d",
+			  count_path, parent_pid, pid, (unsigned long long)lver, rv);
 
+ kill_child:
 		kill(pid, SIGKILL);
+		waitpid(pid, &status, 0);
 		sleep(rand_int(0, 1));
 	}
 
@@ -583,21 +617,22 @@ static int do_lock(int argc, char *argv[])
 
 			sock = sanlock_register();
 			if (sock < 0) {
-				printf("%d sanlock_register error %d\n",
-				       child_pid, sock);
+				log_error("%s c %d sanlock_register error %d",
+					  count_path, child_pid, sock);
 				exit(-1);
 			}
 
 			rv = sanlock_acquire(sock, -1, 0, 1, &res, NULL);
 			if (rv < 0) {
-				printf("%d sanlock_acquire error %d\n",
-				       child_pid, rv);
+				log_debug("%s c %d sanlock_acquire error %d",
+					  count_path, child_pid, rv);
 				/* all hosts are trying to acquire so we
 				   expect this to acquire only sometimes;
 				   TODO: exit with an error for some rv's */
 				exit(0);
 			}
-			printf("%d sanlock_acquire done\n", child_pid);
+			log_debug("%s c %d sanlock_acquire done",
+				  count_path, child_pid);
 
 			execv(av[0], av);
 			perror("execv devcount problem");
@@ -661,19 +696,21 @@ static int do_wrap(int argc, char *argv[])
 
 	sock = sanlock_register();
 	if (sock < 0) {
-		printf("%d sanlock_register error %d\n", pid, sock);
+		log_error("%s c %d sanlock_register error %d",
+			  count_path, pid, sock);
 		exit(-1);
 	}
 
 	rv = sanlock_acquire(sock, -1, 0, 1, &res, NULL);
 	if (rv < 0) {
-		printf("%d sanlock_acquire error %d\n", pid, rv);
+		log_error("%s c %d sanlock_acquire error %d",
+			  count_path, pid, rv);
 		/* all hosts are trying to acquire so we
 		   expect this to acquire only sometimes;
 		   TODO: exit with an error for some rv's */
 		exit(0);
 	}
-	printf("%d sanlock_acquire done\n", pid);
+	log_debug("%s c %d sanlock_acquire done", count_path, pid);
 
 	execv(av[0], av);
 	perror("execv devcount problem");
@@ -916,18 +953,18 @@ static int do_migrate(int argc, char *argv[])
 
 			sock = sanlock_register();
 			if (sock < 0) {
-				printf("%d sanlock_register error %d\n",
-				       child_pid, sock);
+				log_error("%s c %d sanlock_register error %d",
+					  count_path, child_pid, sock);
 				exit(-1);
 			}
 
-			printf("%d pause\n", child_pid);
+			log_debug("%s c %d wait", count_path, child_pid);
 
 			read(pfd[0], &junk, 1);
 			close(pfd[0]);
 			close(pfd[1]);
 
-			printf("%d resume\n", child_pid);
+			log_debug("%s c %d begin", count_path, child_pid);
 
 			execv(av[0], av);
 			perror("execv devcount problem");
@@ -946,11 +983,13 @@ static int do_migrate(int argc, char *argv[])
 
 		rv = sanlock_acquire(-1, pid, 0, 1, &res, NULL);
 		if (rv < 0) {
-			printf("%d sanlock_acquire error %d\n", parent_pid, rv);
+			log_error("%s p %d sanlock_acquire c %d error %d",
+				  count_path, parent_pid, pid, rv);
 			exit(0);
 		}
-		printf("%d sanlock_acquire done init %d lver %llu\n", parent_pid,
-		       init, (unsigned long long)lver);
+		log_debug("%s p %d sanlock_acquire c %d init %d lver %llu done",
+			  count_path, parent_pid, pid, init,
+			  (unsigned long long)lver);
 
 		/* tell child to resume */
 		write(pfd[1], "\n", 1);
@@ -965,26 +1004,28 @@ static int do_migrate(int argc, char *argv[])
 
 		rv = sanlock_inquire(-1, pid, 0, &res_count, &state);
 		if (rv < 0) {
-			printf("%d sanlock_inquire error %d\n", parent_pid, rv);
+			log_error("%s p %d sanlock_inquire c %d error %d",
+				  count_path, parent_pid, pid, rv);
 			goto fail;
 		}
-		printf("%d sanlock_inquire done\n", parent_pid);
+		log_debug("%s p %d sanlock_inquire c %d done",
+			  count_path, parent_pid, pid);
 
-		kill(pid, SIGSTOP);
+		pause_pid(pid);
 
 		rv = sanlock_release(-1, pid, SANLK_REL_ALL, 0, NULL);
 		if (rv < 0) {
-			printf("%d sanlock_release error %d\n", parent_pid, rv);
+			log_error("%s p %d sanlock_release c %d error %d",
+				  count_path, parent_pid, pid, rv);
 			goto fail;
 		}
-		printf("%d sanlock_release done\n", parent_pid);
+		log_debug("%s p %d sanlock_release c %d done",
+			  count_path, parent_pid, pid);
 
 		write_migrate_incoming(state); /* to dest */
 
 		kill(pid, SIGKILL);
-
 		waitpid(pid, &status, 0);
-
 		free(state);
 	}
 
