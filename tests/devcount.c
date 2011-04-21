@@ -2,6 +2,7 @@
 #include <sys/wait.h>
 #include <sys/un.h>
 #include <sys/mount.h>
+#include <sys/signalfd.h>
 #include <inttypes.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -55,17 +56,84 @@ do { \
 } while (0)
 
 
-/* kill(pid, SIGSTOP) would be nice, but that won't guarantee
-   the pid has finished all i/o when it returns */
-
-static void pause_pid(int pid)
+static int kill_pid(int pid)
 {
-	kill(pid, SIGSTOP);
+	int rv, status;
+
+	kill(pid, SIGKILL);
+
+	while (1) {
+		rv = waitpid(pid, &status, 0);
+		if (rv < 0)
+			return -1;
+		if (rv != pid)
+			return -2;
+
+		if (WIFEXITED(status))
+			return 0;
+	}
+}
+
+/* kill(pid, SIGSTOP) would be nice, but that won't guarantee
+   the pid has finished all i/o when it returns.
+
+   Instead, we send SIGUSR1, which child sees after it's done
+   with a (synchronous) write, and calls SIGSTOP on itself */
+
+static void pause_pid(int pid, int child_stderr)
+{
+	char buf[64];
+	int rv;
+
+	kill(pid, SIGUSR1);
+
+	/* child prints "we_are_paused" to stderr before stopping */
+
+	memset(buf, 0, sizeof(buf));
+
+	rv = read(child_stderr, buf, sizeof(buf));
+
+	if (!strstr(buf, "we_are_paused"))
+		log_error("pause_pid %d buf %s", pid, buf);
 }
 
 static void resume_pid(int pid)
 {
 	kill(pid, SIGCONT);
+}
+
+static int check_pause(int fd)
+{
+	struct signalfd_siginfo fdsi;
+	ssize_t rv;
+
+	rv = read(fd, &fdsi, sizeof(struct signalfd_siginfo));
+	if (rv != sizeof(struct signalfd_siginfo)) {
+		return 0;
+	}
+	if (fdsi.ssi_signo == SIGUSR1) {
+		return 1;
+	}
+	return 0;
+}
+
+static int setup_pause(void)
+{
+	sigset_t mask;
+	int fd, rv;
+
+	sigemptyset(&mask);
+	sigaddset(&mask, SIGUSR1);
+
+	rv = sigprocmask(SIG_BLOCK, &mask, NULL);
+	if (rv < 0)
+		return rv;
+
+	fd = signalfd(-1, &mask, SFD_NONBLOCK);
+	if (fd < 0)
+		return -errno;
+
+	return fd;
 }
 
 static int rand_int(int a, int b)
@@ -100,12 +168,14 @@ void print_entries(char *path, int pid, char *buf)
 	}
 }
 
-void print_our_we(char *path, int pid, int writes, struct entry *our_we)
+void print_our_we(char *path, int pid, int writes, struct entry *our_we,
+		  const char *stage)
 {
-	log_debug("%s c %d w %d index %d turn %u time %llu %u:%llu:%llu "
+	log_debug("%s c %d %s w %d index %d turn %u time %llu %u:%llu:%llu "
 		"last %u %llu %u:%llu:%llu",
 		path,
 		pid,
+		stage,
 		writes,
 		our_hostid - 1,
 		our_we->turn,
@@ -133,6 +203,7 @@ static int do_count(int argc, char *argv[])
 	char *rbuf, **p_rbuf, *wbuf, **p_wbuf, *vbuf, **p_vbuf;
 	struct entry *re, *max_re, *our_we;
 	int i, fd, rv, max_i;
+	int pause_fd;
 	time_t start;
 	uint32_t our_pid = getpid();
 	uint32_t max_turn;
@@ -142,6 +213,8 @@ static int do_count(int argc, char *argv[])
 
 	if (argc < COUNT_ARGS)
 		return -1;
+
+	pause_fd = setup_pause();
 
 	strcpy(count_path, argv[2]);
 	sec1 = atoi(argv[3]);
@@ -287,7 +360,7 @@ static int do_count(int argc, char *argv[])
 	}
 	writes = 1;
 
-	print_our_we(count_path, our_pid, writes, our_we);
+	print_our_we(count_path, our_pid, writes, our_we, "begin");
 
 	start = time(NULL);
 
@@ -306,9 +379,17 @@ static int do_count(int argc, char *argv[])
 
 		if (write_seconds && (our_we->time - start >= write_seconds))
 			break;
+
+		if (check_pause(pause_fd)) {
+			print_our_we(count_path, our_pid, writes, our_we, "pause");
+			fprintf(stderr, "we_are_paused\n");
+			raise(SIGSTOP);
+			/* this shouldn't appear until parent does kill(SIGCONT) */
+			print_our_we(count_path, our_pid, writes, our_we, "resume");
+		}
 	}
 
-	print_our_we(count_path, our_pid, writes, our_we);
+	print_our_we(count_path, our_pid, writes, our_we, "end");
 
 	if (turn_file) {
 		fprintf(turn_file, "turn %03u start %llu end %llu host %u pid %u\n",
@@ -402,6 +483,7 @@ static int do_relock(int argc, char *argv[])
 	char *av[COUNT_ARGS+1];
 	struct sanlk_resource *res, *res_inq;
 	int i, j, pid, rv, sock, len, status;
+	int c2p[2]; /* child to parent */
 	int res_count;
 	uint32_t parent_pid = getpid();
 	uint64_t lver;
@@ -444,6 +526,8 @@ static int do_relock(int argc, char *argv[])
 	av[j] = NULL;
 
 	while (1) {
+		pipe(c2p);
+
 		pid = fork();
 		if (!pid) {
 			int child_pid = getpid();
@@ -470,6 +554,12 @@ static int do_relock(int argc, char *argv[])
 			log_debug("%s c %d sanlock_acquire done",
 				  count_path, child_pid);
 
+			/* make child's stderr go to parent c2p[0] */
+			close(2);
+			dup(c2p[1]);
+			close(c2p[0]);
+			close(c2p[1]);
+
 			execv(av[0], av);
 			perror("execv devcount problem");
 			exit(EXIT_FAILURE);
@@ -488,10 +578,8 @@ static int do_relock(int argc, char *argv[])
 		/* we expect child to exit when it fails to acquire the lock
 		   because it's held by someone else, or rw run time is up */
 
-		if (rv == pid) {
-			sleep(rand_int(0, 1));
-			continue;
-		}
+		if (rv == pid)
+			goto dead_child;
 
 		rv = sanlock_inquire(-1, pid, 0, &res_count, &state);
 		if (rv < 0) {
@@ -514,7 +602,8 @@ static int do_relock(int argc, char *argv[])
 		free(res_inq);
 		free(state);
 
-		pause_pid(pid);
+		pause_pid(pid, c2p[0]);
+		log_debug("%s p %d paused c %d", count_path, parent_pid, pid);
 
 		rv = sanlock_release(-1, pid, SANLK_REL_ALL, 0, NULL);
 		if (rv < 0) {
@@ -551,8 +640,10 @@ static int do_relock(int argc, char *argv[])
 			  count_path, parent_pid, pid, (unsigned long long)lver, rv);
 
  kill_child:
-		kill(pid, SIGKILL);
-		waitpid(pid, &status, 0);
+		kill_pid(pid);
+ dead_child:
+		close(c2p[0]);
+		close(c2p[1]);
 		sleep(rand_int(0, 1));
 	}
 
@@ -900,8 +991,9 @@ static int do_migrate(int argc, char *argv[])
 {
 	char *av[MIGRATE_ARGS+1];
 	struct sanlk_resource *res;
-	int i, j, pid, rv, sock, len, status, init;
-	int pfd[2];
+	int i, j, pid, rv, sock, len, init;
+	int p2c[2]; /* parent to child */
+	int c2p[2]; /* child to parent */
 	int res_count;
 	uint32_t parent_pid = getpid();
 	uint64_t lver;
@@ -945,7 +1037,9 @@ static int do_migrate(int argc, char *argv[])
 	av[j] = NULL;
 
 	while (1) {
-		pipe(pfd);
+		pipe(p2c);
+		pipe(c2p);
+
 		pid = fork();
 		if (!pid) {
 			int child_pid = getpid();
@@ -960,11 +1054,17 @@ static int do_migrate(int argc, char *argv[])
 
 			log_debug("%s c %d wait", count_path, child_pid);
 
-			read(pfd[0], &junk, 1);
-			close(pfd[0]);
-			close(pfd[1]);
+			read(p2c[0], &junk, 1);
+			close(p2c[0]);
+			close(p2c[1]);
 
 			log_debug("%s c %d begin", count_path, child_pid);
+
+			/* make child's stderr go to parent c2p[0] */
+			close(2);
+			dup(c2p[1]);
+			close(c2p[0]);
+			close(c2p[1]);
 
 			execv(av[0], av);
 			perror("execv devcount problem");
@@ -992,9 +1092,9 @@ static int do_migrate(int argc, char *argv[])
 			  (unsigned long long)lver);
 
 		/* tell child to resume */
-		write(pfd[1], "\n", 1);
-		close(pfd[0]);
-		close(pfd[1]);
+		write(p2c[1], "\n", 1);
+		close(p2c[0]);
+		close(p2c[1]);
 
 		/* let the child run for 10 seconds before stopping it;
 		   if the child exits before the 10 seconds, the sanlock_inquire
@@ -1011,7 +1111,8 @@ static int do_migrate(int argc, char *argv[])
 		log_debug("%s p %d sanlock_inquire c %d done",
 			  count_path, parent_pid, pid);
 
-		pause_pid(pid);
+		pause_pid(pid, c2p[0]);
+		log_debug("%s p %d paused c %d", count_path, parent_pid, pid);
 
 		rv = sanlock_release(-1, pid, SANLK_REL_ALL, 0, NULL);
 		if (rv < 0) {
@@ -1024,8 +1125,9 @@ static int do_migrate(int argc, char *argv[])
 
 		write_migrate_incoming(state); /* to dest */
 
-		kill(pid, SIGKILL);
-		waitpid(pid, &status, 0);
+		kill_pid(pid);
+		close(c2p[0]);
+		close(c2p[1]);
 		free(state);
 	}
 
