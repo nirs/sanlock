@@ -84,6 +84,7 @@ static int write_dblock(struct timeout *ti,
 	return rv;
 }
 
+#if 0
 static int write_request(struct timeout *ti,
 			 struct sync_disk *disk, struct request_record *rr)
 {
@@ -93,6 +94,7 @@ static int write_request(struct timeout *ti,
 			  ti->io_timeout_seconds, ti->use_aio, "request");
 	return rv;
 }
+#endif
 
 static int write_leader(struct timeout *ti,
 			struct sync_disk *disk, struct leader_record *lr)
@@ -988,42 +990,39 @@ int paxos_lease_release(struct timeout *ti,
 int paxos_lease_init(struct timeout *ti,
 		     struct token *token, int num_hosts, int max_hosts)
 {
-	struct leader_record leader;
-	struct request_record req;
-	struct paxos_dblock dblock;
-	int d, q;
-	uint32_t offset, ss;
-	uint64_t bb, be, sb, se;
+	char *iobuf, **p_iobuf;
+	struct leader_record *leader;
+	int iobuf_len;
+	int rv, d;
 
-	offset = token->disks[0].offset;
-	ss = token->disks[0].sector_size;
-	bb = offset;
-	be = offset + (ss * (max_hosts + 2) - 1);
-	sb = bb / ss;
-	se = be / ss;
+	iobuf_len = token->disks[0].sector_size * (2 + max_hosts);
 
-	memset(&leader, 0, sizeof(struct leader_record));
-	memset(&req, 0, sizeof(struct request_record));
-	memset(&dblock, 0, sizeof(struct paxos_dblock));
+	p_iobuf = &iobuf;
 
-	leader.magic = PAXOS_DISK_MAGIC;
-	leader.version = PAXOS_DISK_VERSION_MAJOR | PAXOS_DISK_VERSION_MINOR;
-	leader.sector_size = token->disks[0].sector_size;
-	leader.num_hosts = num_hosts;
-	leader.max_hosts = max_hosts;
-	leader.timestamp = LEASE_FREE;
-	strncpy(leader.space_name, token->r.lockspace_name, NAME_ID_SIZE);
-	strncpy(leader.resource_name, token->r.name, NAME_ID_SIZE);
-	leader.checksum = leader_checksum(&leader);
+	rv = posix_memalign((void *)p_iobuf, getpagesize(), iobuf_len);
+	if (rv)
+		return rv;
+
+	memset(iobuf, 0, iobuf_len);
+
+	leader = (struct leader_record *)iobuf;
+	leader->magic = PAXOS_DISK_MAGIC;
+	leader->version = PAXOS_DISK_VERSION_MAJOR | PAXOS_DISK_VERSION_MINOR;
+	leader->sector_size = token->disks[0].sector_size;
+	leader->num_hosts = num_hosts;
+	leader->max_hosts = max_hosts;
+	leader->timestamp = LEASE_FREE;
+	strncpy(leader->space_name, token->r.lockspace_name, NAME_ID_SIZE);
+	strncpy(leader->resource_name, token->r.name, NAME_ID_SIZE);
+	leader->checksum = leader_checksum(leader);
 
 	for (d = 0; d < token->r.num_disks; d++) {
-		write_leader(ti, &token->disks[d], &leader);
-		write_request(ti, &token->disks[d], &req);
-		for (q = 0; q < max_hosts; q++)
-			write_dblock(ti, &token->disks[d], q, &dblock);
+		rv = write_iobuf(token->disks[d].fd, token->disks[d].offset,
+				 iobuf, iobuf_len,
+				 ti->io_timeout_seconds, ti->use_aio);
+		if (rv < 0)
+			return rv;
 	}
-
-	/* TODO: return error if cannot initialize majority of disks */
 
 	return 0;
 }

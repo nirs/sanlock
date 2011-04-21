@@ -373,41 +373,39 @@ int delta_lease_init(struct timeout *ti,
 		     char *space_name,
 		     int max_hosts)
 {
-	struct leader_record leader;
+	struct leader_record *leader;
+	char *iobuf, **p_iobuf;
+	int iobuf_len;
 	int i, rv;
-	uint64_t bb, be, sb, se;
-	uint32_t ss;
 
-	ss = disk->sector_size;
-	bb = disk->offset;
-	be = disk->offset + (disk->sector_size * max_hosts) - 1;
-	sb = bb / ss;
-	se = be / ss;
+	iobuf_len = disk->sector_size * max_hosts;
 
-	memset(&leader, 0, sizeof(struct leader_record));
+	p_iobuf = &iobuf;
 
-	leader.magic = DELTA_DISK_MAGIC;
-	leader.version = DELTA_DISK_VERSION_MAJOR | DELTA_DISK_VERSION_MINOR;
-	leader.sector_size = disk->sector_size;
-	leader.max_hosts = 1;
-	leader.timestamp = LEASE_FREE;
-	strncpy(leader.space_name, space_name, NAME_ID_SIZE);
+	rv = posix_memalign((void *)p_iobuf, getpagesize(), iobuf_len);
+	if (rv)
+		return rv;
+
+	memset(iobuf, 0, iobuf_len);
 
 	/* host_id N is block offset N-1 */
 
 	for (i = 0; i < max_hosts; i++) {
-		memset(leader.resource_name, 0, NAME_ID_SIZE);
-		snprintf(leader.resource_name, NAME_ID_SIZE, "host_id_%d", i+1);
-		leader.checksum = leader_checksum(&leader);
-
-		rv = write_sector(disk, i, (char *)&leader, sizeof(struct leader_record),
-				  ti->io_timeout_seconds, ti->use_aio, "delta_leader");
-
-		if (rv < 0) {
-			log_tool("delta_init write_sector %d rv %d", i, rv);
-			return rv;
-		}
+		leader = (struct leader_record *)(iobuf + (i * disk->sector_size));
+		leader->magic = DELTA_DISK_MAGIC;
+		leader->version = DELTA_DISK_VERSION_MAJOR | DELTA_DISK_VERSION_MINOR;
+		leader->sector_size = disk->sector_size;
+		leader->max_hosts = 1;
+		leader->timestamp = LEASE_FREE;
+		strncpy(leader->space_name, space_name, NAME_ID_SIZE);
+		snprintf(leader->resource_name, NAME_ID_SIZE, "host_id_%d", i+1);
+		leader->checksum = leader_checksum(leader);
 	}
+
+	rv = write_iobuf(disk->fd, disk->offset, iobuf, iobuf_len,
+			 ti->io_timeout_seconds, ti->use_aio);
+	if (rv < 0)
+		return rv;
 
 	return 0;
 }

@@ -307,6 +307,17 @@ static int do_read_aio(int fd, uint64_t offset, char *buf, int len, int io_timeo
 	return -1;
 }
 
+/* write aligned io buffer */
+
+int write_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len,
+		int io_timeout_seconds, int use_aio)
+{
+	if (use_aio)
+		return do_write_aio(fd, offset, iobuf, iobuf_len, io_timeout_seconds);
+	else
+		return do_write(fd, offset, iobuf, iobuf_len);
+}
+
 static int _write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 			  uint32_t sector_count GNUC_UNUSED,
 			  const char *data, int data_len,
@@ -332,11 +343,8 @@ static int _write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 	memset(iobuf, 0, iobuf_len);
 	memcpy(iobuf, data, data_len);
 
-	if (use_aio)
-		rv = do_write_aio(disk->fd, offset, iobuf, iobuf_len, io_timeout_seconds);
-	else
-		rv = do_write(disk->fd, offset, iobuf, iobuf_len);
-
+	rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len,
+			 io_timeout_seconds, use_aio);
 	if (rv < 0)
 		log_error("write_sectors %s offset %llu rv %d %s",
 			  blktype, (unsigned long long)offset, rv, disk->path);
