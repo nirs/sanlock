@@ -1,0 +1,28 @@
+#!/bin/bash
+
+if [ $# -le 1 ]; then
+	echo "num $#"
+	echo ""
+	echo "devcount-dmsetup save <dev>"
+	echo ""
+	echo "devcount-dmsetup error <dev>"
+	echo ""
+	echo "devcount-dmsetup linear <dev>"
+	echo ""
+fi
+
+cmd=$1
+dev=$2
+
+if [ "$cmd" == "save" ]; then
+	rm -f /tmp/table-linear.txt
+	rm -f /tmp/table-error.txt
+	dmsetup table $dev > /tmp/table-linear.txt
+	sed "s/linear/error/" /tmp/table-linear.txt > /tmp/table-error.txt
+	exit 0
+fi
+
+dmsetup suspend $dev
+dmsetup load $dev /tmp/table-$cmd.txt
+dmsetup resume $dev
+

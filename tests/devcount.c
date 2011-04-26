@@ -380,7 +380,7 @@ static int do_count(int argc, char *argv[])
 		if (write_seconds && (our_we->time - start >= write_seconds))
 			break;
 
-		if (check_pause(pause_fd)) {
+		if (!(writes % 64) && check_pause(pause_fd)) {
 			print_our_we(count_path, our_pid, writes, our_we, "pause");
 			fprintf(stderr, "we_are_paused\n");
 			raise(SIGSTOP);
@@ -436,7 +436,7 @@ static int do_count(int argc, char *argv[])
 	return -1;
 }
 
-static void add_lockspace(void)
+static int add_lockspace(void)
 {
 	int rv;
 
@@ -446,7 +446,11 @@ static void add_lockspace(void)
 	lockspace.host_id = our_hostid;
 
 	rv = sanlock_add_lockspace(&lockspace, 0);
-	printf("%d sanlock_add_lockspace %d\n", getpid(), rv);
+
+	log_debug("%s p %d sanlock_add_lockspace %d",
+		  lock_path, getpid(), rv);
+
+	return rv;
 }
 
 /*
@@ -641,6 +645,7 @@ static int do_relock(int argc, char *argv[])
 
  kill_child:
 		kill_pid(pid);
+		log_debug("%s p %d killed c %d", count_path, parent_pid, pid);
  dead_child:
 		close(c2p[0]);
 		close(c2p[1]);
@@ -1126,6 +1131,7 @@ static int do_migrate(int argc, char *argv[])
 		write_migrate_incoming(state); /* to dest */
 
 		kill_pid(pid);
+		log_debug("%s p %d killed c %d", count_path, parent_pid, pid);
 		close(c2p[0]);
 		close(c2p[1]);
 		free(state);
@@ -1134,6 +1140,195 @@ static int do_migrate(int argc, char *argv[])
  fail:
 	printf("test failed...\n");
 	sleep(10000000);
+	return -1;
+}
+
+/*
+ * dmsetup table /dev/bull/lock1 > /tmp/table-linear.txt
+ * sed "s/linear/error/" /tmp/table-linear.txt > /tmp/table-error.txt
+ *
+ * dmsetup suspend /dev/bull/lock1
+ * dmsetup load /dev/bull/lock1 /tmp/table-error.txt
+ * dmsetup resume /dev/bull/lock1
+ *
+ * dmsetup suspend /dev/bull/lock1
+ * dmsetup load /dev/bull/lock1 /tmp/table-linear.txt
+ * dmsetup resume /dev/bull/lock1
+ */
+
+static void dmsetup_save_lock_disk(void)
+{
+	char cmd[128];
+	sprintf(cmd, "./devcount-dmsetup save %s", lock_path);
+	system(cmd);
+}
+
+static void dmsetup_error_lock_disk(void)
+{
+	char cmd[128];
+	sprintf(cmd, "./devcount-dmsetup error %s", lock_path);
+	system(cmd);
+}
+
+static void dmsetup_linear_lock_disk(void)
+{
+	char cmd[128];
+	sprintf(cmd, "./devcount-dmsetup linear %s", lock_path);
+	system(cmd);
+}
+
+int do_expire(int argc, char *argv[])
+{
+	char *av[COUNT_ARGS+1];
+	struct sanlk_resource *res;
+	uint32_t parent_pid = getpid();
+	int i, j, pid, rv, sock, len, status;
+	int c2p[2];
+	char result[5];
+
+	if (argc < LOCK_ARGS)
+		return -1;
+
+	count_offset = 0;
+
+	strcpy(lock_path, argv[2]);
+	strcpy(count_path, argv[4]);
+	our_hostid = atoi(argv[7]);
+
+	dmsetup_save_lock_disk();
+
+	add_lockspace();
+
+	len = sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk);
+	res = malloc(len);
+	memset(res, 0, len);
+	strcpy(res->lockspace_name, lockspace.name);
+	snprintf(res->name, SANLK_NAME_LEN, "resource%s", count_path);
+	res->name[SANLK_NAME_LEN-1] = '\0';
+	res->num_disks = 1;
+	strncpy(res->disks[0].path, lock_path, SANLK_PATH_LEN);
+	res->disks[0].path[SANLK_PATH_LEN-1] = '\0';
+	res->disks[0].offset = 1024000;
+
+	/* 
+	 * argv[0] = devcount
+	 * argv[1] = expire
+	 * argv[2] = <lock_disk>
+	 * argv[3] = rw
+	 * start copying at argv[3]
+	 */
+
+	j = 0;
+	av[j++] = strdup(argv[0]);
+	for (i = 3; i < LOCK_ARGS; i++)
+		av[j++] = strdup(argv[i]);
+	av[j] = NULL;
+
+	while (1) {
+		pipe(c2p);
+
+		pid = fork();
+		if (!pid) {
+			int child_pid = getpid();
+
+			sock = sanlock_register();
+			if (sock < 0) {
+				log_error("%s c %d sanlock_register error %d",
+					  count_path, child_pid, sock);
+				exit(-1);
+			}
+
+			/* this acquire can take up to 90 seconds waiting for
+			   the host_id of the owner to time out */
+
+			log_debug("%s c %d sanlock_acquire begin",
+				  count_path, child_pid);
+
+			rv = sanlock_acquire(sock, -1, 0, 1, &res, NULL);
+			if (rv < 0) {
+				log_debug("%s c %d sanlock_acquire error %d",
+					  count_path, child_pid, rv);
+
+				/* all hosts are trying to acquire so we
+				   expect this to acquire only sometimes;
+				   TODO: exit with an error for some rv's */
+
+				write(c2p[1], "fail", 4);
+				close(c2p[0]);
+				close(c2p[1]);
+				exit(0);
+			}
+			log_debug("%s c %d sanlock_acquire done",
+				  count_path, child_pid);
+
+			write(c2p[1], "good", 4);
+			close(c2p[0]);
+			close(c2p[1]);
+			execv(av[0], av);
+			perror("execv devcount problem");
+			exit(EXIT_FAILURE);
+		}
+
+		memset(&result, 0, sizeof(result));
+		read(c2p[0], &result, 4);
+		close(c2p[0]);
+		close(c2p[1]);
+
+		if (strstr(result, "fail")) {
+			/* we expect child to exit when it fails to acquire the
+			   lock because it's held by someone else */
+			waitpid(pid, &status, 0);
+			goto dead_child;
+		}
+
+		/* this test should be run with sec2 set to some large value
+		   that won't run out before sanlock daemon kills rw */
+
+		sleep(rand_int(6, 100));
+
+		dmsetup_error_lock_disk();
+		log_debug("%s p %d disable %s", count_path, parent_pid, lock_path);
+
+		/* sanlock daemon kills pid when the renewals fail; after the
+		   kill it will try to release the resource lease, which will
+		   also fail if the resource lease is on the same disk as the
+		   host_id lease.  Other nodes trying to get pid's resource
+		   lease are watching our host_id for 90 seconds, after which
+		   they will take pid's resource lease.  If the resource lease
+		   is on a different disk, the daemon will be able to release
+		   it after the kill, and another node will be able to take it
+		   immediately after that, without watching our host_id for 90
+		   seconds */
+
+		/* other nodes can't rely on the daemon being able to kill rw,
+		   so they need to wait 90 seconds to ensure that the watchdog
+		   has killed the host before taking pid's resource lease.
+		   In a different test, have the daemon kill fail, causing rw
+		   to continue running until the watchdog fires, after which
+		   another host will take pid's resource lease */
+
+		waitpid(pid, &status, 0);
+		log_debug("%s p %d waitpid c %d done", count_path, parent_pid, pid);
+
+		sleep(rand_int(0, 3));
+
+		dmsetup_linear_lock_disk();
+		log_debug("%s p %d enable %s", count_path, parent_pid, lock_path);
+
+		log_debug("%s p %d sanlock_add_lockspace begin",
+			  lock_path, parent_pid);
+		while (1) {
+			sleep(1);
+			rv = add_lockspace();
+			if (!rv)
+				break;
+		}
+ dead_child:
+		sleep(rand_int(0, 1));
+	}
+
+	printf("test failed...\n");
+	sleep(1000000);
 	return -1;
 }
 
@@ -1248,6 +1443,9 @@ int main(int argc, char *argv[])
 	else if (!strcmp(argv[1], "migrate"))
 		rv = do_migrate(argc, argv);
 
+	else if (!strcmp(argv[1], "expire"))
+		rv = do_expire(argc, argv);
+
 	if (!rv)
 		return 0;
 
@@ -1281,10 +1479,12 @@ int main(int argc, char *argv[])
 	printf("devcount wrap <lock_disk> rw <count_disk> <sec1> <sec2> <hostid>\n");
 	printf("  sanlock add_lockspace -s devcount:<hostid>:<lock_disk>:0\n");
 	printf("  sanlock_acquire, exec devcount rw\n");
+	printf("\n");
 	printf("devcount migrate <lock_disk> rw <count_disk> <sec1> <sec2> <hostid> <max_hostid>\n");
 	printf("  sanlock add_lockspace -s devcount:<hostid>:<lock_disk>:0\n");
 	printf("  loop around fork, sanlock_acquire, exec devcount rw\n");
 	printf("\n");
+	printf("devcount expire <lock_disk> rw <count_disk> <sec1> <sec2> <hostid>\n");
 	printf("\n");
 	return -1;
 }
