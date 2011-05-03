@@ -83,7 +83,7 @@ static int verify_leader(struct sync_disk *disk,
 		log_error("verify_leader %llu wrong magic %x %s",
 			  (unsigned long long)host_id,
 			  lr->magic, disk->path);
-		result = SANLK_BAD_MAGIC;
+		result = SANLK_LEADER_MAGIC;
 		goto fail;
 	}
 
@@ -91,7 +91,7 @@ static int verify_leader(struct sync_disk *disk,
 		log_error("verify_leader %llu wrong version %x %s",
 			  (unsigned long long)host_id,
 			  lr->version, disk->path);
-		result = SANLK_BAD_VERSION;
+		result = SANLK_LEADER_VERSION;
 		goto fail;
 	}
 
@@ -99,7 +99,7 @@ static int verify_leader(struct sync_disk *disk,
 		log_error("verify_leader %llu wrong sector size %d %d %s",
 			  (unsigned long long)host_id,
 			  lr->sector_size, disk->sector_size, disk->path);
-		result = SANLK_BAD_SECTORSIZE;
+		result = SANLK_LEADER_SECTORSIZE;
 		goto fail;
 	}
 
@@ -107,7 +107,7 @@ static int verify_leader(struct sync_disk *disk,
 		log_error("verify_leader %llu wrong space name %.48s %.48s %s",
 			  (unsigned long long)host_id,
 			  lr->space_name, space_name, disk->path);
-		result = SANLK_BAD_LOCKSPACE;
+		result = SANLK_LEADER_LOCKSPACE;
 		goto fail;
 	}
 
@@ -119,7 +119,7 @@ static int verify_leader(struct sync_disk *disk,
 		log_error("verify_leader %llu wrong resource name %.48s %.48s %s",
 			  (unsigned long long)host_id,
 			  lr->resource_name, resource_name, disk->path);
-		result = SANLK_BAD_RESOURCEID;
+		result = SANLK_LEADER_RESOURCE;
 		goto fail;
 	}
 
@@ -129,7 +129,7 @@ static int verify_leader(struct sync_disk *disk,
 		log_error("verify_leader %llu wrong checksum %x %x %s",
 			  (unsigned long long)host_id,
 			  lr->checksum, sum, disk->path);
-		result = SANLK_BAD_CHECKSUM;
+		result = SANLK_LEADER_CHECKSUM;
 		goto fail;
 	}
 
@@ -168,7 +168,7 @@ int delta_lease_leader_read(struct timeout *ti,
 			  sizeof(struct leader_record),
 			  ti->io_timeout_seconds, ti->use_aio, "delta_leader");
 	if (rv < 0)
-		return SANLK_READ_LEADERS;
+		return SANLK_LEADER_READ;
 
 	error = verify_leader(disk, space_name, host_id, &leader, caller);
 	if (error < 0)
@@ -293,7 +293,7 @@ int delta_lease_renew(struct timeout *ti,
 		return error;
 
 	if (leader.owner_id != our_host_id)
-		return SANLK_BAD_LEADER;
+		return SANLK_RENEW_OWNER;
 
 	new_ts = time(NULL);
 
@@ -331,7 +331,7 @@ int delta_lease_renew(struct timeout *ti,
 			  (unsigned long long)host_id);
 		log_leader_error(0, space_name, host_id, disk, &leader, "delta_renew_write");
 		log_leader_error(0, space_name, host_id, disk, &leader_read, "delta_renew_reread");
-		return SANLK_BAD_LEADER;
+		return SANLK_RENEW_DIFF;
 	}
 
 	memcpy(leader_ret, &leader, sizeof(struct leader_record));

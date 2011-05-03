@@ -16,7 +16,7 @@
 #define NAME_ID_SIZE 48
 
 #define PAXOS_DISK_MAGIC 0x06152010
-#define PAXOS_DISK_VERSION_MAJOR 0x00040000
+#define PAXOS_DISK_VERSION_MAJOR 0x00050000
 #define PAXOS_DISK_VERSION_MINOR 0x00000001
 
 #define DELTA_DISK_MAGIC 0x12212010
@@ -58,6 +58,9 @@ struct leader_record {
 	uint64_t unused1;
 	uint32_t checksum;
 	uint32_t unused2;
+	uint64_t write_id;		/* for extra info, debug */
+	uint64_t write_generation;	/* for extra info, debug */
+	uint64_t write_timestamp;	/* for extra info, debug */
 };
 
 #endif

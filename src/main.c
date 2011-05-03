@@ -920,7 +920,7 @@ static void *cmd_acquire_thread(void *args_in)
 
 		rv = acquire_token(token, acquire_lver, new_num_hosts);
 		if (rv < 0) {
-			if (rv == SANLK_LIVE_LEADER && com.quiet_fail) {
+			if (rv == SANLK_ACQUIRE_IDLIVE && com.quiet_fail) {
 				log_token(token, "cmd_acquire %d,%d,%d paxos_lease %d",
 					  cl_ci, cl_fd, cl_pid, rv);
 			} else {
