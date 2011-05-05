@@ -183,6 +183,53 @@ static int read_request(struct timeout *ti,
 }
 #endif
 
+/*
+ * It's possible that we pick a bk_max from another host which has our own
+ * inp values in it, and we can end up commiting our own inp values, copied
+ * from another host's dblock:
+ *
+ * host2 leader free
+ * host2 phase1 mbal 14002
+ * host2 writes dblock[1] mbal 14002
+ * host2 reads  no higher mbal
+ * host2 choose own inp 2,1
+ * host2 phase2 mbal 14002 bal 14002 inp 2,1
+ * host2 writes dblock[1] bal 14002 inp 2,1
+ *                                           host1 leader free
+ *                                           host1 phase1 mbal 20001
+ *                                           host1 writes dblock[0] mbal 20001
+ *                                           host1 reads  no higher mbal
+ *                                           host1 choose dblock[1] bal 14002 inp 2,1
+ *                                           host1 phase2 mbal 20001 bal 20001 inp 2,1
+ *                                           host1 writes dblock[0] bal 20001 inp 2,1
+ * host2 reads  dblock[0] mbal 20001 > 14002
+ *              abort2, retry
+ * host2 leader free
+ * host2 phase1 mbal 16002
+ * host2 writes dblock[1] mbal 16002
+ * host2 reads  dblock[0] mbal 20001 > 16002
+ *       abort1 retry
+ * host2 leader free
+ * host2 phase1 mbal 18002
+ * host2 writes dblock[1] mbal 18002
+ * host2 reads  dblock[0] mbal 20001 > 18002
+ *       abort1 retry
+ * host2 leader free
+ * host2 phase1 mbal 20002
+ * host2 writes dblock[1] mbal 20002
+ * host2 reads  no higher mbal
+ * host2 choose dblock[0] bal 20001 inp 2,1
+ *                                           host1 reads  dblock[1] mbal 20002 > 20001
+ *                                                 abort2 retry
+ * host2 phase2 mbal 20002 bal 20002 inp 2,1
+ * host2 writes dblock[1] bal 20002 inp 2,1
+ * host2 reads  no higher mbal
+ * host2 commit inp 2,1
+ * host2 success
+ *                                           host1 leader owner 2,1
+ *                                           host1 fail
+ */
+
 static int run_ballot(struct timeout *ti, struct token *token, int num_hosts,
 		      uint64_t next_lver, uint64_t our_mbal,
 		      struct paxos_dblock *dblock_out)
@@ -245,7 +292,7 @@ static int run_ballot(struct timeout *ti, struct token *token, int num_hosts,
 
 			if (bk[q].lver > dblock.lver) {
 				/* I don't think this should happen */
-				log_errot(token, "ballot %llu larger lver[%d] %llu",
+				log_errot(token, "ballot %llu larger1 lver[%d] %llu",
 					  (unsigned long long)next_lver, q,
 					  (unsigned long long)bk[q].lver);
 				return SANLK_DBLOCK_LVER;
@@ -254,7 +301,7 @@ static int run_ballot(struct timeout *ti, struct token *token, int num_hosts,
 			/* see "It aborts the ballot" in comment above */
 
 			if (bk[q].mbal > dblock.mbal) {
-				log_errot(token, "ballot %llu mbal %llu larger mbal[%d] %llu",
+				log_errot(token, "ballot %llu abort1 mbal %llu mbal[%d] %llu",
 					  (unsigned long long)next_lver,
 					  (unsigned long long)our_mbal, q,
 					  (unsigned long long)bk[q].mbal);
@@ -317,7 +364,7 @@ static int run_ballot(struct timeout *ti, struct token *token, int num_hosts,
 
 	if (bk_max.inp) {
 		/* not a problem, but interesting to see, so use log_error */
-		log_errot(token, "ballot %llu bk_max[%d] lver %llu mbal %llu bal %llu inp %llu %llu %llu",
+		log_errot(token, "ballot %llu choose bk_max[%d] lver %llu mbal %llu bal %llu inp %llu %llu %llu",
 			  (unsigned long long)next_lver, q_max,
 			  (unsigned long long)bk_max.lver,
 			  (unsigned long long)bk_max.mbal,
@@ -380,7 +427,7 @@ static int run_ballot(struct timeout *ti, struct token *token, int num_hosts,
 			/* see "It aborts the ballot" in comment above */
 
 			if (bk[q].mbal > dblock.mbal) {
-				log_errot(token, "ballot %llu mbal %llu larger2 mbal[%d] %llu",
+				log_errot(token, "ballot %llu abort2 mbal %llu mbal[%d] %llu",
 					  (unsigned long long)next_lver,
 					  (unsigned long long)our_mbal, q,
 					  (unsigned long long)bk[q].mbal);
@@ -589,7 +636,7 @@ int paxos_lease_leader_read(struct timeout *ti,
 	}
 
 	if (!majority_disks(token, num_reads)) {
-		log_errot(token, "%s leader_read error %d", caller, rv);
+		log_errot(token, "%s leader read error %d", caller, rv);
 		error = SANLK_LEADER_READ;
 		goto fail;
 	}
@@ -611,12 +658,12 @@ int paxos_lease_leader_read(struct timeout *ti,
 	}
 
 	if (!found) {
-		log_errot(token, "%s leader_read inconsistent", caller);
+		log_errot(token, "%s leader inconsistent", caller);
 		error = SANLK_LEADER_DIFF;
 		goto fail;
 	}
 
-	log_token(token, "%s leader_read %llu owner %llu %llu %llu", caller,
+	log_token(token, "%s leader %llu owner %llu %llu %llu", caller,
 		  (unsigned long long)leader.lver,
 		  (unsigned long long)leader.owner_id,
 		  (unsigned long long)leader.owner_generation,
@@ -630,6 +677,13 @@ int paxos_lease_leader_read(struct timeout *ti,
 	free(leaders);
 	free(leader_reps);
 	return error;
+}
+
+/* return a random int between a and b inclusive */
+
+static int get_rand(int a, int b)
+{
+	return a + (int) (((float)(b - a + 1)) * random() / (RAND_MAX+1.0));
 }
 
 static int write_new_leader(struct timeout *ti, struct token *token,
@@ -648,7 +702,11 @@ static int write_new_leader(struct timeout *ti, struct token *token,
 	}
 
 	if (!majority_disks(token, num_writes)) {
-		log_errot(token, "%s write_new_leader no majority writes", caller);
+		log_errot(token, "%s write_new_leader error %d owner %llu %llu %llu",
+			  caller, rv,
+			  (unsigned long long)nl->owner_id,
+			  (unsigned long long)nl->owner_generation,
+			  (unsigned long long)nl->timestamp);
 		error = SANLK_LEADER_WRITE;
 	}
 
@@ -683,7 +741,7 @@ int paxos_lease_acquire(struct timeout *ti,
 	uint64_t next_lver;
 	uint64_t our_mbal = 0;
 	uint64_t last_timestamp = 0;
-	int error, rv, d, num_reads, disk_open = 0;
+	int error, rv, d, us, num_reads, disk_open = 0;
 
 	log_token(token, "paxos_acquire begin acquire_lver %llu flags %x",
 		  (unsigned long long)acquire_lver, flags);
@@ -705,7 +763,8 @@ int paxos_lease_acquire(struct timeout *ti,
 	}
 
 	if (cur_leader.timestamp == LEASE_FREE) {
-		log_token(token, "paxos_acquire lease free");
+		log_token(token, "paxos_acquire leader %llu free",
+			  (unsigned long long)cur_leader.lver);
 		goto run;
 	}
 
@@ -840,7 +899,8 @@ int paxos_lease_acquire(struct timeout *ti,
 
 		last_timestamp = host_id_leader.timestamp;
 
-		sleep(2);
+		/* TODO: test with sleep(2) here */
+		sleep(1);
 
 		error = paxos_lease_leader_read(ti, token, &tmp_leader, "paxos_acquire");
 		if (error < 0)
@@ -908,8 +968,12 @@ int paxos_lease_acquire(struct timeout *ti,
 		    tmp_leader.owner_generation == token->host_generation) {
 			/* not a problem, but interesting to see, so use log_error */
 
-			log_errot(token, "paxos_acquire %llu our id commited by %llu",
+			log_errot(token, "paxos_acquire %llu owner our inp "
+				  "%llu %llu %llu commited by %llu",
 				  (unsigned long long)next_lver,
+				  (unsigned long long)tmp_leader.owner_id,
+				  (unsigned long long)tmp_leader.owner_generation,
+				  (unsigned long long)tmp_leader.timestamp,
 				  (unsigned long long)tmp_leader.write_id);
 
 			memcpy(leader_ret, &tmp_leader, sizeof(struct leader_record));
@@ -930,8 +994,11 @@ int paxos_lease_acquire(struct timeout *ti,
 			   &dblock);
 
 	if (error == SANLK_DBLOCK_MBAL) {
-		log_token(token, "paxos_acquire %llu retry ballot",
-			  (unsigned long long)next_lver);
+		us = get_rand(0, 1000000);
+		/* not a problem, but interesting to see, so use log_error */
+		log_errot(token, "paxos_acquire %llu retry delay %d us",
+			  (unsigned long long)next_lver, us);
+		usleep(us);
 		our_mbal += cur_leader.max_hosts;
 		goto retry_ballot;
 	}
@@ -965,7 +1032,7 @@ int paxos_lease_acquire(struct timeout *ti,
 	if (new_leader.owner_id != token->host_id) {
 		/* not a problem, but interesting to see, so use log_error */
 
-		log_errot(token, "paxos_acquire %llu commit other owner %llu %llu %llu",
+		log_errot(token, "ballot %llu commit other owner %llu %llu %llu",
 			  (unsigned long long)new_leader.lver,
 			  (unsigned long long)new_leader.owner_id,
 			  (unsigned long long)new_leader.owner_generation,
@@ -975,7 +1042,7 @@ int paxos_lease_acquire(struct timeout *ti,
 		goto out;
 	}
 
-	log_token(token, "paxos_acquire %llu owner %llu %llu %llu done",
+	log_token(token, "ballot %llu commit self owner %llu %llu %llu",
 		  (unsigned long long)next_lver,
 		  (unsigned long long)new_leader.owner_id,
 		  (unsigned long long)new_leader.owner_generation,
@@ -990,24 +1057,6 @@ int paxos_lease_acquire(struct timeout *ti,
 
 	return error;
 }
-
-#if 0
-int paxos_lease_leader_write(struct timeout *ti,
-			     struct token *token,
-			     struct leader_record *leader_new)
-{
-	int error;
-
-	log_token(token, "paxos_lease_leader_write begin");
-
-	leader_new->checksum = leader_checksum(leader_new);
-
-	error = write_new_leader(ti, token, leader_new);
-
-	log_token(token, "paxos_lease_leader_write done %d", error);
-	return error;
-}
-#endif
 
 #if 0
 int paxos_lease_renew(struct timeout *ti,
