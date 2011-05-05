@@ -13,10 +13,12 @@ int direct_acquire(struct timeout *ti,
                    struct sanlk_resource *res,
                    int num_hosts,
                    uint64_t local_host_id,
-                   uint64_t local_host_generation);
+                   uint64_t local_host_generation,
+		   struct leader_record *leader_ret);
 
 int direct_release(struct timeout *ti,
-                   struct sanlk_resource *res);
+                   struct sanlk_resource *res,
+		   struct leader_record *leader_ret);
 
 int direct_acquire_id(struct timeout *ti, struct sanlk_lockspace *ls);
 int direct_release_id(struct timeout *ti, struct sanlk_lockspace *ls);
@@ -39,6 +41,11 @@ int direct_init(struct timeout *ti,
                 struct sanlk_lockspace *ls,
                 struct sanlk_resource *res,
                 int max_hosts, int num_hosts);
+
+int direct_read_leader(struct timeout *ti,
+                       struct sanlk_lockspace *ls,
+                       struct sanlk_resource *res,
+                       struct leader_record *leader_ret);
 
 int direct_dump(struct timeout *ti, char *dump_path);
 

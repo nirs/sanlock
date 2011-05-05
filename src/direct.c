@@ -31,6 +31,54 @@
 #include "delta_lease.h"
 #include "sanlock_direct.h"
 
+/*
+ * cli: sanlock direct init
+ * cli: sanlock direct read_leader
+ * cli: sanlock direct acquire
+ * cli: sanlock direct release
+ * lib: sanlock_direct_init()
+ *
+ *              direct.c:
+ *              direct_init()
+ *              direct_read_leader()
+ *              direct_acquire()
+ *              direct_release()
+ * 	           do_paxos_action()
+ * 	              paxos_lease.c:
+ * 	              paxos_lease_init()
+ * 	              paxos_lease_leader_read()
+ * 	              paxos_lease_acquire()
+ * 	              paxos_lease_release()
+ *
+ * cli: sanlock direct init
+ * cli: sanlock direct read_leader
+ * cli: sanlock direct acquire_id
+ * cli: sanlock direct release_id
+ * cli: sanlock direct renew_id
+ * cli: sanlock direct read_id
+ * cli: sanlock direct live_id
+ * lib: sanlock_direct_read_id()
+ * lib: sanlock_direct_live_id()
+ * lib: sanlock_direct_init()
+ *
+ *              direct.c:
+ *              direct_init()
+ *              direct_read_leader()
+ *              direct_acquire_id()
+ *              direct_release_id()
+ *              direct_renew_id()
+ *              direct_read_id()
+ *              direct_live_id()
+ *                 do_delta_action()
+ *                    delta_lease.c:
+ *                    delta_lease_init()
+ *                    delta_lease_leader_read()
+ *                    delta_lease_acquire()
+ *                    delta_lease_release()
+ *                    delta_lease_renew()
+ */
+
+
 /* TODO: include from sanlock_internal */
 static struct timeout to_default =  {
         DEFAULT_USE_AIO,
@@ -40,16 +88,15 @@ static struct timeout to_default =  {
         DEFAULT_HOST_ID_RENEWAL_FAIL_SECONDS,
         DEFAULT_HOST_ID_RENEWAL_WARN_SECONDS };
 
-static int do_paxos_action(int action,
-			   struct timeout *ti,
+static int do_paxos_action(int action, struct timeout *ti,
 			   struct sanlk_resource *res,
-			   int max_hosts,
-			   int num_hosts,
+			   int max_hosts, int num_hosts,
 			   uint64_t local_host_id,
-			   uint64_t local_host_generation)
+			   uint64_t local_host_generation,
+			   struct leader_record *leader_ret)
 {
 	struct token *token;
-	struct leader_record leader_read, leader_ret;
+	struct leader_record leader;
 	int disks_len, token_len;
 	int num_opened;
 	int j, rv = 0;
@@ -76,48 +123,41 @@ static int do_paxos_action(int action,
 	}
 
 	num_opened = open_disks(token->disks, token->r.num_disks);
-	if (!majority_disks(token, num_opened)) {
-		log_tool("cannot open majority of disks");
-		return -1;
-	}
+	if (!majority_disks(token, num_opened))
+		return -ENODEV;
 
 	switch (action) {
 	case ACT_INIT:
 		rv = paxos_lease_init(ti, token, num_hosts, max_hosts);
-		if (rv < 0) {
-			log_tool("cannot initialize disks");
-			goto exit_fail;
-		}
 		break;
 
 	case ACT_ACQUIRE:
 		token->host_id = local_host_id;
 		token->host_generation = local_host_generation;
 
-		rv = paxos_lease_acquire(ti, token, 0, &leader_ret, 0, num_hosts);
-		if (rv < 0) {
-			log_tool("cannot acquire lease on %s", token->r.name);
-			goto exit_fail;
-		}
+		rv = paxos_lease_acquire(ti, token, 0, leader_ret, 0, num_hosts);
 		break;
 
 	case ACT_RELEASE:
-		rv = paxos_lease_leader_read(ti, token, &leader_read, "direct_release");
-		if (rv < 0) {
-			log_tool("cannot read lease on %s", token->r.name);
-			goto exit_fail;
-		}
-		rv = paxos_lease_release(ti, token, &leader_read, &leader_ret);
-		if (rv < 0) {
-			log_tool("cannot release lease on %s", token->r.name);
-			goto exit_fail;
-		}
+		rv = paxos_lease_leader_read(ti, token, &leader, "direct_release");
+		if (rv < 0)
+			break;
+		rv = paxos_lease_release(ti, token, &leader, leader_ret);
+		break;
+
+	case ACT_READ_LEADER:
+		rv = paxos_lease_leader_read(ti, token, &leader, "direct_read_leader");
 		break;
 	}
 
-exit_fail:
 	close_disks(token->disks, token->r.num_disks);
 	free(token);
+
+	if (rv == SANLK_OK)
+		rv = 0;
+
+	if (leader_ret)
+		memcpy(leader_ret, &leader, sizeof(struct leader_record));
 
 	return rv;
 }
@@ -131,21 +171,29 @@ int direct_acquire(struct timeout *ti,
 		   struct sanlk_resource *res,
 		   int num_hosts,
 		   uint64_t local_host_id,
-		   uint64_t local_host_generation)
+		   uint64_t local_host_generation,
+		   struct leader_record *leader_ret)
 {
-	return do_paxos_action(ACT_ACQUIRE, ti, res, -1, num_hosts,
-			       local_host_id, local_host_generation);
+	return do_paxos_action(ACT_ACQUIRE, ti, res,
+			       -1, num_hosts,
+			       local_host_id, local_host_generation,
+			       leader_ret);
 }
 
 int direct_release(struct timeout *ti,
-		   struct sanlk_resource *res)
+		   struct sanlk_resource *res,
+		   struct leader_record *leader_ret)
 {
-	return do_paxos_action(ACT_RELEASE, ti, res, -1, -1, 0, 0);
+	return do_paxos_action(ACT_RELEASE, ti, res,
+			       -1, -1,
+			       0, 0,
+			       leader_ret);
 }
 
 static int do_delta_action(int action,
 			   struct timeout *ti,
 			   struct sanlk_lockspace *ls,
+			   int max_hosts,
 			   struct leader_record *leader_ret)
 {
 	struct leader_record leader;
@@ -153,32 +201,24 @@ static int do_delta_action(int action,
 	struct space space;
 	int rv;
 
-	if (!ls->name[0])
-		return -1;
-
-	if (!ls->host_id_disk.path[0]) {
-		log_tool("invalid disk path");
-		return -1;
-	}
-
-	if (!ls->host_id) {
-		log_tool("zero host_id");
-		return -1;
-	}
-
 	/* for log_space in delta functions */
 	memset(&space, 0, sizeof(space));
+
+	if (!ls->host_id_disk.path[0])
+		return -ENODEV;
 
 	memset(&sd, 0, sizeof(struct sync_disk));
 	memcpy(&sd, &ls->host_id_disk, sizeof(struct sanlk_disk));
 
 	rv = open_disks(&sd, 1);
-	if (rv != 1) {
-		log_tool("open_disk failed %d %s", rv, sd.path);
-		return -1;
-	}
+	if (rv != 1)
+		return -ENODEV;
 
 	switch (action) {
+	case ACT_INIT:
+		rv = delta_lease_init(ti, &sd, ls->name, max_hosts);
+		break;
+
 	case ACT_ACQUIRE_ID:
 		rv = delta_lease_acquire(ti, &space, &sd,
 					 ls->name,
@@ -207,6 +247,7 @@ static int do_delta_action(int action,
 					 &leader, &leader);
 		break;
 	case ACT_READ_ID:
+	case ACT_READ_LEADER:
 		rv = delta_lease_leader_read(ti, &sd,
 					     ls->name,
 					     ls->host_id,
@@ -214,6 +255,8 @@ static int do_delta_action(int action,
 					     "direct_read");
 		break;
 	}
+
+	close_disks(&sd, 1);
 
 	if (rv == SANLK_OK)
 		rv = 0;
@@ -233,17 +276,17 @@ static int do_delta_action(int action,
 
 int direct_acquire_id(struct timeout *ti, struct sanlk_lockspace *ls)
 {
-	return do_delta_action(ACT_ACQUIRE_ID, ti, ls, NULL);
+	return do_delta_action(ACT_ACQUIRE_ID, ti, ls, -1, NULL);
 }
 
 int direct_release_id(struct timeout *ti, struct sanlk_lockspace *ls)
 {
-	return do_delta_action(ACT_RELEASE_ID, ti, ls, NULL);
+	return do_delta_action(ACT_RELEASE_ID, ti, ls, -1, NULL);
 }
 
 int direct_renew_id(struct timeout *ti, struct sanlk_lockspace *ls)
 {
-	return do_delta_action(ACT_RENEW_ID, ti, ls, NULL);
+	return do_delta_action(ACT_RENEW_ID, ti, ls, -1, NULL);
 }
 
 int direct_read_id(struct timeout *ti,
@@ -257,7 +300,7 @@ int direct_read_id(struct timeout *ti,
 
 	memset(&leader, 0, sizeof(struct leader_record));
 
-	rv = do_delta_action(ACT_READ_ID, ti, ls, &leader);
+	rv = do_delta_action(ACT_READ_ID, ti, ls, -1, &leader);
 
 	*timestamp = leader.timestamp;
 	*owner_id = leader.owner_id;
@@ -290,7 +333,7 @@ int direct_live_id(struct timeout *ti,
 	time_t start;
 	int rv;
 
-	rv = do_delta_action(ACT_READ_ID, ti, ls, &leader_begin);
+	rv = do_delta_action(ACT_READ_ID, ti, ls, -1, &leader_begin);
 	if (rv < 0)
 		return rv;
 
@@ -299,7 +342,7 @@ int direct_live_id(struct timeout *ti,
 	while (1) {
 		sleep(1);
 
-		rv = do_delta_action(ACT_READ_ID, ti, ls, &leader);
+		rv = do_delta_action(ACT_READ_ID, ti, ls, -1, &leader);
 		if (rv < 0)
 			return rv;
 
@@ -355,61 +398,29 @@ int direct_init(struct timeout *ti,
 		struct sanlk_resource *res,
 		int max_hosts, int num_hosts)
 {
-	struct sync_disk sd;
-	int num_opened;
-	int rv;
+	int rv = -1;
 
 	if (ls && ls->host_id_disk.path[0]) {
-		memset(&sd, 0, sizeof(struct sync_disk));
-		memcpy(&sd, &ls->host_id_disk, sizeof(struct sanlk_disk));
+		rv = do_delta_action(ACT_INIT, ti, ls, max_hosts, NULL);
 
-		num_opened = open_disks(&sd, 1);
-		if (num_opened != 1) {
-			log_tool("cannot open disk %s", sd.path);
-			return -1;
-		}
+	} else if (res) {
+		if (!num_hosts)
+			return -EINVAL;
 
-		rv = delta_lease_init(ti, &sd, ls->name, max_hosts);
-	        close_disks(&sd, 1);
+		if (num_hosts > max_hosts)
+			return SANLK_LEADER_NUMHOSTS;
 
-		if (rv < 0) {
-			log_tool("lockspace init failed %d", rv);
-			return -1;
-		}
+		if (!res->num_disks)
+			return -ENODEV;
+
+		if (!res->disks[0].path[0])
+			return -ENODEV;
+
+		rv = do_paxos_action(ACT_INIT, ti, res,
+				     max_hosts, num_hosts, 0, 0, NULL);
 	}
 
-	if (res) {
-		if (!num_hosts) {
-			log_tool("num_hosts option required for paxos lease init");
-			return -1;
-		}
-
-		if (!max_hosts)
-			max_hosts = DEFAULT_MAX_HOSTS;
-
-		if (num_hosts > max_hosts) {
-			log_tool("num_hosts cannot be greater than max_hosts");
-			return -1;
-		}
-
-		if (!res->num_disks) {
-			log_tool("num_disks zero");
-			return -1;
-		}
-
-		if (!res->disks[0].path[0]) {
-			log_tool("invalid disk path");
-			return -1;
-		}
-
-		rv = do_paxos_action(ACT_INIT, ti, res, max_hosts, num_hosts, 0, 0);
-		if (rv < 0) {
-			log_tool("resource init failed %d", rv);
-			return rv;
-		}
-	}
-
-	return 0;
+	return rv;
 }
 
 int sanlock_direct_init(struct sanlk_lockspace *ls,
@@ -423,6 +434,22 @@ int sanlock_direct_init(struct sanlk_lockspace *ls,
 		max_hosts = DEFAULT_MAX_HOSTS;
 
 	return direct_init(&ti, ls, res, max_hosts, num_hosts);
+}
+
+int direct_read_leader(struct timeout *ti,
+		       struct sanlk_lockspace *ls,
+		       struct sanlk_resource *res,
+		       struct leader_record *leader_ret)
+{
+	int rv = -1;
+
+	if (ls && ls->host_id_disk.path[0])
+		rv = do_delta_action(ACT_READ_LEADER, ti, ls, -1, leader_ret);
+
+	else if (res)
+		rv = do_paxos_action(ACT_READ_LEADER, ti, res,
+				     -1, -1, 0, 0, leader_ret);
+	return rv;
 }
 
 int direct_dump(struct timeout *ti, char *dump_path)
@@ -448,10 +475,8 @@ int direct_dump(struct timeout *ti, char *dump_path)
 	strncpy(sd.path, dump_path, SANLK_PATH_LEN);
 
 	num_opened = open_disks(&sd, 1);
-	if (num_opened != 1) {
-		log_tool("cannot open disk %s", sd.path);
-		return -1;
-	}
+	if (num_opened != 1)
+		return -ENODEV;
 
 	data = malloc(sd.sector_size);
 	if (!data)

@@ -310,6 +310,7 @@ enum {
 	ACT_LIVE_ID,
 	ACT_INIT,
 	ACT_DUMP,
+	ACT_READ_LEADER,
 };
 
 #endif

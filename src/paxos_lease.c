@@ -626,6 +626,7 @@ int paxos_lease_leader_read(struct timeout *ti,
 	return SANLK_OK;
 
  fail:
+	memcpy(leader_ret, &leader, sizeof(struct leader_record));
 	free(leaders);
 	free(leader_reps);
 	return error;

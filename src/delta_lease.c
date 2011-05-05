@@ -171,11 +171,9 @@ int delta_lease_leader_read(struct timeout *ti,
 		return SANLK_LEADER_READ;
 
 	error = verify_leader(disk, space_name, host_id, &leader, caller);
-	if (error < 0)
-		return error;
 
 	memcpy(leader_ret, &leader, sizeof(struct leader_record));
-	return SANLK_OK;
+	return error;
 }
 
 int delta_lease_acquire(struct timeout *ti,

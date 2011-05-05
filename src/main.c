@@ -2268,6 +2268,7 @@ static void print_usage(void)
 	printf("direct actions:		read/write storage directly to:\n");
 	printf("  init			initialize disk areas for host_id and resource leases\n");
 	printf("  dump			print initialized leases\n");
+	printf("  read_leader		print values in leader_record\n");
 	printf("  acquire		acquire leases\n");
 	printf("  release		release leases\n");
 	printf("  acquire_id		acquire a host_id lease\n");
@@ -2332,6 +2333,9 @@ static void print_usage(void)
 	printf("\n");
 	printf("direct dump <path>[:<offset>] [options]\n");
 	printf("  -D			debug: print extra info for debugging\n");
+	printf("  -a <num>		use async io (1 yes, 0 no)\n");
+	printf("\n");
+	printf("direct read_leader [-s LOCKSPACE] [-r RESOURCE]\n");
 	printf("  -a <num>		use async io (1 yes, 0 no)\n");
 	printf("\n");
 	printf("direct acquire|release -i <num> -g <num> -r RESOURCE\n");
@@ -2440,6 +2444,8 @@ static int read_command_line(int argc, char *argv[])
 			com.action = ACT_INIT;
 		else if (!strcmp(act, "dump"))
 			com.action = ACT_DUMP;
+		else if (!strcmp(act, "read_leader"))
+			com.action = ACT_READ_LEADER;
 		else if (!strcmp(act, "acquire"))
 			com.action = ACT_ACQUIRE;
 		else if (!strcmp(act, "release"))
@@ -2734,6 +2740,7 @@ static int do_client(void)
 
 static int do_direct(void)
 {
+	struct leader_record leader;
 	uint64_t timestamp, owner_id, owner_generation;
 	int live;
 	int rv;
@@ -2750,14 +2757,44 @@ static int do_direct(void)
 		log_tool("dump done %d", rv);
 		break;
 
+	case ACT_READ_LEADER:
+		rv = direct_read_leader(&to, &com.lockspace, com.res_args[0], &leader);
+		log_tool("read_leader done %d", rv);
+		log_tool("magic 0x%x", leader.magic);
+		log_tool("version 0x%x", leader.version);
+		log_tool("sector_size %u", leader.sector_size);
+		log_tool("num_hosts %llu",
+			 (unsigned long long)leader.num_hosts);
+		log_tool("max_hosts %llu",
+			 (unsigned long long)leader.max_hosts);
+		log_tool("owner_id %llu",
+			 (unsigned long long)leader.owner_id);
+		log_tool("owner_generation %llu",
+			 (unsigned long long)leader.owner_generation);
+		log_tool("lver %llu",
+			 (unsigned long long)leader.lver);
+		log_tool("space_name %.48s", leader.space_name);
+		log_tool("resource_name %.48s", leader.resource_name);
+		log_tool("timestamp %llu",
+			 (unsigned long long)leader.timestamp);
+		log_tool("checksum %u", leader.checksum);
+		log_tool("write_id %llu",
+			 (unsigned long long)leader.write_id);
+		log_tool("write_generation %llu",
+			 (unsigned long long)leader.write_generation);
+		log_tool("write_timestamp %llu",
+			 (unsigned long long)leader.write_timestamp);
+		break;
+
 	case ACT_ACQUIRE:
 		rv = direct_acquire(&to, com.res_args[0], com.num_hosts,
-				    com.local_host_id, com.local_host_generation);
+				    com.local_host_id, com.local_host_generation,
+				    &leader);
 		log_tool("acquire done %d", rv);
 		break;
 
 	case ACT_RELEASE:
-		rv = direct_release(&to, com.res_args[0]);
+		rv = direct_release(&to, com.res_args[0], &leader);
 		log_tool("release done %d", rv);
 		break;
 
