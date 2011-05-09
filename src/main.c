@@ -1192,7 +1192,7 @@ static void cmd_inquire(struct cmd_args *ca)
 	struct sm_header h;
 	struct token *token;
 	struct client *cl;
-	char *state, *str;
+	char *state = NULL, *str;
 	int state_maxlen = 0, state_strlen = 0;
 	int res_count = 0, cat_count = 0;
 	int fd, i, rv, pid_dead;
@@ -1208,6 +1208,11 @@ static void cmd_inquire(struct cmd_args *ca)
 		  cl_ci, cl_fd, cl_pid, ca->ci_in, fd);
 
 	pthread_mutex_lock(&cl->mutex);
+
+	if (cl->pid_dead) {
+		result = -ESTALE;
+		goto done;
+	}
 
 	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
 		if (cl->tokens[i])
