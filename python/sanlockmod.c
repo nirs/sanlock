@@ -12,28 +12,48 @@
 #include <sanlock_admin.h>
 #include <sanlock_direct.h>
 
+#define SKERRNO(x) (-x)
+
 int __sanlockmod_fd = -1;
 PyObject *py_module;
 
 /* SANLock exception */
 static PyObject *sanlockmod_exception;
 
+static void
+__set_exception(int en, char *msg)
+{
+    PyObject *exc_tuple;
+
+    exc_tuple = Py_BuildValue("(is)", en, msg);
+
+    if (exc_tuple == NULL) {
+        PyErr_NoMemory();
+    } else {
+        PyErr_SetObject(sanlockmod_exception, exc_tuple);
+        Py_DECREF(exc_tuple);
+    }
+}
+
 static int
 __parse_lockspace(char *lockspace, struct sanlk_lockspace *ret_ls)
 {
+    int rv;
     char *lockspace_arg;
 
     /* sanlock_str_to_lockspace is destructive */
     lockspace_arg = strdup(lockspace);
 
     if (lockspace_arg == NULL) {
-        PyErr_SetString(sanlockmod_exception, "SANLock extension memory error");
+        PyErr_NoMemory();
         return -1;
     }
 
     /* convert lockspace string to structure */
-    if (sanlock_str_to_lockspace(lockspace_arg, ret_ls) != 0) {
-        PyErr_SetString(sanlockmod_exception, "Invalid SANLock lockspace");
+    rv = sanlock_str_to_lockspace(lockspace_arg, ret_ls);
+
+    if (rv != 0) {
+        __set_exception(SKERRNO(rv), "Invalid SANLock lockspace");
         goto exit_fail;
     }
 
@@ -48,9 +68,13 @@ exit_fail:
 static int
 __parse_resource(char *resource, struct sanlk_resource **ret_res)
 {
+    int rv;
+
     /* convert resource string to structure */
-    if (sanlock_str_to_res(resource, ret_res) != 0) {
-        PyErr_SetString(sanlockmod_exception, "Invalid SANLock resource");
+    rv = sanlock_str_to_res(resource, ret_res);
+
+    if (rv != 0) {
+        __set_exception(SKERRNO(rv), "Invalid SANLock resource");
         return -1;
     }
 
@@ -65,7 +89,8 @@ py_register(PyObject *self, PyObject *args)
     }
 
     if (__sanlockmod_fd < 0) {
-        PyErr_SetString(sanlockmod_exception, "SANLock registration failed");
+        __set_exception(SKERRNO(__sanlockmod_fd),
+                        "SANLock registration failed");
         return NULL;
     }
 
@@ -95,7 +120,7 @@ static PyObject *py_init_lockspace(PyObject *self, PyObject *args)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        PyErr_SetString(sanlockmod_exception, "SANLock lockspace init failure");
+        __set_exception(SKERRNO(rv), "SANLock lockspace init failure");
         return NULL;
     }
 
@@ -125,7 +150,7 @@ static PyObject *py_init_resource(PyObject *self, PyObject *args)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        PyErr_SetString(sanlockmod_exception, "SANLock resource init failure");
+        __set_exception(SKERRNO(rv), "SANLock resource init failure");
         return NULL;
     }
 
@@ -155,7 +180,7 @@ py_add_lockspace(PyObject *self, PyObject *args)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        PyErr_SetString(sanlockmod_exception, "SANLock lockspace add failure");
+        __set_exception(SKERRNO(rv), "SANLock lockspace add failure");
         return NULL;
     }
 
@@ -185,7 +210,7 @@ py_rem_lockspace(PyObject *self, PyObject *args)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        PyErr_SetString(sanlockmod_exception, "SANLock lockspace remove failure");
+        __set_exception(SKERRNO(rv), "SANLock lockspace remove failure");
         return NULL;
     }
 
@@ -215,7 +240,7 @@ py_acquire(PyObject *self, PyObject *args)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        PyErr_SetString(sanlockmod_exception, "SANLock resource not acquired");
+        __set_exception(SKERRNO(rv), "SANLock resource not acquired");
         goto exit_fail;
     }
 
@@ -244,13 +269,13 @@ py_release(PyObject *self, PyObject *args)
         return NULL;
     }
 
-    /* release sanlock resource (gil disabled)*/
+    /* release sanlock resource (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
     rv = sanlock_release(__sanlockmod_fd, -1, 0, 1, &res);
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        PyErr_SetString(sanlockmod_exception, "SANLock resource not released");
+        __set_exception(SKERRNO(rv), "SANLock resource not released");
         goto exit_fail;
     }
 
