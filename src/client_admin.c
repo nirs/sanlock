@@ -111,8 +111,9 @@ static void status_lockspace(int fd, struct sanlk_state *st, char *str, int debu
 
 	rv = recv(fd, &lockspace, sizeof(lockspace), MSG_WAITALL);
 
-	printf("lockspace %.48s host_id %llu %s:%llu\n",
-	       lockspace.name, (unsigned long long)lockspace.host_id,
+	printf("    lockspace %.48s:%llu:%s:%llu\n",
+	       lockspace.name,
+	       (unsigned long long)lockspace.host_id,
 	       lockspace.host_id_disk.path,
 	       (unsigned long long)lockspace.host_id_disk.offset);
 
@@ -137,14 +138,15 @@ static void status_resource(int fd, struct sanlk_state *st, char *str, int debug
 
 	rv = recv(fd, &resource, sizeof(resource), MSG_WAITALL);
 
-	printf("    %.48s %.48s\n", resource.lockspace_name, resource.name);
+	printf("    resource %.48s:%.48s", resource.lockspace_name, resource.name);
 
 	for (i = 0; i < resource.num_disks; i++) {
 		rv = recv(fd, &disk, sizeof(disk), MSG_WAITALL);
 
-		printf("    %s:%llu\n",
+		printf(":%s:%llu",
 		       disk.path, (unsigned long long)disk.offset);
 	}
+	printf("\n");
 
 	if (st->str_len && debug)
 		print_debug(str, st->str_len);

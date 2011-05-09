@@ -1554,7 +1554,7 @@ static int print_daemon_state(char *str)
 		 "host_id_renewal=%d "
 		 "host_id_renewal_fail=%d "
 		 "host_id_renewal_warn=%d "
-		 "host_id_timeout=%d ",
+		 "host_id_timeout=%d",
 		 to.use_aio,
 		 to.io_timeout_seconds,
 		 to.host_id_renewal_seconds,
