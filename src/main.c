@@ -82,12 +82,26 @@ static int token_id_counter = 1;
 static int space_id_counter = 1;
 
 struct cmd_args {
+	struct list_head list; /* thread_pool data */
 	int ci_in;
 	int ci_target;
 	int cl_fd;
 	int cl_pid;
 	struct sm_header header;
 };
+
+struct thread_pool {
+	int num_workers;
+	int max_workers;
+	int free_workers;
+	int quit;
+	struct list_head work_data;
+	pthread_mutex_t mutex;
+	pthread_cond_t cond;
+	pthread_cond_t quit_wait;
+};
+
+static struct thread_pool pool;
 
 extern struct list_head spaces;
 extern struct list_head spaces_remove;
@@ -698,9 +712,8 @@ static int check_new_tokens_space(struct client *cl,
 	return 0;
 }
 
-static void *cmd_acquire_thread(void *args_in)
+static void cmd_acquire(struct cmd_args *ca)
 {
-	struct cmd_args *ca = args_in;
 	struct sm_header h;
 	struct client *cl;
 	struct token *token = NULL;
@@ -1061,13 +1074,10 @@ static void *cmd_acquire_thread(void *args_in)
 		client_recv_all(ca->ci_in, &ca->header, pos);
 
 	client_resume(ca->ci_in);
-	free(ca);
-	return NULL;
 }
 
-static void *cmd_release_thread(void *args_in)
+static void cmd_release(struct cmd_args *ca)
 {
-	struct cmd_args *ca = args_in;
 	struct sm_header h;
 	struct client *cl;
 	struct token *token;
@@ -1175,13 +1185,10 @@ static void *cmd_release_thread(void *args_in)
 	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
 
 	client_resume(ca->ci_in);
-	free(ca);
-	return NULL;
 }
 
-static void *cmd_inquire_thread(void *args_in)
+static void cmd_inquire(struct cmd_args *ca)
 {
-	struct cmd_args *ca = args_in;
 	struct sm_header h;
 	struct token *token;
 	struct client *cl;
@@ -1298,13 +1305,10 @@ static void *cmd_inquire_thread(void *args_in)
 	}
 
 	client_resume(ca->ci_in);
-	free(ca);
-	return NULL;
 }
 
-static void *cmd_add_lockspace_thread(void *args_in)
+static void cmd_add_lockspace(struct cmd_args *ca)
 {
-	struct cmd_args *ca = args_in;
 	struct sm_header h;
 	struct space *sp;
 	struct sanlk_lockspace lockspace;
@@ -1363,13 +1367,10 @@ static void *cmd_add_lockspace_thread(void *args_in)
 	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
 
 	client_resume(ca->ci_in);
-	free(ca);
-	return NULL;
 }
 
-static void *cmd_rem_lockspace_thread(void *args_in)
+static void cmd_rem_lockspace(struct cmd_args *ca)
 {
-	struct cmd_args *ca = args_in;
 	struct sm_header h;
 	struct sanlk_lockspace lockspace;
 	int fd, rv, result;
@@ -1419,8 +1420,128 @@ static void *cmd_rem_lockspace_thread(void *args_in)
 	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
 
 	client_resume(ca->ci_in);
-	free(ca);
+}
+
+static void call_cmd(struct cmd_args *ca)
+{
+	switch (ca->header.cmd) {
+	case SM_CMD_ACQUIRE:
+		cmd_acquire(ca);
+		break;
+	case SM_CMD_RELEASE:
+		cmd_release(ca);
+		break;
+	case SM_CMD_INQUIRE:
+		cmd_inquire(ca);
+		break;
+	case SM_CMD_ADD_LOCKSPACE:
+		strcpy(client[ca->ci_in].owner_name, "add_lockspace");
+		cmd_add_lockspace(ca);
+		break;
+	case SM_CMD_REM_LOCKSPACE:
+		strcpy(client[ca->ci_in].owner_name, "rem_lockspace");
+		cmd_rem_lockspace(ca);
+		break;
+	};
+}
+
+static void *thread_pool_worker(void *data GNUC_UNUSED)
+{
+	struct cmd_args *ca;
+
+	pthread_mutex_lock(&pool.mutex);
+
+	while (1) {
+		while (!pool.quit && list_empty(&pool.work_data)) {
+			pool.free_workers++;
+			pthread_cond_wait(&pool.cond, &pool.mutex);
+			pool.free_workers--;
+		}
+
+		while (!list_empty(&pool.work_data)) {
+			ca = list_first_entry(&pool.work_data, struct cmd_args, list);
+			list_del(&ca->list);
+			pthread_mutex_unlock(&pool.mutex);
+
+			call_cmd(ca);
+			free(ca);
+
+			pthread_mutex_lock(&pool.mutex);
+		}
+
+		if (pool.quit)
+			break;
+	}
+
+	pool.num_workers--;
+	if (!pool.num_workers)
+		pthread_cond_signal(&pool.quit_wait);
+	pthread_mutex_unlock(&pool.mutex);
 	return NULL;
+}
+
+static int thread_pool_add_work(struct cmd_args *ca)
+{
+	pthread_t th;
+	int rv;
+
+	pthread_mutex_lock(&pool.mutex);
+	if (pool.quit) {
+		pthread_mutex_unlock(&pool.mutex);
+		return -1;
+	}
+
+	list_add_tail(&ca->list, &pool.work_data);
+
+	if (!pool.free_workers && pool.num_workers < pool.max_workers) {
+		rv = pthread_create(&th, NULL, thread_pool_worker, &pool);
+		if (rv < 0) {
+			list_del(&ca->list);
+			pthread_mutex_unlock(&pool.mutex);
+			return rv;
+		}
+		pool.num_workers++;
+	}
+
+	pthread_cond_signal(&pool.cond);
+	pthread_mutex_unlock(&pool.mutex);
+	return 0;
+}
+
+static void thread_pool_free(void)
+{
+	pthread_mutex_lock(&pool.mutex);
+	pool.quit = 1;
+	if (pool.num_workers > 0) {
+		pthread_cond_broadcast(&pool.cond);
+		pthread_cond_wait(&pool.quit_wait, &pool.mutex);
+	}
+	pthread_mutex_unlock(&pool.mutex);
+}
+
+static int thread_pool_create(int min_workers, int max_workers)
+{
+	pthread_t th;
+	int i, rv;
+
+	memset(&pool, 0, sizeof(pool));
+	INIT_LIST_HEAD(&pool.work_data);
+	pthread_mutex_init(&pool.mutex, NULL);
+	pthread_cond_init(&pool.cond, NULL);
+	pthread_cond_init(&pool.quit_wait, NULL);
+	pool.max_workers = max_workers;
+
+	for (i = 0; i < min_workers; i++) {
+		rv = pthread_create(&th, NULL, thread_pool_worker, &pool);
+		if (rv < 0)
+			break;
+		pool.num_workers++;
+	}
+
+	if (rv < 0)
+		thread_pool_free();
+
+	return rv;
 }
 
 static int print_daemon_state(char *str)
@@ -1637,8 +1758,6 @@ static void cmd_log_dump(int fd, struct sm_header *h_recv)
 
 static void process_cmd_thread_lockspace(int ci_in, struct sm_header *h_recv)
 {
-	pthread_t cmd_thread;
-	pthread_attr_t attr;
 	struct cmd_args *ca;
 	struct sm_header h;
 	int rv;
@@ -1651,26 +1770,16 @@ static void process_cmd_thread_lockspace(int ci_in, struct sm_header *h_recv)
 	ca->ci_in = ci_in;
 	memcpy(&ca->header, h_recv, sizeof(struct sm_header));
 
-	pthread_attr_init(&attr);
-	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-
-	switch (h_recv->cmd) {
-	case SM_CMD_ADD_LOCKSPACE:
+	if (h_recv->cmd == SM_CMD_ADD_LOCKSPACE)
 		strcpy(client[ci_in].owner_name, "add_lockspace");
-		rv = pthread_create(&cmd_thread, &attr, cmd_add_lockspace_thread, ca);
-		break;
-	case SM_CMD_REM_LOCKSPACE:
+	else if (h_recv->cmd == SM_CMD_REM_LOCKSPACE)
 		strcpy(client[ci_in].owner_name, "rem_lockspace");
-		rv = pthread_create(&cmd_thread, &attr, cmd_rem_lockspace_thread, ca);
-		break;
-	};
+	else
+		strcpy(client[ci_in].owner_name, "cmd_lockspace");
 
-	pthread_attr_destroy(&attr);
-	if (rv < 0) {
-		log_error("create cmd thread failed");
+	rv = thread_pool_add_work(ca);
+	if (rv < 0)
 		goto fail_free;
-	}
-
 	return;
 
  fail_free:
@@ -1686,8 +1795,6 @@ static void process_cmd_thread_lockspace(int ci_in, struct sm_header *h_recv)
 
 static void process_cmd_thread_resource(int ci_in, struct sm_header *h_recv)
 {
-	pthread_t cmd_thread;
-	pthread_attr_t attr;
 	struct cmd_args *ca;
 	struct sm_header h;
 	struct client *cl;
@@ -1787,25 +1894,7 @@ static void process_cmd_thread_resource(int ci_in, struct sm_header *h_recv)
 	ca->cl_fd = cl->fd;
 	memcpy(&ca->header, h_recv, sizeof(struct sm_header));
 
-	/* TODO: use a thread pool? */
-
-	pthread_attr_init(&attr);
-	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-
-	switch (h_recv->cmd) {
-	case SM_CMD_ACQUIRE:
-		rv = pthread_create(&cmd_thread, &attr, cmd_acquire_thread, ca);
-		break;
-	case SM_CMD_RELEASE:
-		rv = pthread_create(&cmd_thread, &attr, cmd_release_thread, ca);
-		break;
-	case SM_CMD_INQUIRE:
-		rv = pthread_create(&cmd_thread, &attr, cmd_inquire_thread, ca);
-		break;
-	};
-
-	pthread_attr_destroy(&attr);
-
+	rv = thread_pool_add_work(ca);
 	if (rv < 0) {
 		/* we don't have to worry about client_pid_dead having
 		   been called while mutex was unlocked with cmd_active set,
@@ -2037,16 +2126,9 @@ static int do_daemon(void)
 	if (rv < 0)
 		return rv;
 
-	/*
-	 * after creating dirs and setting up logging the daemon can
-	 * use log_error/log_debug
-	 */
-
 	rv = make_dirs();
-	if (rv < 0) {
-		log_tool("cannot create logging dirs\n");
+	if (rv < 0)
 		return rv;
-	}
 
 	setup_logging();
 
@@ -2056,17 +2138,21 @@ static int do_daemon(void)
 	if (fd < 0)
 		goto out;
 
-	rv = setup_watchdog();
+	rv = thread_pool_create(DEFAULT_MIN_WORKER_THREADS, com.max_worker_threads);
 	if (rv < 0)
 		goto out_lockfile;
+
+	rv = setup_watchdog();
+	if (rv < 0)
+		goto out_threads;
 
 	rv = setup_listener();
 	if (rv < 0)
-		goto out_lockfile;
+		goto out_threads;
 
 	setup_token_manager();
 	if (rv < 0)
-		goto out_lockfile;
+		goto out_threads;
 
 	setup_spaces();
 
@@ -2076,6 +2162,8 @@ static int do_daemon(void)
 
 	close_watchdog();
 
+ out_threads:
+	thread_pool_free();
  out_lockfile:
 	unlink_lockfile(fd, SANLK_RUN_DIR, SANLK_LOCKFILE_NAME);
  out:
@@ -2283,6 +2371,7 @@ static void print_usage(void)
 	printf("  -Q <num>		quiet error messages for common lock contention\n");
 	printf("  -L <level>		write logging at level and up to logfile (-1 none)\n");
 	printf("  -S <level>		write logging at level and up to syslog (-1 none)\n");
+	printf("  -t <num>		max worker threads (default %d)\n", DEFAULT_MAX_WORKER_THREADS);
 	printf("  -w <num>		use watchdog through wdmd (1 yes, 0 no, default %d)\n", DEFAULT_USE_WATCHDOG);
 	printf("  -a <num>		use async io (1 yes, 0 no, default %d)\n", DEFAULT_USE_AIO);
 	printf("  -h <num>		use high priority features (1 yes, 0 no, default %d)\n", DEFAULT_HIGH_PRIORITY);
@@ -2515,6 +2604,11 @@ static int read_command_line(int argc, char *argv[])
 			break;
 		case 'a':
 			to.use_aio = atoi(optionarg);
+			break;
+		case 't':
+			com.max_worker_threads = atoi(optionarg);
+			if (com.max_worker_threads < DEFAULT_MIN_WORKER_THREADS)
+				com.max_worker_threads = DEFAULT_MIN_WORKER_THREADS;
 			break;
 		case 'w':
 			com.use_watchdog = atoi(optionarg);
@@ -2858,6 +2952,7 @@ int main(int argc, char *argv[])
 	com.max_hosts = DEFAULT_MAX_HOSTS;
 	com.use_watchdog = DEFAULT_USE_WATCHDOG;
 	com.high_priority = DEFAULT_HIGH_PRIORITY;
+	com.max_worker_threads = DEFAULT_MAX_WORKER_THREADS;
 	com.uid = DEFAULT_SOCKET_UID;
 	com.gid = DEFAULT_SOCKET_GID;
 	com.pid = -1;

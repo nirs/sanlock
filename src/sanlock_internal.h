@@ -263,6 +263,8 @@ EXTERN struct timeout to;
 #define DEFAULT_SOCKET_UID 0
 #define DEFAULT_SOCKET_GID 0
 #define DEFAULT_SOCKET_MODE (S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP)
+#define DEFAULT_MIN_WORKER_THREADS 2
+#define DEFAULT_MAX_WORKER_THREADS 8
 
 struct command_line {
 	int type;				/* COM_ */
@@ -272,6 +274,7 @@ struct command_line {
 	int quiet_fail;
 	int use_watchdog;
 	int high_priority;
+	int max_worker_threads;
 	int uid;				/* -U */
 	int gid;				/* -G */
 	int pid;				/* -p */
