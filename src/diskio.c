@@ -21,8 +21,13 @@
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/stat.h>
-#include <aio.h>
 #include <blkid/blkid.h>
+
+#ifdef LINUX_AIO
+#include <libaio.h>
+#else /* POSIX_AIO */
+#include <aio.h>
+#endif
 
 #include "sanlock_internal.h"
 #include "diskio.h"
@@ -209,6 +214,63 @@ static int do_read(int fd, uint64_t offset, char *buf, int len)
 	return 0;
 }
 
+#ifdef LINUX_AIO
+static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
+			int io_timeout_seconds, int cmd)
+{
+	io_context_t ctx;
+	struct io_event event;
+	struct timespec ts;
+	struct iocb cb;
+	struct iocb *p_cb;
+	int rv;
+
+	memset(&ctx, 0, sizeof(ctx));
+	rv = io_setup(1, &ctx);
+	if (rv < 0)
+		return rv;
+
+	memset(&cb, 0, sizeof(cb));
+	p_cb = &cb;
+
+	cb.aio_fildes = fd;
+	cb.aio_lio_opcode = cmd;
+	cb.u.c.buf = buf;
+	cb.u.c.nbytes = len;
+	cb.u.c.offset = offset;
+
+	rv = io_submit(ctx, 1, &p_cb);
+	if (rv < 0)
+		goto out;
+
+	memset(&event, 0, sizeof(event));
+
+	memset(&ts, 0, sizeof(struct timespec));
+	ts.tv_sec = io_timeout_seconds;
+
+	rv = io_getevents(ctx, 1, 1, &event, &ts);
+	if (rv == 1) {
+		rv = 0;
+		goto out;
+	}
+	rv = -EIO;
+ out:
+	io_destroy(ctx);
+	return rv;
+}
+
+static int do_write_aio(int fd, uint64_t offset, char *buf, int len,
+                        int io_timeout_seconds)
+{
+	return do_linux_aio(fd, offset, buf, len, io_timeout_seconds, IO_CMD_PWRITE);
+}
+static int do_read_aio(int fd, uint64_t offset, char *buf, int len,
+		       int io_timeout_seconds)
+{
+	return do_linux_aio(fd, offset, buf, len, io_timeout_seconds, IO_CMD_PREAD);
+}
+
+#else
 static int do_write_aio(int fd, uint64_t offset, char *buf, int len,
                         int io_timeout_seconds)
 {
@@ -306,6 +368,7 @@ static int do_read_aio(int fd, uint64_t offset, char *buf, int len, int io_timeo
 	/* undefined error condition */
 	return -1;
 }
+#endif
 
 /* write aligned io buffer */
 

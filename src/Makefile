@@ -63,9 +63,10 @@ CFLAGS += -D_GNU_SOURCE -g \
 	-Wp,-D_FORTIFY_SOURCE=2 \
 	-fexceptions \
 	-fasynchronous-unwind-tables \
-	-fdiagnostics-show-option
+	-fdiagnostics-show-option \
+	-DLINUX_AIO
 
-CMD_LDFLAGS = -lpthread -lrt -lblkid -lsanlock -lwdmd
+CMD_LDFLAGS = -lpthread -laio -lblkid -lsanlock -lwdmd
 
 
 all: $(SHLIB_TARGET) $(CMD_TARGET) $(SHLIB2_TARGET)

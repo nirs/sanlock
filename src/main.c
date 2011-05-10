@@ -2564,6 +2564,8 @@ static int read_command_line(int argc, char *argv[])
 
 	/* the only action that has an option without dash-letter prefix */
 	if (com.action == ACT_DUMP) {
+		if (argc < 4)
+			exit(EXIT_FAILURE);
 		optionarg = argv[i++];
 		com.dump_path = strdup(optionarg);
 	}
