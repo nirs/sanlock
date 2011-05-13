@@ -11,7 +11,7 @@ URL:            https://fedorahosted.org/sanlock/
 Source0:        https://fedorahosted.org/releases/s/a/sanlock/%{name}-%{version}.tar.bz2
 BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
-BuildRequires:  libblkid-devel
+BuildRequires:  libblkid-devel, libaio-devel
 
 Requires:       %{name}-lib = %{version}-%{release}
 
