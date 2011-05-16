@@ -25,10 +25,12 @@ prog="sanlock"
 lockfile="/var/run/sanlock/$prog.pid"
 exec="/usr/sbin/$prog"
 
+[ -f /etc/sysconfig/$prog ] && . /etc/sysconfig/$prog
+
 start() {
 	[ -x $exec ] || exit 5
 	echo -n $"Starting $prog: "
-	daemon $prog daemon
+	daemon $prog daemon $SANLOCKOPTS
 	retval=$?
 	echo
 	[ $retval -eq 0 ] && touch $lockfile
