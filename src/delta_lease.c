@@ -51,7 +51,7 @@ static void log_leader_error(int result,
 		  disk->path,
 		  (unsigned long long)disk->offset);
 
-	log_error("leader3 m %u v %u ss %u nh %llu mh %llu oi %llu og %llu lv %llu",
+	log_error("leader3 m %x v %x ss %u nh %llu mh %llu oi %llu og %llu lv %llu",
 		  lr->magic,
 		  lr->version,
 		  lr->sector_size,
@@ -142,14 +142,14 @@ static int verify_leader(struct sync_disk *disk,
 
 	rv = read_sectors(disk, host_id - 1, 1, (char *)&leader_rr,
 			  sizeof(struct leader_record),
-			  0, 0, "delta_verify");
+			  NULL, "delta_verify");
 
 	log_leader_error(rv, space_name, host_id, disk, &leader_rr, "delta_verify");
 
 	return result;
 }
 
-int delta_lease_leader_read(struct timeout *ti,
+int delta_lease_leader_read(struct task *task,
 			    struct sync_disk *disk,
 			    char *space_name,
 			    uint64_t host_id,
@@ -164,9 +164,8 @@ int delta_lease_leader_read(struct timeout *ti,
 	memset(&leader, 0, sizeof(struct leader_record));
 	memset(leader_ret, 0, sizeof(struct leader_record));
 
-	rv = read_sectors(disk, host_id - 1, 1, (char *)&leader,
-			  sizeof(struct leader_record),
-			  ti->io_timeout_seconds, ti->use_aio, "delta_leader");
+	rv = read_sectors(disk, host_id - 1, 1, (char *)&leader, sizeof(struct leader_record),
+			  task, "delta_leader");
 	if (rv < 0)
 		return SANLK_LEADER_READ;
 
@@ -176,10 +175,12 @@ int delta_lease_leader_read(struct timeout *ti,
 	return error;
 }
 
-int delta_lease_acquire(struct timeout *ti,
-			struct space *sp, struct sync_disk *disk,
+int delta_lease_acquire(struct task *task,
+			struct space *sp,
+			struct sync_disk *disk,
 			char *space_name,
-			uint64_t our_host_id, uint64_t host_id,
+			uint64_t our_host_id,
+			uint64_t host_id,
 			struct leader_record *leader_ret)
 {
 	struct leader_record leader;
@@ -189,7 +190,7 @@ int delta_lease_acquire(struct timeout *ti,
 
 	log_space(sp, "delta_acquire %llu begin", (unsigned long long)host_id);
 
-	error = delta_lease_leader_read(ti, disk, space_name, host_id, &leader,
+	error = delta_lease_leader_read(task, disk, space_name, host_id, &leader,
 					"delta_acquire_begin");
 	if (error < 0)
 		return error;
@@ -217,8 +218,8 @@ int delta_lease_acquire(struct timeout *ti,
 	 * paxos delay host_id_timeout_seconds, so that it covers the requirements
 	 * of both paxos and delta algorithms. */
 
-	delay = ti->host_id_timeout_seconds; /* for paxos leases */
-	delta_delay = ti->host_id_renewal_seconds + (6 * ti->io_timeout_seconds);
+	delay = task->host_id_timeout_seconds; /* for paxos leases */
+	delta_delay = task->host_id_renewal_seconds + (6 * task->io_timeout_seconds);
 	if (delta_delay > delay)
 		delay = delta_delay;
 
@@ -228,7 +229,7 @@ int delta_lease_acquire(struct timeout *ti,
 		log_space(sp, "delta_acquire long sleep %d", delay);
 		sleep(delay);
 
-		error = delta_lease_leader_read(ti, disk, space_name, host_id,
+		error = delta_lease_leader_read(task, disk, space_name, host_id,
 						&leader, "delta_acquire_wait");
 		if (error < 0)
 			return error;
@@ -249,17 +250,16 @@ int delta_lease_acquire(struct timeout *ti,
 
 	log_space(sp, "delta_acquire write new %llu", (unsigned long long)new_ts);
 
-	error = write_sector(disk, host_id - 1, (char *)&leader,
-			     sizeof(struct leader_record),
-			     ti->io_timeout_seconds, ti->use_aio, "delta_leader");
+	error = write_sector(disk, host_id - 1, (char *)&leader, sizeof(struct leader_record),
+			     task, "delta_leader");
 	if (error < 0)
 		return error;
 
-	delay = 2 * ti->io_timeout_seconds;
+	delay = 2 * task->io_timeout_seconds;
 	log_space(sp, "delta_acquire sleep 2d %d", delay);
 	sleep(delay);
 
-	error = delta_lease_leader_read(ti, disk, space_name, host_id, &leader,
+	error = delta_lease_leader_read(task, disk, space_name, host_id, &leader,
 					"delta_acquire_check");
 	if (error < 0)
 		return error;
@@ -271,7 +271,7 @@ int delta_lease_acquire(struct timeout *ti,
 	return SANLK_OK;
 }
 
-int delta_lease_renew(struct timeout *ti,
+int delta_lease_renew(struct task *task,
 		      struct space *sp,
 		      struct sync_disk *disk,
 		      char *space_name,
@@ -285,7 +285,7 @@ int delta_lease_renew(struct timeout *ti,
 
 	/* log_space(sp, "delta_renew %llu begin", (unsigned long long)host_id); */
 
-	error = delta_lease_leader_read(ti, disk, space_name, host_id, &leader,
+	error = delta_lease_leader_read(task, disk, space_name, host_id, &leader,
 					"delta_renew_begin");
 	if (error < 0)
 		return error;
@@ -304,17 +304,16 @@ int delta_lease_renew(struct timeout *ti,
 
 	/* log_space(sp, "delta_renew write new %llu", (unsigned long long)new_ts); */
 
-	error = write_sector(disk, host_id - 1, (char *)&leader,
-			     sizeof(struct leader_record),
-			     ti->io_timeout_seconds, ti->use_aio, "delta_leader");
+	error = write_sector(disk, host_id - 1, (char *)&leader, sizeof(struct leader_record),
+			     task, "delta_leader");
 	if (error < 0)
 		return error;
 
-	delay = 2 * ti->io_timeout_seconds;
+	delay = 2 * task->io_timeout_seconds;
 	/* log_space(sp, "delta_renew sleep 2d %d", delay); */
 	sleep(delay);
 
-	error = delta_lease_leader_read(ti, disk, space_name, host_id, &leader_read,
+	error = delta_lease_leader_read(task, disk, space_name, host_id, &leader_read,
 					"delta_renew_check");
 	if (error < 0)
 		return error;
@@ -336,7 +335,7 @@ int delta_lease_renew(struct timeout *ti,
 	return SANLK_OK;
 }
 
-int delta_lease_release(struct timeout *ti,
+int delta_lease_release(struct task *task,
 			struct space *sp,
 			struct sync_disk *disk,
 			char *space_name GNUC_UNUSED,
@@ -353,9 +352,8 @@ int delta_lease_release(struct timeout *ti,
 	leader.timestamp = LEASE_FREE;
 	leader.checksum = leader_checksum(&leader);
 
-	error = write_sector(disk, host_id - 1, (char *)&leader,
-			     sizeof(struct leader_record),
-			     ti->io_timeout_seconds, ti->use_aio, "delta_leader");
+	error = write_sector(disk, host_id - 1, (char *)&leader, sizeof(struct leader_record),
+			     task, "delta_leader");
 	if (error < 0)
 		return error;
 
@@ -366,7 +364,7 @@ int delta_lease_release(struct timeout *ti,
 /* the host_id lease area begins disk->offset bytes from the start of
    block device disk->path */
 
-int delta_lease_init(struct timeout *ti,
+int delta_lease_init(struct task *task,
 		     struct sync_disk *disk,
 		     char *space_name,
 		     int max_hosts)
@@ -400,8 +398,7 @@ int delta_lease_init(struct timeout *ti,
 		leader->checksum = leader_checksum(leader);
 	}
 
-	rv = write_iobuf(disk->fd, disk->offset, iobuf, iobuf_len,
-			 ti->io_timeout_seconds, ti->use_aio);
+	rv = write_iobuf(disk->fd, disk->offset, iobuf, iobuf_len, task);
 	if (rv < 0)
 		return rv;
 

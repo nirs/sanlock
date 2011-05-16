@@ -9,8 +9,10 @@
 #ifndef	__TOKEN_MANAGER_H__
 #define __TOKEN_MANAGER_H__
 
-int acquire_token(struct token *token, uint64_t acquire_lver, int new_num_hosts);
-int release_token(struct token *token);
+int acquire_token(struct task *task, struct token *token,
+		  uint64_t acquire_lver, int new_num_hosts);
+
+int release_token(struct task *task, struct token *token);
 
 void release_token_async(struct token *token);
 

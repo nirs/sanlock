@@ -75,8 +75,14 @@ void close_disks(struct sync_disk *disks, int num_disks)
 {
 	int d;
 
-	for (d = 0; d < num_disks; d++)
+	for (d = 0; d < num_disks; d++) {
+		if (disks[d].fd == -1) {
+			log_error("close fd -1");
+			continue;
+		}
 		close(disks[d].fd);
+		disks[d].fd = -1;
+	}
 }
 
 int open_disks_fd(struct sync_disk *disks, int num_disks)
@@ -87,6 +93,12 @@ int open_disks_fd(struct sync_disk *disks, int num_disks)
 
 	for (d = 0; d < num_disks; d++) {
 		disk = &disks[d];
+
+		if (disk->fd != -1) {
+			log_error("open fd %d exists %s", disk->fd, disk->path);
+			return 0;
+		}
+
 		fd = open(disk->path, O_RDWR | O_DIRECT | O_SYNC, 0);
 		if (fd < 0) {
 			log_error("open error %d %s", fd, disk->path);
@@ -112,6 +124,12 @@ int open_disks(struct sync_disk *disks, int num_disks)
 
 	for (d = 0; d < num_disks; d++) {
 		disk = &disks[d];
+
+		if (disk->fd != -1) {
+			log_error("open fd %d exists %s", disk->fd, disk->path);
+			return 0;
+		}
+
 		fd = open(disk->path, O_RDWR | O_DIRECT | O_SYNC, 0);
 		if (fd < 0) {
 			log_error("open error %d %s", fd, disk->path);
@@ -119,18 +137,18 @@ int open_disks(struct sync_disk *disks, int num_disks)
 		}
 
 		if (fstat(fd, &st) < 0) {
-		        log_error("fstat error %d %s", fd, disk->path);
+			log_error("fstat error %d %s", fd, disk->path);
 			close(fd);
 			continue;
 		}
 
 		if (S_ISREG(st.st_mode)) {
-		        disk->sector_size = 512;
+			disk->sector_size = 512;
 		} else {
 		        rv = set_disk_properties(disk);
 			if (rv < 0) {
-			      close(fd);
-			      continue;
+				close(fd);
+				continue;
 			}
 		}
 
@@ -139,6 +157,7 @@ int open_disks(struct sync_disk *disks, int num_disks)
 		} else if (ss != disk->sector_size) {
 			log_error("inconsistent sector sizes %u %u %s",
 				  ss, disk->sector_size, disk->path);
+			close(fd);
 			goto fail;
 		}
 
@@ -216,19 +235,16 @@ static int do_read(int fd, uint64_t offset, char *buf, int len)
 
 #ifdef LINUX_AIO
 static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
-			int io_timeout_seconds, int cmd)
+			struct task *task, int cmd)
 {
-	io_context_t ctx;
-	struct io_event event;
 	struct timespec ts;
 	struct iocb cb;
 	struct iocb *p_cb;
+	struct io_event event;
 	int rv;
 
-	memset(&ctx, 0, sizeof(ctx));
-	rv = io_setup(1, &ctx);
-	if (rv < 0)
-		return rv;
+	memset(&ts, 0, sizeof(struct timespec));
+	ts.tv_sec = task->io_timeout_seconds;
 
 	memset(&cb, 0, sizeof(cb));
 	p_cb = &cb;
@@ -239,40 +255,79 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 	cb.u.c.nbytes = len;
 	cb.u.c.offset = offset;
 
-	rv = io_submit(ctx, 1, &p_cb);
-	if (rv < 0)
+	rv = io_submit(task->aio_ctx, 1, &p_cb);
+	if (rv < 0) {
+		log_error("aio %d io_submit error %d", cmd, rv);
 		goto out;
+	}
 
+ retry:
 	memset(&event, 0, sizeof(event));
 
-	memset(&ts, 0, sizeof(struct timespec));
-	ts.tv_sec = io_timeout_seconds;
-
-	rv = io_getevents(ctx, 1, 1, &event, &ts);
+	rv = io_getevents(task->aio_ctx, 1, 1, &event, &ts);
+	if (rv == -EINTR)
+		goto retry;
+	if (rv < 0) {
+		log_error("aio %d io_getevents error %d", cmd, rv);
+		goto out;
+	}
 	if (rv == 1) {
+		if (event.obj != p_cb) {
+			log_error("aio %d event for other io retry", cmd);
+			goto retry;
+		}
+		if ((int)event.res < 0) {
+			log_error("aio %d event res error %ld %ld",
+				  cmd, event.res, event.res2);
+			rv = event.res;
+			goto out;
+		}
+		if (event.res != len) {
+			log_error("aio %d event len %d error %lu %lu",
+				  cmd, len, event.res, event.res2);
+			rv = -EMSGSIZE;
+			goto out;
+		}
+
+		/* standard success case */
 		rv = 0;
 		goto out;
 	}
-	rv = -EIO;
+
+	/* Timed out waiting for result.  If cancel fails, we could try retry
+	   io_getevents indefinately, but that removes the whole point of using
+	   aio, which is the timeout.  So, we need to be prepared to reap the
+	   event the next time we call io_getevents for a different i/o. */
+
+	rv = io_cancel(task->aio_ctx, &cb, &event);
+	if (!rv) {
+		log_error("aio %d canceled", cmd);
+		rv = -ECANCELED;
+		goto out;
+	}
+
+	/* <phro> dct: io_cancel doesn't work, in general.  you are very
+	   likely going to get -EINVAL from that call */
+
+	log_error("aio %d error %d", cmd, rv);
+
+	if (rv > 0)
+		rv = -EILSEQ;
  out:
-	io_destroy(ctx);
 	return rv;
 }
 
-static int do_write_aio(int fd, uint64_t offset, char *buf, int len,
-                        int io_timeout_seconds)
+static int do_write_aio(int fd, uint64_t offset, char *buf, int len, struct task *task)
 {
-	return do_linux_aio(fd, offset, buf, len, io_timeout_seconds, IO_CMD_PWRITE);
+	return do_linux_aio(fd, offset, buf, len, task, IO_CMD_PWRITE);
 }
-static int do_read_aio(int fd, uint64_t offset, char *buf, int len,
-		       int io_timeout_seconds)
+static int do_read_aio(int fd, uint64_t offset, char *buf, int len, struct task *task)
 {
-	return do_linux_aio(fd, offset, buf, len, io_timeout_seconds, IO_CMD_PREAD);
+	return do_linux_aio(fd, offset, buf, len, task, IO_CMD_PREAD);
 }
 
 #else
-static int do_write_aio(int fd, uint64_t offset, char *buf, int len,
-                        int io_timeout_seconds)
+static int do_write_aio(int fd, uint64_t offset, char *buf, int len, struct task *task)
 {
 	struct timespec ts;
 	struct aiocb cb;
@@ -280,7 +335,7 @@ static int do_write_aio(int fd, uint64_t offset, char *buf, int len,
 	int rv;
 
 	memset(&ts, 0, sizeof(struct timespec));
-	ts.tv_sec = io_timeout_seconds;
+	ts.tv_sec = task->io_timeout_seconds;
 
 	memset(&cb, 0, sizeof(struct aiocb));
 	p_cb = &cb;
@@ -321,7 +376,7 @@ static int do_write_aio(int fd, uint64_t offset, char *buf, int len,
 	return -1;
 }
 
-static int do_read_aio(int fd, uint64_t offset, char *buf, int len, int io_timeout_seconds)
+static int do_read_aio(int fd, uint64_t offset, char *buf, int len, struct task *task)
 {
 	struct timespec ts;
 	struct aiocb cb;
@@ -329,7 +384,7 @@ static int do_read_aio(int fd, uint64_t offset, char *buf, int len, int io_timeo
 	int rv;
 
 	memset(&ts, 0, sizeof(struct timespec));
-	ts.tv_sec = io_timeout_seconds;
+	ts.tv_sec = task->io_timeout_seconds;
 
 	memset(&cb, 0, sizeof(struct aiocb));
 	p_cb = &cb;
@@ -372,11 +427,10 @@ static int do_read_aio(int fd, uint64_t offset, char *buf, int len, int io_timeo
 
 /* write aligned io buffer */
 
-int write_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len,
-		int io_timeout_seconds, int use_aio)
+int write_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len, struct task *task)
 {
-	if (use_aio)
-		return do_write_aio(fd, offset, iobuf, iobuf_len, io_timeout_seconds);
+	if (task && task->use_aio)
+		return do_write_aio(fd, offset, iobuf, iobuf_len, task);
 	else
 		return do_write(fd, offset, iobuf, iobuf_len);
 }
@@ -384,12 +438,14 @@ int write_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len,
 static int _write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 			  uint32_t sector_count GNUC_UNUSED,
 			  const char *data, int data_len,
-			  int iobuf_len, int io_timeout_seconds, int use_aio,
-			  const char *blktype)
+			  int iobuf_len, struct task *task, const char *blktype)
 {
 	char *iobuf, **p_iobuf;
 	uint64_t offset;
 	int rv;
+
+	if (!disk->sector_size)
+		return -EINVAL;
 
 	offset = disk->offset + (sector_nr * disk->sector_size);
 
@@ -406,11 +462,11 @@ static int _write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 	memset(iobuf, 0, iobuf_len);
 	memcpy(iobuf, data, data_len);
 
-	rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len,
-			 io_timeout_seconds, use_aio);
+	rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len, task);
 	if (rv < 0)
 		log_error("write_sectors %s offset %llu rv %d %s",
 			  blktype, (unsigned long long)offset, rv, disk->path);
+
 	free(iobuf);
  out:
 	return rv;
@@ -422,8 +478,8 @@ static int _write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
    data_len must be <= sector_size */
 
 int write_sector(const struct sync_disk *disk, uint64_t sector_nr,
-		 const char *data, int data_len, int io_timeout_seconds,
-		 int use_aio, const char *blktype)
+		 const char *data, int data_len, struct task *task,
+		 const char *blktype)
 {
 	int iobuf_len = disk->sector_size;
 
@@ -434,14 +490,14 @@ int write_sector(const struct sync_disk *disk, uint64_t sector_nr,
 	}
 
 	return _write_sectors(disk, sector_nr, 1, data, data_len,
-			      iobuf_len, io_timeout_seconds, use_aio, blktype);
+			      iobuf_len, task, blktype);
 }
 
 /* write multiple complete sectors, data_len must be multiple of sector size */
 
 int write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 		  uint32_t sector_count, const char *data, int data_len,
-		  int io_timeout_seconds, int use_aio, const char *blktype)
+		  struct task *task, const char *blktype)
 {
 	int iobuf_len = data_len;
 
@@ -452,7 +508,7 @@ int write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 	}
 
 	return _write_sectors(disk, sector_nr, sector_count, data, data_len,
-			      iobuf_len, io_timeout_seconds, use_aio, blktype);
+			      iobuf_len, task, blktype);
 }
 
 /* read sector_count sectors starting with sector_nr, where sector_nr
@@ -463,12 +519,15 @@ int write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 
 int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 	 	 uint32_t sector_count, char *data, int data_len,
-		 int io_timeout_seconds, int use_aio, const char *blktype)
+		 struct task *task, const char *blktype)
 {
 	char *iobuf, **p_iobuf;
 	uint64_t offset;
 	int iobuf_len = sector_count * disk->sector_size;
 	int rv;
+
+	if (!disk->sector_size)
+		return -EINVAL;
 
 	offset = disk->offset + (sector_nr * disk->sector_size);
 
@@ -484,8 +543,8 @@ int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 
 	memset(iobuf, 0, iobuf_len);
 
-	if (use_aio)
-		rv = do_read_aio(disk->fd, offset, iobuf, iobuf_len, io_timeout_seconds);
+	if (task && task->use_aio)
+		rv = do_read_aio(disk->fd, offset, iobuf, iobuf_len, task);
 	else
 		rv = do_read(disk->fd, offset, iobuf, iobuf_len);
 

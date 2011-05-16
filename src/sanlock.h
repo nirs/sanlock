@@ -36,6 +36,9 @@
 
 #define SANLK_MAX_RES_STR	4400
 
+/* TODO: add more padding to sanlk_disk so we can extend sync_disk
+   later without changing abi */
+
 struct sanlk_disk {
 	char path[SANLK_PATH_LEN]; /* must include terminating \0 */
 	uint64_t offset;

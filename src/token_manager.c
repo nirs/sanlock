@@ -118,8 +118,8 @@ void del_resource(struct token *token)
 
 /* return < 0 on error, 1 on success */
 
-int acquire_token(struct token *token, uint64_t acquire_lver,
-		  int new_num_hosts)
+int acquire_token(struct task *task, struct token *token,
+		  uint64_t acquire_lver, int new_num_hosts)
 {
 	struct leader_record leader_ret;
 	int rv;
@@ -128,10 +128,19 @@ int acquire_token(struct token *token, uint64_t acquire_lver,
 	if (com.quiet_fail)
 		flags |= PAXOS_ACQUIRE_QUIET_FAIL;
 
-	rv = paxos_lease_acquire(&to, token, flags, &leader_ret, acquire_lver,
+	rv = open_disks(token->disks, token->r.num_disks);
+	if (!majority_disks(token, rv)) {
+		log_errot(token, "acquire open_disk error %s", token->disks[0].path);
+		return -ENODEV;
+	}
+
+	rv = paxos_lease_acquire(task, token, flags, &leader_ret, acquire_lver,
 				 new_num_hosts);
 
 	token->acquire_result = rv;
+
+	/* we could leave this open so release does not have to reopen */
+	close_disks(token->disks, token->r.num_disks);
 
 	log_token(token, "acquire rv %d lver %llu at %llu", rv,
 		  (unsigned long long)token->leader.lver,
@@ -147,14 +156,22 @@ int acquire_token(struct token *token, uint64_t acquire_lver,
 
 /* return < 0 on error, 1 on success */
 
-int release_token(struct token *token)
+int release_token(struct task *task, struct token *token)
 {
 	struct leader_record leader_ret;
 	int rv;
 
-	rv = paxos_lease_release(&to, token, &token->leader, &leader_ret);
+	rv = open_disks_fd(token->disks, token->r.num_disks);
+	if (!majority_disks(token, rv)) {
+		log_errot(token, "release open_disk error %s", token->disks[0].path);
+		return -ENODEV;
+	}
+
+	rv = paxos_lease_release(task, token, &token->leader, &leader_ret);
 
 	token->release_result = rv;
+
+	close_disks(token->disks, token->r.num_disks);
 
 	log_token(token, "release rv %d", rv);
 
@@ -169,8 +186,11 @@ int release_token(struct token *token)
 
 static void *async_release_thread(void *arg GNUC_UNUSED)
 {
+	struct task task;
 	struct resource *r;
 	struct token *token;
+
+	setup_task(&task);
 
 	while (1) {
 		pthread_mutex_lock(&resource_mutex);
@@ -188,9 +208,7 @@ static void *async_release_thread(void *arg GNUC_UNUSED)
 		token = r->token;
 
 		if (token->acquire_result == 1)
-			release_token(token);
-
-		close_disks(token->disks, token->r.num_disks);
+			release_token(&task, token);
 
 		/* we don't want to remove r from dispose_list until after the
 		   lease is released because we don't want a new token for
@@ -203,6 +221,7 @@ static void *async_release_thread(void *arg GNUC_UNUSED)
 		free(token);
 	}
  out:
+	close_task(&task);
 	return NULL;
 }
 

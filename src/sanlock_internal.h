@@ -13,6 +13,8 @@
 #define GNUC_UNUSED __attribute__((__unused__))
 #endif
 
+#define BUILD_BUG_ON(condition) ((void)sizeof(char[1 - 2*!!(condition)]))
+
 #ifndef EXTERN
 #define EXTERN extern
 #else
@@ -24,6 +26,8 @@
 #include "sanlock_rv.h"
 #include "leader.h"
 #include "list.h"
+
+#include <libaio.h>
 
 #define SM_MAGIC 0x04282010
 
@@ -247,16 +251,17 @@ struct sm_header {
 #define DEFAULT_HOST_ID_RENEWAL_FAIL_SECONDS 30
 #define DEFAULT_HOST_ID_RENEWAL_WARN_SECONDS 25
 
-struct timeout {
+struct task {
 	int use_aio;
 	int io_timeout_seconds;
 	int host_id_timeout_seconds;
 	int host_id_renewal_seconds;
 	int host_id_renewal_fail_seconds;
 	int host_id_renewal_warn_seconds;
+	io_context_t aio_ctx;
 };
 
-EXTERN struct timeout to;
+EXTERN struct task main_task;
 
 #define DEFAULT_USE_WATCHDOG 1
 #define DEFAULT_HIGH_PRIORITY 1
@@ -315,6 +320,10 @@ enum {
 	ACT_DUMP,
 	ACT_READ_LEADER,
 };
+
+/* main.c */
+void setup_task(struct task *task);
+void close_task(struct task *task);
 
 #endif
 

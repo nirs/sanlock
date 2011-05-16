@@ -122,7 +122,7 @@ int host_id_disk_info(char *name, struct sync_disk *disk)
  * check if our_host_id_thread has renewed within timeout
  */
 
-int host_id_check(struct space *sp)
+int host_id_check(struct task *task, struct space *sp)
 {
 	uint64_t last_success;
 	int gap;
@@ -133,12 +133,12 @@ int host_id_check(struct space *sp)
 
 	gap = time(NULL) - last_success;
 
-	if (gap >= to.host_id_renewal_fail_seconds) {
+	if (gap >= task->host_id_renewal_fail_seconds) {
 		log_erros(sp, "host_id_check failed %d", gap);
 		return 0;
 	}
 
-	if (gap >= to.host_id_renewal_warn_seconds) {
+	if (gap >= task->host_id_renewal_warn_seconds) {
 		log_erros(sp, "host_id_check warning %d last_success %llu",
 			  gap, (unsigned long long)last_success);
 	}
@@ -153,22 +153,32 @@ int host_id_check(struct space *sp)
 
 static void *host_id_thread(void *arg_in)
 {
+	struct task task;
 	struct space *sp;
 	char space_name[NAME_ID_SIZE];
-	struct sync_disk host_id_disk;
 	struct leader_record leader;
 	uint64_t host_id;
 	time_t last_attempt, last_success;
-	int rv, stop = 0, result, delta_result, delta_length, gap;
+	int rv, result, delta_length, gap, opened;
+	int delta_result = 0;
+	int stop = 0;
 
 	sp = (struct space *)arg_in;
 	host_id = sp->host_id;
 	memcpy(&space_name, sp->space_name, NAME_ID_SIZE);
-	memcpy(&host_id_disk, &sp->host_id_disk, sizeof(host_id_disk));
+
+	setup_task(&task);
 
 	last_attempt = time(NULL);
 
-	result = delta_lease_acquire(&to, sp, &host_id_disk, space_name,
+	opened = open_disks(&sp->host_id_disk, 1);
+	if (opened != 1) {
+		log_erros(sp, "open_disk failed %s", sp->host_id_disk.path);
+		result = -ENODEV;
+		goto set_status;
+	}
+
+	result = delta_lease_acquire(&task, sp, &sp->host_id_disk, space_name,
 				     host_id, host_id, &leader);
 	delta_result = result;
 	delta_length = time(NULL) - last_attempt;
@@ -187,6 +197,7 @@ static void *host_id_thread(void *arg_in)
 		}
 	}
 
+ set_status:
 	pthread_mutex_lock(&sp->mutex);
 	sp->lease_status.acquire_last_result = result;
 	sp->lease_status.acquire_last_attempt = last_attempt;
@@ -224,13 +235,14 @@ static void *host_id_thread(void *arg_in)
 		if (stop)
 			break;
 
-		if (time(NULL) - last_success < to.host_id_renewal_seconds)
+		if (time(NULL) - last_success < task.host_id_renewal_seconds)
 			continue;
 
 		last_attempt = time(NULL);
 
-		result = delta_lease_renew(&to, sp, &host_id_disk, space_name,
-					   host_id, host_id, &leader);
+		result = delta_lease_renew(&task, sp, &sp->host_id_disk,
+					   space_name, host_id, host_id,
+					   &leader);
 		delta_result = result;
 		delta_length = time(NULL) - last_attempt;
 
@@ -267,9 +279,13 @@ static void *host_id_thread(void *arg_in)
 	close_watchdog_file(sp);
  out:
 	if (delta_result == SANLK_OK)
-		delta_lease_release(&to, sp, &host_id_disk, space_name,
+		delta_lease_release(&task, sp, &sp->host_id_disk, space_name,
 				    host_id, &leader, &leader);
 
+	if (opened)
+		close_disks(&sp->host_id_disk, 1);
+
+	close_task(&task);
 	return NULL;
 }
 
@@ -307,14 +323,6 @@ int add_space(struct space *sp)
 		goto fail;
 	}
 
-	rv = open_disks(&sp->host_id_disk, 1);
-	if (rv != 1) {
-		log_erros(sp, "add_space open_disk failed %d %s",
-			  rv, sp->host_id_disk.path);
-		rv = -ENODEV;
-		goto fail;
-	}
-
 	log_space(sp, "add_space host_id %llu path %s offset %llu",
 		  (unsigned long long)sp->host_id,
 		  sp->host_id_disk.path,
@@ -323,7 +331,7 @@ int add_space(struct space *sp)
 	rv = pthread_create(&sp->thread, NULL, host_id_thread, sp);
 	if (rv < 0) {
 		log_erros(sp, "add_space create thread failed");
-		goto fail_close;
+		goto fail;
 	}
 
 	while (1) {
@@ -339,7 +347,7 @@ int add_space(struct space *sp)
 		/* the thread exits right away if acquire fails */
 		pthread_join(sp->thread, NULL);
 		rv = result;
-		goto fail_close;
+		goto fail;
 	}
 
 	pthread_mutex_lock(&spaces_mutex);
@@ -358,8 +366,6 @@ int add_space(struct space *sp)
  fail_stop:
 	sp->thread_stop = 1;
 	pthread_join(sp->thread, NULL);
- fail_close:
-	close_disks(&sp->host_id_disk, 1);
  fail:
 	return rv;
 }
@@ -408,13 +414,7 @@ static int finish_space(struct space *sp, int wait)
 	else
 		rv = pthread_tryjoin_np(sp->thread, NULL);
 
-	if (rv)
-		return rv;
-
-	log_space(sp, "close_disks");
-
-	close_disks(&sp->host_id_disk, 1);
-	return 0;
+	return rv;
 }
 
 void clear_spaces(int wait)

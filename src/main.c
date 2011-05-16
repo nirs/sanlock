@@ -586,7 +586,7 @@ static int main_loop(void)
 				check_interval = RECOVERY_CHECK_INTERVAL;
 			} else {
 				if (external_shutdown || sp->external_remove ||
-				    !host_id_check(sp)) {
+				    !host_id_check(&main_task, sp)) {
 					log_space(sp, "set killing_pids");
 					sp->killing_pids = 1;
 					kill_pids(sp);
@@ -641,7 +641,7 @@ static void client_recv_all(int ci, struct sm_header *h_recv, int pos)
 	log_debug("recv_all ci %d rem %d total %d", ci, rem, total);
 }
 
-static void release_cl_tokens(struct client *cl)
+static void release_cl_tokens(struct task *task, struct client *cl)
 {
 	struct token *token;
 	int j;
@@ -650,24 +650,19 @@ static void release_cl_tokens(struct client *cl)
 		token = cl->tokens[j];
 		if (!token)
 			continue;
-		release_token(token);
-		close_disks(token->disks, token->r.num_disks);
+		release_token(task, token);
 		del_resource(token);
 		free(token);
 	}
 }
 
-static void release_new_tokens(struct token *new_tokens[],
-			       int alloc_count, int add_count,
-			       int open_count, int acquire_count)
+static void release_new_tokens(struct task *task, struct token *new_tokens[],
+			       int alloc_count, int add_count, int acquire_count)
 {
 	int i;
 
 	for (i = 0; i < acquire_count; i++)
-		release_token(new_tokens[i]);
-
-	for (i = 0; i < open_count; i++)
-		close_disks(new_tokens[i]->disks, new_tokens[i]->r.num_disks);
+		release_token(task, new_tokens[i]);
 
 	for (i = 0; i < add_count; i++)
 		del_resource(new_tokens[i]);
@@ -712,7 +707,7 @@ static int check_new_tokens_space(struct client *cl,
 	return 0;
 }
 
-static void cmd_acquire(struct cmd_args *ca)
+static void cmd_acquire(struct task *task, struct cmd_args *ca)
 {
 	struct sm_header h;
 	struct client *cl;
@@ -725,8 +720,8 @@ static void cmd_acquire(struct cmd_args *ca)
 	uint64_t acquire_lver = 0;
 	uint32_t new_num_hosts = 0;
 	int token_len, disks_len;
-	int fd, rv, i, j, empty_slots, opened;
-	int alloc_count = 0, add_count = 0, open_count = 0, acquire_count = 0;
+	int fd, rv, i, j, empty_slots;
+	int alloc_count = 0, add_count = 0, acquire_count = 0;
 	int pos = 0, pid_dead = 0;
 	int new_tokens_count;
 	int recv_done = 0;
@@ -831,7 +826,7 @@ static void cmd_acquire(struct cmd_args *ca)
 		/* zero out pad1 and pad2, see WARNING above */
 		for (j = 0; j < token->r.num_disks; j++) {
 			token->disks[j].sector_size = 0;
-			token->disks[j].fd = 0;
+			token->disks[j].fd = -1;
 		}
 
 		token->token_id = token_id_counter++;
@@ -913,25 +908,13 @@ static void cmd_acquire(struct cmd_args *ca)
 
 	for (i = 0; i < new_tokens_count; i++) {
 		token = new_tokens[i];
-		opened = open_disks(token->disks, token->r.num_disks);
-		if (!majority_disks(token, opened)) {
-			log_errot(token, "cmd_acquire %d,%d,%d open_disks %d",
-				  cl_ci, cl_fd, cl_pid, opened);
-			result = -ENODEV;
-			goto done;
-		}
-		open_count++;
-	}
-
-	for (i = 0; i < new_tokens_count; i++) {
-		token = new_tokens[i];
 
 		if (token->acquire_flags & SANLK_RES_LVER)
 			acquire_lver = token->acquire_lver;
 		if (token->acquire_flags & SANLK_RES_NUM_HOSTS)
 			new_num_hosts = token->acquire_data32;
 
-		rv = acquire_token(token, acquire_lver, new_num_hosts);
+		rv = acquire_token(task, token, acquire_lver, new_num_hosts);
 		if (rv < 0) {
 			if (rv == SANLK_ACQUIRE_IDLIVE && com.quiet_fail) {
 				log_token(token, "cmd_acquire %d,%d,%d paxos_lease %d",
@@ -1037,9 +1020,8 @@ static void cmd_acquire(struct cmd_args *ca)
 	/* 2. Success acquiring leases, and pid is dead */
 
 	if (!result && pid_dead) {
-		release_new_tokens(new_tokens, alloc_count, add_count,
-				   open_count, acquire_count);
-		release_cl_tokens(cl);
+		release_new_tokens(task, new_tokens, alloc_count, add_count, acquire_count);
+		release_cl_tokens(task, cl);
 		client_free(cl_ci);
 		result = -ENOTTY;
 		goto reply;
@@ -1048,17 +1030,15 @@ static void cmd_acquire(struct cmd_args *ca)
 	/* 3. Failure acquiring leases, and pid is live */
 
 	if (result && !pid_dead) {
-		release_new_tokens(new_tokens, alloc_count, add_count,
-				   open_count, acquire_count);
+		release_new_tokens(task, new_tokens, alloc_count, add_count, acquire_count);
 		goto reply;
 	}
 
 	/* 4. Failure acquiring leases, and pid is dead */
 
 	if (result && pid_dead) {
-		release_new_tokens(new_tokens, alloc_count, add_count,
-				   open_count, acquire_count);
-		release_cl_tokens(cl);
+		release_new_tokens(task, new_tokens, alloc_count, add_count, acquire_count);
+		release_cl_tokens(task, cl);
 		client_free(cl_ci);
 		goto reply;
 	}
@@ -1076,7 +1056,7 @@ static void cmd_acquire(struct cmd_args *ca)
 	client_resume(ca->ci_in);
 }
 
-static void cmd_release(struct cmd_args *ca)
+static void cmd_release(struct task *task, struct cmd_args *ca)
 {
 	struct sm_header h;
 	struct client *cl;
@@ -1154,10 +1134,9 @@ static void cmd_release(struct cmd_args *ca)
 
 	for (i = 0; i < rem_tokens_count; i++) {
 		token = rem_tokens[i];
-		rv = release_token(token);
+		rv = release_token(task, token);
 		if (rv < 0)
 			result = rv;
-		close_disks(token->disks, token->r.num_disks);
 		del_resource(token);
 		free(token);
 	}
@@ -1174,7 +1153,7 @@ static void cmd_release(struct cmd_args *ca)
 
 	if (pid_dead) {
 		/* release any tokens not already released above */
-		release_cl_tokens(cl);
+		release_cl_tokens(task, cl);
 		client_free(cl_ci);
 	}
 
@@ -1187,7 +1166,7 @@ static void cmd_release(struct cmd_args *ca)
 	client_resume(ca->ci_in);
 }
 
-static void cmd_inquire(struct cmd_args *ca)
+static void cmd_inquire(struct task *task, struct cmd_args *ca)
 {
 	struct sm_header h;
 	struct token *token;
@@ -1291,7 +1270,7 @@ static void cmd_inquire(struct cmd_args *ca)
 		  cl_ci, cl_fd, cl_pid, result, pid_dead, res_count, state_strlen);
 
 	if (pid_dead) {
-		release_cl_tokens(cl);
+		release_cl_tokens(task, cl);
 		client_free(cl_ci);
 	}
 
@@ -1342,6 +1321,7 @@ static void cmd_add_lockspace(struct cmd_args *ca)
 	sp->host_id = lockspace.host_id;
 	memcpy(&sp->host_id_disk, &lockspace.host_id_disk,
 	       sizeof(struct sanlk_disk));
+	sp->host_id_disk.fd = -1;
 	pthread_mutex_init(&sp->mutex, NULL);
 
 	pthread_mutex_lock(&spaces_mutex);
@@ -1427,17 +1407,17 @@ static void cmd_rem_lockspace(struct cmd_args *ca)
 	client_resume(ca->ci_in);
 }
 
-static void call_cmd(struct cmd_args *ca)
+static void call_cmd(struct task *task, struct cmd_args *ca)
 {
 	switch (ca->header.cmd) {
 	case SM_CMD_ACQUIRE:
-		cmd_acquire(ca);
+		cmd_acquire(task, ca);
 		break;
 	case SM_CMD_RELEASE:
-		cmd_release(ca);
+		cmd_release(task, ca);
 		break;
 	case SM_CMD_INQUIRE:
-		cmd_inquire(ca);
+		cmd_inquire(task, ca);
 		break;
 	case SM_CMD_ADD_LOCKSPACE:
 		strcpy(client[ca->ci_in].owner_name, "add_lockspace");
@@ -1452,7 +1432,10 @@ static void call_cmd(struct cmd_args *ca)
 
 static void *thread_pool_worker(void *data GNUC_UNUSED)
 {
+	struct task task;
 	struct cmd_args *ca;
+
+	setup_task(&task);
 
 	pthread_mutex_lock(&pool.mutex);
 
@@ -1468,7 +1451,7 @@ static void *thread_pool_worker(void *data GNUC_UNUSED)
 			list_del(&ca->list);
 			pthread_mutex_unlock(&pool.mutex);
 
-			call_cmd(ca);
+			call_cmd(&task, ca);
 			free(ca);
 
 			pthread_mutex_lock(&pool.mutex);
@@ -1482,6 +1465,8 @@ static void *thread_pool_worker(void *data GNUC_UNUSED)
 	if (!pool.num_workers)
 		pthread_cond_signal(&pool.quit_wait);
 	pthread_mutex_unlock(&pool.mutex);
+
+	close_task(&task);
 	return NULL;
 }
 
@@ -1549,6 +1534,29 @@ static int thread_pool_create(int min_workers, int max_workers)
 	return rv;
 }
 
+void setup_task(struct task *task)
+{
+	int rv;
+
+	memcpy(task, &main_task, sizeof(struct task));
+
+	memset(&task->aio_ctx, 0, sizeof(io_context_t));
+
+	if (task->use_aio) {
+		rv = io_setup(1, &task->aio_ctx);
+		if (rv < 0) {
+			log_error("io_setup error %d, use_aio=0", rv);
+			task->use_aio = 0;
+		}
+	}
+}
+
+void close_task(struct task *task)
+{
+	if (task->use_aio)
+		io_destroy(task->aio_ctx);
+}
+
 static int print_daemon_state(char *str)
 {
 	memset(str, 0, SANLK_STATE_MAXSTR);
@@ -1560,12 +1568,12 @@ static int print_daemon_state(char *str)
 		 "host_id_renewal_fail=%d "
 		 "host_id_renewal_warn=%d "
 		 "host_id_timeout=%d",
-		 to.use_aio,
-		 to.io_timeout_seconds,
-		 to.host_id_renewal_seconds,
-		 to.host_id_renewal_fail_seconds,
-		 to.host_id_renewal_warn_seconds,
-		 to.host_id_timeout_seconds);
+		 main_task.use_aio,
+		 main_task.io_timeout_seconds,
+		 main_task.host_id_renewal_seconds,
+		 main_task.host_id_renewal_fail_seconds,
+		 main_task.host_id_renewal_warn_seconds,
+		 main_task.host_id_timeout_seconds);
 
 	return strlen(str) + 1;
 }
@@ -2121,6 +2129,9 @@ static int do_daemon(void)
 		umask(0);
 	}
 
+	/* in the daemon, the main_task should never do disk i/o, so we do not
+	   need to call io_setup() on main_task.aio_ctx */
+
 	rv = client_alloc();
 	if (rv < 0)
 		return rv;
@@ -2249,32 +2260,32 @@ static int parse_arg_resource(char *arg)
 static void set_timeout(char *key, char *val)
 {
 	if (!strcmp(key, "io_timeout")) {
-		to.io_timeout_seconds = atoi(val);
-		log_debug("io_timeout_seconds %d", to.io_timeout_seconds);
+		main_task.io_timeout_seconds = atoi(val);
+		log_debug("io_timeout_seconds %d", main_task.io_timeout_seconds);
 		return;
 	}
 
 	if (!strcmp(key, "host_id_timeout")) {
-		to.host_id_timeout_seconds = atoi(val);
-		log_debug("host_id_timeout_seconds %d", to.host_id_timeout_seconds);
+		main_task.host_id_timeout_seconds = atoi(val);
+		log_debug("host_id_timeout_seconds %d", main_task.host_id_timeout_seconds);
 		return;
 	}
 
 	if (!strcmp(key, "host_id_renewal")) {
-		to.host_id_renewal_seconds = atoi(val);
-		log_debug("host_id_renewal_seconds %d", to.host_id_renewal_seconds);
+		main_task.host_id_renewal_seconds = atoi(val);
+		log_debug("host_id_renewal_seconds %d", main_task.host_id_renewal_seconds);
 		return;
 	}
 
 	if (!strcmp(key, "host_id_renewal_warn")) {
-		to.host_id_renewal_warn_seconds = atoi(val);
-		log_debug("host_id_renewal_warn_seconds %d", to.host_id_renewal_warn_seconds);
+		main_task.host_id_renewal_warn_seconds = atoi(val);
+		log_debug("host_id_renewal_warn_seconds %d", main_task.host_id_renewal_warn_seconds);
 		return;
 	}
 
 	if (!strcmp(key, "host_id_renewal_fail")) {
-		to.host_id_renewal_fail_seconds = atoi(val);
-		log_debug("host_id_renewal_fail_seconds %d", to.host_id_renewal_fail_seconds);
+		main_task.host_id_renewal_fail_seconds = atoi(val);
+		log_debug("host_id_renewal_fail_seconds %d", main_task.host_id_renewal_fail_seconds);
 		return;
 	}
 
@@ -2610,7 +2621,7 @@ static int read_command_line(int argc, char *argv[])
 			log_syslog_priority = atoi(optionarg);
 			break;
 		case 'a':
-			to.use_aio = atoi(optionarg);
+			main_task.use_aio = atoi(optionarg);
 			break;
 		case 't':
 			com.max_worker_threads = atoi(optionarg);
@@ -2624,7 +2635,7 @@ static int read_command_line(int argc, char *argv[])
 			com.high_priority = atoi(optionarg);
 			break;
 		case 'o':
-			parse_arg_timeout(optionarg); /* to */
+			parse_arg_timeout(optionarg);
 			break;
 
 		case 'n':
@@ -2846,22 +2857,33 @@ static int do_direct(void)
 	int live;
 	int rv;
 
+	/* for direct commands, the main_task does disk i/o, so set up
+	   main_task.aio_ctx */
+
+	if (main_task.use_aio) {
+		rv = io_setup(1, &main_task.aio_ctx);
+		if (rv < 0) {
+			log_tool("io_setup error %d, use_aio=0", rv);
+			main_task.use_aio = 0;
+		}
+	}
+
 	switch (com.action) {
 	case ACT_INIT:
-		rv = direct_init(&to, &com.lockspace, com.res_args[0],
+		rv = direct_init(&main_task, &com.lockspace, com.res_args[0],
 				 com.max_hosts, com.num_hosts);
 		log_tool("init done %d", rv);
 		break;
 
 	case ACT_DUMP:
-		rv = direct_dump(&to, com.dump_path);
+		rv = direct_dump(&main_task, com.dump_path);
 		log_tool("dump done %d", rv);
 		break;
 
 	case ACT_READ_LEADER:
-		rv = direct_read_leader(&to, &com.lockspace, com.res_args[0], &leader);
+		rv = direct_read_leader(&main_task, &com.lockspace, com.res_args[0], &leader);
 		log_tool("read_leader done %d", rv);
-		log_tool("magic 0x%x", leader.magic);
+		log_tool("magic 0x%0x", leader.magic);
 		log_tool("version 0x%x", leader.version);
 		log_tool("sector_size %u", leader.sector_size);
 		log_tool("num_hosts %llu",
@@ -2878,7 +2900,7 @@ static int do_direct(void)
 		log_tool("resource_name %.48s", leader.resource_name);
 		log_tool("timestamp %llu",
 			 (unsigned long long)leader.timestamp);
-		log_tool("checksum %u", leader.checksum);
+		log_tool("checksum 0x%0x", leader.checksum);
 		log_tool("write_id %llu",
 			 (unsigned long long)leader.write_id);
 		log_tool("write_generation %llu",
@@ -2888,34 +2910,34 @@ static int do_direct(void)
 		break;
 
 	case ACT_ACQUIRE:
-		rv = direct_acquire(&to, com.res_args[0], com.num_hosts,
+		rv = direct_acquire(&main_task, com.res_args[0], com.num_hosts,
 				    com.local_host_id, com.local_host_generation,
 				    &leader);
 		log_tool("acquire done %d", rv);
 		break;
 
 	case ACT_RELEASE:
-		rv = direct_release(&to, com.res_args[0], &leader);
+		rv = direct_release(&main_task, com.res_args[0], &leader);
 		log_tool("release done %d", rv);
 		break;
 
 	case ACT_ACQUIRE_ID:
-		rv = direct_acquire_id(&to, &com.lockspace);
+		rv = direct_acquire_id(&main_task, &com.lockspace);
 		log_tool("acquire_id done %d", rv);
 		break;
 
 	case ACT_RELEASE_ID:
-		rv = direct_release_id(&to, &com.lockspace);
+		rv = direct_release_id(&main_task, &com.lockspace);
 		log_tool("release_id done %d", rv);
 		break;
 
 	case ACT_RENEW_ID:
-		rv = direct_renew_id(&to, &com.lockspace);
+		rv = direct_renew_id(&main_task, &com.lockspace);
 		log_tool("rewew_id done %d", rv);
 		break;
 
 	case ACT_READ_ID:
-		rv = direct_read_id(&to,
+		rv = direct_read_id(&main_task,
 				    &com.lockspace,
 				    &timestamp,
 				    &owner_id,
@@ -2929,7 +2951,7 @@ static int do_direct(void)
 		break;
 
 	case ACT_LIVE_ID:
-		rv = direct_live_id(&to,
+		rv = direct_live_id(&main_task,
 				    &com.lockspace,
 				    &timestamp,
 				    &owner_id,
@@ -2948,12 +2970,15 @@ static int do_direct(void)
 		rv = -1;
 	}
 
+	close_task(&main_task);
 	return rv;
 }
 
 int main(int argc, char *argv[])
 {
 	int rv;
+
+	BUILD_BUG_ON(sizeof(struct sanlk_disk) != sizeof(struct sync_disk));
 	
 	memset(&com, 0, sizeof(com));
 	com.max_hosts = DEFAULT_MAX_HOSTS;
@@ -2964,14 +2989,15 @@ int main(int argc, char *argv[])
 	com.gid = DEFAULT_SOCKET_GID;
 	com.pid = -1;
 
-	to.use_aio = DEFAULT_USE_AIO;
-	to.io_timeout_seconds = DEFAULT_IO_TIMEOUT_SECONDS;
-	to.host_id_timeout_seconds = DEFAULT_HOST_ID_TIMEOUT_SECONDS;
-	to.host_id_renewal_seconds = DEFAULT_HOST_ID_RENEWAL_SECONDS;
-	to.host_id_renewal_fail_seconds = DEFAULT_HOST_ID_RENEWAL_FAIL_SECONDS;
-	to.host_id_renewal_warn_seconds = DEFAULT_HOST_ID_RENEWAL_WARN_SECONDS;
+	memset(&main_task, 0, sizeof(main_task));
+	main_task.use_aio = DEFAULT_USE_AIO;
+	main_task.io_timeout_seconds = DEFAULT_IO_TIMEOUT_SECONDS;
+	main_task.host_id_timeout_seconds = DEFAULT_HOST_ID_TIMEOUT_SECONDS;
+	main_task.host_id_renewal_seconds = DEFAULT_HOST_ID_RENEWAL_SECONDS;
+	main_task.host_id_renewal_fail_seconds = DEFAULT_HOST_ID_RENEWAL_FAIL_SECONDS;
+	main_task.host_id_renewal_warn_seconds = DEFAULT_HOST_ID_RENEWAL_WARN_SECONDS;
 
-	/* com and to values can be altered via command line options */
+	/* com and main_task values can be altered via command line options */
 
 	rv = read_command_line(argc, argv);
 	if (rv < 0)
