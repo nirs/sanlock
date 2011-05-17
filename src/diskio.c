@@ -23,11 +23,8 @@
 #include <sys/stat.h>
 #include <blkid/blkid.h>
 
-#ifdef LINUX_AIO
-#include <libaio.h>
-#else /* POSIX_AIO */
-#include <aio.h>
-#endif
+#include <libaio.h> /* linux aio */
+#include <aio.h>    /* posix aio */
 
 #include "sanlock_internal.h"
 #include "diskio.h"
@@ -180,11 +177,14 @@ int open_disks(struct sync_disk *disks, int num_disks)
 	return 0;
 }
 
-static int do_write(int fd, uint64_t offset, const char *buf, int len)
+static int do_write(int fd, uint64_t offset, const char *buf, int len, struct task *task)
 {
 	off_t ret;
 	int rv;
 	int pos = 0;
+
+	if (task)
+		task->io_count++;
 
 	ret = lseek(fd, offset, SEEK_SET);
 	if (ret != offset)
@@ -210,10 +210,13 @@ static int do_write(int fd, uint64_t offset, const char *buf, int len)
 	return 0;
 }
 
-static int do_read(int fd, uint64_t offset, char *buf, int len)
+static int do_read(int fd, uint64_t offset, char *buf, int len, struct task *task)
 {
 	off_t ret;
 	int rv, pos = 0;
+
+	if (task)
+		task->io_count++;
 
 	ret = lseek(fd, offset, SEEK_SET);
 	if (ret != offset)
@@ -233,34 +236,81 @@ static int do_read(int fd, uint64_t offset, char *buf, int len)
 	return 0;
 }
 
-#ifdef LINUX_AIO
+static struct aicb *find_callback_slot(struct task *task)
+{
+	struct timespec ts;
+	struct io_event event;
+	int cleared = 0;
+	int rv;
+	int i;
+
+ find:
+	for (i = 0; i < task->cb_size; i++) {
+		if (task->callbacks[i].used)
+			continue;
+		return &task->callbacks[i];
+	}
+
+	if (cleared++)
+		return NULL;
+
+	memset(&ts, 0, sizeof(struct timespec));
+	ts.tv_sec = task->io_timeout_seconds;
+ retry:
+	memset(&event, 0, sizeof(event));
+
+	rv = io_getevents(task->aio_ctx, 1, 1, &event, &ts);
+	if (rv == -EINTR)
+		goto retry;
+	if (rv < 0)
+		return NULL;
+	if (rv == 1) {
+		struct iocb *ev_iocb = event.obj;
+		struct aicb *ev_aicb = container_of(ev_iocb, struct aicb, iocb);
+
+		ev_aicb->used = 0;
+		goto find;
+	}
+	return NULL;
+}
+
 static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 			struct task *task, int cmd)
 {
 	struct timespec ts;
-	struct iocb cb;
-	struct iocb *p_cb;
+	struct aicb *aicb;
+	struct iocb *iocb;
 	struct io_event event;
 	int rv;
 
-	memset(&ts, 0, sizeof(struct timespec));
-	ts.tv_sec = task->io_timeout_seconds;
+	/* I expect this pre-emptively catches the io_submit EAGAIN case */
 
-	memset(&cb, 0, sizeof(cb));
-	p_cb = &cb;
+	aicb = find_callback_slot(task);
+	if (!aicb)
+		return -ENOENT;
 
-	cb.aio_fildes = fd;
-	cb.aio_lio_opcode = cmd;
-	cb.u.c.buf = buf;
-	cb.u.c.nbytes = len;
-	cb.u.c.offset = offset;
+	iocb = &aicb->iocb;
 
-	rv = io_submit(task->aio_ctx, 1, &p_cb);
+	memset(iocb, 0, sizeof(struct iocb));
+	iocb->aio_fildes = fd;
+	iocb->aio_lio_opcode = cmd;
+	iocb->u.c.buf = buf;
+	iocb->u.c.nbytes = len;
+	iocb->u.c.offset = offset;
+
+	rv = io_submit(task->aio_ctx, 1, &iocb);
 	if (rv < 0) {
-		log_error("aio %d io_submit error %d", cmd, rv);
+		log_error("aio %s io_submit error %d", task->name, rv);
 		goto out;
 	}
 
+	task->io_count++;
+
+	/* don't reuse aicb->iocb until we reap the event for it */
+	aicb->used = 1;
+
+	memset(&ts, 0, sizeof(struct timespec));
+	ts.tv_sec = task->io_timeout_seconds;
  retry:
 	memset(&event, 0, sizeof(event));
 
@@ -268,23 +318,29 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 	if (rv == -EINTR)
 		goto retry;
 	if (rv < 0) {
-		log_error("aio %d io_getevents error %d", cmd, rv);
+		log_error("aio %s io_getevents error %d", task->name, rv);
 		goto out;
 	}
 	if (rv == 1) {
-		if (event.obj != p_cb) {
-			log_error("aio %d event for other io retry", cmd);
+		struct iocb *ev_iocb = event.obj;
+		struct aicb *ev_aicb = container_of(ev_iocb, struct aicb, iocb);
+
+		ev_aicb->used = 0;
+
+		if (ev_iocb != iocb) {
+			log_error("aio %s other iocb %p event result %ld %ld",
+				  task->name, ev_iocb, event.res, event.res2);
 			goto retry;
 		}
 		if ((int)event.res < 0) {
-			log_error("aio %d event res error %ld %ld",
-				  cmd, event.res, event.res2);
+			log_error("aio %s event result %ld %ld",
+				  task->name, event.res, event.res2);
 			rv = event.res;
 			goto out;
 		}
 		if (event.res != len) {
-			log_error("aio %d event len %d error %lu %lu",
-				  cmd, len, event.res, event.res2);
+			log_error("aio %s event len %d result %lu %lu",
+				  task->name, len, event.res, event.res2);
 			rv = -EMSGSIZE;
 			goto out;
 		}
@@ -297,37 +353,39 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 	/* Timed out waiting for result.  If cancel fails, we could try retry
 	   io_getevents indefinately, but that removes the whole point of using
 	   aio, which is the timeout.  So, we need to be prepared to reap the
-	   event the next time we call io_getevents for a different i/o. */
+	   event the next time we call io_getevents for a different i/o.  We
+	   can't reuse the iocb for this timed out io until we get an event for
+	   it because we need to compare the iocb to event.obj to distinguish
+	   events for separate submissions.
 
-	rv = io_cancel(task->aio_ctx, &cb, &event);
-	if (!rv) {
-		log_error("aio %d canceled", cmd);
-		rv = -ECANCELED;
-		goto out;
-	}
-
-	/* <phro> dct: io_cancel doesn't work, in general.  you are very
+	   <phro> dct: io_cancel doesn't work, in general.  you are very
 	   likely going to get -EINVAL from that call */
 
-	log_error("aio %d error %d", cmd, rv);
+	task->to_count++;
 
-	if (rv > 0)
+	log_error("aio %s iocb %p timeout %u io_count %u", task->name, iocb,
+		  task->to_count, task->io_count);
+
+	rv = io_cancel(task->aio_ctx, iocb, &event);
+	if (!rv) {
+		rv = -ECANCELED;
+	} else if (rv > 0) {
 		rv = -EILSEQ;
+	}
  out:
 	return rv;
 }
 
-static int do_write_aio(int fd, uint64_t offset, char *buf, int len, struct task *task)
+static int do_write_aio_linux(int fd, uint64_t offset, char *buf, int len, struct task *task)
 {
 	return do_linux_aio(fd, offset, buf, len, task, IO_CMD_PWRITE);
 }
-static int do_read_aio(int fd, uint64_t offset, char *buf, int len, struct task *task)
+static int do_read_aio_linux(int fd, uint64_t offset, char *buf, int len, struct task *task)
 {
 	return do_linux_aio(fd, offset, buf, len, task, IO_CMD_PREAD);
 }
 
-#else
-static int do_write_aio(int fd, uint64_t offset, char *buf, int len, struct task *task)
+static int do_write_aio_posix(int fd, uint64_t offset, char *buf, int len, struct task *task)
 {
 	struct timespec ts;
 	struct aiocb cb;
@@ -376,7 +434,7 @@ static int do_write_aio(int fd, uint64_t offset, char *buf, int len, struct task
 	return -1;
 }
 
-static int do_read_aio(int fd, uint64_t offset, char *buf, int len, struct task *task)
+static int do_read_aio_posix(int fd, uint64_t offset, char *buf, int len, struct task *task)
 {
 	struct timespec ts;
 	struct aiocb cb;
@@ -423,16 +481,17 @@ static int do_read_aio(int fd, uint64_t offset, char *buf, int len, struct task 
 	/* undefined error condition */
 	return -1;
 }
-#endif
 
 /* write aligned io buffer */
 
 int write_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len, struct task *task)
 {
-	if (task && task->use_aio)
-		return do_write_aio(fd, offset, iobuf, iobuf_len, task);
+	if (task && task->use_aio == 1)
+		return do_write_aio_linux(fd, offset, iobuf, iobuf_len, task);
+	else if (task && task->use_aio == 2)
+		return do_write_aio_posix(fd, offset, iobuf, iobuf_len, task);
 	else
-		return do_write(fd, offset, iobuf, iobuf_len);
+		return do_write(fd, offset, iobuf, iobuf_len, task);
 }
 
 static int _write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
@@ -543,10 +602,12 @@ int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 
 	memset(iobuf, 0, iobuf_len);
 
-	if (task && task->use_aio)
-		rv = do_read_aio(disk->fd, offset, iobuf, iobuf_len, task);
+	if (task && task->use_aio == 1)
+		rv = do_read_aio_linux(disk->fd, offset, iobuf, iobuf_len, task);
+	else if (task && task->use_aio == 2)
+		rv = do_read_aio_posix(disk->fd, offset, iobuf, iobuf_len, task);
 	else
-		rv = do_read(disk->fd, offset, iobuf, iobuf_len);
+		rv = do_read(disk->fd, offset, iobuf, iobuf_len, task);
 
 	if (!rv) {
 		memcpy(data, iobuf, data_len);

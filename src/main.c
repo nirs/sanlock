@@ -1430,12 +1430,13 @@ static void call_cmd(struct task *task, struct cmd_args *ca)
 	};
 }
 
-static void *thread_pool_worker(void *data GNUC_UNUSED)
+static void *thread_pool_worker(void *data)
 {
 	struct task task;
 	struct cmd_args *ca;
 
-	setup_task(&task);
+	setup_task(&task, WORKER_AIO_CB_SIZE);
+	snprintf(task.name, NAME_ID_SIZE, "worker%ld", (long)data);
 
 	pthread_mutex_lock(&pool.mutex);
 
@@ -1484,7 +1485,8 @@ static int thread_pool_add_work(struct cmd_args *ca)
 	list_add_tail(&ca->list, &pool.work_data);
 
 	if (!pool.free_workers && pool.num_workers < pool.max_workers) {
-		rv = pthread_create(&th, NULL, thread_pool_worker, &pool);
+		rv = pthread_create(&th, NULL, thread_pool_worker,
+				    (void *)(long)pool.num_workers);
 		if (rv < 0) {
 			list_del(&ca->list);
 			pthread_mutex_unlock(&pool.mutex);
@@ -1522,7 +1524,8 @@ static int thread_pool_create(int min_workers, int max_workers)
 	pool.max_workers = max_workers;
 
 	for (i = 0; i < min_workers; i++) {
-		rv = pthread_create(&th, NULL, thread_pool_worker, &pool);
+		rv = pthread_create(&th, NULL, thread_pool_worker,
+				    (void *)(long)i);
 		if (rv < 0)
 			break;
 		pool.num_workers++;
@@ -1534,27 +1537,54 @@ static int thread_pool_create(int min_workers, int max_workers)
 	return rv;
 }
 
-void setup_task(struct task *task)
+void setup_task(struct task *task, int cb_size)
 {
 	int rv;
 
-	memcpy(task, &main_task, sizeof(struct task));
+	memset(task, 0, sizeof(struct task));
 
-	memset(&task->aio_ctx, 0, sizeof(io_context_t));
+	/* inherit configured timeouts from main_task */
+
+	task->use_aio = main_task.use_aio;
+	task->io_timeout_seconds = main_task.io_timeout_seconds;
+	task->host_id_timeout_seconds = main_task.host_id_timeout_seconds;
+	task->host_id_renewal_seconds = main_task.host_id_renewal_seconds;
+	task->host_id_renewal_fail_seconds = main_task.host_id_renewal_fail_seconds;
+	task->host_id_renewal_warn_seconds = main_task.host_id_renewal_warn_seconds;
 
 	if (task->use_aio) {
-		rv = io_setup(1, &task->aio_ctx);
-		if (rv < 0) {
-			log_error("io_setup error %d, use_aio=0", rv);
-			task->use_aio = 0;
+		if (!cb_size)
+			goto fail;
+
+		rv = io_setup(cb_size, &task->aio_ctx);
+		if (rv < 0)
+			goto fail;
+
+		task->cb_size = cb_size;
+		task->callbacks = malloc(cb_size * sizeof(struct aicb));
+		if (!task->callbacks) {
+			rv = -ENOMEM;
+			goto fail_setup;
 		}
+		memset(task->callbacks, 0, cb_size * sizeof(struct aicb));
 	}
+	return;
+
+ fail_setup:
+	io_destroy(task->aio_ctx);
+ fail:
+	task->use_aio = 0;
+	log_error("setup_task aio disabled %d", rv);
 }
 
 void close_task(struct task *task)
 {
 	if (task->use_aio)
 		io_destroy(task->aio_ctx);
+
+	if (task->callbacks)
+		free(task->callbacks);
+	task->callbacks = NULL;
 }
 
 static int print_daemon_state(char *str)
@@ -2129,9 +2159,10 @@ static int do_daemon(void)
 		umask(0);
 	}
 
-	/* in the daemon, the main_task should never do disk i/o, so we do not
-	   need to call io_setup() on main_task.aio_ctx */
-
+	/* no setup_task(&main_task) to set up aio in daemon because the daemon
+	   main task should never do disk i/o.  We do leave main_task.use_aio
+	   set because other tasks copy their use_aio setting from there. */
+	 
 	rv = client_alloc();
 	if (rv < 0)
 		return rv;
@@ -2858,15 +2889,10 @@ static int do_direct(void)
 	int rv;
 
 	/* for direct commands, the main_task does disk i/o, so set up
-	   main_task.aio_ctx */
+	   main_task for aio */
 
-	if (main_task.use_aio) {
-		rv = io_setup(1, &main_task.aio_ctx);
-		if (rv < 0) {
-			log_tool("io_setup error %d, use_aio=0", rv);
-			main_task.use_aio = 0;
-		}
-	}
+	setup_task(&main_task, DIRECT_AIO_CB_SIZE);
+	sprintf(main_task.name, "%s", "main_direct");
 
 	switch (com.action) {
 	case ACT_INIT:
@@ -2990,6 +3016,7 @@ int main(int argc, char *argv[])
 	com.pid = -1;
 
 	memset(&main_task, 0, sizeof(main_task));
+	sprintf(main_task.name, "%s", "main");
 	main_task.use_aio = DEFAULT_USE_AIO;
 	main_task.io_timeout_seconds = DEFAULT_IO_TIMEOUT_SECONDS;
 	main_task.host_id_timeout_seconds = DEFAULT_HOST_ID_TIMEOUT_SECONDS;

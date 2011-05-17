@@ -251,14 +251,30 @@ struct sm_header {
 #define DEFAULT_HOST_ID_RENEWAL_FAIL_SECONDS 30
 #define DEFAULT_HOST_ID_RENEWAL_WARN_SECONDS 25
 
+#define HOSTID_AIO_CB_SIZE 64
+#define WORKER_AIO_CB_SIZE 8
+#define DIRECT_AIO_CB_SIZE 8
+#define RELEASE_AIO_CB_SIZE 64
+#define LIB_AIO_CB_SIZE 8
+
+struct aicb {
+	int used;
+	struct iocb iocb;
+};
+
 struct task {
+	char name[NAME_ID_SIZE+1];
 	int use_aio;
 	int io_timeout_seconds;
 	int host_id_timeout_seconds;
 	int host_id_renewal_seconds;
 	int host_id_renewal_fail_seconds;
 	int host_id_renewal_warn_seconds;
+	unsigned int io_count;
+	unsigned int to_count;
+	int cb_size;
 	io_context_t aio_ctx;
+	struct aicb *callbacks;
 };
 
 EXTERN struct task main_task;
@@ -322,7 +338,7 @@ enum {
 };
 
 /* main.c */
-void setup_task(struct task *task);
+void setup_task(struct task *task, int cb_size);
 void close_task(struct task *task);
 
 #endif

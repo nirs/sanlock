@@ -570,9 +570,9 @@ static int do_relock(int argc, char *argv[])
 		}
 
  run_more:
-		/* let the child run for 10 seconds before stopping it */
+		/* let the child run for 20 seconds before stopping it */
 
-		for (i = 0; i < 10; i++) {
+		for (i = 0; i < 20; i++) {
 			rv = waitpid(pid, &status, WNOHANG);
 			if (rv == pid)
 				break;

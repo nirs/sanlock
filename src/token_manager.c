@@ -190,7 +190,8 @@ static void *async_release_thread(void *arg GNUC_UNUSED)
 	struct resource *r;
 	struct token *token;
 
-	setup_task(&task);
+	setup_task(&task, RELEASE_AIO_CB_SIZE);
+	sprintf(task.name, "%s", "release");
 
 	while (1) {
 		pthread_mutex_lock(&resource_mutex);

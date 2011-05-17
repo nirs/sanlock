@@ -21,7 +21,7 @@ CFLAGS += -D_GNU_SOURCE -g \
 	-fasynchronous-unwind-tables \
 	-fdiagnostics-show-option
 
-LDFLAGS = -laio -lblkid -lsanlock -lsanlock_direct
+LDFLAGS = -lrt -laio -lblkid -lsanlock -lsanlock_direct
 
 all: $(TARGET)
 

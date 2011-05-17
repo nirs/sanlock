@@ -167,7 +167,8 @@ static void *host_id_thread(void *arg_in)
 	host_id = sp->host_id;
 	memcpy(&space_name, sp->space_name, NAME_ID_SIZE);
 
-	setup_task(&task);
+	setup_task(&task, HOSTID_AIO_CB_SIZE);
+	memcpy(task.name, sp->space_name, NAME_ID_SIZE);
 
 	last_attempt = time(NULL);
 

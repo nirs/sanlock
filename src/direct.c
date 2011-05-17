@@ -29,7 +29,6 @@
 #include "direct.h"
 #include "paxos_lease.h"
 #include "delta_lease.h"
-#include "sanlock_direct.h"
 
 /*
  * cli: sanlock direct init
@@ -77,17 +76,6 @@
  *                    delta_lease_release()
  *                    delta_lease_renew()
  */
-
-
-/* TODO: include from sanlock_internal */
-static struct task task_default =  {
-        DEFAULT_USE_AIO,
-        DEFAULT_IO_TIMEOUT_SECONDS,
-        DEFAULT_HOST_ID_TIMEOUT_SECONDS,
-        DEFAULT_HOST_ID_RENEWAL_SECONDS,
-        DEFAULT_HOST_ID_RENEWAL_FAIL_SECONDS,
-        DEFAULT_HOST_ID_RENEWAL_WARN_SECONDS,
-	0 };
 
 static int do_paxos_action(int action, struct task *task,
 			   struct sanlk_resource *res,
@@ -313,31 +301,6 @@ int direct_read_id(struct task *task,
 	return rv;
 }
 
-int sanlock_direct_read_id(struct sanlk_lockspace *ls,
-			   uint64_t *timestamp,
-			   uint64_t *owner_id,
-			   uint64_t *owner_generation,
-			   int use_aio)
-{
-	struct task task = task_default;
-	task.use_aio = use_aio;
-	int rv;
-
-	if (use_aio) {
-		memset(&task.aio_ctx, 0, sizeof(task.aio_ctx));
-		rv = io_setup(1, &task.aio_ctx);
-		if (rv < 0)
-			return rv;
-	}
-
-	rv = direct_read_id(&task, ls, timestamp, owner_id, owner_generation);
-
-	if (use_aio)
-		io_destroy(task.aio_ctx);
-
-	return rv;
-}
-
 int direct_live_id(struct task *task,
 		   struct sanlk_lockspace *ls,
 		   uint64_t *timestamp,
@@ -390,32 +353,6 @@ int direct_live_id(struct task *task,
 	return 0;
 }
 
-int sanlock_direct_live_id(struct sanlk_lockspace *ls,
-			   uint64_t *timestamp,
-			   uint64_t *owner_id,
-			   uint64_t *owner_generation,
-			   int *live,
-			   int use_aio)
-{
-	struct task task = task_default;
-	task.use_aio = use_aio;
-	int rv;
-
-	if (use_aio) {
-		memset(&task.aio_ctx, 0, sizeof(task.aio_ctx));
-		rv = io_setup(1, &task.aio_ctx);
-		if (rv < 0)
-			return rv;
-	}
-
-	rv = direct_live_id(&task, ls, timestamp, owner_id, owner_generation, live);
-
-	if (use_aio)
-		io_destroy(task.aio_ctx);
-
-	return rv;
-}
-
 /*
  * sanlock direct init -n <num_hosts> [-s LOCKSPACE] [-r RESOURCE]
  *
@@ -449,32 +386,6 @@ int direct_init(struct task *task,
 		rv = do_paxos_action(ACT_INIT, task, res,
 				     max_hosts, num_hosts, 0, 0, NULL);
 	}
-
-	return rv;
-}
-
-int sanlock_direct_init(struct sanlk_lockspace *ls,
-			struct sanlk_resource *res,
-			int max_hosts, int num_hosts, int use_aio)
-{
-	struct task task = task_default;
-	task.use_aio = use_aio;
-	int rv;
-
-	if (use_aio) {
-		memset(&task.aio_ctx, 0, sizeof(task.aio_ctx));
-		rv = io_setup(1, &task.aio_ctx);
-		if (rv < 0)
-			return rv;
-	}
-
-	if (!max_hosts)
-		max_hosts = DEFAULT_MAX_HOSTS;
-
-	rv = direct_init(&task, ls, res, max_hosts, num_hosts);
-
-	if (use_aio)
-		io_destroy(task.aio_ctx);
 
 	return rv;
 }
