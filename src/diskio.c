@@ -570,6 +570,18 @@ int write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 			      iobuf_len, task, blktype);
 }
 
+/* read aligned io buffer */
+
+int read_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len, struct task *task)
+{
+	if (task && task->use_aio == 1)
+		return do_read_aio_linux(fd, offset, iobuf, iobuf_len, task);
+	else if (task && task->use_aio == 2)
+		return do_read_aio_posix(fd, offset, iobuf, iobuf_len, task);
+	else
+		return do_read(fd, offset, iobuf, iobuf_len, task);
+}
+
 /* read sector_count sectors starting with sector_nr, where sector_nr
    is a logical sector number within the sync_disk.  the caller will
    generally want to look at the first N bytes of each sector.
@@ -602,13 +614,7 @@ int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 
 	memset(iobuf, 0, iobuf_len);
 
-	if (task && task->use_aio == 1)
-		rv = do_read_aio_linux(disk->fd, offset, iobuf, iobuf_len, task);
-	else if (task && task->use_aio == 2)
-		rv = do_read_aio_posix(disk->fd, offset, iobuf, iobuf_len, task);
-	else
-		rv = do_read(disk->fd, offset, iobuf, iobuf_len, task);
-
+	rv = read_iobuf(disk->fd, offset, iobuf, iobuf_len, task);
 	if (!rv) {
 		memcpy(data, iobuf, data_len);
 	} else {

@@ -16,6 +16,9 @@ int open_disks_fd(struct sync_disk *disks, int num_disks);
 int write_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len,
 		struct task *task);
 
+int read_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len,
+	       struct task *task);
+
 int write_sector(const struct sync_disk *disk, uint64_t sector_nr,
 		 const char *data, int data_len,
 		 struct task *task, const char *blktype);
