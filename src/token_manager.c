@@ -74,8 +74,9 @@ int add_resource(struct token *token, int pid)
 
 	r = find_resource(token, &dispose_resources);
 	if (r) {
-		log_errot(token, "add_resource disposed");
-		rv = -EEXIST;
+		if (!com.quiet_fail)
+			log_errot(token, "add_resource disposed");
+		rv = -EAGAIN;
 		goto out;
 	}
 

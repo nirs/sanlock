@@ -898,8 +898,9 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 		token = new_tokens[i];
 		rv = add_resource(token, cl_pid);
 		if (rv < 0) {
-			log_errot(token, "cmd_acquire %d,%d,%d add_resource %d",
-				  cl_ci, cl_fd, cl_pid, rv);
+			if (!com.quiet_fail)
+				log_errot(token, "cmd_acquire %d,%d,%d add_resource %d",
+					  cl_ci, cl_fd, cl_pid, rv);
 			result = rv;
 			goto done;
 		}
