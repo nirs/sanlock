@@ -1578,6 +1578,9 @@ void setup_task(struct task *task, int cb_size)
 	log_error("setup_task aio disabled %d", rv);
 }
 
+/* TODO: do we need/want to go through all task->callbacks that are still used
+   and wait to reap events for them before doing io_destroy? */
+
 void close_task(struct task *task)
 {
 	if (task->use_aio)

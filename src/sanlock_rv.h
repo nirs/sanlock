@@ -12,6 +12,7 @@
 #define SANLK_OK		   1
 #define SANLK_NONE		   0    /* unused */
 #define SANLK_ERROR		-201
+#define SANLK_AIO_TIMEOUT	-202
 
 /* run_ballot */
 

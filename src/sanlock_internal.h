@@ -259,6 +259,7 @@ struct sm_header {
 
 struct aicb {
 	int used;
+	char *buf;
 	struct iocb iocb;
 };
 

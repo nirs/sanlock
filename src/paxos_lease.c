@@ -802,7 +802,8 @@ static int _leader_dblock_read_single(struct task *task,
 	memcpy(our_dblock, iobuf + (sector_size * (host_id + 1)),
 	       sizeof(struct paxos_dblock));
  out:
-	free(iobuf);
+	if (rv != SANLK_AIO_TIMEOUT)
+		free(iobuf);
 	return rv;
 }
 
@@ -1385,6 +1386,7 @@ int paxos_lease_init(struct task *task,
 	char *iobuf, **p_iobuf;
 	struct leader_record *leader;
 	int iobuf_len;
+	int aio_timeout = 0;
 	int rv, d;
 
 	iobuf_len = token->disks[0].sector_size * (2 + max_hosts);
@@ -1411,9 +1413,16 @@ int paxos_lease_init(struct task *task,
 	for (d = 0; d < token->r.num_disks; d++) {
 		rv = write_iobuf(token->disks[d].fd, token->disks[d].offset,
 				 iobuf, iobuf_len, task);
+
+		if (rv == SANLK_AIO_TIMEOUT)
+			aio_timeout = 1;
+
 		if (rv < 0)
 			return rv;
 	}
+
+	if (!aio_timeout)
+		free(iobuf);
 
 	return 0;
 }

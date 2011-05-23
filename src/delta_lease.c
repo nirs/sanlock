@@ -399,6 +399,10 @@ int delta_lease_init(struct task *task,
 	}
 
 	rv = write_iobuf(disk->fd, disk->offset, iobuf, iobuf_len, task);
+
+	if (rv != SANLK_AIO_TIMEOUT)
+		free(iobuf);
+
 	if (rv < 0)
 		return rv;
 

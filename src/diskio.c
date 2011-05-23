@@ -269,10 +269,21 @@ static struct aicb *find_callback_slot(struct task *task)
 		struct aicb *ev_aicb = container_of(ev_iocb, struct aicb, iocb);
 
 		ev_aicb->used = 0;
+
+		log_error("aio %s clear iocb %p event result %ld %ld",
+			  task->name, ev_iocb, event.res, event.res2);
 		goto find;
 	}
 	return NULL;
 }
+
+/*
+ * If this function returns SANLK_AIO_TIMEOUT, it means the io has timed out
+ * and the event for the timed out io has not been reaped; the caller cannot
+ * free the buf it passed in.  It will be freed by a subsequent call when the
+ * event is reaped.  (Using my own error value here because I'm not certain
+ * what values we might return from event.res.)
+ */
 
 static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 			struct task *task, int cmd)
@@ -306,8 +317,9 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 
 	task->io_count++;
 
-	/* don't reuse aicb->iocb until we reap the event for it */
+	/* don't reuse aicb->iocb or free the buf until we reap the event */
 	aicb->used = 1;
+	aicb->buf = buf;
 
 	memset(&ts, 0, sizeof(struct timespec));
 	ts.tv_sec = task->io_timeout_seconds;
@@ -330,6 +342,8 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 		if (ev_iocb != iocb) {
 			log_error("aio %s other iocb %p event result %ld %ld",
 				  task->name, ev_iocb, event.res, event.res2);
+			free(ev_aicb->buf);
+			ev_aicb->buf = NULL;
 			goto retry;
 		}
 		if ((int)event.res < 0) {
@@ -368,9 +382,11 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 
 	rv = io_cancel(task->aio_ctx, iocb, &event);
 	if (!rv) {
+		aicb->used = 0;
 		rv = -ECANCELED;
-	} else if (rv > 0) {
-		rv = -EILSEQ;
+	} else {
+		/* aicb->used and aicb->buf both remain set */
+		rv = SANLK_AIO_TIMEOUT;
 	}
  out:
 	return rv;
@@ -514,7 +530,7 @@ static int _write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 	if (rv) {
 		log_error("write_sectors %s posix_memalign rv %d %s",
 			  blktype, rv, disk->path);
-		rv = -1;
+		rv = -ENOMEM;
 		goto out;
 	}
 
@@ -522,11 +538,13 @@ static int _write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 	memcpy(iobuf, data, data_len);
 
 	rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len, task);
-	if (rv < 0)
+	if (rv < 0) {
 		log_error("write_sectors %s offset %llu rv %d %s",
 			  blktype, (unsigned long long)offset, rv, disk->path);
+	}
 
-	free(iobuf);
+	if (rv != SANLK_AIO_TIMEOUT)
+		free(iobuf);
  out:
 	return rv;
 }
@@ -608,7 +626,7 @@ int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 	if (rv) {
 		log_error("read_sectors %s posix_memalign rv %d %s",
 			  blktype, rv, disk->path);
-		rv = -1;
+		rv = -ENOMEM;
 		goto out;
 	}
 
@@ -622,7 +640,8 @@ int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 			  blktype, (unsigned long long)offset, rv, disk->path);
 	}
 
-	free(iobuf);
+	if (rv != SANLK_AIO_TIMEOUT)
+		free(iobuf);
  out:
 	return rv;
 }
