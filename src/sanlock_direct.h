@@ -13,14 +13,16 @@ int sanlock_direct_read_id(struct sanlk_lockspace *ls,
                            uint64_t *timestamp,
                            uint64_t *owner_id,
                            uint64_t *owner_generation,
-                           int use_aio);
+                           int use_aio,
+			   int io_timeout_sec);
 
 int sanlock_direct_live_id(struct sanlk_lockspace *ls,
                            uint64_t *timestamp,
                            uint64_t *owner_id,
                            uint64_t *owner_generation,
                            int *live,
-                           int use_aio);
+                           int use_aio,
+			   int io_timeout_sec);
 
 /* Use max_hosts = 0 for default max_hosts value */
 

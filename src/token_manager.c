@@ -27,6 +27,7 @@
 #include "log.h"
 #include "paxos_lease.h"
 #include "token_manager.h"
+#include "task.h"
 
 static struct list_head resources;
 static struct list_head dispose_resources;
@@ -191,7 +192,8 @@ static void *async_release_thread(void *arg GNUC_UNUSED)
 	struct resource *r;
 	struct token *token;
 
-	setup_task(&task, RELEASE_AIO_CB_SIZE);
+	setup_task_timeouts(&task, main_task.io_timeout_seconds);
+	setup_task_aio(&task, main_task.use_aio, RELEASE_AIO_CB_SIZE);
 	sprintf(task.name, "%s", "release");
 
 	while (1) {
@@ -223,7 +225,7 @@ static void *async_release_thread(void *arg GNUC_UNUSED)
 		free(token);
 	}
  out:
-	close_task(&task);
+	close_task_aio(&task);
 	return NULL;
 }
 

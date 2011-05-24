@@ -175,6 +175,14 @@ int delta_lease_leader_read(struct task *task,
 	return error;
 }
 
+/* TODO: do we need to set the watchdog to expire in host_dead_seconds just
+ * before we do the write here?  The algorithm depends on io timeouts to
+ * protect against this write happening at a latest possible time, but since
+ * our ios don't ever really timeout reliably, we need to timeout in
+ * host_dead_seconds.
+ * And can we touch the watchdog immediately after the write, or do we
+ * need to wait for the read to complete also? */
+
 int delta_lease_acquire(struct task *task,
 			struct space *sp,
 			struct sync_disk *disk,
@@ -186,7 +194,7 @@ int delta_lease_acquire(struct task *task,
 	struct leader_record leader;
 	struct leader_record leader1;
 	uint64_t new_ts;
-	int error, delay, delta_delay;
+	int error, delay, delta_large_delay;
 
 	log_space(sp, "delta_acquire %llu begin", (unsigned long long)host_id);
 
@@ -200,33 +208,32 @@ int delta_lease_acquire(struct task *task,
 		goto write_new;
 
 	/* we need to ensure that a host_id cannot be acquired and released
-	 * sooner than host_id_timeout_seconds because the change in host_id
+	 * sooner than host_dead_seconds because the change in host_id
 	 * ownership affects the host_id "liveness" determination used by paxos
 	 * leases, and the ownership of paxos leases cannot change until after
-	 * host_id_timeout_seconds to ensure that the watchdog has fired.  So,
-	 * I think we want the delay here to be the max of
-	 * host_id_timeout_seconds and the D+6d delay.
+	 * host_dead_seconds to ensure that the watchdog has fired.  So, I
+	 * think we want the delay here to be the max of host_dead_seconds and
+	 * the D+6d delay.
 	 *
 	 * Per the algorithm in the paper, a delta lease can change ownership
 	 * in the while loop below after the delta_delay of D+6d.  However,
 	 * because we use the change of delta lease ownership to directly
 	 * determine the change in paxos lease ownership, we need the delta
-	 * delay to also meet the delay requirements of the paxos leases.
-	 * The paxos leases cannot change ownership until a min of
-	 * host_id_timeout_seconds to ensure the watchdog has fired.  So, the
-	 * timeout we use here must be the max of the delta delay (D+6d) and
-	 * paxos delay host_id_timeout_seconds, so that it covers the requirements
-	 * of both paxos and delta algorithms. */
+	 * delay to also meet the delay requirements of the paxos leases.  The
+	 * paxos leases cannot change ownership until a min of
+	 * host_dead_seconds to ensure the watchdog has fired.  So, the timeout
+	 * we use here must be the max of the delta delay (D+6d) and
+	 * host_dead_seconds */
 
-	delay = task->host_id_timeout_seconds; /* for paxos leases */
-	delta_delay = task->host_id_renewal_seconds + (6 * task->io_timeout_seconds);
-	if (delta_delay > delay)
-		delay = delta_delay;
+	delay = task->host_dead_seconds;
+	delta_large_delay = task->id_renewal_seconds + (6 * task->io_timeout_seconds);
+	if (delta_large_delay > delay)
+		delay = delta_large_delay;
 
 	while (1) {
 		memcpy(&leader1, &leader, sizeof(struct leader_record));
 
-		log_space(sp, "delta_acquire long sleep %d", delay);
+		log_space(sp, "delta_acquire delta_large_delay %d", delay);
 		sleep(delay);
 
 		error = delta_lease_leader_read(task, disk, space_name, host_id,
@@ -239,6 +246,8 @@ int delta_lease_acquire(struct task *task,
 
 		if (leader.timestamp == LEASE_FREE)
 			break;
+
+		/* TODO: fail and return an error? */
 	}
 
  write_new:
@@ -256,7 +265,7 @@ int delta_lease_acquire(struct task *task,
 		return error;
 
 	delay = 2 * task->io_timeout_seconds;
-	log_space(sp, "delta_acquire sleep 2d %d", delay);
+	log_space(sp, "delta_acquire delta_short_delay %d", delay);
 	sleep(delay);
 
 	error = delta_lease_leader_read(task, disk, space_name, host_id, &leader,
@@ -271,27 +280,52 @@ int delta_lease_acquire(struct task *task,
 	return SANLK_OK;
 }
 
+/* our_host_id and host_id will always be the same, i.e. we
+   only ever try to acquire/renew our own host_id */
+
 int delta_lease_renew(struct task *task,
 		      struct space *sp,
 		      struct sync_disk *disk,
 		      char *space_name,
 		      uint64_t our_host_id,
+		      uint64_t our_host_id_generation,
 		      uint64_t host_id,
+		      int prev_result,
+		      struct leader_record *leader_last,
 		      struct leader_record *leader_ret)
 {
-	struct leader_record leader, leader_read;
+	struct leader_record leader;
 	uint64_t new_ts;
-	int error, delay;
+	int io_timeout_save;
+	int error;
 
-	/* log_space(sp, "delta_renew %llu begin", (unsigned long long)host_id); */
+	/* TODO: if the previous renew timed out in this initial read, and that
+	 * read is now complete, we could just use the result from that read
+	 * here instead of ignoring it and doing another. */
 
 	error = delta_lease_leader_read(task, disk, space_name, host_id, &leader,
 					"delta_renew_begin");
 	if (error < 0)
 		return error;
 
-	if (leader.owner_id != our_host_id)
+	if (!our_host_id_generation)
+		our_host_id_generation = leader.owner_generation;
+
+	if (leader.owner_id != our_host_id ||
+	    leader.owner_generation != our_host_id_generation) {
+		log_erros(sp, "delta_renew %llu not owner", (unsigned long long)host_id);
+		log_leader_error(0, space_name, host_id, disk, leader_last, "delta_renew_last");
+		log_leader_error(0, space_name, host_id, disk, &leader, "delta_renew_read");
 		return SANLK_RENEW_OWNER;
+	}
+
+	if (prev_result == SANLK_OK &&
+	    memcmp(&leader, leader_last, sizeof(struct leader_record))) {
+		log_erros(sp, "delta_renew %llu reread mismatch", (unsigned long long)host_id);
+		log_leader_error(0, space_name, host_id, disk, leader_last, "delta_renew_last");
+		log_leader_error(0, space_name, host_id, disk, &leader, "delta_renew_read");
+		return SANLK_RENEW_DIFF;
+	}
 
 	new_ts = time(NULL);
 
@@ -302,12 +336,25 @@ int delta_lease_renew(struct task *task,
 	leader.timestamp = new_ts;
 	leader.checksum = leader_checksum(&leader);
 
-	/* log_space(sp, "delta_renew write new %llu", (unsigned long long)new_ts); */
+	/* extend io timeout for this one write; we need to give this write
+	 * every chance to succeed, and there's no point in letting it time
+	 * out.  there's nothing we would do but retry it, and timing out and
+	 * retrying unnecessarily would probably be counter productive. */
+
+	io_timeout_save = task->io_timeout_seconds;
+	task->io_timeout_seconds = task->host_dead_seconds;
 
 	error = write_sector(disk, host_id - 1, (char *)&leader, sizeof(struct leader_record),
 			     task, "delta_leader");
+
+	task->io_timeout_seconds = io_timeout_save;
+
 	if (error < 0)
 		return error;
+
+#if 0
+	/* the paper shows doing a delay and another read here, but it seems
+	   unnecessary since we do the same at the beginning of the next renewal */
 
 	delay = 2 * task->io_timeout_seconds;
 	/* log_space(sp, "delta_renew sleep 2d %d", delay); */
@@ -330,6 +377,7 @@ int delta_lease_renew(struct task *task,
 		log_leader_error(0, space_name, host_id, disk, &leader_read, "delta_renew_reread");
 		return SANLK_RENEW_DIFF;
 	}
+#endif
 
 	memcpy(leader_ret, &leader, sizeof(struct leader_record));
 	return SANLK_OK;

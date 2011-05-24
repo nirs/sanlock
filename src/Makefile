@@ -29,6 +29,7 @@ CMD_SOURCE = \
 	log.c \
 	main.c \
 	paxos_lease.c \
+	task.c \
 	token_manager.c \
 	watchdog.c
 
@@ -43,6 +44,7 @@ LIB2_SOURCE = \
 	delta_lease.c \
 	paxos_lease.c \
 	direct.c \
+	task.c \
 	direct_lib.c
 
 CFLAGS += -D_GNU_SOURCE -g \

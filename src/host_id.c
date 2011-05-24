@@ -29,6 +29,7 @@
 #include "host_id.h"
 #include "watchdog.h"
 #include "client_msg.h"
+#include "task.h"
 
 struct list_head spaces;
 struct list_head spaces_remove;
@@ -133,12 +134,12 @@ int host_id_check(struct task *task, struct space *sp)
 
 	gap = time(NULL) - last_success;
 
-	if (gap >= task->host_id_renewal_fail_seconds) {
+	if (gap >= task->id_renewal_fail_seconds) {
 		log_erros(sp, "host_id_check failed %d", gap);
 		return 0;
 	}
 
-	if (gap >= task->host_id_renewal_warn_seconds) {
+	if (gap >= task->id_renewal_warn_seconds) {
 		log_erros(sp, "host_id_check warning %d last_success %llu",
 			  gap, (unsigned long long)last_success);
 	}
@@ -157,17 +158,18 @@ static void *host_id_thread(void *arg_in)
 	struct space *sp;
 	char space_name[NAME_ID_SIZE];
 	struct leader_record leader;
-	uint64_t host_id;
+	uint64_t our_host_id, our_host_id_generation;
 	time_t last_attempt, last_success;
 	int rv, result, delta_length, gap, opened;
 	int delta_result = 0;
 	int stop = 0;
 
 	sp = (struct space *)arg_in;
-	host_id = sp->host_id;
+	our_host_id = sp->host_id;
 	memcpy(&space_name, sp->space_name, NAME_ID_SIZE);
 
-	setup_task(&task, HOSTID_AIO_CB_SIZE);
+	setup_task_timeouts(&task, main_task.io_timeout_seconds);
+	setup_task_aio(&task, main_task.use_aio, HOSTID_AIO_CB_SIZE);
 	memcpy(task.name, sp->space_name, NAME_ID_SIZE);
 
 	last_attempt = time(NULL);
@@ -180,7 +182,7 @@ static void *host_id_thread(void *arg_in)
 	}
 
 	result = delta_lease_acquire(&task, sp, &sp->host_id_disk, space_name,
-				     host_id, host_id, &leader);
+				     our_host_id, our_host_id, &leader);
 	delta_result = result;
 	delta_length = time(NULL) - last_attempt;
 
@@ -212,22 +214,21 @@ static void *host_id_thread(void *arg_in)
 
 	if (result < 0) {
 		log_erros(sp, "host_id %llu acquire failed %d",
-			  (unsigned long long)host_id, result);
+			  (unsigned long long)our_host_id, result);
 		goto out;
 	}
 
 	log_erros(sp, "host_id %llu generation %llu acquire %llu",
-		  (unsigned long long)host_id,
+		  (unsigned long long)our_host_id,
 		  (unsigned long long)leader.owner_generation,
 		  (unsigned long long)leader.timestamp);
 
 	sp->host_generation = leader.owner_generation;
+	our_host_id_generation = leader.owner_generation;
 
 	while (1) {
 		if (stop)
 			break;
-
-		sleep(1);
 
 		pthread_mutex_lock(&sp->mutex);
 		stop = sp->thread_stop;
@@ -236,14 +237,21 @@ static void *host_id_thread(void *arg_in)
 		if (stop)
 			break;
 
-		if (time(NULL) - last_success < task.host_id_renewal_seconds)
+		if (time(NULL) - last_success < task.id_renewal_seconds) {
+			sleep(1);
 			continue;
+		} else {
+			/* don't spin too quickly if renew is failing
+			   immediately and repeatedly */
+			usleep(200000);
+		}
 
 		last_attempt = time(NULL);
 
 		result = delta_lease_renew(&task, sp, &sp->host_id_disk,
-					   space_name, host_id, host_id,
-					   &leader);
+					   space_name, our_host_id,
+					   our_host_id_generation, our_host_id,
+					   delta_result, &leader, &leader);
 		delta_result = result;
 		delta_length = time(NULL) - last_attempt;
 
@@ -258,9 +266,14 @@ static void *host_id_thread(void *arg_in)
 			gap = last_success - sp->lease_status.renewal_last_success;
 			sp->lease_status.renewal_last_success = last_success;
 
-			if (com.debug_renew) {
-				log_space(sp, "host_id %llu renewed %llu len %d interval %d",
-					  (unsigned long long)host_id,
+			if (delta_length > task.id_renewal_seconds) {
+				log_erros(sp, "host_id %llu renewed %llu delta_length %d too long",
+					  (unsigned long long)our_host_id,
+					  (unsigned long long)last_success,
+					  delta_length);
+			} else if (com.debug_renew) {
+				log_space(sp, "host_id %llu renewed %llu delta_length %d interval %d",
+					  (unsigned long long)our_host_id,
 					  (unsigned long long)last_success,
 					  delta_length, gap);
 			}
@@ -268,8 +281,8 @@ static void *host_id_thread(void *arg_in)
 			if (!sp->thread_stop)
 				update_watchdog_file(sp, last_success);
 		} else {
-			log_erros(sp, "host_id %llu renewal error %d len %d last_success %llu",
-				  (unsigned long long)host_id, result, delta_length,
+			log_erros(sp, "host_id %llu renewal error %d delta_length %d last_success %llu",
+				  (unsigned long long)our_host_id, result, delta_length,
 				  (unsigned long long)sp->lease_status.renewal_last_success);
 		}
 		stop = sp->thread_stop;
@@ -281,12 +294,12 @@ static void *host_id_thread(void *arg_in)
  out:
 	if (delta_result == SANLK_OK)
 		delta_lease_release(&task, sp, &sp->host_id_disk, space_name,
-				    host_id, &leader, &leader);
+				    our_host_id, &leader, &leader);
 
 	if (opened)
 		close_disks(&sp->host_id_disk, 1);
 
-	close_task(&task);
+	close_task_aio(&task);
 	return NULL;
 }
 

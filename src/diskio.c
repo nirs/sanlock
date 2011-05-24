@@ -377,7 +377,8 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 
 	task->to_count++;
 
-	log_error("aio %s iocb %p timeout %u io_count %u", task->name, iocb,
+	log_error("aio %s iocb %p timeout sec %d count %u ios %u",
+		  task->name, iocb, task->io_timeout_seconds,
 		  task->to_count, task->io_count);
 
 	rv = io_cancel(task->aio_ctx, iocb, &event);

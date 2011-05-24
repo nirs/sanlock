@@ -222,7 +222,10 @@ static int do_delta_action(int action,
 		rv = delta_lease_renew(task, &space, &sd,
 				       ls->name,
 				       ls->host_id,
+				       0, /* local_host_generaion */
 				       ls->host_id,
+				       -1,
+				       &leader,
 				       &leader);
 		break;
 	case ACT_RELEASE_ID:
@@ -341,7 +344,7 @@ int direct_live_id(struct task *task,
 			break;
 		}
 
-		if (time(NULL) - start > task->host_id_timeout_seconds) {
+		if (time(NULL) - start > task->host_dead_seconds) {
 			*live = 0;
 			break;
 		}

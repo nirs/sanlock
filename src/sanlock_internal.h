@@ -129,101 +129,66 @@ struct sm_header {
 };
 
 /*
- * io_timeout_seconds - max time a single disk read or write can take to return
- * (if -1 then non-async i/o is used and time is unlimited)
- * (cf. safelease.c "max_op_ms")
- * (cf. light weight leases paper small delta)
- * (cf. delta_lease.c log message "d")
- *
- * host_id_renewal_seconds - attempt a renewal once in each interval of this length
- * (the sleeping time between each attempt will be this time minus the time spent
- * in renewal) 
- *
- * host_id_renewal_fail_seconds - daemon must renew lease once within this time
- * period to keep the lease.  daemon enters recovery mode (kills supervised pids)
- * if the lease is not renewed in this interval.
- * (cf. safelease.c "lease_ms")
- * (cf. light weight leases paper large delta)
- * (cf. delta_lease.c log message "D")
- *
- * host_id_timeout_seconds - one host considers another dead if the other's
- * host_id lease is this old (or more), and will take ownership of any resource
- * leases that the other host owned.
- *
- *
  * Example of watchdog behavior when host_id renewals fail, assuming
  * that sanlock cannot successfully kill the pids it is supervising that
  * depend on the given host_id.
  *
- * Using these default values
- * host_id_renewal_fail_seconds 30
- * host_id_timeout_seconds 90
- * wdmd fire_timeout 60
+ * 
+ * Using these values in the example
+ * watchdog_fire_timeout        = 60 (constant)
+ * io_timeout_seconds           =  2 (defined by us)
+ * id_renewal_seconds           = 10 (defined by us)
+ * id_renewal_fail_seconds      = 30 (defined by us)
+ * host_dead_seconds            = 90 (derived below)
  *
- *   T
+ * (FIXME: 2/10/30 is not a combination we'd actually create,
+ * but the example still works)
+ *
+ *   T  time in seconds
+ *
  *   0: sanlock renews host_id on disk
  *      sanlock calls wdmd_test_live(0, 30)
  *      wdmd test_client sees now 0 < expire 30 ok
  *      wdmd /dev/watchdog keepalive
  *
- *   5: sanlock renews host_id on disk
- *      sanlock calls wdmd_test_live(5, 35)
- *
  *  10: sanlock renews host_id on disk ok
  *      sanlock calls wdmd_test_live(10, 40)
- *      wdmd test_client sees now 10 < expire 35 or 40 ok
+ *      wdmd test_client sees now 10 < expire 30 or 40 ok
  *      wdmd /dev/watchdog keepalive
- *
- *  15: sanlock fails to renew host_id on disk
- *      sanlock does not call wdmd_test_live
  *
  *  20: sanlock fails to renew host_id on disk
  *      sanlock does not call wdmd_test_live
  *      wdmd test_client sees now 20 < expire 40 ok
  *      wdmd /dev/watchdog keepalive
  *
- *  25: sanlock fails to renew host_id on disk
- *      sanlock does not call wdmd_test_live
- *
  *  30: sanlock fails to renew host_id on disk
  *      sanlock does not call wdmd_test_live
  *      wdmd test_client sees now 30 < expire 40 ok
  *      wdmd /dev/watchdog keepalive
- *       
- *  35: sanlock fails to renew host_id on disk
- *      sanlock does not call wdmd_test_live
  *
  *  40: sanlock fails to renew host_id on disk
  *      sanlock does not call wdmd_test_live
  *      wdmd test_client sees now 40 >= expire 40 fail
  *      wdmd no keepalive
  *
- *      . /dev/watchdog will fire at last keepalive + fire_timeout =
+ *      . /dev/watchdog will fire at last keepalive + watchdog_fire_timeout =
  *        T30 + 60 = T90
  *      . host_id will expire at
- *        last disk renewal ok + host_id_renewal_fail_seconds + fire_timeout
+ *        last disk renewal ok + id_renewal_fail_seconds + watchdog_fire_timeout
  *        T10 + 30 + 60 = T100
+ *        (aka last disk renewal ok + host_dead_seconds)
  *      . the wdmd test at T30 could have been at T39, so wdmd would have
  *        seen the client unexpired/ok just before the expiry time at T40,
  *        which would lead to /dev/watchdog firing at 99 instead of 90
- *      . also last disk renewal ok + host_id_timeout_seconds
- *        T10 + 90 = T100
- *      . setup_watchdog checks that host_id_timeout_seconds =
- *        host_id_renewal_fail_seconds + fire_timeout
  *
- *  45: sanlock fails to renew host_id on disk -> does not call wdmd_test_live
  *  50: sanlock fails to renew host_id on disk -> does not call wdmd_test_live
  *      wdmd test_client sees now 50 > expire 40 fail -> no keepalive
- *  55: sanlock fails to renew host_id on disk -> does not call wdmd_test_live
  *  60: sanlock fails to renew host_id on disk -> does not call wdmd_test_live
  *      wdmd test_client sees now 60 > expire 40 fail -> no keepalive
- *  65: sanlock fails to renew host_id on disk -> does not call wdmd_test_live
  *  70: sanlock fails to renew host_id on disk -> does not call wdmd_test_live
  *      wdmd test_client sees now 70 > expire 40 fail -> no keepalive
- *  75: sanlock fails to renew host_id on disk -> does not call wdmd_test_live
  *  80: sanlock fails to renew host_id on disk -> does not call wdmd_test_live
  *      wdmd test_client sees now 80 > expire 40 fail -> no keepalive
- *  85: sanlock fails to renew host_id on disk -> does not call wdmd_test_live
  *  90: sanlock fails to renew host_id on disk -> does not call wdmd_test_live
  *      wdmd test_client sees now 90 > expire 40 fail -> no keepalive
  *      /dev/watchdog fires, machine reset
@@ -233,8 +198,8 @@ struct sm_header {
  * A more likely recovery scenario when a host_id cannot be renewed
  * (probably caused by loss of storage connection):
  *
- * The sanlock daemon fails six times to renew its host_id from
- * T15 to T40.  At T40, after failing for host_id_renewal_fail_seconds (30),
+ * The sanlock daemon fails to renew its host_id from T20 to T40.
+ * At T40, after failing to renew within id_renewal_fail_seconds (30),
  * the sanlock daemon begins trying to kill all pids that were using
  * leases under this host_id.  As soon as all those pids exit, the sanlock
  * daemon will call wdmd_test_live(0, 0) to disable the wdmd testing for
@@ -242,14 +207,212 @@ struct sm_header {
  * the wdmd test will no longer see this client's expiry time of 40,
  * so the wdmd tests will succeed, wdmd will immediately go back to
  * /dev/watchdog keepalive's, and the machine will not be reset.
+ *
+ */
+ 
+/*
+ * "delta" refers to timed based leases described in Chockler/Malkhi that
+ * we use for host_id ownership.
+ *
+ * "paxos" refers to disk paxos based leases described in Lamport that
+ * we use for resource (vm) ownership.
+ *
+ * "free" refers to a lease (either type) that is not owned by anyone
+ *
+ * "held" refers to a lease (either type) that was owned by a host that
+ * failed, so it was not released/freed.
+ . (if a renewal fails we always attempt another renewal immediately)
+ *
+ * "max" refers to the maximum time that a successful acquire/renew can
+ * take, assuming that every io operation takes the max allowable time
+ * (io_timeout_seconds)
+ *
+ * "min" refers to the minimum time that a successful acquire/renew can
+ * take, assuming that every io operation completes immediately, in
+ * effectively zero time
+ *
+ *
+ * io_timeout_seconds: defined by us
+ *
+ * id_renewal_seconds: defined by us
+ *
+ * id_renewal_fail_seconds: defined by us
+ *
+ * watchdog_fire_timeout: /dev/watchdog will fire without being petted this long
+ * = 60 constant
+ *
+ * host_dead_seconds: the length of time from the last successful host_id
+ * renewal until that host is killed by its watchdog.
+ * = id_renewal_fail_seconds + watchdog_fire_timeout
+ *
+ * delta_large_delay: from the algorithm
+ * = id_renewal_seconds + (6 * io_timeout_seconds)
+ *
+ * delta_short_delay: from the algorithm
+ * = 2 * io_timeout_seconds
+ *
+ * delta_acquire_held_max: max time it can take to successfully
+ * acquire a non-free delta lease
+ * = io_timeout_seconds (read) +
+ *   max(delta_large_delay, host_dead_seconds) +
+ *   io_timeout_seconds (read) +
+ *   io_timeout_seconds (write) +
+ *   delta_short_delay +
+ *   io_timeout_seconds (read)
+ *
+ * delta_acquire_held_min: min time it can take to successfully
+ * acquire a non-free delta lease
+ * = max(delta_large_delay, host_dead_seconds)
+ *
+ * delta_acquire_free_max: max time it can take to successfully
+ * acquire a free delta lease.
+ * = io_timeout_seconds (read) +
+ *   io_timeout_seconds (write) +
+ *   delta_short_delay +
+ *   io_timeout_seconds (read)
+ *
+ * delta_acquire_free_min: min time it can take to successfully
+ * acquire a free delta lease.
+ * = delta_short_delay
+ *
+ * delta_renew_max: max time it can take to successfully
+ * renew a delta lease.
+ * = io_timeout_seconds (read) +
+ *   io_timeout_seconds (write)
+ *
+ * delta_renew_min: min time it can take to successfully
+ * renew a delta lease.
+ * = 0
+ *
+ * paxos_acquire_held_max: max time it can take to successfully
+ * acquire a non-free paxos lease, uncontended.
+ * = io_timeout_seconds (read leader) +
+ *   host_dead_seconds +
+ *   io_timeout_seconds (read leader) +
+ *   io_timeout_seconds (write dblock) +
+ *   io_timeout_seconds (read dblocks) +
+ *   io_timeout_seconds (write dblock) +
+ *   io_timeout_seconds (read dblocks) +
+ *   io_timeout_seconds (write leader)
+ *
+ * paxos_acquire_held_min: min time it can take to successfully
+ * acquire a non-free paxos lease, uncontended.
+ * = host_dead_seconds
+ *
+ * paxos_acquire_free_max: max time it can take to successfully
+ * acquire a free paxos lease, uncontended.
+ * = io_timeout_seconds (read leader) +
+ *   io_timeout_seconds (write dblock) +
+ *   io_timeout_seconds (read dblocks) +
+ *   io_timeout_seconds (write dblock) +
+ *   io_timeout_seconds (read dblocks) +
+ *   io_timeout_seconds (write leader)
+ *
+ * paxos_acquire_free_min: min time it can take to successfully
+ * acquire a free paxos lease, uncontended.
+ * = 0
+ *
+ *
+ * How to configure the combination of related timeouts defined by us:
+ * io_timeout_seconds
+ * id_renewal_seconds
+ * id_renewal_fail_seconds
+ *
+ * Here's one approach that seems to produce sensible sets of numbers:
+ *
+ * io_timeout_seconds = N
+ * . max time one io can take
+ *
+ * delta_renew_max = 2N
+ * . max time one renewal can take
+ *
+ * id_renewal_seconds = delta_renew_max (2N)
+ * . delay this long after renewal success before next renew attempt begins
+ * . this will be the difference between two successive renewal timestamps
+ *   when io times are effectively 0
+ * . there's no particular reason for it to be 2N exactly
+ * . if a successful renewal takes the max possible time (delta_renew_max),
+ *   then the next renewal attempt will begin right away
+ * . (if a renewal fails we always attempt another renewal immediately)
+ *
+ * id_renewal_fail_seconds = 4 * delta_renew_max (8N)
+ * . time from last successful renewal until recovery begins
+ * . allows for three consecutive max len renewal failures, i.e.
+ *   id_renewal_seconds + (3 * delta_renew_max)
+ *
+ * id_renewal_warn_seconds = 3 * delta_renew_max (6N)
+ * . time from last successful renewal until warning about renewal length
+ * . allows for two consecutive max len renewal failues
+ *
+ * T		time in seconds
+ * 0		renewal ok
+ * 2N		renewal attempt begin
+ * 4N		renewal attempt fail1 (each io takes max time)
+ * 4N		renewal attempt begin
+ * 6N		renewal attempt fail2 (each io takes max time)
+ * 6N		renewal attempt begin
+ * 8N		renewal attempt fail3 (each io takes max time)
+ * 8N		recovery begins (pids killed)
+ *
+ * If ios don't take the max len (delta_renew_max), this just
+ * gives us more attempts to renew before recovery begins.
+ *
+ * io_timeout_seconds        N    5  10  20
+ * id_renewal_seconds       2N   10  20  40
+ * id_renewal_fail_seconds  8N   40  80 160
+ *
+ *  5 sec io timeout: fast storage io perf
+ * 10 sec io timeout: normal storage io perf
+ * 20 sec io timeout: slow storage io perf
+ *
+ * [We could break down these computations further by adding a variable
+ * F = number of full len renewal failures allowed before recovery
+ * begins.  Above F is fixed at 3, but we may want to vary it to be
+ * 2 or 4.]
+ *
+ *                             fast norm slow
+ * watchdog_fire_timeout         60   60   60
+ *
+ * io_timeout_seconds             5   10   20
+ * id_renewal_seconds            10   20   40
+ * id_renewal_fail_seconds       40   80  160
+ * id_renewal_warn_seconds       30   60  120
+ *
+ * host_dead_seconds            100  140  220
+ * delta_large_delay             40   80  160
+ * delta_short_delay             10   20   40
+ * delta_acquire_held_max       130  200  340
+ * delta_acquire_held_min       100  140  220
+ * delta_acquire_free_max        25   50  100
+ * delta_acquire_free_min        10   20   40
+ * delta_renew_max               10   20   40
+ * delta_renew_min                0    0    0
+ * paxos_acquire_held_max       135  210  360
+ * paxos_acquire_held_min       100  140  220
+ * paxos_acquire_free_max        30   60  120
+ * paxos_acquire_free_min         0    0    0
  */
 
-#define DEFAULT_USE_AIO 1
-#define DEFAULT_IO_TIMEOUT_SECONDS 1
-#define DEFAULT_HOST_ID_TIMEOUT_SECONDS 90
-#define DEFAULT_HOST_ID_RENEWAL_SECONDS 5
-#define DEFAULT_HOST_ID_RENEWAL_FAIL_SECONDS 30
-#define DEFAULT_HOST_ID_RENEWAL_WARN_SECONDS 25
+/*
+ * Why does delta_acquire use max(delta_large_delay, host_dead_seconds) instead
+ * of just delta_large_delay as specified in the algorithm?
+ *
+ * 1. the time based lease algorithm uses delta_large_delay to determine that a
+ * host is failed, but we want to be more certain the host is dead based on its
+ * watchdog firing, and we know the watchdog has fired after host_dead_seconds.
+ *
+ * 2. if a delta lease can be acquired and released (freed) before
+ * host_dead_seconds, that could allow the paxos leases of a failed host to be
+ * acquired by someone else before host_dead_seconds (and before the failed
+ * host is really dead), because acquiring a held paxos lease depends on the
+ * delta lease of the failed owner not changing for host_dead_seconds.
+ * We cannot allow a host to acquire another failed host's paxos lease before
+ * host_dead_seconds.
+ *
+ * 3. ios can't be reliably canceled and never really time out; an io is only
+ * really dead when the machine is dead/reset or storage access is cut off.
+ * The delta lease algorithm expects real io timeouts.
+ */
 
 #define HOSTID_AIO_CB_SIZE 64
 #define WORKER_AIO_CB_SIZE 8
@@ -264,15 +427,19 @@ struct aicb {
 };
 
 struct task {
-	char name[NAME_ID_SIZE+1];
+	char name[NAME_ID_SIZE+1];   /* for log messages */
+
+	int io_timeout_seconds;      /* configured */
+	int id_renewal_seconds;      /* configured */
+	int id_renewal_fail_seconds; /* configured */
+	int id_renewal_warn_seconds; /* configured */
+
+	int host_dead_seconds;       /* calculated */
+
+	unsigned int io_count;       /* stats */
+	unsigned int to_count;       /* stats */
+
 	int use_aio;
-	int io_timeout_seconds;
-	int host_id_timeout_seconds;
-	int host_id_renewal_seconds;
-	int host_id_renewal_fail_seconds;
-	int host_id_renewal_warn_seconds;
-	unsigned int io_count;
-	unsigned int to_count;
 	int cb_size;
 	io_context_t aio_ctx;
 	struct aicb *callbacks;
@@ -280,6 +447,9 @@ struct task {
 
 EXTERN struct task main_task;
 
+#define WATCHDOG_FIRE_TIMEOUT 60
+#define DEFAULT_USE_AIO 1
+#define DEFAULT_IO_TIMEOUT 10
 #define DEFAULT_USE_WATCHDOG 1
 #define DEFAULT_HIGH_PRIORITY 1
 #define DEFAULT_SOCKET_UID 0
@@ -297,6 +467,8 @@ struct command_line {
 	int use_watchdog;
 	int high_priority;
 	int max_worker_threads;
+	int aio_arg;
+	int io_timeout_arg;
 	int uid;				/* -U */
 	int gid;				/* -G */
 	int pid;				/* -p */
@@ -337,10 +509,6 @@ enum {
 	ACT_DUMP,
 	ACT_READ_LEADER,
 };
-
-/* main.c */
-void setup_task(struct task *task, int cb_size);
-void close_task(struct task *task);
 
 #endif
 

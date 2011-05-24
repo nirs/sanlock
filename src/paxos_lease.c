@@ -1044,9 +1044,9 @@ int paxos_lease_acquire(struct task *task,
 		}
 
 		/* a host_id cannot become free in less than
-		   host_id_timeout_sec after the final renewal because
+		   host_dead_seconds after the final renewal because
 		   a host_id must first be acquired before being freed,
-		   and acquiring cannot take less than host_id_timeout_sec */
+		   and acquiring cannot take less than host_dead_seconds */
 
 		if (host_id_leader.timestamp == LEASE_FREE) {
 			log_token(token, "paxos_acquire host_id %llu free",
@@ -1056,7 +1056,7 @@ int paxos_lease_acquire(struct task *task,
 
 		/* another host has acquired the host_id of the host that
 		   owned this paxos lease; acquiring a host_id also cannot be
-		   done in less than host_id_timeout_sec */
+		   done in less than host_dead_seconds */
 
 		if (host_id_leader.owner_id != cur_leader.owner_id) {
 			log_token(token, "paxos_acquire host_id %llu owner %llu",
@@ -1079,26 +1079,26 @@ int paxos_lease_acquire(struct task *task,
 		}
 
 		/* if the owner hasn't renewed its host_id lease for
-		   host_id_timeout_seconds then its watchdog should have fired
+		   host_dead_seconds then its watchdog should have fired
 		   by now
 
 		   if we trust that the clocks are in sync among hosts, then this
 		   check could be: if (time(NULL) - host_id_leader.timestamp >
-		   task->host_id_timeout_seconds), but if the clocks are out of sync,
+		   task->host_dead_seconds), but if the clocks are out of sync,
 		   this check would easily give two hosts the lease.
 
 		   N.B. we need to be careful about ever comparing local time(NULL)
 		   to a time value we read off disk from another node that may
 		   have different time. */
 
-		if (time(NULL) - start > task->host_id_timeout_seconds) {
+		if (time(NULL) - start > task->host_dead_seconds) {
 			log_token(token, "paxos_acquire host_id %llu expired %llu",
 				  (unsigned long long)cur_leader.owner_id,
 				  (unsigned long long)host_id_leader.timestamp);
 			goto run;
 		}
 #if 0
-		if (time(NULL) - host_id_leader.timestamp > task->host_id_timeout_seconds) {
+		if (time(NULL) - host_id_leader.timestamp > task->host_dead_seconds) {
 			log_token(token, "paxos_acquire host_id %llu expired %llu",
 				  (unsigned long long)cur_leader.owner_id,
 				  (unsigned long long)host_id_leader.timestamp);
