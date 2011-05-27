@@ -43,6 +43,18 @@ struct paxos_dblock {
 	uint64_t lver;
 };
 
+static uint32_t roundup_power_of_two(uint32_t val)
+{
+	val--;
+	val |= val >> 1;
+	val |= val >> 2;
+	val |= val >> 4;
+	val |= val >> 8;
+	val |= val >> 16;
+	val++;
+	return val;
+}
+
 int majority_disks(struct token *token, int num)
 {
 	int num_disks = token->r.num_disks;
@@ -117,6 +129,7 @@ static int read_dblock(struct task *task,
 	return rv;
 }
 
+#if 0
 static int read_dblocks(struct task *task,
 			struct sync_disk *disk,
 			struct paxos_dblock *pds,
@@ -133,23 +146,6 @@ static int read_dblocks(struct task *task,
 		rv = -ENOMEM;
 		goto out;
 	}
-
-
-	/* TODO: the actual read io should start at offset 0, and the len should
-	   be rounded up to the next power of two.  Then copy pds starting at
-	   data + (2 * ss).
-
-	   data_len = next_po2((2 + pds_count)*ss)
-
-	   for (i = 0; i < pds_count; i++)
-	   	memcpy(&pds[i], data + ((2+i)*ss));
-
-	   TODO2: return the data to the caller, let them use it directly
-	   and then free it, instead of copying data into their buf; also
-	   removes bk[num_hosts] from the stack of the callers, which could
-	   get too big with large num_hosts.
-	*/
-
 
 	/* 2 = 1 leader block + 1 request block */
 
@@ -172,6 +168,7 @@ static int read_dblocks(struct task *task,
  out:
 	return rv;
 }
+#endif
 
 static int read_leader(struct task *task,
 		       struct sync_disk *disk,
@@ -255,13 +252,36 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 		      uint64_t next_lver, uint64_t our_mbal,
 		      struct paxos_dblock *dblock_out)
 {
-	struct paxos_dblock bk[num_hosts];
-	struct paxos_dblock bk_max;
 	struct paxos_dblock dblock;
+	struct paxos_dblock bk_max;
+	struct paxos_dblock *bk;
+	struct sync_disk *disk;
+	char *iobuf[MAX_DISKS];
+	char **p_iobuf[MAX_DISKS];
 	int num_disks = token->r.num_disks;
 	int num_writes, num_reads;
+	int sector_size = token->disks[0].sector_size;
+	int sector_count;
+	int iobuf_len;
 	int d, q, rv;
 	int q_max = -1;
+	int error;
+
+	sector_count = roundup_power_of_two(num_hosts + 2);
+
+	iobuf_len = sector_count * sector_size;
+
+	if (!iobuf_len)
+		return -EINVAL;
+
+	for (d = 0; d < num_disks; d++) {
+		p_iobuf[d] = &iobuf[d];
+
+		rv = posix_memalign((void *)p_iobuf[d], getpagesize(), iobuf_len);
+		if (rv)
+			return rv;
+	}
+
 
 	/*
 	 * phase 1
@@ -296,53 +316,67 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 	if (!majority_disks(token, num_writes)) {
 		log_errot(token, "ballot %llu dblock write error %d",
 			  (unsigned long long)next_lver, rv);
-		return SANLK_DBLOCK_WRITE;
+		error = SANLK_DBLOCK_WRITE;
+		goto out;
 	}
 
 	num_reads = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = read_dblocks(task, &token->disks[d], bk, num_hosts);
+		disk = &token->disks[d];
+
+		if (!iobuf[d])
+			continue;
+		memset(iobuf[d], 0, iobuf_len);
+
+		rv = read_iobuf(disk->fd, disk->offset, iobuf[d], iobuf_len, task);
+		if (rv == SANLK_AIO_TIMEOUT)
+			iobuf[d] = NULL;
 		if (rv < 0)
 			continue;
 		num_reads++;
 
+
 		for (q = 0; q < num_hosts; q++) {
-			if (bk[q].lver < dblock.lver)
+			bk = (struct paxos_dblock *)(iobuf[d] + ((2 + q)*sector_size));
+
+			if (bk->lver < dblock.lver)
 				continue;
 
-			if (bk[q].lver > dblock.lver) {
+			if (bk->lver > dblock.lver) {
 				/* I don't think this should happen */
 				log_errot(token, "ballot %llu larger1 lver[%d] %llu",
 					  (unsigned long long)next_lver, q,
-					  (unsigned long long)bk[q].lver);
-				return SANLK_DBLOCK_LVER;
+					  (unsigned long long)bk->lver);
+				error = SANLK_DBLOCK_LVER;
+				goto out;
 			}
 
 			/* see "It aborts the ballot" in comment above */
 
-			if (bk[q].mbal > dblock.mbal) {
+			if (bk->mbal > dblock.mbal) {
 				log_errot(token, "ballot %llu abort1 mbal %llu mbal[%d] %llu",
 					  (unsigned long long)next_lver,
 					  (unsigned long long)our_mbal, q,
-					  (unsigned long long)bk[q].mbal);
-				return SANLK_DBLOCK_MBAL;
+					  (unsigned long long)bk->mbal);
+				error = SANLK_DBLOCK_MBAL;
+				goto out;
 			}
 
 			/* see choosing inp for phase 2 in comment below */
 
-			if (!bk[q].inp)
+			if (!bk->inp)
 				continue;
 
-			if (!bk[q].bal) {
+			if (!bk->bal) {
 				log_errot(token, "ballot %llu zero bal inp[%d] %llu",
 					  (unsigned long long)next_lver, q,
-					  (unsigned long long)bk[q].inp);
+					  (unsigned long long)bk->inp);
 				continue;
 			}
 
-			if (bk[q].bal > bk_max.bal) {
-				bk_max = bk[q];
+			if (bk->bal > bk_max.bal) {
+				bk_max = *bk;
 				q_max = q;
 			}
 		}
@@ -351,7 +385,8 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 	if (!majority_disks(token, num_reads)) {
 		log_errot(token, "ballot %llu dblock read error %d",
 			  (unsigned long long)next_lver, rv);
-		return SANLK_DBLOCK_READ;
+		error = SANLK_DBLOCK_READ;
+		goto out;
 	}
 
 
@@ -422,37 +457,50 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 	if (!majority_disks(token, num_writes)) {
 		log_errot(token, "ballot %llu our dblock write2 error %d",
 			  (unsigned long long)next_lver, rv);
-		return SANLK_DBLOCK_WRITE;
+		error = SANLK_DBLOCK_WRITE;
+		goto out;
 	}
 
 	num_reads = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = read_dblocks(task, &token->disks[d], bk, num_hosts);
+		disk = &token->disks[d];
+
+		if (!iobuf[d])
+			continue;
+		memset(iobuf[d], 0, iobuf_len);
+
+		rv = read_iobuf(disk->fd, disk->offset, iobuf[d], iobuf_len, task);
+		if (rv == SANLK_AIO_TIMEOUT)
+			iobuf[d] = NULL;
 		if (rv < 0)
 			continue;
 		num_reads++;
 
 		for (q = 0; q < num_hosts; q++) {
-			if (bk[q].lver < dblock.lver)
+			bk = (struct paxos_dblock *)(iobuf[d] + ((2 + q)*sector_size));
+
+			if (bk->lver < dblock.lver)
 				continue;
 
-			if (bk[q].lver > dblock.lver) {
+			if (bk->lver > dblock.lver) {
 				/* I don't think this should happen */
 				log_errot(token, "ballot %llu larger2 lver[%d] %llu",
 					  (unsigned long long)next_lver, q,
-					  (unsigned long long)bk[q].lver);
-				return SANLK_DBLOCK_LVER;
+					  (unsigned long long)bk->lver);
+				error = SANLK_DBLOCK_LVER;
+				goto out;
 			}
 
 			/* see "It aborts the ballot" in comment above */
 
-			if (bk[q].mbal > dblock.mbal) {
+			if (bk->mbal > dblock.mbal) {
 				log_errot(token, "ballot %llu abort2 mbal %llu mbal[%d] %llu",
 					  (unsigned long long)next_lver,
 					  (unsigned long long)our_mbal, q,
-					  (unsigned long long)bk[q].mbal);
-				return SANLK_DBLOCK_MBAL;
+					  (unsigned long long)bk->mbal);
+				error = SANLK_DBLOCK_MBAL;
+				goto out;
 			}
 		}
 	}
@@ -460,14 +508,22 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 	if (!majority_disks(token, num_reads)) {
 		log_errot(token, "ballot %llu dblock read2 error %d",
 			  (unsigned long long)next_lver, rv);
-		return SANLK_DBLOCK_READ;
+		error = SANLK_DBLOCK_READ;
+		goto out;
 	}
 
 	/* "When it completes phase 2, p has committed dblock[p].inp." */
 
 	memcpy(dblock_out, &dblock, sizeof(struct paxos_dblock));
-
-	return SANLK_OK;
+	error = SANLK_OK;
+ out:
+	for (d = 0; d < num_disks; d++) {
+		/* don't free iobufs that have timed out */
+		if (!iobuf[d])
+			continue;
+		free(iobuf[d]);
+	}
+	return error;
 }
 
 uint32_t leader_checksum(struct leader_record *lr)
@@ -742,18 +798,6 @@ int paxos_lease_leader_read(struct task *task,
 			  (unsigned long long)leader_ret->timestamp);
 
 	return rv;
-}
-
-static uint32_t roundup_power_of_two(uint32_t val)
-{
-	val--;
-	val |= val >> 1;
-	val |= val >> 2;
-	val |= val >> 4;
-	val |= val >> 8;
-	val |= val >> 16;
-	val++;
-	return val;
 }
 
 static int _leader_dblock_read_single(struct task *task,
