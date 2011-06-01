@@ -73,14 +73,17 @@ void close_disks(struct sync_disk *disks, int num_disks)
 	int d;
 
 	for (d = 0; d < num_disks; d++) {
-		if (disks[d].fd == -1) {
-			log_error("close fd -1");
+		if (disks[d].fd == -1)
 			continue;
-		}
 		close(disks[d].fd);
 		disks[d].fd = -1;
 	}
 }
+
+/* 
+ * set fd in each disk
+ * returns number of opened disks
+ */
 
 int open_disks_fd(struct sync_disk *disks, int num_disks)
 {
@@ -93,7 +96,7 @@ int open_disks_fd(struct sync_disk *disks, int num_disks)
 
 		if (disk->fd != -1) {
 			log_error("open fd %d exists %s", disk->fd, disk->path);
-			return 0;
+			goto fail;
 		}
 
 		fd = open(disk->path, O_RDWR | O_DIRECT | O_SYNC, 0);
@@ -106,59 +109,89 @@ int open_disks_fd(struct sync_disk *disks, int num_disks)
 		num_opens++;
 	}
 	return num_opens;
+
+ fail:
+	close_disks(disks, num_disks);
+	return 0;
 }
 
-/* return number of opened disks */
+/* 
+ * set fd and sector_size
+ * returns 0 for success or -EXXX
+ */
+
+int open_disk(struct sync_disk *disk)
+{
+	struct stat st;
+	int fd, rv;
+
+	fd = open(disk->path, O_RDWR | O_DIRECT | O_SYNC, 0);
+	if (fd < 0) {
+		rv = -errno;
+		log_error("open error %d %s", rv, disk->path);
+		goto fail;
+	}
+
+	if (fstat(fd, &st) < 0) {
+		rv = -errno;
+		log_error("fstat error %d %s", rv, disk->path);
+		close(fd);
+		goto fail;
+	}
+
+	if (S_ISREG(st.st_mode)) {
+		disk->sector_size = 512;
+	} else {
+		rv = set_disk_properties(disk);
+		if (rv < 0) {
+			close(fd);
+			goto fail;
+		}
+	}
+
+	disk->fd = fd;
+	return 0;
+
+ fail:
+	if (rv >= 0)
+		rv = -1;
+	return rv;
+}
+
+/*
+ * set fd and sector_size in each disk
+ * verify all sector_size's match
+ * verify sector_size is ok for previously set offset
+ * returns number of opened disks
+ */
 
 int open_disks(struct sync_disk *disks, int num_disks)
 {
 	struct sync_disk *disk;
 	int num_opens = 0;
-	int d, fd, rv;
+	int d, rv;
 	uint32_t ss = 0;
-	uint64_t orig_offset;
-	struct stat st;
 
 	for (d = 0; d < num_disks; d++) {
 		disk = &disks[d];
 
 		if (disk->fd != -1) {
 			log_error("open fd %d exists %s", disk->fd, disk->path);
-			return 0;
+			rv = -ENOTEMPTY;
+			goto fail;
 		}
 
-		fd = open(disk->path, O_RDWR | O_DIRECT | O_SYNC, 0);
-		if (fd < 0) {
-			log_error("open error %d %s", fd, disk->path);
-			continue;
-		}
-
-		if (fstat(fd, &st) < 0) {
-			log_error("fstat error %d %s", fd, disk->path);
-			close(fd);
-			continue;
-		}
-
-		if (S_ISREG(st.st_mode)) {
-			disk->sector_size = 512;
-		} else {
-		        rv = set_disk_properties(disk);
-			if (rv < 0) {
-				close(fd);
-				continue;
-			}
-		}
+		rv = open_disk(disk);
+		if (rv < 0)
+			goto fail;
 
 		if (!ss) {
 			ss = disk->sector_size;
 		} else if (ss != disk->sector_size) {
 			log_error("inconsistent sector sizes %u %u %s",
 				  ss, disk->sector_size, disk->path);
-			close(fd);
 			goto fail;
 		}
-
-		orig_offset = disk->offset;
 
 		if (disk->offset % disk->sector_size) {
 			log_error("invalid offset %llu sector size %u %s",
@@ -167,7 +200,6 @@ int open_disks(struct sync_disk *disks, int num_disks)
 			goto fail;
 		}
 
-		disk->fd = fd;
 		num_opens++;
 	}
 	return num_opens;

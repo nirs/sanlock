@@ -202,8 +202,8 @@ static int do_delta_action(int action,
 	memcpy(&sd, &ls->host_id_disk, sizeof(struct sanlk_disk));
 	sd.fd = -1;
 
-	rv = open_disks(&sd, 1);
-	if (rv != 1)
+	rv = open_disk(&sd);
+	if (rv < 0)
 		return -ENODEV;
 
 	switch (action) {
@@ -417,8 +417,8 @@ int direct_dump(struct task *task, char *dump_path)
 	struct sync_disk sd;
 	char sname[NAME_ID_SIZE+1];
 	char rname[NAME_ID_SIZE+1];
-	int num_opened, rv;
 	uint64_t sector_nr;
+	int rv;
 
 	memset(&sd, 0, sizeof(struct sync_disk));
 
@@ -432,8 +432,8 @@ int direct_dump(struct task *task, char *dump_path)
 	strncpy(sd.path, dump_path, SANLK_PATH_LEN);
 	sd.fd = -1;
 
-	num_opened = open_disks(&sd, 1);
-	if (num_opened != 1)
+	rv = open_disk(&sd);
+	if (rv < 0)
 		return -ENODEV;
 
 	data = malloc(sd.sector_size);

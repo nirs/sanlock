@@ -21,6 +21,9 @@
 #include "sanlock_resource.h"
 #include "sanlock_direct.h"
 
+#define ONEMB 1048576
+#define LEASE_SIZE ONEMB
+
 FILE *turn_file;
 
 char count_path[PATH_MAX];
@@ -513,7 +516,7 @@ static int do_relock(int argc, char *argv[])
 	res->num_disks = 1;
 	strncpy(res->disks[0].path, lock_path, SANLK_PATH_LEN);
 	res->disks[0].path[SANLK_PATH_LEN-1] = '\0';
-	res->disks[0].offset = 1024000;
+	res->disks[0].offset = LEASE_SIZE;
 
 	/* 
 	 * argv[0] = devcount
@@ -697,7 +700,7 @@ static int do_lock(int argc, char *argv[])
 	res->num_disks = 1;
 	strncpy(res->disks[0].path, lock_path, SANLK_PATH_LEN);
 	res->disks[0].path[SANLK_PATH_LEN-1] = '\0';
-	res->disks[0].offset = 1024000;
+	res->disks[0].offset = LEASE_SIZE;
 
 	/* 
 	 * argv[0] = devcount
@@ -781,7 +784,7 @@ static int do_wrap(int argc, char *argv[])
 	res->num_disks = 1;
 	strncpy(res->disks[0].path, lock_path, SANLK_PATH_LEN);
 	res->disks[0].path[SANLK_PATH_LEN-1] = '\0';
-	res->disks[0].offset = 1024000;
+	res->disks[0].offset = LEASE_SIZE;
 
 	/* 
 	 * argv[0] = devcount
@@ -1032,7 +1035,7 @@ static int do_migrate(int argc, char *argv[])
 	res->num_disks = 1;
 	strncpy(res->disks[0].path, lock_path, SANLK_PATH_LEN);
 	res->disks[0].path[SANLK_PATH_LEN-1] = '\0';
-	res->disks[0].offset = 1024000;
+	res->disks[0].offset = LEASE_SIZE;
 
 	/*
 	 * argv[0] = devcount
@@ -1215,7 +1218,7 @@ int do_expire(int argc, char *argv[])
 	res->num_disks = 1;
 	strncpy(res->disks[0].path, lock_path, SANLK_PATH_LEN);
 	res->disks[0].path[SANLK_PATH_LEN-1] = '\0';
-	res->disks[0].offset = 1024000;
+	res->disks[0].offset = LEASE_SIZE;
 
 	/* 
 	 * argv[0] = devcount
@@ -1342,7 +1345,7 @@ int do_expire(int argc, char *argv[])
 /* 
  * devcount init <lock_disk> <count_disk>
  * sanlock direct init -n 8 -s devcount:0:<lock_disk>:0
- * sanlock direct init -n 8 -r devcount:resource<count_disk>:<lock_disk>:1024000
+ * sanlock direct init -n 8 -r devcount:resource<count_disk>:<lock_disk>:LEASE_SIZE
  * dd if=/dev/zero of=<count_disk> bs=512 count=24
  */
 
@@ -1351,10 +1354,11 @@ int do_expire(int argc, char *argv[])
 int do_init(int argc, char *argv[])
 {
 	char resbuf[sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk)];
+	struct sanlk_disk disk;
 	struct sanlk_resource *res;
 	struct sanlk_lockspace ls;
 	char command[4096];
-	int rv;
+	int rv, ss;
 
 	if (argc < 4)
 		return -1;
@@ -1374,21 +1378,37 @@ int do_init(int argc, char *argv[])
 
 	system(command);
 
-	/* initialize first resource lease area at offset 1024000 */
+	/* initialize first resource lease area at offset LEASE_SIZE */
 
 	memset(command, 0, sizeof(command));
 
 
 	snprintf(command, sizeof(command),
-		 "sanlock direct init -n %d -r devcount:resource%s:%s:1024000",
+		 "sanlock direct init -n %d -r devcount:resource%s:%s:%d",
 		 INIT_NUM_HOSTS,
 		 argv[3],
-		 argv[2]);
+		 argv[2],
+		 LEASE_SIZE);
 
 	printf("%s\n", command);
 
 	system(command);
 #else
+	memset(&disk, 0, sizeof(disk));
+	strcpy(disk.path, argv[2]);
+
+	ss = sanlock_direct_sector_size(&disk);
+	if (ss < 0) {
+		printf("sanlock_direct_sector_size %s error %d\n",
+			disk.path, ss);
+		return -1;
+	}
+
+	if (ss != 512) {
+		printf("unsupported sector size %d\n", ss);
+		return -1;
+	}
+
 	memset(&ls, 0, sizeof(ls));
 	strcpy(ls.name, "devcount");
 	strcpy(ls.host_id_disk.path, argv[2]);
@@ -1405,7 +1425,7 @@ int do_init(int argc, char *argv[])
 	sprintf(res->name, "resource%s", argv[3]);
 	res->num_disks = 1;
 	strcpy(res->disks[0].path, argv[2]);
-	res->disks[0].offset = 1024000;
+	res->disks[0].offset = LEASE_SIZE;
 
 	rv = sanlock_direct_init(NULL, res, 0, INIT_NUM_HOSTS, 0);
 	if (rv < 0) {
@@ -1459,15 +1479,15 @@ int main(int argc, char *argv[])
  out:
 	/*
 	 * sanlock direct init -n 8 -s devcount:0:/dev/bull/leases:0
-	 * sanlock direct init -n 8 -r devcount:resource/dev/bull/count:/dev/bull/leases:1024000
+	 * sanlock direct init -n 8 -r devcount:resource/dev/bull/count:/dev/bull/leases:LEASE_SIZE
 	 *
 	 * host_id leases exists at <lock_disk> offset 0
-	 * first resource lease exists at <lock_disk> offset 1024000
+	 * first resource lease exists at <lock_disk> offset LEASE_SIZE
 	 */
 
 	printf("devcount init <lock_disk> <count_disk>\n");
 	printf("  sanlock direct init -n 8 -s devcount:0:<lock_disk>:0\n");
-	printf("  sanlock direct init -n 8 -r devcount:resource<count_disk>:<lock_disk>:1024000\n");
+	printf("  sanlock direct init -n 8 -r devcount:resource<count_disk>:<lock_disk>:LEASE_SIZE\n");
 	printf("  dd if=/dev/zero of=<count_disk> bs=512 count=24\n");
 	printf("\n");
 	printf("devcount rw <count_disk> <sec1> <sec2> <hostid>\n");

@@ -160,8 +160,9 @@ static void *host_id_thread(void *arg_in)
 	struct leader_record leader;
 	uint64_t our_host_id, our_host_id_generation;
 	time_t last_attempt, last_success;
-	int rv, result, delta_length, gap, opened;
+	int rv, result, delta_length, gap;
 	int delta_result = 0;
+	int opened = 0;
 	int stop = 0;
 
 	sp = (struct space *)arg_in;
@@ -174,12 +175,13 @@ static void *host_id_thread(void *arg_in)
 
 	last_attempt = time(NULL);
 
-	opened = open_disks(&sp->host_id_disk, 1);
-	if (opened != 1) {
-		log_erros(sp, "open_disk failed %s", sp->host_id_disk.path);
+	rv = open_disk(&sp->host_id_disk);
+	if (rv < 0) {
+		log_erros(sp, "open_disk %s error %d", sp->host_id_disk.path, rv);
 		result = -ENODEV;
 		goto set_status;
 	}
+	opened = 1;
 
 	result = delta_lease_acquire(&task, sp, &sp->host_id_disk, space_name,
 				     our_host_id, our_host_id, &leader);
@@ -297,7 +299,7 @@ static void *host_id_thread(void *arg_in)
 				    our_host_id, &leader, &leader);
 
 	if (opened)
-		close_disks(&sp->host_id_disk, 1);
+		close(sp->host_id_disk.fd);
 
 	close_task_aio(&task);
 	return NULL;

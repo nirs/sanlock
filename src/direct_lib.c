@@ -16,6 +16,7 @@
 
 #include "sanlock_internal.h"
 #include "sanlock_direct.h"
+#include "diskio.h"
 #include "direct.h"
 #include "task.h"
 
@@ -101,5 +102,23 @@ int sanlock_direct_init(struct sanlk_lockspace *ls,
 	close_task_aio(&task);
 
 	return rv;
+}
+
+int sanlock_direct_sector_size(struct sanlk_disk *disk_in)
+{
+	struct sync_disk disk;
+	int rv;
+
+	memset(&disk, 0, sizeof(disk));
+
+	memcpy(disk.path, disk_in->path, SANLK_PATH_LEN);
+
+	rv = open_disk(&disk);
+	if (rv < 0)
+		return rv;
+
+	close(disk.fd);
+
+	return disk.sector_size;
 }
 
