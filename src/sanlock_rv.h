@@ -20,6 +20,7 @@
 #define SANLK_DBLOCK_WRITE	-211
 #define SANLK_DBLOCK_LVER	-212
 #define SANLK_DBLOCK_MBAL	-213
+#define SANLK_DBLOCK_CHECKSUM	-214
 
 /* verify_leader, leader_read, leader_write (paxos or delta) */
 

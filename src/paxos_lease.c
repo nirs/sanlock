@@ -34,6 +34,8 @@ struct request_record {
 	uint8_t force_mode;
 };
 
+#define DBLOCK_CHECKSUM_LEN 48 /* ends before checksum field */
+
 struct paxos_dblock {
 	uint64_t mbal;
 	uint64_t bal;
@@ -41,6 +43,7 @@ struct paxos_dblock {
 	uint64_t inp2;	/* host_id generation */
 	uint64_t inp3;	/* host_id's timestamp */
 	uint64_t lver;
+	uint32_t checksum;
 };
 
 static uint32_t roundup_power_of_two(uint32_t val)
@@ -201,6 +204,29 @@ static int read_request(struct task *task,
 }
 #endif
 
+static uint32_t dblock_checksum(struct paxos_dblock *pd)
+{
+	return crc32c((uint32_t)~1, (char *)pd, DBLOCK_CHECKSUM_LEN);
+}
+
+static int verify_dblock(struct token *token, struct paxos_dblock *pd)
+{
+	uint32_t sum;
+
+	if (!pd->checksum && !pd->mbal && !pd->bal && !pd->inp && !pd->lver)
+		return SANLK_OK;
+
+	sum = dblock_checksum(pd);
+
+	if (pd->checksum != sum) {
+		log_errot(token, "verify_dblock wrong checksum %x %x",
+			  pd->checksum, sum);
+		return SANLK_DBLOCK_CHECKSUM;
+	}
+
+	return SANLK_OK;
+}
+
 /*
  * It's possible that we pick a bk_max from another host which has our own
  * inp values in it, and we can end up commiting our own inp values, copied
@@ -301,6 +327,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 	memset(&dblock, 0, sizeof(struct paxos_dblock));
 	dblock.mbal = our_mbal;
 	dblock.lver = next_lver;
+	dblock.checksum = dblock_checksum(&dblock);
 
 	memset(&bk_max, 0, sizeof(struct paxos_dblock));
 
@@ -339,6 +366,10 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 
 		for (q = 0; q < num_hosts; q++) {
 			bk = (struct paxos_dblock *)(iobuf[d] + ((2 + q)*sector_size));
+
+			rv = verify_dblock(token, bk);
+			if (rv < 0)
+				continue;
 
 			if (bk->lver < dblock.lver)
 				continue;
@@ -417,6 +448,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 		dblock.inp3 = time(NULL);
 	}
 	dblock.bal = dblock.mbal;
+	dblock.checksum = dblock_checksum(&dblock);
 
 	if (bk_max.inp) {
 		/* not a problem, but interesting to see, so use log_error */
@@ -479,6 +511,10 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 
 		for (q = 0; q < num_hosts; q++) {
 			bk = (struct paxos_dblock *)(iobuf[d] + ((2 + q)*sector_size));
+
+			rv = verify_dblock(token, bk);
+			if (rv < 0)
+				continue;
 
 			if (bk->lver < dblock.lver)
 				continue;
