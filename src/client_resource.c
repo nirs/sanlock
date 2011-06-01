@@ -48,6 +48,27 @@ int sanlock_register(void)
 	return sock;
 }
 
+int sanlock_restrict(int sock, uint32_t flags)
+{
+	struct sm_header h;
+	int rv;
+
+	rv = send_header(sock, SM_CMD_RESTRICT, flags, 0, 0, -1);
+	if (rv < 0)
+		return rv;
+
+	memset(&h, 0, sizeof(h));
+
+	rv = recv(sock, &h, sizeof(h), MSG_WAITALL);
+	if (rv != sizeof(h)) {
+		rv = -1;
+		goto out;
+	}
+	rv = (int)h.data;
+ out:
+	return rv;
+}
+
 int sanlock_acquire(int sock, int pid, uint32_t flags, int res_count,
 		    struct sanlk_resource *res_args[],
 		    struct sanlk_options *opt_in)

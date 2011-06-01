@@ -21,6 +21,10 @@
 
 int sanlock_register(void);
 
+#define SANLK_RESTRICT_ALL 0x1
+
+int sanlock_restrict(int sock, uint32_t flags);
+
 int sanlock_acquire(int sock, int pid, uint32_t flags, int res_count,
 		    struct sanlk_resource *res_args[],
 		    struct sanlk_options *opt_in);

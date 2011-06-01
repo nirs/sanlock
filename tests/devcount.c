@@ -558,6 +558,13 @@ static int do_relock(int argc, char *argv[])
 			log_debug("%s c %d sanlock_acquire done",
 				  count_path, child_pid);
 
+			rv = sanlock_restrict(sock, SANLK_RESTRICT_ALL);
+			if (rv < 0) {
+				log_error("%s c %d sanlock_restrict error %d",
+					  count_path, child_pid, sock);
+				exit(-1);
+			}
+
 			/* make child's stderr go to parent c2p[0] */
 			close(2);
 			dup(c2p[1]);

@@ -62,6 +62,7 @@ struct client {
 	int suspend;
 	int need_free;
 	int killing;
+	uint32_t cmd_flags;
 	char owner_name[SANLK_NAME_LEN+1];
 	pthread_mutex_t mutex;
 	void *workfn;
@@ -180,6 +181,7 @@ static void _client_free(int ci)
 	cl->suspend = 0;
 	cl->need_free = 0;
 	cl->killing = 0;
+	cl->cmd_flags = 0;
 	memset(cl->owner_name, 0, sizeof(cl->owner_name));
 	cl->workfn = NULL;
 	cl->deadfn = NULL;
@@ -1750,6 +1752,22 @@ static void cmd_log_dump(int fd, struct sm_header *h_recv)
 	write_log_dump(fd);
 }
 
+static void cmd_restrict(int ci, int fd, struct sm_header *h_recv)
+{
+	struct sm_header h;
+
+	log_debug("cmd_restrict ci %d fd %d pid %d flags %x",
+		  ci, fd, client[ci].pid, h_recv->cmd_flags);
+
+	client[ci].cmd_flags = h_recv->cmd_flags;
+
+	memcpy(&h, h_recv, sizeof(struct sm_header));
+	h.length = sizeof(h);
+	h.data = 0;
+	h.data2 = 0;
+	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
+}
+
 static void process_cmd_thread_lockspace(int ci_in, struct sm_header *h_recv)
 {
 	struct cmd_args *ca;
@@ -1936,6 +1954,11 @@ static void process_cmd_daemon(int ci, struct sm_header *h_recv)
 		client[ci].deadfn = client_pid_dead;
 		auto_close = 0;
 		break;
+	case SM_CMD_RESTRICT:
+		strcpy(client[ci].owner_name, "restrict");
+		cmd_restrict(ci, fd, h_recv);
+		auto_close = 0;
+		break;
 	case SM_CMD_SHUTDOWN:
 		strcpy(client[ci].owner_name, "shutdown");
 		external_shutdown = 1;
@@ -1978,11 +2001,17 @@ static void process_connection(int ci)
 			  ci, rv, h.magic, SM_MAGIC);
 		goto dead;
 	}
+	if (client[ci].cmd_flags & SANLK_RESTRICT_ALL) {
+		log_error("ci %d fd %d pid %d cmd %d restrict all",
+			  ci, client[ci].fd, client[ci].pid, h.cmd);
+		goto dead;
+	}
 
 	client[ci].cmd_last = h.cmd;
 
 	switch (h.cmd) {
 	case SM_CMD_REGISTER:
+	case SM_CMD_RESTRICT:
 	case SM_CMD_SHUTDOWN:
 	case SM_CMD_STATUS:
 	case SM_CMD_LOG_DUMP:
