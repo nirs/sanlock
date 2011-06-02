@@ -31,8 +31,11 @@
 #include "client_msg.h"
 #include "task.h"
 
+static unsigned int space_id_counter = 1;
+
 struct list_head spaces;
-struct list_head spaces_remove;
+struct list_head spaces_add;
+struct list_head spaces_rem;
 pthread_mutex_t spaces_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 int print_space_state(struct space *sp, char *str)
@@ -64,19 +67,53 @@ int print_space_state(struct space *sp, char *str)
 	return strlen(str) + 1;
 }
 
-static struct space *_search_space(char *name, struct sync_disk *disk,
-				   uint64_t host_id, struct list_head *head)
+static struct space *_search_space(char *name,
+				   struct sync_disk *disk,
+				   uint64_t host_id,
+				   struct list_head *head1,
+				   struct list_head *head2,
+				   struct list_head *head3)
 {
 	struct space *sp;
 
-	list_for_each_entry(sp, head, list) {
-		if (strncmp(sp->space_name, name, NAME_ID_SIZE))
-			continue;
-		if (disk && strncmp(sp->host_id_disk.path, disk->path, SANLK_PATH_LEN))
-			continue;
-		if (host_id && sp->host_id != host_id)
-			continue;
-		return sp;
+	if (head1) {
+		list_for_each_entry(sp, head1, list) {
+			if (name && strncmp(sp->space_name, name, NAME_ID_SIZE))
+				continue;
+			if (disk && strncmp(sp->host_id_disk.path, disk->path, SANLK_PATH_LEN))
+				continue;
+			if (disk && sp->host_id_disk.offset != disk->offset)
+				continue;
+			if (host_id && sp->host_id != host_id)
+				continue;
+			return sp;
+		}
+	}
+	if (head2) {
+		list_for_each_entry(sp, head2, list) {
+			if (name && strncmp(sp->space_name, name, NAME_ID_SIZE))
+				continue;
+			if (disk && strncmp(sp->host_id_disk.path, disk->path, SANLK_PATH_LEN))
+				continue;
+			if (disk && sp->host_id_disk.offset != disk->offset)
+				continue;
+			if (host_id && sp->host_id != host_id)
+				continue;
+			return sp;
+		}
+	}
+	if (head3) {
+		list_for_each_entry(sp, head3, list) {
+			if (name && strncmp(sp->space_name, name, NAME_ID_SIZE))
+				continue;
+			if (disk && strncmp(sp->host_id_disk.path, disk->path, SANLK_PATH_LEN))
+				continue;
+			if (disk && sp->host_id_disk.offset != disk->offset)
+				continue;
+			if (host_id && sp->host_id != host_id)
+				continue;
+			return sp;
+		}
 	}
 	return NULL;
 }
@@ -154,7 +191,7 @@ int host_id_check(struct task *task, struct space *sp)
 	return 1;
 }
 
-static void *host_id_thread(void *arg_in)
+static void *lockspace_thread(void *arg_in)
 {
 	struct task task;
 	struct space *sp;
@@ -216,16 +253,8 @@ static void *host_id_thread(void *arg_in)
 		sp->lease_status.renewal_last_success = last_success;
 	pthread_mutex_unlock(&sp->mutex);
 
-	if (result < 0) {
-		log_erros(sp, "host_id %llu acquire failed %d",
-			  (unsigned long long)our_host_id, result);
+	if (result < 0)
 		goto out;
-	}
-
-	log_erros(sp, "host_id %llu generation %llu acquire %llu",
-		  (unsigned long long)our_host_id,
-		  (unsigned long long)leader.owner_generation,
-		  (unsigned long long)leader.timestamp);
 
 	sp->host_generation = leader.owner_generation;
 	our_host_id_generation = leader.owner_generation;
@@ -271,13 +300,11 @@ static void *host_id_thread(void *arg_in)
 			sp->lease_status.renewal_last_success = last_success;
 
 			if (delta_length > task.id_renewal_seconds) {
-				log_erros(sp, "host_id %llu renewed %llu delta_length %d too long",
-					  (unsigned long long)our_host_id,
+				log_erros(sp, "renewed %llu delta_length %d too long",
 					  (unsigned long long)last_success,
 					  delta_length);
 			} else if (com.debug_renew) {
-				log_space(sp, "host_id %llu renewed %llu delta_length %d interval %d",
-					  (unsigned long long)our_host_id,
+				log_space(sp, "renewed %llu delta_length %d interval %d",
 					  (unsigned long long)last_success,
 					  delta_length, gap);
 			}
@@ -285,8 +312,8 @@ static void *host_id_thread(void *arg_in)
 			if (!sp->thread_stop)
 				update_watchdog_file(sp, last_success);
 		} else {
-			log_erros(sp, "host_id %llu renewal error %d delta_length %d last_success %llu",
-				  (unsigned long long)our_host_id, result, delta_length,
+			log_erros(sp, "renewal error %d delta_length %d last_success %llu",
+				  result, delta_length,
 				  (unsigned long long)sp->lease_status.renewal_last_success);
 		}
 		stop = sp->thread_stop;
@@ -313,43 +340,81 @@ static void *host_id_thread(void *arg_in)
  * watchdog needs to be active watching our host_id renewals.
  */
 
-int add_space(struct space *sp)
+int add_lockspace(struct sanlk_lockspace *ls)
 {
+	struct space *sp, *sp2;
 	int rv, result;
 
-	if (!sp->space_name[0]) {
-		log_erros(sp, "add_space no name");
-		rv = -EINVAL;
-		goto fail;
+	if (!ls->name[0] || !ls->host_id || !ls->host_id_disk.path[0]) {
+		log_error("add_lockspace bad args id %llu name %zu path %zu",
+			  (unsigned long long)ls->host_id,
+			  strlen(ls->name), strlen(ls->host_id_disk.path));
+		return -EINVAL;
 	}
 
-	if (!sp->host_id) {
-		log_erros(sp, "add_space zero host_id");
-		rv = -EINVAL;
-		goto fail;
-	}
+	sp = malloc(sizeof(struct space));
+	if (!sp)
+		return -ENOMEM;
+	memset(sp, 0, sizeof(struct space));
 
-	if (space_exists(sp->space_name, &sp->host_id_disk, sp->host_id)) {
-		log_erros(sp, "add_space exists");
+	memcpy(sp->space_name, ls->name, NAME_ID_SIZE);
+	memcpy(&sp->host_id_disk, &ls->host_id_disk, sizeof(struct sanlk_disk));
+	sp->host_id_disk.sector_size = 0;
+	sp->host_id_disk.fd = -1;
+	sp->host_id = ls->host_id;
+	pthread_mutex_init(&sp->mutex, NULL);
+
+	pthread_mutex_lock(&spaces_mutex);
+
+	/* search all lists for an identical lockspace */
+
+	sp2 = _search_space(sp->space_name, &sp->host_id_disk, sp->host_id,
+			    &spaces, &spaces_add, NULL);
+	if (sp2) {
+		pthread_mutex_unlock(&spaces_mutex);
 		rv = -EEXIST;
-		goto fail;
+		goto fail_free;
 	}
 
-	if (space_exists(sp->space_name, NULL, 0)) {
-		log_erros(sp, "add_space name exists with other host info");
+	sp2 = _search_space(sp->space_name, &sp->host_id_disk, sp->host_id,
+			    &spaces_rem, NULL, NULL);
+	if (sp2) {
+		pthread_mutex_unlock(&spaces_mutex);
+		rv = -EAGAIN;
+		goto fail_free;
+	}
+
+	/* search all lists for a lockspace with the same name */
+
+	sp2 = _search_space(sp->space_name, NULL, 0,
+			    &spaces, &spaces_add, &spaces_rem);
+	if (sp2) {
+		pthread_mutex_unlock(&spaces_mutex);
 		rv = -EINVAL;
-		goto fail;
+		goto fail_free;
 	}
 
-	log_space(sp, "add_space host_id %llu path %s offset %llu",
-		  (unsigned long long)sp->host_id,
-		  sp->host_id_disk.path,
-		  (unsigned long long)sp->host_id_disk.offset);
+	/* search all lists for a lockspace with the same host_id_disk */
 
-	rv = pthread_create(&sp->thread, NULL, host_id_thread, sp);
+	sp2 = _search_space(NULL, &sp->host_id_disk, 0,
+			    &spaces, &spaces_add, &spaces_rem);
+	if (sp2) {
+		pthread_mutex_unlock(&spaces_mutex);
+		rv = -EINVAL;
+		goto fail_free;
+	}
+
+	sp->space_id = space_id_counter++;
+	list_add(&sp->list, &spaces_add);
+	pthread_mutex_unlock(&spaces_mutex);
+
+	rv = pthread_create(&sp->thread, NULL, lockspace_thread, sp);
 	if (rv < 0) {
-		log_erros(sp, "add_space create thread failed");
-		goto fail;
+		log_erros(sp, "add_lockspace create thread failed");
+		pthread_mutex_lock(&spaces_mutex);
+		list_del(&sp->list);
+		pthread_mutex_unlock(&spaces_mutex);
+		goto fail_free;
 	}
 
 	while (1) {
@@ -365,41 +430,74 @@ int add_space(struct space *sp)
 		/* the thread exits right away if acquire fails */
 		pthread_join(sp->thread, NULL);
 		rv = result;
-		goto fail;
+		goto fail_free;
 	}
 
+	/* once we move sp to spaces list, tokens can begin using it,
+	   and the main loop will begin monitoring its renewals */
+
 	pthread_mutex_lock(&spaces_mutex);
-	/* TODO: repeating check here unnecessary if we serialize adds and removes */
-	if (_search_space(sp->space_name, NULL, 0, &spaces) ||
-	    _search_space(sp->space_name, NULL, 0, &spaces_remove)) {
-		pthread_mutex_unlock(&spaces_mutex);
-		log_erros(sp, "add_space duplicate name");
-		goto fail_stop;
-	} else {
-		list_add(&sp->list, &spaces);
-	}
+	list_move(&sp->list, &spaces);
 	pthread_mutex_unlock(&spaces_mutex);
 	return 0;
 
- fail_stop:
-	sp->thread_stop = 1;
-	pthread_join(sp->thread, NULL);
- fail:
+ fail_free:
+	free(sp);
 	return rv;
 }
 
-int rem_space(char *name, struct sync_disk *disk, uint64_t host_id)
+int rem_lockspace(struct sanlk_lockspace *ls)
 {
-	struct space *sp;
-	int rv = -ENOENT;
+	struct space *sp, *sp2;
+	unsigned int id;
+	int rv, done;
 
 	pthread_mutex_lock(&spaces_mutex);
-	sp = _search_space(name, disk, host_id, &spaces);
+
+	sp = _search_space(ls->name, (struct sync_disk *)&ls->host_id_disk, ls->host_id,
+			   &spaces_rem, NULL, NULL);
 	if (sp) {
-		sp->external_remove = 1;
-		rv = 0;
+		pthread_mutex_unlock(&spaces_mutex);
+		rv = -EINPROGRESS;
+		goto out;
 	}
+
+	sp = _search_space(ls->name, (struct sync_disk *)&ls->host_id_disk, ls->host_id,
+			   &spaces_add, NULL, NULL);
+	if (sp) {
+		pthread_mutex_unlock(&spaces_mutex);
+		rv = -EAGAIN;
+		goto out;
+	}
+
+	sp = _search_space(ls->name, (struct sync_disk *)&ls->host_id_disk, ls->host_id,
+			   &spaces, NULL, NULL);
+	if (!sp) {
+		pthread_mutex_unlock(&spaces_mutex);
+		rv = -ENOENT;
+		goto out;
+	}
+
+	sp->external_remove = 1;
+	id = sp->space_id;
 	pthread_mutex_unlock(&spaces_mutex);
+
+	while (1) {
+		pthread_mutex_lock(&spaces_mutex);
+		sp2 = _search_space(ls->name, (struct sync_disk *)&ls->host_id_disk, ls->host_id,
+			   	    &spaces, &spaces_rem, NULL);
+		if (sp2 && sp2->space_id == id)
+			done = 0;
+		else
+			done = 1;
+		pthread_mutex_unlock(&spaces_mutex);
+
+		if (done)
+			break;
+		sleep(1);
+	}
+	rv = 0;
+ out:
 	return rv;
 }
 
@@ -412,16 +510,18 @@ int rem_space(char *name, struct sync_disk *disk, uint64_t host_id)
  * "logical" point commented above in host_id_thread.
  */
 
-static int finish_space(struct space *sp, int wait)
+static int stop_lockspace_thread(struct space *sp, int wait)
 {
 	int stop, rv;
 
 	pthread_mutex_lock(&sp->mutex);
 	stop = sp->thread_stop;
+	sp->thread_stop = 1;
 	pthread_mutex_unlock(&sp->mutex);
 
 	if (!stop) {
-		log_erros(sp, "finish_space zero thread_stop");
+		/* should never happen */
+		log_erros(sp, "stop_lockspace_thread zero thread_stop");
 		return -EINVAL;
 	}
 
@@ -433,16 +533,16 @@ static int finish_space(struct space *sp, int wait)
 	return rv;
 }
 
-void clear_spaces(int wait)
+void free_lockspaces(int wait)
 {
 	struct space *sp, *safe;
 	int rv;
 
 	pthread_mutex_lock(&spaces_mutex);
-	list_for_each_entry_safe(sp, safe, &spaces_remove, list) {
-		rv = finish_space(sp, wait);
+	list_for_each_entry_safe(sp, safe, &spaces_rem, list) {
+		rv = stop_lockspace_thread(sp, wait);
 		if (!rv) {
-			log_space(sp, "free sp");
+			log_space(sp, "free lockspace");
 			list_del(&sp->list);
 			free(sp);
 		}
@@ -450,23 +550,10 @@ void clear_spaces(int wait)
 	pthread_mutex_unlock(&spaces_mutex);
 }
 
-int space_exists(char *name, struct sync_disk *disk, uint64_t host_id)
-{
-	struct space *sp;
-
-	pthread_mutex_lock(&spaces_mutex);
-	sp = _search_space(name, disk, host_id, &spaces);
-	if (!sp)
-		sp = _search_space(name, disk, host_id, &spaces_remove);
-	pthread_mutex_unlock(&spaces_mutex);
-	if (sp)
-		return 1;
-	return 0;
-}
-
 void setup_spaces(void)
 {
 	INIT_LIST_HEAD(&spaces);
-	INIT_LIST_HEAD(&spaces_remove);
+	INIT_LIST_HEAD(&spaces_add);
+	INIT_LIST_HEAD(&spaces_rem);
 }
 

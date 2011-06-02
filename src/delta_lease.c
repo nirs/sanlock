@@ -233,7 +233,8 @@ int delta_lease_acquire(struct task *task,
 	while (1) {
 		memcpy(&leader1, &leader, sizeof(struct leader_record));
 
-		log_space(sp, "delta_acquire delta_large_delay %d", delay);
+		log_space(sp, "delta_acquire delta_large_delay %d delay %d",
+			  delta_large_delay, delay);
 		sleep(delay);
 
 		error = delta_lease_leader_read(task, disk, space_name, host_id,

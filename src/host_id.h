@@ -14,10 +14,9 @@ int _get_space_info(char *space_name, struct space *sp_out);
 int get_space_info(char *space_name, struct space *sp_out);
 int host_id_disk_info(char *name, struct sync_disk *disk);
 int host_id_check(struct task *task, struct space *sp);
-int add_space(struct space *sp);
-int rem_space(char *name, struct sync_disk *disk, uint64_t host_id);
-void clear_spaces(int wait);
-int space_exists(char *name, struct sync_disk *disk, uint64_t host_id);
+int add_lockspace(struct sanlk_lockspace *ls);
+int rem_lockspace(struct sanlk_lockspace *ls);
+void free_lockspaces(int wait);
 void setup_spaces(void);
 
 #endif

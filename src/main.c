@@ -80,8 +80,7 @@ static char command[COMMAND_MAX];
 static int cmd_argc;
 static char **cmd_argv;
 static int external_shutdown;
-static int token_id_counter = 1;
-static int space_id_counter = 1;
+static unsigned int token_id_counter = 1;
 
 struct cmd_args {
 	struct list_head list; /* thread_pool data */
@@ -106,7 +105,7 @@ struct thread_pool {
 static struct thread_pool pool;
 
 extern struct list_head spaces;
-extern struct list_head spaces_remove;
+extern struct list_head spaces_rem;
 extern pthread_mutex_t spaces_mutex;
 
 /* FIXME: add a mutex for client array so we don't try to expand it
@@ -587,7 +586,7 @@ static int main_loop(void)
 					sp->thread_stop = 1;
 					unlink_watchdog_file(sp);
 					pthread_mutex_unlock(&sp->mutex);
-					list_move(&sp->list, &spaces_remove);
+					list_move(&sp->list, &spaces_rem);
 				} else {
 					kill_pids(sp);
 				}
@@ -616,7 +615,7 @@ static int main_loop(void)
 		if (empty && external_shutdown)
 			break;
 
-		clear_spaces(0);
+		free_lockspaces(0);
 
 		gettimeofday(&now, NULL);
 		ms = time_diff(&last_check, &now);
@@ -626,7 +625,7 @@ static int main_loop(void)
 			poll_timeout = 1;
 	}
 
-	clear_spaces(1);
+	free_lockspaces(1);
 
 	return 0;
 }
@@ -794,7 +793,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 			goto done;
 		}
 
-		if (res.num_disks > MAX_DISKS) {
+		if (!res.num_disks || res.num_disks > MAX_DISKS) {
 			result = -ERANGE;
 			goto done;
 		}
@@ -851,8 +850,11 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 		 * of full length space_name+resource_name in each log message
 		 * would make excessively long lines. */
 
-		log_token(token, "lockspace %.48s resource %.48s has token_id %u for pid %u",
-			  token->r.lockspace_name, token->r.name, token->token_id, cl_pid);
+		log_token(token, "cmd_acquire %d,%d,%d %.48s:%.48s:%s:%llu",
+			  cl_ci, cl_fd, cl_pid,
+			  token->r.lockspace_name, token->r.name,
+			  token->disks[0].path,
+			  (unsigned long long)token->disks[0].offset);
 	}
 
 	rv = recv(fd, &opt, sizeof(struct sanlk_options), MSG_WAITALL);
@@ -1309,19 +1311,10 @@ static void cmd_inquire(struct task *task, struct cmd_args *ca)
 static void cmd_add_lockspace(struct cmd_args *ca)
 {
 	struct sm_header h;
-	struct space *sp;
 	struct sanlk_lockspace lockspace;
 	int fd, rv, result;
 
 	fd = client[ca->ci_in].fd;
-
-	log_debug("cmd_add_lockspace %d,%d", ca->ci_in, fd);
-
-	sp = malloc(sizeof(struct space));
-	if (!sp) {
-		result = -ENOMEM;
-		goto reply;
-	}
 
 	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_lockspace)) {
@@ -1331,32 +1324,13 @@ static void cmd_add_lockspace(struct cmd_args *ca)
 		goto reply;
 	}
 
-	memset(sp, 0, sizeof(struct space));
-	memcpy(sp->space_name, lockspace.name, NAME_ID_SIZE);
-	sp->host_id = lockspace.host_id;
-	memcpy(&sp->host_id_disk, &lockspace.host_id_disk,
-	       sizeof(struct sanlk_disk));
-	sp->host_id_disk.fd = -1;
-	pthread_mutex_init(&sp->mutex, NULL);
+	log_debug("cmd_add_lockspace %d,%d %.48s:%llu:%s:%llu",
+		  ca->ci_in, fd, lockspace.name,
+		  (unsigned long long)lockspace.host_id,
+		  lockspace.host_id_disk.path,
+		  (unsigned long long)lockspace.host_id_disk.offset);
 
-	pthread_mutex_lock(&spaces_mutex);
-	sp->space_id = space_id_counter++;
-	pthread_mutex_unlock(&spaces_mutex);
-
-	/* We use the space_id in log messages because the full length
-	 * space_name in each log message woul dmake excessively long lines. */
-
-	log_space(sp, "lockspace %.48s host_id %llu has space_id %u",
-		  sp->space_name, (unsigned long long)sp->host_id,
-		  sp->space_id);
-
-	/* add_space returns once the host_id has been acquired and
-	   sp space has been added to the spaces list */
-
-	result = add_space(sp);
-
-	if (result)
-		free(sp);
+	result = add_lockspace(&lockspace);
  reply:
 	log_debug("cmd_add_lockspace %d,%d done %d", ca->ci_in, fd, result);
 
@@ -1377,8 +1351,6 @@ static void cmd_rem_lockspace(struct cmd_args *ca)
 
 	fd = client[ca->ci_in].fd;
 
-	log_debug("cmd_rem_lockspace %d,%d", ca->ci_in, fd);
-
 	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_lockspace)) {
 		log_error("cmd_rem_lockspace %d,%d recv %d %d",
@@ -1387,29 +1359,10 @@ static void cmd_rem_lockspace(struct cmd_args *ca)
 		goto reply;
 	}
 
-	/* rem_space flags the sp as wanting to be removed, so follow with a
-	   wait loop until it's actually gone */
+	log_debug("cmd_rem_lockspace %d,%d %.48s",
+		  ca->ci_in, fd, lockspace.name);
 
-	/* TODO: we should probably prevent add_lockspace during an
-	   outstanding rem_lockspace and v.v.  This would prevent problems
-	   with the space_exists name check below when the same lockspace
-	   name was removed and added at once */
-
-	result = rem_space(lockspace.name,
-			   (struct sync_disk *)&lockspace.host_id_disk,
-			   lockspace.host_id);
-
-	if (result < 0)
-		goto reply;
-
-	while (1) {
-		if (!space_exists(lockspace.name,
-				  (struct sync_disk *)&lockspace.host_id_disk,
-				  lockspace.host_id))
-			break;
-		sleep(1);
-	}
-
+	result = rem_lockspace(&lockspace);
  reply:
 	log_debug("cmd_rem_lockspace %d,%d done %d", ca->ci_in, fd, result);
 
