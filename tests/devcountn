@@ -10,6 +10,7 @@ if [ $# -le 3 ]; then
 	echo "devcountn N relock  LOCKDEV_BASE rw COUNTDEV_BASE SEC1 SEC2 HOSTID"
 	echo "devcountn N wrap    LOCKDEV_BASE rw COUNTDEV_BASE SEC1 SEC2 HOSTID"
 	echo "devcountn N migrate LOCKDEV_BASE rw COUNTDEV_BASE SEC1 SEC2 HOSTID MAXID"
+	echo "devcountn N expire  LOCKDEV_BASE rw COUNTDEV_BASE SEC1 SEC2 HOSTID"
 	echo ""
 	echo "devcount <cmd> LOCKDEV1 rw COUNTDEV1 ..."
 	echo "devcount <cmd> LOCKDEV2 rw COUNTDEV2 ..."

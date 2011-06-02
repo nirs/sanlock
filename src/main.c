@@ -415,9 +415,14 @@ static int client_using_space(struct client *cl, struct space *sp)
 			continue;
 		if (strncmp(token->r.lockspace_name, sp->space_name, NAME_ID_SIZE))
 			continue;
-		rv = 1;
+
 		log_spoke(sp, token, "client_using_space pid %d", cl->pid);
-		break;
+		token->space_dead = sp->space_dead;
+		rv = 1;
+
+		/* we could break here after finding one if we didn't care
+		 * about setting token->space_dead which isn't really
+		 * necessary; it just avoids trying to release the token */
 	}
 	return rv;
 }
@@ -536,7 +541,7 @@ static int main_loop(void)
 	struct timeval now, last_check;
 	int poll_timeout, check_interval;
 	unsigned int ms;
-	int i, rv, empty;
+	int i, rv, empty, space_dead;
 
 	gettimeofday(&last_check, NULL);
 	poll_timeout = STANDARD_CHECK_INTERVAL;
@@ -588,9 +593,15 @@ static int main_loop(void)
 				}
 				check_interval = RECOVERY_CHECK_INTERVAL;
 			} else {
-				if (external_shutdown || sp->external_remove ||
-				    !host_id_check(&main_task, sp)) {
-					log_space(sp, "set killing_pids");
+				space_dead = !host_id_check(&main_task, sp);
+
+				if (space_dead || external_shutdown ||
+				    sp->external_remove) {
+					log_space(sp, "set killing_pids dead %d "
+						  "shutdown %d remove %d",
+						  space_dead, external_shutdown,
+						  sp->external_remove);
+					sp->space_dead = space_dead;
 					sp->killing_pids = 1;
 					kill_pids(sp);
 					check_interval = RECOVERY_CHECK_INTERVAL;

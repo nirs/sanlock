@@ -42,6 +42,7 @@ int print_space_state(struct space *sp, char *str)
 	snprintf(str, SANLK_STATE_MAXSTR-1,
 		 "space_id=%u "
 		 "host_generation=%llu "
+		 "space_dead=%d "
 		 "killing_pids=%d "
 		 "acquire_last_result=%d "
 		 "renewal_last_result=%d "
@@ -51,6 +52,7 @@ int print_space_state(struct space *sp, char *str)
 		 "renewal_last_success=%llu",
 		 sp->space_id,
 		 (unsigned long long)sp->host_generation,
+		 sp->space_dead,
 		 sp->killing_pids,
 		 sp->lease_status.acquire_last_result,
 		 sp->lease_status.renewal_last_result,
@@ -59,7 +61,7 @@ int print_space_state(struct space *sp, char *str)
 		 (unsigned long long)sp->lease_status.renewal_last_attempt,
 		 (unsigned long long)sp->lease_status.renewal_last_success);
 
-	return strlen(str);
+	return strlen(str) + 1;
 }
 
 static struct space *_search_space(char *name, struct sync_disk *disk,
@@ -423,8 +425,6 @@ static int finish_space(struct space *sp, int wait)
 		return -EINVAL;
 	}
 
-	log_space(sp, "finish_space");
-
 	if (wait)
 		rv = pthread_join(sp->thread, NULL);
 	else
@@ -442,6 +442,7 @@ void clear_spaces(int wait)
 	list_for_each_entry_safe(sp, safe, &spaces_remove, list) {
 		rv = finish_space(sp, wait);
 		if (!rv) {
+			log_space(sp, "free sp");
 			list_del(&sp->list);
 			free(sp);
 		}

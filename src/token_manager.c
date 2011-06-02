@@ -210,9 +210,7 @@ static void *async_release_thread(void *arg GNUC_UNUSED)
 		pthread_mutex_unlock(&resource_mutex);
 
 		token = r->token;
-
-		if (token->acquire_result == 1)
-			release_token(&task, token);
+		release_token(&task, token);
 
 		/* we don't want to remove r from dispose_list until after the
 		   lease is released because we don't want a new token for
@@ -237,8 +235,13 @@ void release_token_async(struct token *token)
 	r = find_resource(token, &resources);
 	if (r) {
 		/* assert r->token == token ? */
-		list_move(&r->list, &dispose_resources);
-		pthread_cond_signal(&resource_cond);
+		if (token->space_dead || (token->acquire_result != SANLK_OK)) {
+			_del_resource(r);
+			free(token);
+		} else {
+			list_move(&r->list, &dispose_resources);
+			pthread_cond_signal(&resource_cond);
+		}
 	}
 	pthread_mutex_unlock(&resource_mutex);
 }
