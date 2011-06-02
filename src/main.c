@@ -2161,21 +2161,21 @@ static int do_daemon(void)
 	if (rv < 0)
 		return rv;
 
-	setup_logging();
-
-	setup_priority();
-
 	fd = lockfile(SANLK_RUN_DIR, SANLK_LOCKFILE_NAME);
 	if (fd < 0)
-		goto out;
+		return fd;
+
+	setup_logging();
 
 	log_error("sanlock daemon started aio %d %d renew %d %d",
 		  main_task.use_aio, main_task.io_timeout_seconds,
 		  main_task.id_renewal_seconds, main_task.id_renewal_fail_seconds);
 
+	setup_priority();
+
 	rv = thread_pool_create(DEFAULT_MIN_WORKER_THREADS, com.max_worker_threads);
 	if (rv < 0)
-		goto out_lockfile;
+		goto out_logging;
 
 	rv = setup_watchdog();
 	if (rv < 0)
@@ -2199,10 +2199,9 @@ static int do_daemon(void)
 
  out_threads:
 	thread_pool_free();
- out_lockfile:
-	unlink_lockfile(fd, SANLK_RUN_DIR, SANLK_LOCKFILE_NAME);
- out:
+ out_logging:
 	close_logging();
+	unlink_lockfile(fd, SANLK_RUN_DIR, SANLK_LOCKFILE_NAME);
 	return rv;
 }
 

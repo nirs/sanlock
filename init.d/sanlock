@@ -33,7 +33,7 @@ start() {
 	daemon $prog daemon $SANLOCKOPTS
 	retval=$?
 	echo
-	[ $retval -eq 0 ] && touch $lockfile
+	[ $retval -eq 0 ]
 	return $retval
 }
 
@@ -42,11 +42,18 @@ stop() {
 	killproc -p $lockfile $prog -TERM
 	retval=$?
 	echo
-	[ $retval -eq 0 ] && rm -f $lockfile
+	[ $retval -eq 0 ]
+}
+
+wait_for_stop() {
+	while [ -e $lockfile ]; do
+		sleep .5
+	done
 }
 
 restart() {
 	stop
+	wait_for_stop
 	start
 }
 
