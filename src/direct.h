@@ -37,6 +37,8 @@ int direct_live_id(struct task *task,
                    uint64_t *owner_generation,
                    int *live);
 
+int direct_align(struct sync_disk *disk);
+
 int direct_init(struct task *task,
                 struct sanlk_lockspace *ls,
                 struct sanlk_resource *res,

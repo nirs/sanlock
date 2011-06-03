@@ -1358,7 +1358,7 @@ int do_init(int argc, char *argv[])
 	struct sanlk_resource *res;
 	struct sanlk_lockspace ls;
 	char command[4096];
-	int rv, ss;
+	int rv, ss, align_size;
 
 	if (argc < 4)
 		return -1;
@@ -1401,6 +1401,13 @@ int do_init(int argc, char *argv[])
 	if (ss < 0) {
 		printf("sanlock_direct_sector_size %s error %d\n",
 			disk.path, ss);
+		return -1;
+	}
+
+	align_size = sanlock_direct_align(&disk);
+	if (align_size != LEASE_SIZE) {
+		printf("sanlock_direct align %s error %d\n",
+			disk.path, align_size);
 		return -1;
 	}
 

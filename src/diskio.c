@@ -28,6 +28,7 @@
 
 #include "sanlock_internal.h"
 #include "diskio.h"
+#include "direct.h"
 #include "log.h"
 
 static int set_disk_properties(struct sync_disk *disk)
@@ -117,12 +118,14 @@ int open_disks_fd(struct sync_disk *disks, int num_disks)
 
 /* 
  * set fd and sector_size
+ * verify offset is correctly aligned
  * returns 0 for success or -EXXX
  */
 
 int open_disk(struct sync_disk *disk)
 {
 	struct stat st;
+	int align_size;
 	int fd, rv;
 
 	fd = open(disk->path, O_RDWR | O_DIRECT | O_SYNC, 0);
@@ -149,6 +152,17 @@ int open_disk(struct sync_disk *disk)
 		}
 	}
 
+	align_size = direct_align(disk);
+
+	if (disk->offset % align_size) {
+		rv = -EBADSLT;
+		log_error("invalid offset %llu align size %u %s",
+			  (unsigned long long)disk->offset,
+			  align_size, disk->path);
+		close(fd);
+		goto fail;
+	}
+
 	disk->fd = fd;
 	return 0;
 
@@ -161,7 +175,6 @@ int open_disk(struct sync_disk *disk)
 /*
  * set fd and sector_size in each disk
  * verify all sector_size's match
- * verify sector_size is ok for previously set offset
  * returns number of opened disks
  */
 
@@ -190,13 +203,6 @@ int open_disks(struct sync_disk *disks, int num_disks)
 		} else if (ss != disk->sector_size) {
 			log_error("inconsistent sector sizes %u %u %s",
 				  ss, disk->sector_size, disk->path);
-			goto fail;
-		}
-
-		if (disk->offset % disk->sector_size) {
-			log_error("invalid offset %llu sector size %u %s",
-				  (unsigned long long)disk->offset,
-				  disk->sector_size, disk->path);
 			goto fail;
 		}
 

@@ -1919,7 +1919,6 @@ static void process_cmd_daemon(int ci, struct sm_header *h_recv)
 		auto_close = 0;
 		break;
 	case SM_CMD_RESTRICT:
-		strcpy(client[ci].owner_name, "restrict");
 		cmd_restrict(ci, fd, h_recv);
 		auto_close = 0;
 		break;
@@ -2439,6 +2438,9 @@ static void print_usage(void)
 	printf("  <offset>		offset on disk in bytes\n");
 	printf("  <lver>                optional disk leader version of resource for acquire\n");
 	printf("\n");
+	printf("<offset> must be 1MB aligned for disks with 512 byte sectors\n");
+	printf("         and 8MB aligned for disks with 4096 byte sectors\n");
+	printf("\n");
 }
 
 static int read_command_line(int argc, char *argv[])
@@ -2842,7 +2844,6 @@ static int do_direct(void)
 
 	case ACT_DUMP:
 		rv = direct_dump(&main_task, com.dump_path);
-		log_tool("dump done %d", rv);
 		break;
 
 	case ACT_READ_LEADER:

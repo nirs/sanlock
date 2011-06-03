@@ -24,6 +24,7 @@
 
 #include "sanlock_internal.h"
 #include "diskio.h"
+#include "direct.h"
 #include "log.h"
 #include "paxos_lease.h"
 #include "delta_lease.h"
@@ -421,9 +422,15 @@ int delta_lease_init(struct task *task,
 	struct leader_record *leader;
 	char *iobuf, **p_iobuf;
 	int iobuf_len;
+	int align_size;
 	int i, rv;
 
-	iobuf_len = disk->sector_size * max_hosts;
+	align_size = direct_align(disk);
+
+	if (disk->sector_size * max_hosts > align_size)
+		return -E2BIG;
+
+	iobuf_len = align_size;
 
 	p_iobuf = &iobuf;
 

@@ -122,3 +122,23 @@ int sanlock_direct_sector_size(struct sanlk_disk *disk_in)
 	return disk.sector_size;
 }
 
+int sanlock_direct_align(struct sanlk_disk *disk_in)
+{
+	struct sync_disk disk;
+	int align_size, rv;
+
+	memset(&disk, 0, sizeof(disk));
+
+	memcpy(disk.path, disk_in->path, SANLK_PATH_LEN);
+
+	rv = open_disk(&disk);
+	if (rv < 0)
+		return rv;
+
+	align_size = direct_align(&disk);
+
+	close(disk.fd);
+
+	return align_size;
+}
+

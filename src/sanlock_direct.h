@@ -44,4 +44,11 @@ int sanlock_direct_init(struct sanlk_lockspace *ls,
 
 int sanlock_direct_sector_size(struct sanlk_disk *disk);
 
+/*
+ * Returns the alignment in bytes required by sanlock_direct_init()
+ * (1MB for disks with 512 sectors, 8MB for disks with 4096 sectors)
+ */
+
+int sanlock_direct_align(struct sanlk_disk *disk);
+
 #endif

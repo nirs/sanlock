@@ -356,6 +356,16 @@ int direct_live_id(struct task *task,
 	return 0;
 }
 
+int direct_align(struct sync_disk *disk)
+{
+	if (disk->sector_size == 512)
+		return 1024 * 1024;
+	else if (disk->sector_size == 4096)
+		return 8 * 1024 * 1024;
+	else
+		return -EINVAL;
+}
+
 /*
  * sanlock direct init -n <num_hosts> [-s LOCKSPACE] [-r RESOURCE]
  *
@@ -418,7 +428,8 @@ int direct_dump(struct task *task, char *dump_path)
 	char sname[NAME_ID_SIZE+1];
 	char rname[NAME_ID_SIZE+1];
 	uint64_t sector_nr;
-	int rv;
+	int sector_count, datalen, align_size;
+	int i, rv;
 
 	memset(&sd, 0, sizeof(struct sync_disk));
 
@@ -436,14 +447,19 @@ int direct_dump(struct task *task, char *dump_path)
 	if (rv < 0)
 		return -ENODEV;
 
-	data = malloc(sd.sector_size);
+	rv = direct_align(&sd);
+	if (rv < 0)
+		goto out_close;
+
+	align_size = rv;
+	datalen = align_size;
+	sector_count = align_size / sd.sector_size;
+
+	data = malloc(datalen);
 	if (!data) {
 		rv = -ENOMEM;
 		goto out_close;
 	}
-	lr = (struct leader_record *)data;
-
-	sector_nr = 0;
 
 	printf("%8s %36s %36s %10s %4s %4s %s\n",
 	       "offset",
@@ -454,26 +470,39 @@ int direct_dump(struct task *task, char *dump_path)
 	       "gen",
 	       "lver");
 
+	sector_nr = 0;
+
 	while (1) {
 		memset(sname, 0, sizeof(rname));
 		memset(rname, 0, sizeof(rname));
 		memset(data, 0, sd.sector_size);
 
-		rv = read_sectors(&sd, sector_nr, 1, data, sd.sector_size,
+		rv = read_sectors(&sd, sector_nr, sector_count, data, datalen,
 				  task, "dump");
 
+		lr = (struct leader_record *)data;
+
 		if (lr->magic == DELTA_DISK_MAGIC) {
-			strncpy(sname, lr->space_name, NAME_ID_SIZE);
-			strncpy(rname, lr->resource_name, NAME_ID_SIZE);
+			for (i = 0; i < sector_count; i++) {
+				lr = (struct leader_record *)(data + (i * sd.sector_size));
 
-			printf("%08llu %36s %36s %010llu %04llu %04llu\n",
-			       (unsigned long long)(sector_nr * sd.sector_size),
-			       sname, rname,
-			       (unsigned long long)lr->timestamp,
-			       (unsigned long long)lr->owner_id,
-			       (unsigned long long)lr->owner_generation);
+				if (!lr->magic)
+					continue;
 
-			sector_nr += 1;
+				/* has never been acquired, don't print */
+				if (!lr->owner_id && !lr->owner_generation)
+					continue;
+
+				strncpy(sname, lr->space_name, NAME_ID_SIZE);
+				strncpy(rname, lr->resource_name, NAME_ID_SIZE);
+
+				printf("%08llu %36s %36s %010llu %04llu %04llu\n",
+					(unsigned long long)((sector_nr + i) * sd.sector_size),
+					sname, rname,
+					(unsigned long long)lr->timestamp,
+					(unsigned long long)lr->owner_id,
+					(unsigned long long)lr->owner_generation);
+			}
 		} else if (lr->magic == PAXOS_DISK_MAGIC) {
 			strncpy(sname, lr->space_name, NAME_ID_SIZE);
 			strncpy(rname, lr->resource_name, NAME_ID_SIZE);
@@ -485,14 +514,11 @@ int direct_dump(struct task *task, char *dump_path)
 			       (unsigned long long)lr->owner_id,
 			       (unsigned long long)lr->owner_generation,
 			       (unsigned long long)lr->lver);
-
-			sector_nr += lr->max_hosts + 2;
 		} else {
-			printf("%08llu %36s\n",
-			       (unsigned long long)(sector_nr * sd.sector_size),
-			       "uninitialized");
 			break;
 		}
+
+		sector_nr += sector_count;
 	}
 
 	rv = 0;

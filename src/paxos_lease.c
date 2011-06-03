@@ -23,6 +23,7 @@
 
 #include "sanlock_internal.h"
 #include "diskio.h"
+#include "direct.h"
 #include "log.h"
 #include "crc32c.h"
 #include "host_id.h"
@@ -1466,10 +1467,16 @@ int paxos_lease_init(struct task *task,
 	char *iobuf, **p_iobuf;
 	struct leader_record *leader;
 	int iobuf_len;
+	int align_size;
 	int aio_timeout = 0;
 	int rv, d;
 
-	iobuf_len = token->disks[0].sector_size * (2 + max_hosts);
+	align_size = direct_align(&token->disks[0]);
+
+	if (token->disks[0].sector_size * (2 + max_hosts) > align_size)
+		return -E2BIG;
+
+	iobuf_len = align_size;
 
 	p_iobuf = &iobuf;
 
