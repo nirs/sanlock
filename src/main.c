@@ -2311,7 +2311,7 @@ static void parse_arg_timeout(char *optstr)
 }
 #endif
 
-#define RELEASE_VERSION "1.2"
+#define RELEASE_VERSION "1.3"
 
 /* 
  * daemon: acquires leases for the local host_id, associates them with a local
