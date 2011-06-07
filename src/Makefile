@@ -62,12 +62,13 @@ CFLAGS += -D_GNU_SOURCE -g \
 	-fdiagnostics-show-option
 
 CMD_LDFLAGS = -lpthread -lrt -laio -lblkid -lsanlock -lwdmd
+LIB_LDFLAGS = -lpthread -lrt -laio -lblkid -lwdmd
 
 
 all: $(SHLIB_TARGET) $(CMD_TARGET)
 
 $(SHLIB_TARGET): $(LIB_SOURCE)
-	$(CC) $(CFLAGS) -shared -fPIC -o $@ -Wl,-soname=$(LIB_TARGET).so.$(SOMAJOR) $^
+	$(CC) $(CFLAGS) $(LIB_LDFLAGS) -shared -fPIC -o $@ -Wl,-soname=$(LIB_TARGET).so.$(SOMAJOR) $^
 	ln -sf $(SHLIB_TARGET) $(LIB_TARGET).so
 	ln -sf $(SHLIB_TARGET) $(LIB_TARGET).so.$(SOMAJOR)
 
