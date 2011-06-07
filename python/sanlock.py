@@ -8,7 +8,8 @@ import sys
 import sanlockmod
 
 SANLOCK_FUNCTIONS = (
-    'register', 'add_lockspace', 'rem_lockspace', 'acquire', 'release'
+    'register', 'add_lockspace', 'rem_lockspace', 'acquire', 'release',
+    'get_alignment'
 )
 
 SanlockException = sanlockmod.exception

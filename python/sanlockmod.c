@@ -287,6 +287,34 @@ exit_fail:
     return NULL;
 }
 
+static PyObject *
+py_get_alignment(PyObject *self, PyObject *args)
+{
+    int rv;
+    char *path;
+    struct sanlk_disk disk;
+
+    /* parse python tuple */
+    if (!PyArg_ParseTuple(args, "s", &path)) {
+        return NULL;
+    }
+
+    memset(&disk, 0, sizeof(struct sanlk_disk));
+    strncpy(disk.path, path, SANLK_PATH_LEN - 1);
+
+    /* get device alignment (gil disabled) */
+    Py_BEGIN_ALLOW_THREADS
+    rv = sanlock_direct_align(&disk);
+    Py_END_ALLOW_THREADS
+
+    if (rv < 0) {
+        __set_exception(SKERRNO(rv), "Unable to get device alignment");
+        return NULL;
+    }
+
+    return PyInt_FromLong(rv);
+}
+
 static PyMethodDef
 sanlockmod_methods[] = {
     {"register", py_register, METH_NOARGS, "Register to SANLock daemon."},
@@ -302,6 +330,8 @@ sanlockmod_methods[] = {
                 "Acquire a resource lease for the current process."},
     {"release", py_release, METH_VARARGS,
                 "Release a resource lease for the current process."},
+    {"get_alignment", py_get_alignment, METH_VARARGS,
+                "Get device alignment."},
     {NULL, NULL, 0, NULL}
 };
 
