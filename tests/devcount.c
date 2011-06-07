@@ -1420,7 +1420,15 @@ int do_init(int argc, char *argv[])
 	strcpy(ls.name, "devcount");
 	strcpy(ls.host_id_disk.path, argv[2]);
 
+	printf("init sync\n");
 	rv = sanlock_direct_init(&ls, NULL, 0, INIT_NUM_HOSTS, 0);
+	if (rv < 0) {
+		printf("sanlock_direct_init lockspace error %d\n", rv);
+		return -1;
+	}
+
+	printf("init async\n");
+	rv = sanlock_direct_init(&ls, NULL, 0, INIT_NUM_HOSTS, 1);
 	if (rv < 0) {
 		printf("sanlock_direct_init lockspace error %d\n", rv);
 		return -1;
