@@ -61,8 +61,8 @@ CFLAGS += -D_GNU_SOURCE -g \
 	-fasynchronous-unwind-tables \
 	-fdiagnostics-show-option
 
-CMD_LDFLAGS = -lpthread -lrt -laio -lblkid -lsanlock -lwdmd
-LIB_LDFLAGS = -lpthread -lrt -laio -lblkid -lwdmd
+CMD_LDFLAGS = -lpthread -lrt -laio -lblkid -lsanlock -L../wdmd -lwdmd
+LIB_LDFLAGS = -lpthread -lrt -laio -lblkid -L../wdmd -lwdmd
 
 
 all: $(SHLIB_TARGET) $(CMD_TARGET)
@@ -73,7 +73,7 @@ $(SHLIB_TARGET): $(LIB_SOURCE)
 	ln -sf $(SHLIB_TARGET) $(LIB_TARGET).so.$(SOMAJOR)
 
 $(CMD_TARGET): $(SHLIB_TARGET) $(CMD_SOURCE)
-	$(CC) $(CFLAGS) $(CMD_LDFLAGS) $(CMD_SOURCE) -o $@ -L. -L../wdmd
+	$(CC) $(CFLAGS) $(CMD_LDFLAGS) $(CMD_SOURCE) -o $@ -L.
 
 clean:
 	rm -f *.o *.so *.so.* $(CMD_TARGET)
