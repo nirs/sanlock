@@ -330,7 +330,7 @@ static int setup_listener_socket(int *listener_socket)
 
 static int setup_clients(void)
 {
-	int rv, fd, ci;
+	int rv, fd = -1, ci;
 
 	rv = setup_listener_socket(&fd);
 	if (rv < 0)
@@ -610,10 +610,15 @@ static int test_scripts(void) { return 0; }
 
 static void close_watchdog(void)
 {
-	write(dev_fd, "V", 1);
-	close(dev_fd);
+	int rv;
 
-	log_error("/dev/watchdog disarmed");
+	rv = write(dev_fd, "V", 1);
+	if (rv < 0)
+		log_error("/dev/watchdog disarm write error %d", errno);
+	else
+		log_error("/dev/watchdog disarmed");
+
+	close(dev_fd);
 }
 
 static int setup_watchdog(void)

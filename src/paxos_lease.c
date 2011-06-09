@@ -724,7 +724,7 @@ static int _leader_read_multiple(struct task *task,
 	int leaders_len, leader_reps_len;
 	int num_reads;
 	int num_disks = token->r.num_disks;
-	int rv, d, i, found;
+	int rv = 0, d, i, found;
 	int error;
 
 	leaders_len = num_disks * sizeof(struct leader_record);
@@ -978,7 +978,7 @@ static int write_new_leader(struct task *task,
 	int num_disks = token->r.num_disks;
 	int num_writes = 0;
 	int error = SANLK_OK;
-	int rv, d;
+	int rv = 0, d;
 
 	for (d = 0; d < num_disks; d++) {
 		rv = write_leader(task, &token->disks[d], nl);
