@@ -168,7 +168,33 @@ int delta_lease_leader_read(struct task *task,
 	rv = read_sectors(disk, host_id - 1, 1, (char *)&leader, sizeof(struct leader_record),
 			  task, "delta_leader");
 	if (rv < 0)
-		return SANLK_LEADER_READ;
+		return rv;
+
+	error = verify_leader(disk, space_name, host_id, &leader, caller);
+
+	memcpy(leader_ret, &leader, sizeof(struct leader_record));
+	return error;
+}
+
+static int delta_lease_leader_reap(struct task *task,
+			    struct sync_disk *disk,
+			    char *space_name,
+			    uint64_t host_id,
+			    struct leader_record *leader_ret,
+			    const char *caller)
+{
+	struct leader_record leader;
+	int rv, error;
+
+	/* host_id N is block offset N-1 */
+
+	memset(&leader, 0, sizeof(struct leader_record));
+	memset(leader_ret, 0, sizeof(struct leader_record));
+
+	rv = read_sectors_reap(disk, host_id - 1, 1, (char *)&leader, sizeof(struct leader_record),
+			       task, "delta_leader");
+	if (rv < 0)
+		return rv;
 
 	error = verify_leader(disk, space_name, host_id, &leader, caller);
 
@@ -301,15 +327,30 @@ int delta_lease_renew(struct task *task,
 	int io_timeout_save;
 	int error;
 
-	/* TODO: if the previous renew timed out in this initial read, and that
-	 * read is now complete, we could just use the result from that read
-	 * here instead of ignoring it and doing another. */
+	/* if the previous renew timed out in this initial read, and that read
+	   is now complete, we can use that result here instead of discarding
+	   it and doing another. */
 
-	error = delta_lease_leader_read(task, disk, space_name, host_id, &leader,
-					"delta_renew_begin");
+	if (prev_result == SANLK_AIO_TIMEOUT && task->read_timeout) {
+		error = delta_lease_leader_reap(task, disk, space_name, host_id,
+						&leader, "delta_renew_reap");
+
+		log_space(sp, "delta_renew reap %d", error);
+
+		if (error == SANLK_OK) {
+			task->read_timeout = NULL;
+			goto read_done;
+		}
+	}
+
+	task->read_timeout = NULL;
+
+	error = delta_lease_leader_read(task, disk, space_name, host_id,
+					&leader, "delta_renew_read");
 	if (error < 0)
 		return error;
 
+ read_done:
 	if (!our_host_id_generation)
 		our_host_id_generation = leader.owner_generation;
 

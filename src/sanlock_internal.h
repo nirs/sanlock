@@ -444,6 +444,7 @@ struct task {
 	int use_aio;
 	int cb_size;
 	io_context_t aio_ctx;
+	struct aicb *read_timeout;
 	struct aicb *callbacks;
 };
 

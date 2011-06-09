@@ -276,7 +276,7 @@ static void *lockspace_thread(void *arg_in)
 		} else {
 			/* don't spin too quickly if renew is failing
 			   immediately and repeatedly */
-			usleep(200000);
+			usleep(500000);
 		}
 
 		last_attempt = time(NULL);

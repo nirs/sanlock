@@ -426,6 +426,9 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 	} else {
 		/* aicb->used and aicb->buf both remain set */
 		rv = SANLK_AIO_TIMEOUT;
+
+		if (cmd == IO_CMD_PREAD)
+			task->read_timeout = aicb;
 	}
  out:
 	return rv;
@@ -651,12 +654,13 @@ int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 {
 	char *iobuf, **p_iobuf;
 	uint64_t offset;
-	int iobuf_len = sector_count * disk->sector_size;
+	int iobuf_len;
 	int rv;
 
 	if (!disk->sector_size)
 		return -EINVAL;
 
+	iobuf_len = sector_count * disk->sector_size;
 	offset = disk->offset + (sector_nr * disk->sector_size);
 
 	p_iobuf = &iobuf;
@@ -681,6 +685,90 @@ int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 
 	if (rv != SANLK_AIO_TIMEOUT)
 		free(iobuf);
+ out:
+	return rv;
+}
+
+/* Try to reap the event of a previously timed out read_sectors.
+   A task's last timed out read is saved in task->read_timeout. */
+
+int read_sectors_reap(const struct sync_disk *disk, uint64_t sector_nr,
+		      uint32_t sector_count, char *data, int data_len,
+		      struct task *task, const char *blktype GNUC_UNUSED)
+{
+	struct timespec ts;
+	struct aicb *aicb;
+	struct iocb *iocb;
+	struct io_event event;
+	char *iobuf;
+	uint64_t offset;
+	int iobuf_len;
+	int rv;
+
+	iobuf_len = sector_count * disk->sector_size;
+	offset = disk->offset + (sector_nr * disk->sector_size);
+
+	aicb = task->read_timeout;
+	iocb = &aicb->iocb;
+	iobuf = iocb->u.c.buf;
+
+	if (!aicb->used)
+		return -EINVAL;
+	if (iocb->aio_fildes != disk->fd)
+		return -EINVAL;
+	if (iocb->u.c.nbytes != iobuf_len)
+		return -EINVAL;
+	if (iocb->u.c.offset != offset)
+		return -EINVAL;
+	if (iocb->aio_lio_opcode != IO_CMD_PREAD)
+		return -EINVAL;
+
+	memset(&ts, 0, sizeof(struct timespec));
+	ts.tv_nsec = 500000000; /* half a second */
+ retry:
+	memset(&event, 0, sizeof(event));
+
+	rv = io_getevents(task->aio_ctx, 1, 1, &event, &ts);
+	if (rv == -EINTR)
+		goto retry;
+	if (rv < 0) {
+		log_error("reap aio %s io_getevents error %d", task->name, rv);
+		goto out;
+	}
+	if (rv == 1) {
+		struct iocb *ev_iocb = event.obj;
+		struct aicb *ev_aicb = container_of(ev_iocb, struct aicb, iocb);
+
+		ev_aicb->used = 0;
+
+		if (ev_iocb != iocb) {
+			log_error("reap aio %s other iocb %p event result %ld %ld",
+				  task->name, ev_iocb, event.res, event.res2);
+			free(ev_aicb->buf);
+			ev_aicb->buf = NULL;
+			goto retry;
+		}
+		if ((int)event.res < 0) {
+			log_error("reap aio %s event result %ld %ld",
+				  task->name, event.res, event.res2);
+			rv = event.res;
+			goto out;
+		}
+		if (event.res != iobuf_len) {
+			log_error("reap aio %s event len %d result %lu %lu",
+				  task->name, iobuf_len, event.res, event.res2);
+			rv = -EMSGSIZE;
+			goto out;
+		}
+
+		rv = 0;
+		memcpy(data, iobuf, data_len);
+		free(iobuf);
+		goto out;
+	}
+
+	/* timed out again */
+	rv = SANLK_AIO_TIMEOUT;
  out:
 	return rv;
 }

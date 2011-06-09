@@ -31,4 +31,8 @@ int write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 	 	 uint32_t sector_count, char *data, int data_len,
 		 struct task *task, const char *blktype);
+
+int read_sectors_reap(const struct sync_disk *disk, uint64_t sector_nr,
+		      uint32_t sector_count, char *data, int data_len,
+		      struct task *task, const char *blktype);
 #endif
