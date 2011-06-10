@@ -17,31 +17,27 @@ int delta_lease_leader_read(struct task *task,
 			    const char *caller);
 
 int delta_lease_acquire(struct task *task,
-			struct space *sp,
-			struct sync_disk *disk,
-			char *space_name,
-			uint64_t our_host_id,
-			uint64_t host_id,
-			struct leader_record *leader_ret);
+                        struct space *sp,
+                        struct sync_disk *disk,
+                        char *space_name,
+                        char *our_host_name,
+                        uint64_t host_id,
+                        struct leader_record *leader_ret);
 
 int delta_lease_renew(struct task *task,
-		      struct space *sp,
-		      struct sync_disk *disk,
-		      char *space_name,
-		      uint64_t our_host_id,
-		      uint64_t our_host_id_generation,
-		      uint64_t host_id,
-		      int prev_result,
-		      struct leader_record *leader_last,
-		      struct leader_record *leader_ret);
+                      struct space *sp,
+                      struct sync_disk *disk,
+                      char *space_name,
+                      int prev_result,
+                      struct leader_record *leader_last,
+                      struct leader_record *leader_ret);
 
 int delta_lease_release(struct task *task,
-			struct space *sp,
-			struct sync_disk *disk,
-			char *space_name,
-			uint64_t host_id,
-			struct leader_record *leader_last,
-			struct leader_record *leader_ret);
+                        struct space *sp,
+                        struct sync_disk *disk,
+                        char *space_name GNUC_UNUSED,
+                        struct leader_record *leader_last,
+                        struct leader_record *leader_ret);
 
 int delta_lease_init(struct task *task,
 		     struct sync_disk *disk,

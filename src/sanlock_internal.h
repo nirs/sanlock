@@ -480,6 +480,7 @@ struct command_line {
 	int num_hosts;				/* -n */
 	int max_hosts;				/* -m */
 	int res_count;
+	char our_host_name[SANLK_NAME_LEN+1];
 	char *dump_path;
 	struct sanlk_lockspace lockspace;	/* -s LOCKSPACE */
 	struct sanlk_resource *res_args[SANLK_MAX_RESOURCES]; /* -r RESOURCE */
@@ -512,6 +513,8 @@ enum {
 	ACT_DUMP,
 	ACT_READ_LEADER,
 };
+
+EXTERN char our_host_name_global[SANLK_NAME_LEN+1];
 
 #endif
 

@@ -185,6 +185,7 @@ static int do_delta_action(int action,
 			   struct task *task,
 			   struct sanlk_lockspace *ls,
 			   int max_hosts,
+			   char *our_host_name,
 			   struct leader_record *leader_ret)
 {
 	struct leader_record leader;
@@ -214,16 +215,20 @@ static int do_delta_action(int action,
 	case ACT_ACQUIRE_ID:
 		rv = delta_lease_acquire(task, &space, &sd,
 					 ls->name,
-					 ls->host_id,
+					 our_host_name,
 					 ls->host_id,
 					 &leader);
 		break;
 	case ACT_RENEW_ID:
+		rv = delta_lease_leader_read(task, &sd,
+					     ls->name,
+					     ls->host_id,
+					     &leader,
+					     "direct_renew");
+		if (rv < 0)
+			return rv;
 		rv = delta_lease_renew(task, &space, &sd,
 				       ls->name,
-				       ls->host_id,
-				       0, /* local_host_generaion */
-				       ls->host_id,
 				       -1,
 				       &leader,
 				       &leader);
@@ -238,8 +243,8 @@ static int do_delta_action(int action,
 			return rv;
 		rv = delta_lease_release(task, &space, &sd,
 					 ls->name,
-					 ls->host_id,
-					 &leader, &leader);
+					 &leader,
+					 &leader);
 		break;
 	case ACT_READ_ID:
 	case ACT_READ_LEADER:
@@ -269,19 +274,20 @@ static int do_delta_action(int action,
  * sanlock client add_lockspace|rem_lockspace -s LOCKSPACE
  */
 
-int direct_acquire_id(struct task *task, struct sanlk_lockspace *ls)
+int direct_acquire_id(struct task *task, struct sanlk_lockspace *ls,
+		      char *our_host_name)
 {
-	return do_delta_action(ACT_ACQUIRE_ID, task, ls, -1, NULL);
+	return do_delta_action(ACT_ACQUIRE_ID, task, ls, -1, our_host_name, NULL);
 }
 
 int direct_release_id(struct task *task, struct sanlk_lockspace *ls)
 {
-	return do_delta_action(ACT_RELEASE_ID, task, ls, -1, NULL);
+	return do_delta_action(ACT_RELEASE_ID, task, ls, -1, NULL, NULL);
 }
 
 int direct_renew_id(struct task *task, struct sanlk_lockspace *ls)
 {
-	return do_delta_action(ACT_RENEW_ID, task, ls, -1, NULL);
+	return do_delta_action(ACT_RENEW_ID, task, ls, -1, NULL, NULL);
 }
 
 int direct_read_id(struct task *task,
@@ -295,7 +301,7 @@ int direct_read_id(struct task *task,
 
 	memset(&leader, 0, sizeof(struct leader_record));
 
-	rv = do_delta_action(ACT_READ_ID, task, ls, -1, &leader);
+	rv = do_delta_action(ACT_READ_ID, task, ls, -1, NULL, &leader);
 
 	*timestamp = leader.timestamp;
 	*owner_id = leader.owner_id;
@@ -316,7 +322,7 @@ int direct_live_id(struct task *task,
 	time_t start;
 	int rv;
 
-	rv = do_delta_action(ACT_READ_ID, task, ls, -1, &leader_begin);
+	rv = do_delta_action(ACT_READ_ID, task, ls, -1, NULL, &leader_begin);
 	if (rv < 0)
 		return rv;
 
@@ -325,7 +331,7 @@ int direct_live_id(struct task *task,
 	while (1) {
 		sleep(1);
 
-		rv = do_delta_action(ACT_READ_ID, task, ls, -1, &leader);
+		rv = do_delta_action(ACT_READ_ID, task, ls, -1, NULL, &leader);
 		if (rv < 0)
 			return rv;
 
@@ -381,7 +387,7 @@ int direct_init(struct task *task,
 	int rv = -1;
 
 	if (ls && ls->host_id_disk.path[0]) {
-		rv = do_delta_action(ACT_INIT, task, ls, max_hosts, NULL);
+		rv = do_delta_action(ACT_INIT, task, ls, max_hosts, NULL, NULL);
 
 	} else if (res) {
 		if (!num_hosts)
@@ -411,7 +417,7 @@ int direct_read_leader(struct task *task,
 	int rv = -1;
 
 	if (ls && ls->host_id_disk.path[0])
-		rv = do_delta_action(ACT_READ_LEADER, task, ls, -1, leader_ret);
+		rv = do_delta_action(ACT_READ_LEADER, task, ls, -1, NULL, leader_ret);
 
 	else if (res)
 		rv = do_paxos_action(ACT_READ_LEADER, task, res,

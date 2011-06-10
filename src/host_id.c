@@ -21,6 +21,7 @@
 #include <syslog.h>
 #include <sys/types.h>
 #include <sys/time.h>
+#include <sys/utsname.h>
 
 #include "sanlock_internal.h"
 #include "diskio.h"
@@ -32,6 +33,10 @@
 #include "task.h"
 
 static unsigned int space_id_counter = 1;
+
+static struct random_data rand_data;
+static char rand_state[32];
+static pthread_mutex_t rand_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 struct list_head spaces;
 struct list_head spaces_add;
@@ -195,9 +200,7 @@ static void *lockspace_thread(void *arg_in)
 {
 	struct task task;
 	struct space *sp;
-	char space_name[NAME_ID_SIZE];
 	struct leader_record leader;
-	uint64_t our_host_id, our_host_id_generation;
 	time_t last_attempt, last_success;
 	int rv, result, delta_length, gap;
 	int delta_result = 0;
@@ -205,8 +208,6 @@ static void *lockspace_thread(void *arg_in)
 	int stop = 0;
 
 	sp = (struct space *)arg_in;
-	our_host_id = sp->host_id;
-	memcpy(&space_name, sp->space_name, NAME_ID_SIZE);
 
 	setup_task_timeouts(&task, main_task.io_timeout_seconds);
 	setup_task_aio(&task, main_task.use_aio, HOSTID_AIO_CB_SIZE);
@@ -222,8 +223,9 @@ static void *lockspace_thread(void *arg_in)
 	}
 	opened = 1;
 
-	result = delta_lease_acquire(&task, sp, &sp->host_id_disk, space_name,
-				     our_host_id, our_host_id, &leader);
+	result = delta_lease_acquire(&task, sp, &sp->host_id_disk,
+				     sp->space_name, our_host_name_global,
+				     sp->host_id, &leader);
 	delta_result = result;
 	delta_length = time(NULL) - last_attempt;
 
@@ -257,7 +259,6 @@ static void *lockspace_thread(void *arg_in)
 		goto out;
 
 	sp->host_generation = leader.owner_generation;
-	our_host_id_generation = leader.owner_generation;
 
 	while (1) {
 		if (stop)
@@ -282,9 +283,8 @@ static void *lockspace_thread(void *arg_in)
 		last_attempt = time(NULL);
 
 		result = delta_lease_renew(&task, sp, &sp->host_id_disk,
-					   space_name, our_host_id,
-					   our_host_id_generation, our_host_id,
-					   delta_result, &leader, &leader);
+					   sp->space_name, delta_result,
+					   &leader, &leader);
 		delta_result = result;
 		delta_length = time(NULL) - last_attempt;
 
@@ -324,8 +324,8 @@ static void *lockspace_thread(void *arg_in)
 	close_watchdog_file(sp);
  out:
 	if (delta_result == SANLK_OK)
-		delta_lease_release(&task, sp, &sp->host_id_disk, space_name,
-				    our_host_id, &leader, &leader);
+		delta_lease_release(&task, sp, &sp->host_id_disk,
+				    sp->space_name, &leader, &leader);
 
 	if (opened)
 		close(sp->host_id_disk.fd);
@@ -550,10 +550,53 @@ void free_lockspaces(int wait)
 	pthread_mutex_unlock(&spaces_mutex);
 }
 
+/* return a random int between a and b inclusive */
+
+int get_rand(int a, int b)
+{
+	int32_t val;
+	int rv;
+
+	pthread_mutex_lock(&rand_mutex);
+	rv = random_r(&rand_data, &val);
+	pthread_mutex_unlock(&rand_mutex);
+	if (rv < 0)
+		return rv;
+
+	return a + (int) (((float)(b - a + 1)) * val / (RAND_MAX+1.0));
+}
+
 void setup_spaces(void)
 {
+	struct utsname name;
+	struct timeval tv;
+
 	INIT_LIST_HEAD(&spaces);
 	INIT_LIST_HEAD(&spaces_add);
 	INIT_LIST_HEAD(&spaces_rem);
+
+	memset(rand_state, 0, sizeof(rand_state));
+	memset(&rand_data, 0, sizeof(rand_data));
+
+	initstate_r(time(NULL), rand_state, sizeof(rand_state), &rand_data);
+
+	/* use host name from command line */
+
+	if (com.our_host_name[0]) {
+		memcpy(our_host_name_global, com.our_host_name, SANLK_NAME_LEN);
+		return;
+	}
+
+	/* make up something that's likely to be different among hosts */
+
+	memset(&our_host_name_global, 0, sizeof(our_host_name_global));
+	uname(&name);
+	gettimeofday(&tv, NULL);
+
+	snprintf(our_host_name_global, NAME_ID_SIZE, "%llu.%llu.%d.%s",
+		 (unsigned long long)tv.tv_sec,
+		 (unsigned long long)tv.tv_usec,
+		 get_rand(1, RAND_MAX-1),
+		 name.nodename);
 }
 

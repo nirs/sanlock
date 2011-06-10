@@ -18,5 +18,6 @@ int add_lockspace(struct sanlk_lockspace *ls);
 int rem_lockspace(struct sanlk_lockspace *ls);
 void free_lockspaces(int wait);
 void setup_spaces(void);
+int get_rand(int a, int b);
 
 #endif

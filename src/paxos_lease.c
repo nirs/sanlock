@@ -963,13 +963,6 @@ static int paxos_lease_leader_dblock_read(struct task *task,
 	return rv;
 }
 
-/* return a random int between a and b inclusive */
-
-static int get_rand(int a, int b)
-{
-	return a + (int) (((float)(b - a + 1)) * random() / (RAND_MAX+1.0));
-}
-
 static int write_new_leader(struct task *task,
 			    struct token *token,
 			    struct leader_record *nl,
@@ -1287,9 +1280,13 @@ int paxos_lease_acquire(struct task *task,
 
 	if (error == SANLK_DBLOCK_MBAL) {
 		us = get_rand(0, 1000000);
+		if (us < 0)
+			us = token->host_id * 100;
+
 		/* not a problem, but interesting to see, so use log_error */
 		log_errot(token, "paxos_acquire %llu retry delay %d us",
 			  (unsigned long long)next_lver, us);
+
 		usleep(us);
 		our_mbal += cur_leader.max_hosts;
 		goto retry_ballot;

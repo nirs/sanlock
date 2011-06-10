@@ -35,6 +35,13 @@ int host_id_disk_info(char *name GNUC_UNUSED, struct sync_disk *disk GNUC_UNUSED
 	return -1;
 }
 
+int get_rand(int a, int b);
+
+int get_rand(int a, int b)
+{
+	return a + (int) (((float)(b - a + 1)) * random() / (RAND_MAX+1.0));
+}
+
 static void setup_task_lib(struct task *task, int use_aio, int io_timeout_sec)
 {
 	memset(task, 0, sizeof(struct task));

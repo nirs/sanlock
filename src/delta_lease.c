@@ -76,7 +76,6 @@ static int verify_leader(struct sync_disk *disk,
 			 const char *caller)
 {
 	struct leader_record leader_rr;
-	char resource_name[NAME_ID_SIZE];
 	uint32_t sum;
 	int result, rv;
 
@@ -109,18 +108,6 @@ static int verify_leader(struct sync_disk *disk,
 			  (unsigned long long)host_id,
 			  lr->space_name, space_name, disk->path);
 		result = SANLK_LEADER_LOCKSPACE;
-		goto fail;
-	}
-
-	memset(resource_name, 0, NAME_ID_SIZE);
-	snprintf(resource_name, NAME_ID_SIZE, "host_id_%llu",
-		 (unsigned long long)host_id);
-
-	if (strncmp(lr->resource_name, resource_name, NAME_ID_SIZE)) {
-		log_error("verify_leader %llu wrong resource name %.48s %.48s %s",
-			  (unsigned long long)host_id,
-			  lr->resource_name, resource_name, disk->path);
-		result = SANLK_LEADER_RESOURCE;
 		goto fail;
 	}
 
@@ -202,19 +189,26 @@ static int delta_lease_leader_reap(struct task *task,
 	return error;
 }
 
-/* TODO: do we need to set the watchdog to expire in host_dead_seconds just
- * before we do the write here?  The algorithm depends on io timeouts to
- * protect against this write happening at a latest possible time, but since
- * our ios don't ever really timeout reliably, we need to timeout in
- * host_dead_seconds.
- * And can we touch the watchdog immediately after the write, or do we
- * need to wait for the read to complete also? */
+/*
+ * delta_lease_acquire:
+ * set the owner of host_id to our_host_name.
+ *
+ * paxos_lease_acquire:
+ * set the owner of resource_name to host_id.
+ *
+ * our_host_name is a unique host identifier used to detect when two different
+ * hosts are trying to acquire the same host_id (since both will be using the
+ * same host_id, that host_id won't work to distinguish between them.) We copy
+ * our_host_name into leader.resource_name, so in a sense the owner_id and
+ * resource_name fields of the leader_record switch functions: the common
+ * resource is the ower_id, and the distinguishing id is the resource_name.
+ */
 
 int delta_lease_acquire(struct task *task,
 			struct space *sp,
 			struct sync_disk *disk,
 			char *space_name,
-			uint64_t our_host_id,
+			char *our_host_name,
 			uint64_t host_id,
 			struct leader_record *leader_ret)
 {
@@ -230,7 +224,6 @@ int delta_lease_acquire(struct task *task,
 	if (error < 0)
 		return error;
 
- retry:
 	if (leader.timestamp == LEASE_FREE)
 		goto write_new;
 
@@ -260,8 +253,11 @@ int delta_lease_acquire(struct task *task,
 	while (1) {
 		memcpy(&leader1, &leader, sizeof(struct leader_record));
 
-		log_space(sp, "delta_acquire delta_large_delay %d delay %d",
-			  delta_large_delay, delay);
+		/* TODO: we could reread every several seconds to see if
+		   it has changed, so we can abort more quickly if so */
+
+		log_space(sp, "delta_acquire %llu delta_large_delay %d delay %d",
+			  (unsigned long long)host_id, delta_large_delay, delay);
 		sleep(delay);
 
 		error = delta_lease_leader_read(task, disk, space_name, host_id,
@@ -275,25 +271,40 @@ int delta_lease_acquire(struct task *task,
 		if (leader.timestamp == LEASE_FREE)
 			break;
 
-		/* TODO: fail and return an error? */
+		log_erros(sp, "delta_acquire %llu busy %llu %llu %llu %.48s",
+			  (unsigned long long)host_id,
+			  (unsigned long long)leader.owner_id,
+			  (unsigned long long)leader.owner_generation,
+			  (unsigned long long)leader.timestamp,
+			  leader.resource_name);
+		return SANLK_HOSTID_BUSY;
 	}
 
  write_new:
 	new_ts = time(NULL);
 	leader.timestamp = new_ts;
-	leader.owner_id = our_host_id;
+	leader.owner_id = host_id;
 	leader.owner_generation++;
+	snprintf(leader.resource_name, NAME_ID_SIZE, "%s", our_host_name);
 	leader.checksum = leader_checksum(&leader);
 
-	log_space(sp, "delta_acquire write new %llu", (unsigned long long)new_ts);
+	log_space(sp, "delta_acquire %llu write %llu %llu %llu %.48s",
+		  (unsigned long long)host_id,
+		  (unsigned long long)leader.owner_id,
+		  (unsigned long long)leader.owner_generation,
+		  (unsigned long long)leader.timestamp,
+		  leader.resource_name);
 
 	error = write_sector(disk, host_id - 1, (char *)&leader, sizeof(struct leader_record),
 			     task, "delta_leader");
 	if (error < 0)
 		return error;
 
+	memcpy(&leader1, &leader, sizeof(struct leader_record));
+
 	delay = 2 * task->io_timeout_seconds;
-	log_space(sp, "delta_acquire delta_short_delay %d", delay);
+	log_space(sp, "delta_acquire %llu delta_short_delay %d",
+		  (unsigned long long)host_id, delay);
 	sleep(delay);
 
 	error = delta_lease_leader_read(task, disk, space_name, host_id, &leader,
@@ -301,31 +312,38 @@ int delta_lease_acquire(struct task *task,
 	if (error < 0)
 		return error;
 
-	if ((leader.timestamp != new_ts) || (leader.owner_id != our_host_id))
-		goto retry;
+	if (memcmp(&leader1, &leader, sizeof(struct leader_record))) {
+		log_erros(sp, "delta_acquire %llu busy %llu %llu %llu %.48s",
+			  (unsigned long long)host_id,
+			  (unsigned long long)leader.owner_id,
+			  (unsigned long long)leader.owner_generation,
+			  (unsigned long long)leader.timestamp,
+			  leader.resource_name);
+		return SANLK_HOSTID_BUSY;
+	}
 
 	memcpy(leader_ret, &leader, sizeof(struct leader_record));
 	return SANLK_OK;
 }
 
-/* our_host_id and host_id will always be the same, i.e. we
-   only ever try to acquire/renew our own host_id */
-
 int delta_lease_renew(struct task *task,
 		      struct space *sp,
 		      struct sync_disk *disk,
 		      char *space_name,
-		      uint64_t our_host_id,
-		      uint64_t our_host_id_generation,
-		      uint64_t host_id,
 		      int prev_result,
 		      struct leader_record *leader_last,
 		      struct leader_record *leader_ret)
 {
 	struct leader_record leader;
+	uint64_t host_id;
 	uint64_t new_ts;
 	int io_timeout_save;
 	int error;
+
+	if (!leader_last)
+		return -EINVAL;
+
+	host_id = leader_last->owner_id;
 
 	/* if the previous renew timed out in this initial read, and that read
 	   is now complete, we can use that result here instead of discarding
@@ -335,7 +353,8 @@ int delta_lease_renew(struct task *task,
 		error = delta_lease_leader_reap(task, disk, space_name, host_id,
 						&leader, "delta_renew_reap");
 
-		log_space(sp, "delta_renew reap %d", error);
+		log_space(sp, "delta_renew %llu reap %d",
+			  (unsigned long long)host_id, error);
 
 		if (error == SANLK_OK) {
 			task->read_timeout = NULL;
@@ -351,11 +370,14 @@ int delta_lease_renew(struct task *task,
 		return error;
 
  read_done:
-	if (!our_host_id_generation)
-		our_host_id_generation = leader.owner_generation;
+	/* We can't always memcmp(&leader, leader_last) because previous writes
+	   may have timed out and we don't know if they were actually written
+	   or not.  We can definately verify that we're still the owner,
+	   though, which is the main thing we need to know. */
 
-	if (leader.owner_id != our_host_id ||
-	    leader.owner_generation != our_host_id_generation) {
+	if (leader.owner_id != leader_last->owner_id ||
+	    leader.owner_generation != leader_last->owner_generation ||
+	    memcmp(leader.resource_name, leader_last->resource_name, NAME_ID_SIZE)) {
 		log_erros(sp, "delta_renew %llu not owner", (unsigned long long)host_id);
 		log_leader_error(0, space_name, host_id, disk, leader_last, "delta_renew_last");
 		log_leader_error(0, space_name, host_id, disk, &leader, "delta_renew_read");
@@ -380,9 +402,9 @@ int delta_lease_renew(struct task *task,
 	leader.checksum = leader_checksum(&leader);
 
 	/* extend io timeout for this one write; we need to give this write
-	 * every chance to succeed, and there's no point in letting it time
-	 * out.  there's nothing we would do but retry it, and timing out and
-	 * retrying unnecessarily would probably be counter productive. */
+	   every chance to succeed, and there's no point in letting it time
+	   out.  there's nothing we would do but retry it, and timing out and
+	   retrying unnecessarily would probably be counter productive. */
 
 	io_timeout_save = task->io_timeout_seconds;
 	task->io_timeout_seconds = task->host_dead_seconds;
@@ -430,12 +452,17 @@ int delta_lease_release(struct task *task,
 			struct space *sp,
 			struct sync_disk *disk,
 			char *space_name GNUC_UNUSED,
-			uint64_t host_id,
 			struct leader_record *leader_last,
 			struct leader_record *leader_ret)
 {
 	struct leader_record leader;
+	uint64_t host_id;
 	int error;
+
+	if (!leader_last)
+		return -EINVAL;
+
+	host_id = leader_last->owner_id;
 
 	log_space(sp, "delta_release %llu begin", (unsigned long long)host_id);
 
@@ -491,7 +518,6 @@ int delta_lease_init(struct task *task,
 		leader->max_hosts = 1;
 		leader->timestamp = LEASE_FREE;
 		strncpy(leader->space_name, space_name, NAME_ID_SIZE);
-		snprintf(leader->resource_name, NAME_ID_SIZE, "host_id_%d", i+1);
 		leader->checksum = leader_checksum(leader);
 	}
 

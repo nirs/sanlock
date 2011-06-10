@@ -1511,11 +1511,13 @@ static int print_daemon_state(char *str)
 	memset(str, 0, SANLK_STATE_MAXSTR);
 
 	snprintf(str, SANLK_STATE_MAXSTR-1,
+		 "our_host_name=%s "
 		 "use_aio=%d "
 		 "io_timeout=%d "
 		 "id_renewal=%d "
 		 "id_renewal_fail=%d "
 		 "id_renewal_warn=%d",
+		 our_host_name_global,
 		 main_task.use_aio,
 		 main_task.io_timeout_seconds,
 		 main_task.id_renewal_seconds,
@@ -2623,6 +2625,9 @@ static int read_command_line(int argc, char *argv[])
 		case 'p':
 			com.pid = atoi(optionarg);
 			break;
+		case 'e':
+			strncpy(com.our_host_name, optionarg, NAME_ID_SIZE);
+			break;
 		case 'i':
 			com.local_host_id = atoll(optionarg);
 			break;
@@ -2888,7 +2893,8 @@ static int do_direct(void)
 		break;
 
 	case ACT_ACQUIRE_ID:
-		rv = direct_acquire_id(&main_task, &com.lockspace);
+		rv = direct_acquire_id(&main_task, &com.lockspace,
+				       com.our_host_name);
 		log_tool("acquire_id done %d", rv);
 		break;
 

@@ -20,7 +20,8 @@ int direct_release(struct task *task,
                    struct sanlk_resource *res,
                    struct leader_record *leader_ret);
 
-int direct_acquire_id(struct task *task, struct sanlk_lockspace *ls);
+int direct_acquire_id(struct task *task, struct sanlk_lockspace *ls,
+		      char *our_host_name);
 int direct_release_id(struct task *task, struct sanlk_lockspace *ls);
 int direct_renew_id(struct task *task, struct sanlk_lockspace *ls);
 
