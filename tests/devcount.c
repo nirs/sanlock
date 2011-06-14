@@ -1358,7 +1358,7 @@ int do_init(int argc, char *argv[])
 	struct sanlk_resource *res;
 	struct sanlk_lockspace ls;
 	char command[4096];
-	int rv, ss, align_size;
+	int rv, align_size;
 
 	if (argc < 4)
 		return -1;
@@ -1397,22 +1397,10 @@ int do_init(int argc, char *argv[])
 	memset(&disk, 0, sizeof(disk));
 	strcpy(disk.path, argv[2]);
 
-	ss = sanlock_direct_sector_size(&disk);
-	if (ss < 0) {
-		printf("sanlock_direct_sector_size %s error %d\n",
-			disk.path, ss);
-		return -1;
-	}
-
 	align_size = sanlock_direct_align(&disk);
 	if (align_size != LEASE_SIZE) {
 		printf("sanlock_direct align %s error %d\n",
 			disk.path, align_size);
-		return -1;
-	}
-
-	if (ss != 512) {
-		printf("unsupported sector size %d\n", ss);
 		return -1;
 	}
 

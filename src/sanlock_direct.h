@@ -39,12 +39,6 @@ int sanlock_direct_init(struct sanlk_lockspace *ls,
                         int max_hosts, int num_hosts, int use_aio);
 
 /*
- * Returns sector size in bytes, -1 on error
- */
-
-int sanlock_direct_sector_size(struct sanlk_disk *disk);
-
-/*
  * Returns the alignment in bytes required by sanlock_direct_init()
  * (1MB for disks with 512 sectors, 8MB for disks with 4096 sectors)
  */
