@@ -14,6 +14,7 @@
 #include <stddef.h>
 #include <errno.h>
 
+#define EXTERN
 #include "sanlock_internal.h"
 #include "sanlock_direct.h"
 #include "diskio.h"

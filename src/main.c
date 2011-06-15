@@ -79,7 +79,6 @@ static struct pollfd *pollfd = NULL;
 static char command[COMMAND_MAX];
 static int cmd_argc;
 static char **cmd_argv;
-static int external_shutdown;
 static unsigned int token_id_counter = 1;
 
 struct cmd_args {

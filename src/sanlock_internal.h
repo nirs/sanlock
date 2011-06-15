@@ -514,6 +514,7 @@ enum {
 	ACT_READ_LEADER,
 };
 
+EXTERN int external_shutdown;
 EXTERN char our_host_name_global[SANLK_NAME_LEN+1];
 
 #endif

@@ -215,7 +215,7 @@ int delta_lease_acquire(struct task *task,
 	struct leader_record leader;
 	struct leader_record leader1;
 	uint64_t new_ts;
-	int error, delay, delta_large_delay;
+	int i, error, delay, delta_large_delay;
 
 	log_space(sp, "delta_acquire %llu begin", (unsigned long long)host_id);
 
@@ -253,12 +253,17 @@ int delta_lease_acquire(struct task *task,
 	while (1) {
 		memcpy(&leader1, &leader, sizeof(struct leader_record));
 
+		log_space(sp, "delta_acquire %llu delta_large_delay %d delay %d",
+			  (unsigned long long)host_id, delta_large_delay, delay);
+
 		/* TODO: we could reread every several seconds to see if
 		   it has changed, so we can abort more quickly if so */
 
-		log_space(sp, "delta_acquire %llu delta_large_delay %d delay %d",
-			  (unsigned long long)host_id, delta_large_delay, delay);
-		sleep(delay);
+		for (i = 0; i < delay; i++) {
+			if (sp->external_remove || external_shutdown)
+				return SANLK_ERROR;
+			sleep(1);
+		}
 
 		error = delta_lease_leader_read(task, disk, space_name, host_id,
 						&leader, "delta_acquire_wait");
@@ -305,7 +310,12 @@ int delta_lease_acquire(struct task *task,
 	delay = 2 * task->io_timeout_seconds;
 	log_space(sp, "delta_acquire %llu delta_short_delay %d",
 		  (unsigned long long)host_id, delay);
-	sleep(delay);
+
+	for (i = 0; i < delay; i++) {
+		if (sp->external_remove || external_shutdown)
+			return SANLK_ERROR;
+		sleep(1);
+	}
 
 	error = delta_lease_leader_read(task, disk, space_name, host_id, &leader,
 					"delta_acquire_check");

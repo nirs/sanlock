@@ -437,6 +437,11 @@ int add_lockspace(struct sanlk_lockspace *ls)
 	   and the main loop will begin monitoring its renewals */
 
 	pthread_mutex_lock(&spaces_mutex);
+	if (sp->external_remove || external_shutdown) {
+		rv = -1;
+		pthread_mutex_unlock(&spaces_mutex);
+		goto fail_free;
+	}
 	list_move(&sp->list, &spaces);
 	pthread_mutex_unlock(&spaces_mutex);
 	return 0;
@@ -465,8 +470,9 @@ int rem_lockspace(struct sanlk_lockspace *ls)
 	sp = _search_space(ls->name, (struct sync_disk *)&ls->host_id_disk, ls->host_id,
 			   &spaces_add, NULL, NULL);
 	if (sp) {
+		sp->external_remove = 1;
 		pthread_mutex_unlock(&spaces_mutex);
-		rv = -EAGAIN;
+		rv = 0;
 		goto out;
 	}
 
