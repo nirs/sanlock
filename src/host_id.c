@@ -411,10 +411,7 @@ int add_lockspace(struct sanlk_lockspace *ls)
 	rv = pthread_create(&sp->thread, NULL, lockspace_thread, sp);
 	if (rv < 0) {
 		log_erros(sp, "add_lockspace create thread failed");
-		pthread_mutex_lock(&spaces_mutex);
-		list_del(&sp->list);
-		pthread_mutex_unlock(&spaces_mutex);
-		goto fail_free;
+		goto fail_del;
 	}
 
 	while (1) {
@@ -430,7 +427,7 @@ int add_lockspace(struct sanlk_lockspace *ls)
 		/* the thread exits right away if acquire fails */
 		pthread_join(sp->thread, NULL);
 		rv = result;
-		goto fail_free;
+		goto fail_del;
 	}
 
 	/* once we move sp to spaces list, tokens can begin using it,
@@ -440,12 +437,16 @@ int add_lockspace(struct sanlk_lockspace *ls)
 	if (sp->external_remove || external_shutdown) {
 		rv = -1;
 		pthread_mutex_unlock(&spaces_mutex);
-		goto fail_free;
+		goto fail_del;
 	}
 	list_move(&sp->list, &spaces);
 	pthread_mutex_unlock(&spaces_mutex);
 	return 0;
 
+ fail_del:
+	pthread_mutex_lock(&spaces_mutex);
+	list_del(&sp->list);
+	pthread_mutex_unlock(&spaces_mutex);
  fail_free:
 	free(sp);
 	return rv;
