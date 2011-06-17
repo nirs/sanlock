@@ -68,7 +68,8 @@ int add_resource(struct token *token, int pid)
 
 	r = find_resource(token, &resources);
 	if (r) {
-		log_errot(token, "add_resource name exists");
+		if (!com.quiet_fail)
+			log_errot(token, "add_resource name exists");
 		rv = -EEXIST;
 		goto out;
 	}

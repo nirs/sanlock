@@ -1,6 +1,8 @@
 TARGET = devcount
+TARGET2 = sanlk_load
 
 SOURCE = devcount.c
+SOURCE2 = sanlk_load.c
 
 CFLAGS += -D_GNU_SOURCE -g \
 	-Wall \
@@ -23,11 +25,14 @@ CFLAGS += -D_GNU_SOURCE -g \
 
 LDFLAGS = -lrt -laio -lblkid -lsanlock
 
-all: $(TARGET)
+all: $(TARGET) $(TARGET2)
 
 $(TARGET): $(SOURCE)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(SOURCE) -o $@ -L. -L../src
 
+$(TARGET2): $(SOURCE2)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(SOURCE2) -o $@ -L. -L../src
+
 clean:
-	rm -f *.o *.so *.so.* $(TARGET)
+	rm -f *.o *.so *.so.* $(TARGET) $(TARGET2)
 
