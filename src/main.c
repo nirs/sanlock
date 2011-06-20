@@ -635,22 +635,25 @@ static void client_recv_all(int ci, struct sm_header *h_recv, int pos)
 {
 	char trash[64];
 	int rem = h_recv->length - sizeof(struct sm_header) - pos;
-	int rv, total = 0;
+	int rv, error = 0, total = 0;
 
 	if (!rem)
 		return;
 
 	while (1) {
 		rv = recv(client[ci].fd, trash, sizeof(trash), MSG_DONTWAIT);
+		if (rv == -1)
+			error = errno;
 		if (rv <= 0)
 			break;
 		total += rv;
 
-		if (total > MAX_CLIENT_MSG)
+		if (total >= rem)
 			break;
 	}
 
-	log_debug("recv_all ci %d rem %d total %d", ci, rem, total);
+	log_error("recv_all %d,%d,%d pos %d rv %d error %d rem %d total %d",
+		  ci, client[ci].fd, client[ci].pid, pos, rv, error, rem, total);
 }
 
 static void release_cl_tokens(struct task *task, struct client *cl)
@@ -1060,14 +1063,14 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 	}
 
  reply:
+	if (!recv_done)
+		client_recv_all(ca->ci_in, &ca->header, pos);
+
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
 	h.length = sizeof(h);
 	h.data = result;
 	h.data2 = 0;
 	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
-
-	if (!recv_done)
-		client_recv_all(ca->ci_in, &ca->header, pos);
 
 	client_resume(ca->ci_in);
 }
@@ -1214,6 +1217,11 @@ static void cmd_inquire(struct task *task, struct cmd_args *ca)
 			res_count++;
 	}
 
+	if (!res_count) {
+		result = 0;
+		goto done;
+	}
+
 	state_maxlen = res_count * (SANLK_MAX_RES_STR + 1);
 
 	state = malloc(state_maxlen);
@@ -1282,8 +1290,8 @@ static void cmd_inquire(struct task *task, struct cmd_args *ca)
 	cl->cmd_active = 0;
 	pthread_mutex_unlock(&cl->mutex);
 
-	log_debug("cmd_inquire %d,%d,%d result %d pid_dead %d count %d strlen %d",
-		  cl_ci, cl_fd, cl_pid, result, pid_dead, res_count, state_strlen);
+	log_debug("cmd_inquire %d,%d,%d result %d pid_dead %d res_count %d cat_count %d strlen %d",
+		  cl_ci, cl_fd, cl_pid, result, pid_dead, res_count, cat_count, state_strlen);
 
 	if (pid_dead) {
 		release_cl_tokens(task, cl);
@@ -1888,13 +1896,13 @@ static void process_cmd_thread_resource(int ci_in, struct sm_header *h_recv)
 	return;
 
  fail:
+	client_recv_all(ci_in, h_recv, 0);
+
 	memcpy(&h, h_recv, sizeof(struct sm_header));
 	h.length = sizeof(h);
 	h.data = result;
 	h.data2 = 0;
 	send(client[ci_in].fd, &h, sizeof(h), MSG_NOSIGNAL);
-
-	client_recv_all(ci_in, h_recv, 0);
 
 	client_resume(ci_in);
 	if (ca)

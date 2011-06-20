@@ -15,6 +15,7 @@
 #include <limits.h>
 #include <time.h>
 #include <signal.h>
+#include <syslog.h>
 
 #include "sanlock.h"
 #include "sanlock_admin.h"
@@ -25,12 +26,15 @@
 #define LEASE_SIZE ONEMB
 
 #define MAX_LS_COUNT 64
-#define MAX_RES_COUNT 64
+#define MAX_RES_COUNT 512
+#define MAX_PID_COUNT 256
 #define DEFAULT_LS_COUNT 4
 #define DEFAULT_RES_COUNT 4
 #define DEFAULT_PID_COUNT 4
 #define MAX_RV 300
 
+int debug = 0;
+char error_buf[4096];
 char lock_disk_base[PATH_MAX];
 int lock_state[MAX_LS_COUNT][MAX_RES_COUNT];
 int ls_count = DEFAULT_LS_COUNT;
@@ -39,17 +43,19 @@ int pid_count = DEFAULT_PID_COUNT;
 int our_hostid;
 int acquire_rv[MAX_RV];
 int release_rv[MAX_RV];
-int debug = 0;
 
 
 #define log_debug(fmt, args...) \
 do { \
-	if (debug) printf("%llu " fmt "\n", (unsigned long long)time(NULL), ##args); \
+	if (debug) printf("%lu " fmt "\n", time(NULL), ##args); \
 } while (0)
 
 #define log_error(fmt, args...) \
 do { \
-	printf("ERROR %llu " fmt "\n", (unsigned long long)time(NULL), ##args); \
+	memset(error_buf, 0, sizeof(error_buf)); \
+	snprintf(error_buf, 4095, "%ld " fmt "\n", time(NULL), ##args); \
+	printf("ERROR: %s\n", error_buf); \
+	syslog(LOG_ERR, "%s", error_buf); \
 } while (0)
 
 
@@ -58,7 +64,7 @@ static int get_rand(int a, int b)
 	return a + (int) (((float)(b - a + 1)) * random() / (RAND_MAX+1.0));
 }
 
-static void save_rv(int rv, int acquire)
+static void save_rv(int pid, int rv, int acquire)
 {
 	if (rv > 0)
 		goto fail;
@@ -79,16 +85,18 @@ static void save_rv(int rv, int acquire)
 	return;
 
  fail:
-	log_error("save_rv %d %d", rv, acquire);
-	while (1)
+	log_error("%d save_rv %d %d", pid, rv, acquire);
+	while (1) {
 		sleep(10);
+		printf("%lu %d ERROR save_rv %d %d", time(NULL), pid, rv, acquire);
+	}
 }
 
 static void display_rv(int pid)
 {
 	int i;
 
-	printf("%llu %d results acquire ", (unsigned long long)time(NULL), pid);
+	printf("%lu %d results acquire ", time(NULL), pid);
 	for (i = 0; i < MAX_RV; i++) {
 		if (acquire_rv[i])
 			printf("%d:%d ", i, acquire_rv[i]);
@@ -118,14 +126,35 @@ static void dump_lock_state(int pid)
 static int check_lock_state(int pid, int result, int count, char *res_state)
 {
 	char buf[128];
-	char *found;
+	char *found = NULL;
 	int found_count = 0;
 	int none_count = 0;
 	int bad_count = 0;
 	int i, j;
 
+	memset(buf, 0, sizeof(buf));
+
 	if (result < 0)
 		goto fail;
+
+	if (!count) {
+		if (res_state) {
+			log_error("%d check_lock_state zero count res_state %s",
+				  pid, res_state);
+		}
+		for (i = 0; i < ls_count; i++) {
+			for (j = 0; j < res_count; j++) {
+				if (lock_state[i][j]) {
+					bad_count++;
+					log_error("%d check_lock_state zero count %d %d lock", pid, i, j);
+				}
+			}
+		}
+
+		if (bad_count)
+			goto fail;
+		return 0;
+	}
 
 	for (i = 0; i < ls_count; i++) {
 		for (j = 0; j < res_count; j++) {
@@ -140,7 +169,6 @@ static int check_lock_state(int pid, int result, int count, char *res_state)
 				none_count++;
 			} else {
 				bad_count++;
-
 				log_error("%d check_lock_state %s lock_state %d res_state %s",
 					  pid, buf, lock_state[i][j], res_state);
 			}
@@ -163,14 +191,19 @@ static int check_lock_state(int pid, int result, int count, char *res_state)
 
 	dump_lock_state(pid);
 
-	while (1)
+	while (1) {
 		sleep(10);
+		printf("%lu %d ERROR check_lock_state result %d count %d found %d bad %d res_state %s",
+			time(NULL), pid, result, count, found_count, bad_count, res_state);
+	}
 }
 
 static int add_lockspaces(void)
 {
 	struct sanlk_lockspace ls;
 	int i, rv;
+
+	printf("adding %d lockspaces...\n", ls_count);
 
 	for (i = 0; i < ls_count; i++) {
 		memset(&ls, 0, sizeof(ls));
@@ -185,9 +218,9 @@ static int add_lockspaces(void)
 			return -1;
 		}
 
-		log_debug("add lockspace %s:%llu:%s:%d",
-			  ls.name, (unsigned long long)ls.host_id,
-			  ls.host_id_disk.path, 0);
+		printf("add lockspace %s:%llu:%s:%d\n",
+			ls.name, (unsigned long long)ls.host_id,
+			ls.host_id_disk.path, 0);
 	}
 
 	return 0;
@@ -220,7 +253,7 @@ static int do_one(int pid, int fd, int ls1, int res1, int *full, int acquire)
 	log_debug("%d %s %d,%d = %d",
 		  pid, acquire ? "acquire" : "release", ls1, res1, rv);
 
-	save_rv(rv, acquire);
+	save_rv(pid, rv, acquire);
 
 	return rv;
 }
@@ -269,7 +302,7 @@ static int do_two(int pid, int fd, int ls1, int res1, int ls2, int res2, int *fu
 	log_debug("%d %s %d,%d %d,%d = %d",
 		  pid, acquire ? "acquire" : "release", ls1, res1, ls2, res2, rv);
 
-	save_rv(rv, acquire);
+	save_rv(pid, rv, acquire);
 
 	free(res_args);
 	return rv;
@@ -303,7 +336,7 @@ static int release_all(int pid, int fd)
 
 	log_debug("%d release all = %d", pid, rv);
 
-	save_rv(rv, 0);
+	save_rv(pid, rv, 0);
 
 	return rv;
 }
@@ -456,12 +489,25 @@ void get_options(int argc, char *argv[])
 			break;
 		case 's':
 			ls_count = atoi(optionarg);
+			if (ls_count > MAX_LS_COUNT) {
+				log_error("max ls_count %d", MAX_LS_COUNT);
+				exit(-1);
+			}
 			break;
 		case 'r':
 			res_count = atoi(optionarg);
+			if (res_count > MAX_RES_COUNT) {
+				log_error("max res_count %d", MAX_RES_COUNT);
+				exit(-1);
+			}
 			break;
 		case 'p':
 			pid_count = atoi(optionarg);
+			if (pid_count > MAX_PID_COUNT) {
+				log_error("max pid_count %d", MAX_PID_COUNT);
+				exit(-1);
+			}
+			break;
 		default:
 			log_error("unknown option: %c", optchar);
 			exit(EXIT_FAILURE);
@@ -473,7 +519,7 @@ void get_options(int argc, char *argv[])
 
 int do_rand(int argc, char *argv[])
 {
-	int children[pid_count];
+	int children[MAX_PID_COUNT];
 	int run_count = 0;
 	int i, rv, pid, status;
 
@@ -488,8 +534,15 @@ int do_rand(int argc, char *argv[])
 	if (rv < 0)
 		return rv;
 
+	printf("forking %d pids...\n", pid_count);
+
 	for (i = 0; i < pid_count; i++) {
 		pid = fork();
+
+		if (pid < 0) {
+			log_error("fork %d failed %d run_count %d", i, errno, run_count);
+			break;
+		}
 
 		if (!pid) {
 			do_rand_child();
@@ -499,6 +552,8 @@ int do_rand(int argc, char *argv[])
 		children[i] = pid;
 		run_count++;
 	}
+
+	printf("children running\n");
 
 	while (run_count) {
 		pid = wait(&status);
