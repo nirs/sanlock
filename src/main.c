@@ -761,6 +761,12 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 	}
 
 	pthread_mutex_lock(&cl->mutex);
+	if (cl->pid_dead) {
+		result = -ESTALE;
+		pthread_mutex_unlock(&cl->mutex);
+		goto done;
+	}
+
 	empty_slots = 0;
 	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
 		if (!cl->tokens[i])
