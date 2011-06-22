@@ -657,7 +657,7 @@ int main(int argc, char *argv[])
  out:
 	printf("sanlk_load init <lock_disk_base> [<ls_count> <res_count>]\n");
 	printf("\n");
-	printf("sanlk_load rand\n");
+	printf("sanlk_load rand <lock_disk_base> -i <host_id> [-D -s <ls_count> -r <res_count> -p <pid_count>]\n");
 	printf("\n");
 	return -1;
 }

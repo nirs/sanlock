@@ -467,7 +467,7 @@ int direct_dump(struct task *task, char *dump_path)
 		goto out_close;
 	}
 
-	printf("%8s %36s %36s %10s %4s %4s %s\n",
+	printf("%8s %36s %48s %10s %4s %4s %s\n",
 	       "offset",
 	       "lockspace",
 	       "resource",
@@ -502,7 +502,7 @@ int direct_dump(struct task *task, char *dump_path)
 				strncpy(sname, lr->space_name, NAME_ID_SIZE);
 				strncpy(rname, lr->resource_name, NAME_ID_SIZE);
 
-				printf("%08llu %36s %36s %010llu %04llu %04llu\n",
+				printf("%08llu %36s %48s %010llu %04llu %04llu\n",
 					(unsigned long long)((sector_nr + i) * sd.sector_size),
 					sname, rname,
 					(unsigned long long)lr->timestamp,
@@ -513,7 +513,7 @@ int direct_dump(struct task *task, char *dump_path)
 			strncpy(sname, lr->space_name, NAME_ID_SIZE);
 			strncpy(rname, lr->resource_name, NAME_ID_SIZE);
 
-			printf("%08llu %36s %36s %010llu %04llu %04llu %llu\n",
+			printf("%08llu %36s %48s %010llu %04llu %04llu %llu\n",
 			       (unsigned long long)(sector_nr * sd.sector_size),
 			       sname, rname,
 			       (unsigned long long)lr->timestamp,

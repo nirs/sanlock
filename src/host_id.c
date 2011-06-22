@@ -22,6 +22,7 @@
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/utsname.h>
+#include <uuid/uuid.h>
 
 #include "sanlock_internal.h"
 #include "diskio.h"
@@ -576,7 +577,8 @@ int get_rand(int a, int b)
 void setup_spaces(void)
 {
 	struct utsname name;
-	struct timeval tv;
+	char uuid[37];
+	uuid_t uu;
 
 	INIT_LIST_HEAD(&spaces);
 	INIT_LIST_HEAD(&spaces_add);
@@ -597,13 +599,14 @@ void setup_spaces(void)
 	/* make up something that's likely to be different among hosts */
 
 	memset(&our_host_name_global, 0, sizeof(our_host_name_global));
-	uname(&name);
-	gettimeofday(&tv, NULL);
+	memset(&name, 0, sizeof(name));
+	memset(&uuid, 0, sizeof(uuid));
 
-	snprintf(our_host_name_global, NAME_ID_SIZE, "%llu.%llu.%d.%s",
-		 (unsigned long long)tv.tv_sec,
-		 (unsigned long long)tv.tv_usec,
-		 get_rand(1, RAND_MAX-1),
-		 name.nodename);
+	uname(&name);
+	uuid_generate(uu);
+	uuid_unparse_lower(uu, uuid);
+
+	snprintf(our_host_name_global, NAME_ID_SIZE, "%s.%s",
+		 uuid, name.nodename);
 }
 
