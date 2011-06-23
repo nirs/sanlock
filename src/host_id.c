@@ -370,10 +370,18 @@ int add_lockspace(struct sanlk_lockspace *ls)
 	/* search all lists for an identical lockspace */
 
 	sp2 = _search_space(sp->space_name, &sp->host_id_disk, sp->host_id,
-			    &spaces, &spaces_add, NULL);
+			    &spaces, NULL, NULL);
 	if (sp2) {
 		pthread_mutex_unlock(&spaces_mutex);
 		rv = -EEXIST;
+		goto fail_free;
+	}
+
+	sp2 = _search_space(sp->space_name, &sp->host_id_disk, sp->host_id,
+			    &spaces_add, NULL, NULL);
+	if (sp2) {
+		pthread_mutex_unlock(&spaces_mutex);
+		rv = -EINPROGRESS;
 		goto fail_free;
 	}
 
