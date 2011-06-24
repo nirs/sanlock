@@ -1860,6 +1860,10 @@ static void process_cmd_thread_resource(int ci_in, struct sm_header *h_recv)
 	}
 
 	if (cl->cmd_active) {
+		if (com.quiet_fail && cl->cmd_active == SM_CMD_ACQUIRE) {
+			result = -EBUSY;
+			goto out;
+		}
 		log_error("cmd %d %d,%d,%d cmd_active %d",
 			  h_recv->cmd, ci_target, cl->fd, cl->pid,
 			  cl->cmd_active);
@@ -2411,17 +2415,16 @@ static void print_usage(void)
 	printf("  -p <pid>		process whose resource leases should be displayed\n");
 	printf("\n");
 
-	printf("direct init -n <num_hosts> [-s LOCKSPACE] [-r RESOURCE]\n");
+	printf("direct init [-s LOCKSPACE] [-r RESOURCE]\n");
 	printf("  -a <num>		use async io (1 yes, 0 no)\n");
 	printf("  -n <num_hosts>	host_id's from 1 to num_hosts will be able to acquire\n");
-	printf("                        a resource lease.  This is also number of sectors that\n");
-	printf("                        are read when paxos is run to acquire a resource lease.\n");
-	printf("  -m <max_hosts>	disk space is allocated to support this many hosts\n");
-	printf("                        (default max_hosts %d)\n", DEFAULT_MAX_HOSTS);
-	printf("  -s LOCKSPACE		initialize host_id leases for host_id's 1 to max_hosts\n");
-	printf("                        (the specific host_id in the LOCKSPACE arg is ignored)\n");
-	printf("  -r RESOURCE           initialize a resource lease for use by host_id's 1 to\n");
-	printf("                        num_hosts (num_hosts can be extended up to max_hosts)\n");
+	printf("                        a resource lease.\n");
+	printf("                        (default %d)\n", DEFAULT_MAX_HOSTS);
+	printf("  -m <max_hosts>	disk space is initialized for this many hosts\n");
+	printf("                        (default %d)\n", DEFAULT_MAX_HOSTS);
+	printf("  -s LOCKSPACE		initialize host_id leases for a lockspace\n");
+	printf("                        (host_id in the LOCKSPACE arg is ignored for init)\n");
+	printf("  -r RESOURCE           initialize a resource lease\n");
 	printf("\n");
 	printf("direct dump <path>[:<offset>] [options]\n");
 	printf("  -D			debug: print extra info for debugging\n");
@@ -2966,7 +2969,6 @@ int main(int argc, char *argv[])
 	BUILD_BUG_ON(sizeof(struct sanlk_disk) != sizeof(struct sync_disk));
 	
 	memset(&com, 0, sizeof(com));
-	com.max_hosts = DEFAULT_MAX_HOSTS;
 	com.use_watchdog = DEFAULT_USE_WATCHDOG;
 	com.high_priority = DEFAULT_HIGH_PRIORITY;
 	com.max_worker_threads = DEFAULT_MAX_WORKER_THREADS;

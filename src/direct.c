@@ -373,7 +373,7 @@ int direct_align(struct sync_disk *disk)
 }
 
 /*
- * sanlock direct init -n <num_hosts> [-s LOCKSPACE] [-r RESOURCE]
+ * sanlock direct init [-s LOCKSPACE] [-r RESOURCE]
  *
  * Note: host_id not used for init, whatever is given in LOCKSPACE
  * is ignored
@@ -390,12 +390,6 @@ int direct_init(struct task *task,
 		rv = do_delta_action(ACT_INIT, task, ls, max_hosts, NULL, NULL);
 
 	} else if (res) {
-		if (!num_hosts)
-			return -EINVAL;
-
-		if (num_hosts > max_hosts)
-			return SANLK_LEADER_NUMHOSTS;
-
 		if (!res->num_disks)
 			return -ENODEV;
 

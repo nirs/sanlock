@@ -29,8 +29,8 @@ int sanlock_direct_live_id(struct sanlk_lockspace *ls,
 			   int io_timeout_sec);
 
 /*
- * Use max_hosts = 0 for default max_hosts value
- *
+ * Use max_hosts = 0 for default value.
+ * Use num_hosts = 0 for default value.
  * Provide either lockspace or resource, not both
  */
 

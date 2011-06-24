@@ -503,6 +503,9 @@ int delta_lease_init(struct task *task,
 	int align_size;
 	int i, rv;
 
+	if (!max_hosts)
+		max_hosts = DEFAULT_MAX_HOSTS;
+
 	align_size = direct_align(disk);
 
 	if (disk->sector_size * max_hosts > align_size)

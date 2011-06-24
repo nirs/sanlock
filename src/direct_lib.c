@@ -102,9 +102,6 @@ int sanlock_direct_init(struct sanlk_lockspace *ls,
 
 	setup_task_lib(&task, use_aio, DEFAULT_IO_TIMEOUT);
 
-	if (!max_hosts)
-		max_hosts = DEFAULT_MAX_HOSTS;
-
 	rv = direct_init(&task, ls, res, max_hosts, num_hosts);
 
 	close_task_aio(&task);
