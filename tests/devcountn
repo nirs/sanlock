@@ -57,7 +57,8 @@ if [ "$cmd1" != "init" ]; then
 	sanlock add_lockspace -s devcount:$hostid:$deva$i:0
 fi
 
-for i in `seq 1 $num`; do
+end=`expr $num - 1`
+for i in `seq 0 $end`; do
 	if [ "$cmd1" == "init" ]; then
 		deva=$3
 		devb=$4

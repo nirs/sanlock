@@ -96,8 +96,13 @@ static void pause_pid(int pid, int child_stderr)
 
 	rv = read(child_stderr, buf, sizeof(buf));
 
-	if (!strstr(buf, "we_are_paused"))
-		log_error("pause_pid %d buf %s", pid, buf);
+	if (strstr(buf, "we_are_paused"))
+		return;
+
+	while (1) {
+		log_error("pause_pid %d read %s", pid, buf);
+		sleep(2);
+	}
 }
 
 static void resume_pid(int pid)
@@ -205,7 +210,7 @@ static int do_count(int argc, char *argv[])
 {
 	char *rbuf, **p_rbuf, *wbuf, **p_wbuf, *vbuf, **p_vbuf;
 	struct entry *re, *max_re, *our_we;
-	int i, fd, rv, max_i;
+	int i, fd, rv, error, max_i;
 	int pause_fd;
 	time_t start;
 	uint32_t our_pid = getpid();
@@ -240,12 +245,14 @@ static int do_count(int argc, char *argv[])
 	fd = open(count_path, O_RDWR | O_DIRECT | O_SYNC, 0);
 	if (fd < 0) {
 		perror("open failed");
+		error = 1;
 		goto fail;
 	}
 
 	rv = ioctl(fd, BLKFLSBUF);
 	if (rv) {
 		perror("BLKFLSBUF failed");
+		error = 2;
 		goto fail;
 	}
 
@@ -256,18 +263,21 @@ static int do_count(int argc, char *argv[])
 	rv = posix_memalign((void *)p_rbuf, getpagesize(), 512);
 	if (rv) {
 		perror("posix_memalign failed");
+		error = 3;
 		goto fail;
 	}
 
 	rv = posix_memalign((void *)p_wbuf, getpagesize(), 512);
 	if (rv) {
 		perror("posix_memalign failed");
+		error = 4;
 		goto fail;
 	}
 
 	rv = posix_memalign((void *)p_vbuf, getpagesize(), 512);
 	if (rv) {
 		perror("posix_memalign failed");
+		error = 5;
 		goto fail;
 	}
 
@@ -276,6 +286,7 @@ static int do_count(int argc, char *argv[])
 	rv = read(fd, rbuf, 512);
 	if (rv != 512) {
 		perror("read failed");
+		error = 6;
 		goto fail;
 	}
 
@@ -294,6 +305,7 @@ static int do_count(int argc, char *argv[])
 			rv = read(fd, vbuf, 512);
 			if (rv != 512) {
 				perror("read failed");
+				error = 7;
 				goto fail;
 			}
 
@@ -302,6 +314,7 @@ static int do_count(int argc, char *argv[])
 				print_entries(count_path, our_pid, rbuf);
 				log_error("%s c %d vbuf:", count_path, our_pid);
 				print_entries(count_path, our_pid, vbuf);
+				error = 8;
 				goto fail;
 			}
 		}
@@ -329,6 +342,7 @@ static int do_count(int argc, char *argv[])
 	if (max_turn != max_re->turn) {
 		log_error("%s c %d max_turn %d max_re->turn %d\n",
 			  count_path, our_pid, max_turn, max_re->turn);
+		error = 9;
 		goto fail;
 	}
 
@@ -359,6 +373,7 @@ static int do_count(int argc, char *argv[])
 	rv = write(fd, wbuf, 512);
 	if (rv != 512) {
 		perror("write failed");
+		error = 10;
 		goto fail;
 	}
 	writes = 1;
@@ -376,6 +391,7 @@ static int do_count(int argc, char *argv[])
 		rv = write(fd, wbuf, 512);
 		if (rv != 512) {
 			perror("write failed");
+			error = 11;
 			goto fail;
 		}
 		writes++;
@@ -419,6 +435,7 @@ static int do_count(int argc, char *argv[])
 			rv = read(fd, vbuf, 512);
 			if (rv != 512) {
 				perror("read failed");
+				error = 12;
 				goto fail;
 			}
 
@@ -427,6 +444,7 @@ static int do_count(int argc, char *argv[])
 				print_entries(count_path, our_pid, rbuf);
 				log_error("%s c %d vbuf:", count_path, our_pid);
 				print_entries(count_path, our_pid, vbuf);
+				error = 13;
 				goto fail;
 			}
 		}
@@ -434,9 +452,13 @@ static int do_count(int argc, char *argv[])
 
 	return 0;
  fail:
-	printf("sleeping...\n");
-	sleep(10000000);
-	return -1;
+	fprintf(stderr, "error %d\n", error);
+	while (1) {
+		log_error("%s c %d error %d", count_path, our_pid, error);
+		print_entries(count_path, our_pid, rbuf);
+		print_entries(count_path, our_pid, vbuf);
+		sleep(2);
+	}
 }
 
 static int add_lockspace(void)
@@ -596,8 +618,15 @@ static int do_relock(int argc, char *argv[])
 			goto dead_child;
 
 		rv = sanlock_inquire(-1, pid, 0, &res_count, &state);
+		if (rv == -EBUSY) {
+			/* pid probably still busy doing acquire */
+			goto run_more;
+		}
+		if (rv == -ESTALE || rv == -ESRCH) {
+			/* pid has exited */
+			goto run_more;
+		}
 		if (rv < 0) {
-			/* pid may have exited */
 			log_error("%s p %d sanlock_inquire c %d error %d",
 				  count_path, parent_pid, pid, rv);
 			goto run_more;
@@ -1349,7 +1378,7 @@ int do_expire(int argc, char *argv[])
  * dd if=/dev/zero of=<count_disk> bs=512 count=24
  */
 
-#define INIT_NUM_HOSTS 8
+#define INIT_NUM_HOSTS 0
 
 int do_init(int argc, char *argv[])
 {
@@ -1371,8 +1400,8 @@ int do_init(int argc, char *argv[])
 	memset(command, 0, sizeof(command));
 
 	snprintf(command, sizeof(command),
-		 "sanlock direct init -n %d -s devcount:0:%s:0",
-		 INIT_NUM_HOSTS, argv[2]);
+		 "sanlock direct init -s devcount:0:%s:0",
+		 argv[2]);
 
 	printf("%s\n", command);
 
@@ -1384,8 +1413,7 @@ int do_init(int argc, char *argv[])
 
 
 	snprintf(command, sizeof(command),
-		 "sanlock direct init -n %d -r devcount:resource%s:%s:%d",
-		 INIT_NUM_HOSTS,
+		 "sanlock direct init -r devcount:resource%s:%s:%d",
 		 argv[3],
 		 argv[2],
 		 LEASE_SIZE);
@@ -1481,16 +1509,16 @@ int main(int argc, char *argv[])
 
  out:
 	/*
-	 * sanlock direct init -n 8 -s devcount:0:/dev/bull/leases:0
-	 * sanlock direct init -n 8 -r devcount:resource/dev/bull/count:/dev/bull/leases:LEASE_SIZE
+	 * sanlock direct init -s devcount:0:/dev/bull/leases:0
+	 * sanlock direct init -r devcount:resource/dev/bull/count:/dev/bull/leases:LEASE_SIZE
 	 *
 	 * host_id leases exists at <lock_disk> offset 0
 	 * first resource lease exists at <lock_disk> offset LEASE_SIZE
 	 */
 
 	printf("devcount init <lock_disk> <count_disk>\n");
-	printf("  sanlock direct init -n 8 -s devcount:0:<lock_disk>:0\n");
-	printf("  sanlock direct init -n 8 -r devcount:resource<count_disk>:<lock_disk>:LEASE_SIZE\n");
+	printf("  sanlock direct init -s devcount:0:<lock_disk>:0\n");
+	printf("  sanlock direct init -r devcount:resource<count_disk>:<lock_disk>:LEASE_SIZE\n");
 	printf("  dd if=/dev/zero of=<count_disk> bs=512 count=24\n");
 	printf("\n");
 	printf("devcount rw <count_disk> <sec1> <sec2> <hostid>\n");
