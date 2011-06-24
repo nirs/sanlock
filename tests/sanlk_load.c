@@ -33,6 +33,7 @@
 #define DEFAULT_PID_COUNT 4
 #define MAX_RV 300
 
+int prog_stop;
 int debug = 0;
 char error_buf[4096];
 char lock_disk_base[PATH_MAX];
@@ -58,6 +59,12 @@ do { \
 	syslog(LOG_ERR, "%s", error_buf); \
 } while (0)
 
+
+static void sigterm_handler(int sig)
+{
+	if (sig == SIGTERM)
+		prog_stop = 1;
+}
 
 static int get_rand(int a, int b)
 {
@@ -198,31 +205,64 @@ static int check_lock_state(int pid, int result, int count, char *res_state)
 	}
 }
 
-static int add_lockspaces(void)
+static int remove_lockspace(int i)
 {
 	struct sanlk_lockspace ls;
-	int i, rv;
+	int rv;
 
-	printf("adding %d lockspaces...\n", ls_count);
+	memset(&ls, 0, sizeof(ls));
+	sprintf(ls.host_id_disk.path, "%s%d", lock_disk_base, i);
+	sprintf(ls.name, "lockspace%d", i);
+	ls.host_id = our_hostid;
 
-	for (i = 0; i < ls_count; i++) {
-		memset(&ls, 0, sizeof(ls));
-		sprintf(ls.host_id_disk.path, "%s%d", lock_disk_base, i);
-		sprintf(ls.name, "lockspace%d", i);
-		ls.host_id = our_hostid;
+	printf("rem lockspace%d...\n", i);
 
-		rv = sanlock_add_lockspace(&ls, 0);
-		if (rv < 0) {
-			log_error("sanlock_add_lockspace error %d %s", rv,
-				  ls.host_id_disk.path);
-			return -1;
-		}
-
-		printf("add lockspace %s:%llu:%s:%d\n",
-			ls.name, (unsigned long long)ls.host_id,
-			ls.host_id_disk.path, 0);
+	rv = sanlock_rem_lockspace(&ls, 0);
+	if (rv < 0) {
+		log_error("sanlock_rem_lockspace error %d %s", rv,
+			  ls.host_id_disk.path);
+		return -1;
 	}
 
+	printf("rem done\n");
+	return 0;
+}
+
+static int add_lockspace(int i)
+{
+	struct sanlk_lockspace ls;
+	int rv;
+
+	memset(&ls, 0, sizeof(ls));
+	sprintf(ls.host_id_disk.path, "%s%d", lock_disk_base, i);
+	sprintf(ls.name, "lockspace%d", i);
+	ls.host_id = our_hostid;
+
+	printf("add lockspace%d...\n", i);
+
+	rv = sanlock_add_lockspace(&ls, 0);
+	if (rv == -EEXIST)
+		return 0;
+
+	if (rv < 0) {
+		log_error("sanlock_add_lockspace error %d %s", rv,
+			  ls.host_id_disk.path);
+		return -1;
+	}
+
+	printf("add done\n");
+	return 0;
+}
+
+static int add_lockspaces(void)
+{
+	int i, rv;
+
+	for (i = 0; i < ls_count; i++) {
+		rv = add_lockspace(i);
+		if (rv < 0)
+			return rv;
+	}
 	return 0;
 }
 
@@ -345,11 +385,17 @@ static void inquire_all(int pid, int fd)
 {
 	int rv, count = 0;
 	char *state = NULL;
+
+	if (prog_stop)
+		return;
 		
 	rv = sanlock_inquire(fd, -1, 0, &count, &state);
 
 	log_debug("%d inquire all = %d", pid, rv);
 
+	if (prog_stop)
+		return;
+		
 	check_lock_state(pid, rv, count, state);
 }
 
@@ -370,7 +416,7 @@ int do_rand_child(void)
 		exit(-1);
 	}
 
-	while (1) {
+	while (!prog_stop) {
 		ls1 = get_rand(0, ls_count-1);
 		res1 = get_rand(0, res_count-1);
 		state1 = lock_state[ls1][res1];
@@ -446,6 +492,8 @@ int do_rand_child(void)
 		}
 		iter++;
 	}
+	display_rv(pid);
+	return 0;
 }
 
 /*
@@ -517,14 +565,30 @@ void get_options(int argc, char *argv[])
 	}
 }
 
+int find_pid(int *kids, int pid)
+{
+	int i;
+
+	for (i = 0; i < pid_count; i++) {
+		if (kids[i] == pid)
+			return i;
+	}
+	return -1;
+}
+
 int do_rand(int argc, char *argv[])
 {
+	struct sigaction act;
 	int children[MAX_PID_COUNT];
 	int run_count = 0;
-	int i, rv, pid, status;
+	int i, rv, pid, lsi, status;
 
 	if (argc < 5)
 		return -1;
+
+	memset(&act, 0, sizeof(act));
+	act.sa_handler = sigterm_handler;
+	sigaction(SIGTERM, &act, NULL);
 
 	strcpy(lock_disk_base, argv[2]);
 
@@ -534,7 +598,7 @@ int do_rand(int argc, char *argv[])
 	if (rv < 0)
 		return rv;
 
-	printf("forking %d pids...\n", pid_count);
+	printf("forking %d pids\n", pid_count);
 
 	for (i = 0; i < pid_count; i++) {
 		pid = fork();
@@ -543,29 +607,103 @@ int do_rand(int argc, char *argv[])
 			log_error("fork %d failed %d run_count %d", i, errno, run_count);
 			break;
 		}
-
 		if (!pid) {
 			do_rand_child();
 			exit(-1);
 		}
-
 		children[i] = pid;
 		run_count++;
 	}
 
 	printf("children running\n");
 
-	while (run_count) {
-		pid = wait(&status);
-		if (pid > 0)
-			run_count--;
+	while (!prog_stop) {
+		/*
+		 * kill and replace a random pid
+		 */
+
+		sleep(get_rand(1, 60));
+		if (prog_stop)
+			break;
+
+		i = get_rand(0, pid_count);
+		pid = children[i];
+
+		printf("kill pid %d\n", pid);
+		kill(pid, SIGKILL);
+
+		rv = waitpid(pid, &status, 0);
+		if (rv <= 0)
+			continue;
+
+		pid = fork();
+		if (pid < 0) {
+			log_error("fork failed %d", errno);
+			break;
+		} else if (!pid) {
+			do_rand_child();
+			exit(-1);
+		} else {
+			children[i] = pid;
+		}
+
+#if 0
+		/*
+		 * remove a random lockspace, replace any pids that were using
+		 * it, replace the lockspace
+		 */
+
+		sleep(get_rand(1, 60));
+		if (prog_stop)
+			break;
+
+		lsi = get_rand(0, ls_count-1);
+
+		remove_lockspace(lsi);
+
+		while (1) {
+			rv = waitpid(-1, &status, WNOHANG);
+			if (rv <= 0)
+				break;
+
+			if (!WIFEXITED(status))
+				continue;
+
+			printf("exit pid %d\n", pid);
+
+			i = find_pid(children, rv);
+			if (i < 0)
+				continue;
+
+			pid = fork();
+			if (pid < 0) {
+				log_error("fork failed %d", errno);
+				break;
+			} else if (!pid) {
+				do_rand_child();
+				exit(-1);
+			} else {
+				children[i] = pid;
+			}
+		}
+
+		add_lockspace(lsi);
+#endif
 	}
 
-	/*
-	 * periodically:
-	 * - kill a random pid, and fork a new one to replace it
-	 * - rem a random ls and add it again
-	 */
+	printf("stopping pids");
+
+	for (i = 0; i < pid_count; i++)
+		kill(children[i], SIGTERM);
+
+	while (run_count) {
+		pid = wait(&status);
+		if (pid > 0) {
+			run_count--;
+			printf(".");
+		}
+	}
+	printf("\n");
 
 	return 0;
 }
@@ -584,7 +722,7 @@ int do_rand(int argc, char *argv[])
  * ...
  */
 
-#define INIT_NUM_HOSTS 8
+#define INIT_NUM_HOSTS 64
 
 int do_init(int argc, char *argv[])
 {
