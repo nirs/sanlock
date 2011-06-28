@@ -1199,6 +1199,11 @@ int paxos_lease_acquire(struct task *task,
 		/* TODO: test with sleep(2) here */
 		sleep(1);
 
+		if (external_shutdown) {
+			error = -1;
+			goto out;
+		}
+
 		error = paxos_lease_leader_read(task, token, &tmp_leader, "paxos_acquire");
 		if (error < 0)
 			goto out;
