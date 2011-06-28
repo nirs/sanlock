@@ -25,7 +25,7 @@
 #include "sanlock_internal.h"
 #include "log.h"
 
-#define LOG_STR_LEN 256
+#define LOG_STR_LEN 512
 static char log_str[LOG_STR_LEN];
 
 static pthread_t thread_handle;
