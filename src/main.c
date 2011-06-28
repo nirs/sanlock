@@ -652,7 +652,7 @@ static void client_recv_all(int ci, struct sm_header *h_recv, int pos)
 			break;
 	}
 
-	log_error("recv_all %d,%d,%d pos %d rv %d error %d rem %d total %d",
+	log_debug("recv_all %d,%d,%d pos %d rv %d error %d rem %d total %d",
 		  ci, client[ci].fd, client[ci].pid, pos, rv, error, rem, total);
 }
 
