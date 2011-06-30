@@ -53,6 +53,7 @@ int print_space_state(struct space *sp, char *str)
 		 "host_generation=%llu "
 		 "space_dead=%d "
 		 "killing_pids=%d "
+		 "corrupt_result=%d "
 		 "acquire_last_result=%d "
 		 "renewal_last_result=%d "
 		 "acquire_last_attempt=%llu "
@@ -63,6 +64,7 @@ int print_space_state(struct space *sp, char *str)
 		 (unsigned long long)sp->host_generation,
 		 sp->space_dead,
 		 sp->killing_pids,
+		 sp->lease_status.corrupt_result,
 		 sp->lease_status.acquire_last_result,
 		 sp->lease_status.renewal_last_result,
 		 (unsigned long long)sp->lease_status.acquire_last_attempt,
@@ -171,11 +173,18 @@ int host_id_disk_info(char *name, struct sync_disk *disk)
 int host_id_check(struct task *task, struct space *sp)
 {
 	uint64_t last_success;
+	int corrupt_result;
 	int gap;
 
 	pthread_mutex_lock(&sp->mutex);
 	last_success = sp->lease_status.renewal_last_success;
+	corrupt_result = sp->lease_status.corrupt_result;
 	pthread_mutex_unlock(&sp->mutex);
+
+	if (corrupt_result) {
+		log_erros(sp, "host_id_check corrupt %d", corrupt_result);
+		return 0;
+	}
 
 	gap = time(NULL) - last_success;
 
@@ -195,6 +204,27 @@ int host_id_check(struct task *task, struct space *sp)
 	}
 
 	return 1;
+}
+
+/* If a renewal result is one of the listed errors, it means our
+   delta lease has been corrupted/overwritten/reinitialized out from
+   under us, and we should stop using it immediately.  There's no
+   point in retrying the renewal. */
+
+static int corrupt_result(int result)
+{
+	switch (result) {
+	case SANLK_RENEW_OWNER:
+	case SANLK_RENEW_DIFF:
+	case SANLK_LEADER_MAGIC:
+	case SANLK_LEADER_VERSION:
+	case SANLK_LEADER_SECTORSIZE:
+	case SANLK_LEADER_LOCKSPACE:
+	case SANLK_LEADER_CHECKSUM:
+		return result;
+	default:
+		return 0;
+	}
 }
 
 static void *lockspace_thread(void *arg_in)
@@ -316,6 +346,12 @@ static void *lockspace_thread(void *arg_in)
 			log_erros(sp, "renewal error %d delta_length %d last_success %llu",
 				  result, delta_length,
 				  (unsigned long long)sp->lease_status.renewal_last_success);
+
+			if (!sp->lease_status.corrupt_result) {
+				sp->lease_status.corrupt_result = corrupt_result(result);
+				log_erros(sp, "renewal error %d is corruption",
+					  sp->lease_status.corrupt_result);
+			}
 		}
 		stop = sp->thread_stop;
 		pthread_mutex_unlock(&sp->mutex);

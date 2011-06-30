@@ -94,6 +94,7 @@ struct token {
 };
 
 struct lease_status {
+	int corrupt_result;
 	int acquire_last_result;
 	int renewal_last_result;
 	uint64_t acquire_last_attempt;

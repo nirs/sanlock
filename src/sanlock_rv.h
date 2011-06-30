@@ -22,7 +22,8 @@
 #define SANLK_DBLOCK_MBAL	-213
 #define SANLK_DBLOCK_CHECKSUM	-214
 
-/* verify_leader, leader_read, leader_write (paxos or delta) */
+/* verify_leader, leader_read, leader_write (paxos or delta)
+   (when adding to list, check if it should be a corrupt_result()) */
 
 #define SANLK_LEADER_READ	-220
 #define SANLK_LEADER_WRITE	-221
