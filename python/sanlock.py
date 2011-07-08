@@ -18,8 +18,8 @@ for skfun in SANLOCK_FUNCTIONS:
     setattr(sys.modules[__name__], skfun, getattr(sanlockmod, skfun))
 del skfun
 
-def init_lockspace(lockspace, max_hosts=2000, use_aio=True):
+def init_lockspace(lockspace, max_hosts=0, use_aio=True):
     sanlockmod.init_lockspace(lockspace, max_hosts, 0, use_aio)
 
-def init_resource(resource, num_hosts, max_hosts=2000, use_aio=True):
+def init_resource(resource, num_hosts=0, max_hosts=0, use_aio=True):
     sanlockmod.init_resource(resource, max_hosts, num_hosts, use_aio)
