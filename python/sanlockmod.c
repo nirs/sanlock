@@ -22,9 +22,11 @@ static PyObject *sanlockmod_exception;
 static void
 __set_exception(int en, char *msg)
 {
+    char *err_name;
     PyObject *exc_tuple;
 
-    exc_tuple = Py_BuildValue("(is)", en, msg);
+    err_name = strerror(en);
+    exc_tuple = Py_BuildValue("(iss)", en, msg, err_name);
 
     if (exc_tuple == NULL) {
         PyErr_NoMemory();
