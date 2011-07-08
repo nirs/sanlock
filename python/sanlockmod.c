@@ -14,7 +14,6 @@
 
 #define SKERRNO(x) (-x)
 
-int __sanlockmod_fd = -1;
 PyObject *py_module;
 
 /* SANLock exception */
@@ -84,17 +83,17 @@ __parse_resource(char *resource, struct sanlk_resource **ret_res)
 static PyObject *
 py_register(PyObject *self, PyObject *args)
 {
-    if (__sanlockmod_fd < 0) {
-        __sanlockmod_fd = sanlock_register();
-    }
+    int sanlockfd;
 
-    if (__sanlockmod_fd < 0) {
-        __set_exception(SKERRNO(__sanlockmod_fd),
+    sanlockfd = sanlock_register();
+
+    if (sanlockfd < 0) {
+        __set_exception(SKERRNO(sanlockfd),
                         "SANLock registration failed");
         return NULL;
     }
 
-    Py_RETURN_NONE;
+    return PyInt_FromLong(sanlockfd);
 }
 
 static PyObject *py_init_lockspace(PyObject *self, PyObject *args)
@@ -220,12 +219,12 @@ py_rem_lockspace(PyObject *self, PyObject *args)
 static PyObject *
 py_acquire(PyObject *self, PyObject *args)
 {
-    int rv;
+    int rv, sanlockfd;
     char *resource;
     struct sanlk_resource *res;
 
     /* parse python tuple */
-    if (!PyArg_ParseTuple(args, "s", &resource)) {
+    if (!PyArg_ParseTuple(args, "is", &sanlockfd, &resource)) {
         return NULL;
     }
 
@@ -236,7 +235,7 @@ py_acquire(PyObject *self, PyObject *args)
 
     /* acquire sanlock resource (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_acquire(__sanlockmod_fd, -1, 0, 1, &res, 0);
+    rv = sanlock_acquire(sanlockfd, -1, 0, 1, &res, 0);
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
@@ -255,12 +254,12 @@ exit_fail:
 static PyObject *
 py_release(PyObject *self, PyObject *args)
 {
-    int rv;
+    int rv, sanlockfd;
     char *resource;
     struct sanlk_resource *res;
 
     /* parse python tuple */
-    if (!PyArg_ParseTuple(args, "s", &resource)) {
+    if (!PyArg_ParseTuple(args, "is", &sanlockfd, &resource)) {
         return NULL;
     }
 
@@ -271,7 +270,7 @@ py_release(PyObject *self, PyObject *args)
 
     /* release sanlock resource (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_release(__sanlockmod_fd, -1, 0, 1, &res);
+    rv = sanlock_release(sanlockfd, -1, 0, 1, &res);
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
