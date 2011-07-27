@@ -31,6 +31,32 @@
 #include "client_msg.h"
 #include "sanlock_resource.h"
 
+/* src has colons unescaped, dst should have them escaped with backslash */
+
+static void copy_path_out(char *dst, char *src)
+{
+	int i, j = 0;
+
+	for (i = 0; i < strlen(src); i++) {
+		if (src[i] == ':')
+			dst[j++] = '\\';
+		dst[j++] = src[i];
+	}
+}
+
+/* src has colons escaped with backslash, dst should have backslash removed */ 
+
+static void copy_path_in(char *dst, char *src)
+{
+	int i, j = 0;
+
+	for (i = 0; i < strlen(src); i++) {
+		if (src[i] == '\\')
+			continue;
+		dst[j++] = src[i];
+	}
+}
+
 int sanlock_register(void)
 {
 	int sock, rv;
@@ -305,6 +331,7 @@ int sanlock_release(int sock, int pid, uint32_t flags, int res_count,
 
 int sanlock_res_to_str(struct sanlk_resource *res, char **str_ret)
 {
+	char path[SANLK_PATH_LEN + 1];
 	char *str;
 	int ret, len, pos, d;
 
@@ -324,8 +351,10 @@ int sanlock_res_to_str(struct sanlk_resource *res, char **str_ret)
 	pos += ret;
 
 	for (d = 0; d < res->num_disks; d++) {
-		ret = snprintf(str + pos, len - pos, ":%s:%llu",
-			       res->disks[d].path,
+		memset(path, 0, sizeof(path));
+		copy_path_out(path, res->disks[d].path);
+
+		ret = snprintf(str + pos, len - pos, ":%s:%llu", path,
 			       (unsigned long long)res->disks[d].offset);
 
 		if (ret >= len - pos)
@@ -585,13 +614,23 @@ int sanlock_str_to_lockspace(char *str, struct sanlk_lockspace *ls)
 	char *host_id = NULL;
 	char *path = NULL;
 	char *offset = NULL;
+	int i;
 
-	if (str)
-		host_id = strstr(str, ":");
-	if (host_id)
-		path = strstr(host_id+1, ":");
-	if (host_id && path)
-		offset = strstr(path+1, ":");
+	for (i = 0; i < strlen(str); i++) {
+		if (str[i] == '\\') {
+			i++;
+			continue;
+		}
+
+		if (str[i] == ':') {
+			if (!host_id)
+				host_id = &str[i];
+			else if (!path)
+				path = &str[i];
+			else if (!offset)
+				offset = &str[i];
+		}
+	}
 
 	if (host_id) {
 		*host_id = '\0';
@@ -611,7 +650,7 @@ int sanlock_str_to_lockspace(char *str, struct sanlk_lockspace *ls)
 	if (host_id)
 		ls->host_id = atoll(host_id);
 	if (path)
-		strncpy(ls->host_id_disk.path, path, SANLK_PATH_LEN-1);
+		copy_path_in(ls->host_id_disk.path, path);
 	if (offset)
 		ls->host_id_disk.offset = atoll(offset);
 
