@@ -863,6 +863,8 @@ static void print_usage(void)
 	printf("version               print version\n");
 	printf("help                  print usage\n");
 	printf("-D                    debug: no fork and print all logging to stderr\n");
+	printf("-H <num>              use high priority features (1 yes, 0 no, default %d)\n",
+				      DEFAULT_HIGH_PRIORITY);
 }
 
 /* If wdmd exits abnormally, /dev/watchdog will eventually fire, and clients
@@ -877,11 +879,13 @@ static void print_usage(void)
    
 int main(int argc, char *argv[])
 {
-	int rv;
+	char optchar;
+	char *optionarg;
+	char *p;
+	int i, rv;
 
 	/*
-	 * TODO: real option parsing, including
-	 * -h <num> use high priority features (1 yes, 0 no, default 1)
+	 * TODO:
 	 * -c <num> enable test clients (1 yes, 0 no, default ...)
 	 * -s <num> enable test scripts (1 yes, 0 no, default ...)
 	 * -f <num> enable test files (1 yes, 0 no, default ...)
@@ -900,6 +904,43 @@ int main(int argc, char *argv[])
 	    (!strcmp(argv[1], "help") || !strcmp(argv[1], "--help") || !strcmp(argv[1], "-h"))) {
 		print_usage();
 		return 0;
+	}
+
+	for (i = 1; i < argc; ) {
+		p = argv[i];
+
+		if ((p[0] != '-') || (strlen(p) != 2)) {
+			fprintf(stderr, "unknown option %s\n", p);
+			fprintf(stderr, "space required before option value\n");
+			exit(EXIT_FAILURE);
+		}
+
+		optchar = p[1];
+		i++;
+
+		/* the only option that does not have optionarg */
+		if (optchar == 'D') {
+			daemon_debug = 1;
+			continue;
+		}
+
+		if (i >= argc) {
+			fprintf(stderr, "option '%c' requires arg\n", optchar);
+			exit(EXIT_FAILURE);
+		}
+
+		optionarg = argv[i];
+
+		switch (optchar) {
+		case 'H':
+			high_priority = atoi(optionarg);
+			break;
+		default:
+			fprintf(stderr, "unknown option: %c\n", optchar);
+			exit(EXIT_FAILURE);
+		}
+
+		i++;
 	}
 
 	if ((argc > 1) &&
