@@ -1,0 +1,112 @@
+.TH SANLOCK 8 2011-08-02
+
+.SH NAME
+sanlock \- shared storage lock manager
+
+.SH SYNOPSIS
+.B sanlock
+[COMMAND] [ACTION] [OPTIONS]
+
+.SH DESCRIPTION
+
+The sanlock daemon manages leases for applications running on a cluster of
+hosts with shared storage.  All lease management and coordination is done
+through reading and writing blocks on the shared storage.  Two basic types
+of leases are used, each based on a different algorithm:
+
+"delta leases" are slow to acquire and demand regular i/o to shared
+storage.  sanlock only uses them internally to hold a lease on its
+"host_id" (an integer host identifier from 1-2000).  They simply prevent
+two hosts from using the same host identifier.  They also serve in a
+limited way as host "liveness" indicators since they are renewed.
+
+"paxos leases" are generally fast to acquire and sanlock makes them
+available to applications as "general purpose" resource leases.  The disk
+paxos algorithm uses host_id's internally, and does not work if different
+hosts use the same host_id.  So the delta leases provide unique host_id's
+for implementing paxos leases.
+
+Before sanlock can be used, the user must assign each host an identifier,
+or "host_id", which is an integer value between 1 and 2000.  Two hosts
+should not be given the same host_id.
+
+sanlock views a pool of storage as a "lockspace".  Each distinct pool of
+storage, e.g. from different sources, would typically be defined as a
+separate lockspace, with a separate lockspace name.
+
+A part of this storage space must be reserved and initialized for sanlock
+to store delta leases.  Each host that wants to use the lockspace must
+first acquire a delta lease on its host_id number within the lockspace.
+(See the add_lockspace action/api.)  These delta leases prevent two hosts
+from using the same host_id, and allow hosts to detect which other hosts
+are currently using the lockspace.  The space required for 2000 delta
+leases in the lockspace (for all possible host_id's) is 1GB for storage
+with 512 byte sectors, or 8GB for storage with 4k sectors.
+
+Example:
+
+1. Create storage pools and reserve and initialize host_id leases
+.br
+two different LUNs on a SAN: /dev/sdb, /dev/sdc
+.br
+vgcreate pool1 /dev/sdb
+.br
+vgcreate pool2 /dev/sdc
+.br
+lvcreate -n hostid_leases -L 1GB pool1
+.br
+lvcreate -n hostid_leases -L 1GB pool2
+.br
+sanlock direct init -s lockspace1:0:/dev/pool1/hostid_leases:0
+.br
+sanlock direct init -s lockspace2:0:/dev/pool2/hostid_leases:0
+.br
+
+2. Start the sanlock daemon on each host
+.br
+sanlock daemon
+.br
+
+3. Add each lockspace to be used
+.br
+host1:
+.br
+sanlock client add_lockspace -s lockspace1:1:/dev/pool1/hostid_leases:0
+.br
+sanlock client add_lockspace -s lockspace2:1:/dev/pool2/hostid_leases:0
+.br
+host2:
+.br
+sanlock client add_lockspace -s lockspace1:2:/dev/pool1/hostid_leases:0
+.br
+sanlock client add_lockspace -s lockspace2:2:/dev/pool2/hostid_leases:0
+.br
+
+4. Applications can now reserve/initialize space for resource leases, and
+then acquire the leases as they need to access the resources.
+
+
+
+sanlock is a multi purpose binary, with three top level commands:
+
+.TP
+.B daemon
+start daemon
+
+.TP
+.B client
+send request to daemon (default command if none given)
+
+.TP
+.B direct
+access storage directly (no coordination with daemon)
+
+.SS client actions
+
+.SS direct actions
+
+.SH OPTIONS
+
+.SH SEE ALSO
+.BR wdmd (8)
+

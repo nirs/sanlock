@@ -5,14 +5,12 @@
 # of the GNU General Public License v.2.
 
 CMD_TARGET = sanlock
-
 LIB_TARGET = libsanlock
-
 HEADER_TARGET = sanlock.h sanlock_rv.h sanlock_resource.h sanlock_admin.h sanlock_direct.h
+MAN_TARGET = sanlock.8
 
 SOMAJOR=1
 SOMINOR=0
-
 SHLIB_TARGET = $(LIB_TARGET).so.$(SOMAJOR).$(SOMINOR)
 
 CMD_SOURCE = \
@@ -81,16 +79,20 @@ clean:
 
 INSTALL=$(shell which install)
 
-CMD_BINDIR=/usr/sbin
-LIB_LIBDIR=/usr/lib64
-HEADER_DIR=/usr/include
+DESTDIR=
+BINDIR=/usr/sbin
+LIBDIR=/usr/lib64
+HEADIR=/usr/include
+MANDIR=/usr/share/man
 
 .PHONY: install
 install: all
-	mkdir -p $(DESTDIR)/$(CMD_BINDIR)
-	mkdir -p $(DESTDIR)/$(LIB_LIBDIR)
-	mkdir -p $(DESTDIR)/$(HEADER_DIR)
-	$(INSTALL) -c -m 755 $(CMD_TARGET) $(DESTDIR)/$(CMD_BINDIR)
-	$(INSTALL) -c -m 755 $(SHLIB_TARGET) $(DESTDIR)/$(LIB_LIBDIR)
-	cp -a $(LIB_TARGET).so $(DESTDIR)/$(LIB_LIBDIR)
-	$(INSTALL) -c -m 644 $(HEADER_TARGET) $(DESTDIR)/$(HEADER_DIR)
+	$(INSTALL) -d $(DESTDIR)/$(BINDIR)
+	$(INSTALL) -d $(DESTDIR)/$(LIBDIR)
+	$(INSTALL) -d $(DESTDIR)/$(HEADIR)
+	$(INSTALL) -d $(DESTDIR)/$(MANDIR)
+	$(INSTALL) -c -m 755 $(CMD_TARGET) $(DESTDIR)/$(BINDIR)
+	$(INSTALL) -c -m 755 $(SHLIB_TARGET) $(DESTDIR)/$(LIBDIR)
+	cp -a $(LIB_TARGET).so $(DESTDIR)/$(LIBDIR)
+	$(INSTALL) -c -m 644 $(HEADER_TARGET) $(DESTDIR)/$(HEADIR)
+	$(INSTALL) $(MAN_TARGET) ${DESTDIR}/${MANDIR}/man8
