@@ -24,13 +24,10 @@
 
 int get_socket_address(struct sockaddr_un *addr)
 {
-	char path[PATH_MAX];
-
-	snprintf(path, PATH_MAX, "%s/%s", WDMD_RUN_DIR, WDMD_SOCKET_NAME);
-
 	memset(addr, 0, sizeof(struct sockaddr_un));
 	addr->sun_family = AF_LOCAL;
-	strncpy(addr->sun_path, path, sizeof(addr->sun_path) - 1);
+	snprintf(addr->sun_path, sizeof(addr->sun_path) - 1, "%s/%s",
+		 WDMD_RUN_DIR, WDMD_SOCKET_NAME);
 	return 0;
 }
 
