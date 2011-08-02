@@ -61,7 +61,7 @@ CFLAGS += -D_GNU_SOURCE -g \
 	-fasynchronous-unwind-tables \
 	-fdiagnostics-show-option
 
-CMD_LDFLAGS = -lpthread -lrt -laio -lblkid -lsanlock -L../wdmd -lwdmd
+CMD_LDFLAGS = -lpthread -luuid -lrt -laio -lblkid -lsanlock -L../wdmd -lwdmd
 LIB_LDFLAGS = -lpthread -lrt -laio -lblkid -L../wdmd -lwdmd
 
 
