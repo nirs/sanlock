@@ -275,9 +275,9 @@ static void process_listener(int ci)
 	int fd;
 	int on = 1;
 
-	fd = accept(client[ci].fd, NULL, NULL);
+	fd = accept4(client[ci].fd, NULL, NULL, SOCK_NONBLOCK);
 	if (fd < 0)
-	return;
+		return;
 
 	setsockopt(fd, SOL_SOCKET, SO_PASSCRED, &on, sizeof(on));
 
