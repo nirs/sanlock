@@ -39,8 +39,7 @@ CFLAGS += -D_GNU_SOURCE -g \
 	-Wp,-D_FORTIFY_SOURCE=2 \
 	-fexceptions \
 	-fasynchronous-unwind-tables \
-	-fdiagnostics-show-option \
-	-DTEST_SCRIPTS
+	-fdiagnostics-show-option
 
 CMD_LDFLAGS = -lwdmd
 TEST_LDFLAGS = -lwdmd
