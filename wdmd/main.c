@@ -48,10 +48,6 @@ static time_t last_keepalive;
 static char lockfile_path[PATH_MAX];
 static int dev_fd;
 
-#define WDMD_RUN_DIR	"/var/run/wdmd"
-#define FILES_DIR	"/var/run/wdmd/test_files"
-#define SCRIPTS_DIR	"/etc/wdmd/test_scripts"
-
 struct script_status {
 	int pid;
 	char path[PATH_MAX];
@@ -379,6 +375,7 @@ static int active_clients(void)
 
 
 #ifdef TEST_FILES
+#define FILES_DIR "/var/run/wdmd/test_files"
 const char *files_built = " files";
 static DIR *files_dir;
 
@@ -464,6 +461,7 @@ static int test_files(void) { return 0; }
 
 
 #ifdef TEST_SCRIPTS
+#define SCRIPTS_DIR "/etc/wdmd/test_scripts"
 static DIR *scripts_dir;
 const char *scripts_built = " scripts";
 
@@ -781,8 +779,10 @@ static int lockfile(void)
 
 	old_umask = umask(0022);
 	rv = mkdir(WDMD_RUN_DIR, 0777);
-	if (rv < 0 && errno != EEXIST)
+	if (rv < 0 && errno != EEXIST) {
+		umask(old_umask);
 		return rv;
+	}
 	umask(old_umask);
 
 	sprintf(lockfile_path, "%s/wdmd.pid", WDMD_RUN_DIR);

@@ -14,7 +14,7 @@
 #endif
 
 #define WDMD_RUN_DIR "/var/run/wdmd"
-#define WDMD_SOCKET_NAME "wdmd_sock"
+#define WDMD_SOCKET_NAME "wdmd.sock"
 
 enum {
 	CMD_REGISTER = 1,
