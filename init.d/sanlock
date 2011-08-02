@@ -22,7 +22,7 @@
 . /etc/rc.d/init.d/functions
 
 prog="sanlock"
-lockfile="/var/run/sanlock/$prog.pid"
+lockfile="/var/run/$prog/$prog.pid"
 exec="/usr/sbin/$prog"
 
 [ -f /etc/sysconfig/$prog ] && . /etc/sysconfig/$prog
@@ -30,6 +30,7 @@ exec="/usr/sbin/$prog"
 start() {
 	[ -x $exec ] || exit 5
 	echo -n $"Starting $prog: "
+	mkdir -p /var/run/$prog
 	daemon $prog daemon $SANLOCKOPTS
 	retval=$?
 	echo

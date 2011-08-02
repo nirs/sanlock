@@ -20,6 +20,7 @@
 #include <syslog.h>
 #include <sys/types.h>
 #include <sys/time.h>
+#include <sys/stat.h>
 
 #include "sanlock_internal.h"
 #include "log.h"
@@ -30,7 +31,16 @@ int lockfile(const char *dir, const char *name)
 	char path[PATH_MAX];
 	char buf[16];
 	struct flock lock;
+	mode_t old_umask;
 	int fd, rv;
+
+	old_umask = umask(0022);
+	rv = mkdir(SANLK_RUN_DIR, 0777);
+	if (rv < 0 && errno != EEXIST) {
+		umask(old_umask);
+		return rv;
+	}
+	umask(old_umask);
 
 	snprintf(path, PATH_MAX, "%s/%s", dir, name);
 

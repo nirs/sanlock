@@ -2063,22 +2063,6 @@ static void sigterm_handler(int sig GNUC_UNUSED)
 	external_shutdown = 1;
 }
 
-static int make_dirs(void)
-{
-	mode_t old_umask;
-	int rv;
-
-	old_umask = umask(0022);
-	rv = mkdir(SANLK_RUN_DIR, 0777);
-	if (rv < 0 && errno != EEXIST)
-		goto out;
-
-	rv = 0;
- out:
-	umask(old_umask);
-	return rv;
-}
-
 static void setup_priority(void)
 {
 	struct sched_param sched_param;
@@ -2136,10 +2120,6 @@ static int do_daemon(void)
 	memset(&act, 0, sizeof(act));
 	act.sa_handler = sigterm_handler;
 	rv = sigaction(SIGTERM, &act, NULL);
-	if (rv < 0)
-		return rv;
-
-	rv = make_dirs();
 	if (rv < 0)
 		return rv;
 
