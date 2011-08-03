@@ -22,15 +22,16 @@
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/utsname.h>
+#include <sys/un.h>
 #include <uuid/uuid.h>
 
 #include "sanlock_internal.h"
+#include "sanlock_sock.h"
 #include "diskio.h"
 #include "log.h"
 #include "delta_lease.h"
 #include "host_id.h"
 #include "watchdog.h"
-#include "client_msg.h"
 #include "task.h"
 
 static unsigned int space_id_counter = 1;

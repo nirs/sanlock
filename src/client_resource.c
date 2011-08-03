@@ -28,6 +28,7 @@
 #include <sys/un.h>
 
 #include "sanlock_internal.h"
+#include "sanlock_sock.h"
 #include "client_msg.h"
 #include "sanlock_resource.h"
 

@@ -28,56 +28,8 @@
 #include <sys/un.h>
 
 #include "sanlock_internal.h"
-#include "log.h"
+#include "sanlock_sock.h"
 #include "client_msg.h"
-
-static int get_socket_address(struct sockaddr_un *addr)
-{
-	memset(addr, 0, sizeof(struct sockaddr_un));
-	addr->sun_family = AF_LOCAL;
-	snprintf(addr->sun_path, sizeof(addr->sun_path) - 1, "%s/%s",
-		 SANLK_RUN_DIR, SANLK_SOCKET_NAME);
-	return 0;
-}
-
-int setup_listener_socket(int *listener_socket,
-                          uid_t owner, gid_t group, mode_t mode)
-{
-	int rv, s;
-	struct sockaddr_un addr;
-
-	s = socket(AF_LOCAL, SOCK_STREAM, 0);
-	if (s < 0)
-		return -1;
-
-	rv = get_socket_address(&addr);
-	if (rv < 0)
-		return rv;
-
-	unlink(addr.sun_path);
-	rv = bind(s, (struct sockaddr *) &addr, sizeof(struct sockaddr_un));
-	if (rv < 0)
-		goto exit_fail;
-
-	rv = chmod(addr.sun_path, mode);
-	if (rv < 0)
-		goto exit_fail;
-
-	rv = chown(addr.sun_path, owner, group);
-	if (rv < 0)
-		goto exit_fail;
-
-	rv = listen(s, 5);
-	if (rv < 0)
-		goto exit_fail;
-
-	*listener_socket = s;
-	return 0;
-
- exit_fail:
-	close(s);
-	return -1;
-}
 
 int connect_socket(int *sock_fd)
 {
@@ -88,7 +40,7 @@ int connect_socket(int *sock_fd)
 	if (s < 0)
 		return -1;
 
-	rv = get_socket_address(&addr);
+	rv = sanlock_socket_address(&addr);
 	if (rv < 0)
 		return rv;
 

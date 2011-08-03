@@ -25,7 +25,8 @@ CMD_SOURCE = \
 	paxos_lease.c \
 	task.c \
 	token_manager.c \
-	watchdog.c
+	watchdog.c \
+	sanlock_sock.c
 
 LIB_SOURCE = \
 	client_msg.c \
@@ -37,7 +38,8 @@ LIB_SOURCE = \
 	paxos_lease.c \
 	direct.c \
 	task.c \
-	direct_lib.c
+	direct_lib.c \
+	sanlock_sock.c
 
 CFLAGS += -D_GNU_SOURCE -g \
 	-Wall \
@@ -58,10 +60,15 @@ CFLAGS += -D_GNU_SOURCE -g \
 	-fexceptions \
 	-fasynchronous-unwind-tables \
 	-fdiagnostics-show-option
+#	-fPIE -DPIE
 
-CMD_LDFLAGS = -lpthread -luuid -lrt -laio -lblkid -lsanlock -L../wdmd -lwdmd
-LIB_LDFLAGS = -lpthread -lrt -laio -lblkid -L../wdmd -lwdmd
+CMD_LDFLAGS += -lpthread -luuid -lrt -laio -lblkid -lsanlock -L../wdmd -lwdmd
+CMD_LDFLAGS += -Wl,-z,now -Wl,-z,relro
+#CMD_LDFLAGS += -Wl,-z,now -Wl,-z,relro -pie
 
+LIB_LDFLAGS += -lpthread -lrt -laio -lblkid -L../wdmd -lwdmd
+LIB_LDFLAGS += -Wl,-z,relro
+#LIB_LDFLAGS += -Wl,-z,relro -pie
 
 all: $(SHLIB_TARGET) $(CMD_TARGET)
 

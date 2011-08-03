@@ -43,7 +43,7 @@
 #include "lockfile.h"
 #include "watchdog.h"
 #include "task.h"
-#include "client_msg.h"
+#include "sanlock_sock.h"
 #include "sanlock_resource.h"
 #include "sanlock_admin.h"
 
@@ -2044,18 +2044,44 @@ static void process_listener(int ci GNUC_UNUSED)
 
 static int setup_listener(void)
 {
+	struct sockaddr_un addr;
 	int rv, fd, ci;
 
-	rv = setup_listener_socket(&fd, com.uid, com.gid, DEFAULT_SOCKET_MODE);
+	rv = sanlock_socket_address(&addr);
 	if (rv < 0)
 		return rv;
 
+	fd = socket(AF_LOCAL, SOCK_STREAM, 0);
+	if (fd < 0)
+		return fd;
+
+	unlink(addr.sun_path);
+	rv = bind(fd, (struct sockaddr *) &addr, sizeof(struct sockaddr_un));
+	if (rv < 0)
+		goto exit_fail;
+
+	rv = chmod(addr.sun_path, DEFAULT_SOCKET_MODE);
+	if (rv < 0)
+		goto exit_fail;
+
+	rv = chown(addr.sun_path, com.uid, com.gid);
+	if (rv < 0)
+		goto exit_fail;
+
+	rv = listen(fd, 5);
+	if (rv < 0)
+		goto exit_fail;
+
 	ci = client_add(fd, process_listener, NULL);
 	if (ci < 0)
-		return -1;
+		goto exit_fail;
 
 	strcpy(client[ci].owner_name, "listener");
 	return 0;
+
+ exit_fail:
+	close(fd);
+	return -1;
 }
 
 static void sigterm_handler(int sig GNUC_UNUSED)
