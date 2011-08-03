@@ -11,39 +11,45 @@ sanlock \- shared storage lock manager
 
 The sanlock daemon manages leases for applications running on a cluster of
 hosts with shared storage.  All lease management and coordination is done
-through reading and writing blocks on the shared storage.  Two basic types
-of leases are used, each based on a different algorithm:
+through reading and writing blocks on the shared storage.  Two types of
+leases are used, each based on a different algorithm:
 
 "delta leases" are slow to acquire and demand regular i/o to shared
-storage.  sanlock only uses them internally to hold a lease on its
-"host_id" (an integer host identifier from 1-2000).  They simply prevent
-two hosts from using the same host identifier.  They also serve in a
-limited way as host "liveness" indicators since they are renewed.
+storage.  A delta lease exists in a single sector of shared storage.
+Acquiring a delta lease involves reads and writes to that sector separated
+by specific delays.  Once acquired, the lease must be renewed by writing a
+new timestamp to the sector regularly.  sanlock only uses delta leases
+internally to hold a lease on its host_id.  The host_id leases prevent two
+hosts from using the same host_id and provide basic host liveness
+information based on the renewals.
 
 "paxos leases" are generally fast to acquire and sanlock makes them
-available to applications as "general purpose" resource leases.  The disk
-paxos algorithm uses host_id's internally, and does not work if different
-hosts use the same host_id.  So the delta leases provide unique host_id's
-for implementing paxos leases.
+available to applications as general purpose resource leases.  A paxos
+lease exists in 1MB of shared storage (8MB for 4k sectors).  Acquiring a
+paxos lease involves reads and writes to max_hosts (2000) sectors in a
+specific sequence specified by the Disk Paxos algorithm.  paxos leases use
+host_id's internally to indicate the owner of the lease, and the algorithm
+will not work if different hosts use the same host_id.  So, the delta
+leases provide the unique host_id's used in paxos leases.  paxos leases
+also use delta leases to check if a host_id is alive.
 
-Before sanlock can be used, the user must assign each host an identifier,
-or "host_id", which is an integer value between 1 and 2000.  Two hosts
-should not be given the same host_id.
+Before sanlock can be used, the user must assign each host a host_id,
+which is a number between 1 and 2000.  Two hosts should not be given the
+same host_id.
 
 sanlock views a pool of storage as a "lockspace".  Each distinct pool of
 storage, e.g. from different sources, would typically be defined as a
-separate lockspace, with a separate lockspace name.
+separate lockspace, with a unique lockspace name.
 
-A part of this storage space must be reserved and initialized for sanlock
-to store delta leases.  Each host that wants to use the lockspace must
-first acquire a delta lease on its host_id number within the lockspace.
-(See the add_lockspace action/api.)  These delta leases prevent two hosts
-from using the same host_id, and allow hosts to detect which other hosts
-are currently using the lockspace.  The space required for 2000 delta
-leases in the lockspace (for all possible host_id's) is 1GB for storage
-with 512 byte sectors, or 8GB for storage with 4k sectors.
+Part of this storage space must be reserved and initialized for sanlock to
+store delta leases.  Each host that wants to use the lockspace must first
+acquire a delta lease on its host_id number within the lockspace.  (See
+the add_lockspace action/api.)  The space required for 2000 delta leases
+in the lockspace (for all possible hosts, max_hosts, which is 2000) is 1MB
+(8MB for 4k sectors).  (This is the same size as that required for a
+single paxos lease.)
 
-Example:
+.B example
 
 1. Create storage pools and reserve and initialize host_id leases
 .br
@@ -53,9 +59,9 @@ vgcreate pool1 /dev/sdb
 .br
 vgcreate pool2 /dev/sdc
 .br
-lvcreate -n hostid_leases -L 1GB pool1
+lvcreate -n hostid_leases -L 1MB pool1
 .br
-lvcreate -n hostid_leases -L 1GB pool2
+lvcreate -n hostid_leases -L 1MB pool2
 .br
 sanlock direct init -s lockspace1:0:/dev/pool1/hostid_leases:0
 .br
@@ -85,7 +91,64 @@ sanlock client add_lockspace -s lockspace2:2:/dev/pool2/hostid_leases:0
 4. Applications can now reserve/initialize space for resource leases, and
 then acquire the leases as they need to access the resources.
 
+What resource leases are created and how they are used depends on the
+application.  For example, say application foo, running on multiple hosts,
+needs to synchronize access to data it stores on /dev/pool1/foo_data.  foo
+could use a resource lease as follows:
 
+5. Reserve and initialize a single resource lease for foo_data
+.br
+lvcreate -n foo_data -L 1MB pool1
+.br
+sanlock direct init -r lockspace1:foo_data:/dev/pool1/foo_data:0
+.br
+
+6. Acquire the lease from the app using libsanlock (see sanlock_register,
+sanlock_acquire).  If the app is already running as pid 1234, and has
+registered with the sanlock daemon, the lease can be added for it
+manually.
+.br
+sanlock client acquire
+        -p 1234 -r lockspace1:foo_data:/dev/pool1/foo_data:0
+.br
+
+.B client failure
+
+If a process holding resource leases fails or exits without releasing its
+leases, sanlock will release the leases for it automatically.
+
+.B lockspace failure
+
+If the sanlock daemon cannot renew a lockspace host_id for a specific
+period of time (usually because storage access is lost), sanlock will kill
+any process holding a resource lease within the lockspace.
+
+.B watchdog usage
+
+The watchdog device is used to further protect shared resources in case
+processes cannot be killed when a host_id fails to be renewed.  The
+watchdog device will reset the host withing a known fixed time period from
+the last successful host_id renewal.  This known time is the length of
+time that sanlock on another host must wait before granting the resource
+lease that was held by a process on the failed host.
+
+.B levels of protection
+
+sanlock leases are meant to guarantee that two different process on two
+different hosts are never allowed to hold the same resource lease at once.
+If they were, the resource being protected could be corrupted.  There are
+three levels of protection built into sanlock itself:
+
+1. The paxos leases and delta leases themselves.
+
+2. If the leases cannot function because storage access is lost (host_id's
+cannot be renewed), the sanlock daemon kills any pids using resource
+leases in the lockspace.
+
+3. If the pids do not exit after being killed, the watchdog device resets
+the host.
+
+.SH COMMANDS
 
 sanlock is a multi purpose binary, with three top level commands:
 
@@ -101,11 +164,64 @@ send request to daemon (default command if none given)
 .B direct
 access storage directly (no coordination with daemon)
 
+.SH OPTIONS
+
+.TP
+.nf
+LOCKSPACE = <lockspace_name>:<host_id>:<path>:<offset>
+.fi
+
+.TP
+.nf
+RESOURCE = <lockspace_name>:<resource_name>:<path>:<offset>[:<lver>]
+.fi
+
 .SS client actions
+
+.TP
+.B status
+
+.TP
+.B log_dump
+
+.TP
+.B shutdown
+
+.TP
+.B client add_lockspace -s LOCKSPACE
+
+.TP
+.B client rem_lockspace -s LOCKSPACE
+
+.TP
+.B client command -r RESOURCE -c <path> <args>
+
+.TP
+.B client acquire -p <pid> -r RESOURCE
+
+.TP
+.B client release -p <pid> -r RESOURCE
+
+.TP
+.B client inquire -p <pid>
 
 .SS direct actions
 
-.SH OPTIONS
+.TP
+.B direct init [-s LOCKSPACE] [-r RESOURCE]
+
+.TP
+.B direct dump <path>[:<offset>] [options]
+
+.TP
+.B direct read_leader [-s LOCKSPACE] [-r RESOURCE]
+
+.TP
+.B direct acquire|release -i <num> -g <num> -r RESOURCE
+
+.TP
+.B direct acquire_id|renew_id|release_id|read_id|live_id -s LOCKSPACE
+
 
 .SH SEE ALSO
 .BR wdmd (8)
