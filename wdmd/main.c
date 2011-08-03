@@ -280,7 +280,7 @@ static void process_listener(int ci)
 	int fd;
 	int on = 1;
 
-	fd = accept4(client[ci].fd, NULL, NULL, SOCK_NONBLOCK);
+	fd = accept(client[ci].fd, NULL, NULL);
 	if (fd < 0)
 		return;
 
@@ -327,6 +327,9 @@ static int setup_listener_socket(int *listener_socket)
 		close(s);
 		return rv;
 	}
+
+	fcntl(s, F_SETFL, fcntl(s, F_GETFL, 0) | O_NONBLOCK);
+
 	*listener_socket = s;
 	return 0;
 }

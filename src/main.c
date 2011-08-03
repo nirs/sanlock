@@ -2033,7 +2033,7 @@ static void process_listener(int ci GNUC_UNUSED)
 	int fd;
 	int on = 1;
 
-	fd = accept4(client[ci].fd, NULL, NULL, SOCK_NONBLOCK);
+	fd = accept(client[ci].fd, NULL, NULL);
 	if (fd < 0)
 		return;
 
@@ -2071,6 +2071,8 @@ static int setup_listener(void)
 	rv = listen(fd, 5);
 	if (rv < 0)
 		goto exit_fail;
+
+	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
 
 	ci = client_add(fd, process_listener, NULL);
 	if (ci < 0)
