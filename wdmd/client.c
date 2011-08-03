@@ -21,38 +21,7 @@
 
 #include "wdmd.h"
 #include "wdmd_internal.h"
-
-int get_socket_address(struct sockaddr_un *addr)
-{
-	memset(addr, 0, sizeof(struct sockaddr_un));
-	addr->sun_family = AF_LOCAL;
-	snprintf(addr->sun_path, sizeof(addr->sun_path) - 1, "%s/%s",
-		 WDMD_RUN_DIR, WDMD_SOCKET_NAME);
-	return 0;
-}
-
-static int connect_socket(int *sock_fd)
-{
-	int rv, s;
-	struct sockaddr_un addr;
-
-	s = socket(AF_LOCAL, SOCK_STREAM, 0);
-	if (s < 0)
-		return -errno;
-
-	rv = get_socket_address(&addr);
-	if (rv < 0)
-		return rv;
-
-	rv = connect(s, (struct sockaddr *) &addr, sizeof(struct sockaddr_un));
-	if (rv < 0) {
-		rv = -errno;
-		close(s);
-		return rv;
-	}
-	*sock_fd = s;
-	return 0;
-}
+#include "wdmd_sock.h"
 
 int wdmd_connect(void)
 {
@@ -63,7 +32,7 @@ int wdmd_connect(void)
 	if (s < 0)
 		return -errno;
 
-	rv = get_socket_address(&addr);
+	rv = wdmd_socket_address(&addr);
 	if (rv < 0)
 		return rv;
 

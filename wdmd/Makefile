@@ -15,9 +15,9 @@ SOMINOR=0
 SHLIB_TARGET = $(LIB_TARGET).so.$(SOMAJOR).$(SOMINOR)
 
 
-CMD_SOURCE = main.c
+CMD_SOURCE = main.c wdmd_sock.c
 
-LIB_SOURCE = client.c
+LIB_SOURCE = client.c wdmd_sock.c
 
 TEST_SOURCE = wdmd_client.c
 
@@ -39,16 +39,21 @@ CFLAGS += -D_GNU_SOURCE -g \
 	-Wp,-D_FORTIFY_SOURCE=2 \
 	-fexceptions \
 	-fasynchronous-unwind-tables \
-	-fdiagnostics-show-option
+	-fdiagnostics-show-option \
+	-fPIE -DPIE
 
-CMD_LDFLAGS = -lwdmd
+CMD_LDFLAGS += -lwdmd
+CMD_LDFLAGS += -Wl,-z,now -Wl,-z,relro -pie
+
+LIB_LDFLAGS += -Wl,-z,relro -pie
+
 TEST_LDFLAGS = -lwdmd
 
 
 all: $(SHLIB_TARGET) $(CMD_TARGET) $(TEST_TARGET)
 
 $(SHLIB_TARGET): $(LIB_SOURCE)
-	$(CC) -shared -fPIC -o $@ -Wl,-soname=$(LIB_TARGET).so.$(SOMAJOR) $^
+	$(CC) $(CFLAGS) $(LIB_LDFLAGS) -shared -fPIC -o $@ -Wl,-soname=$(LIB_TARGET).so.$(SOMAJOR) $^
 	ln -sf $(SHLIB_TARGET) $(LIB_TARGET).so
 	ln -sf $(SHLIB_TARGET) $(LIB_TARGET).so.$(SOMAJOR)
 
@@ -68,16 +73,17 @@ DESTDIR=
 BINDIR=/usr/sbin
 LIBDIR=/usr/lib64
 HEADIR=/usr/include
-MANDIR=/usr/share/man/
+MANDIR=/usr/share/man
 
 .PHONY: install
 install: all
-	mkdir -p $(DESTDIR)/$(BINDIR)
-	mkdir -p $(DESTDIR)/$(LIBDIR)
-	mkdir -p $(DESTDIR)/$(HEADIR)
+	$(INSTALL) -d $(DESTDIR)/$(BINDIR)
+	$(INSTALL) -d $(DESTDIR)/$(LIBDIR)
+	$(INSTALL) -d $(DESTDIR)/$(HEADIR)
+	$(INSTALL) -d $(DESTDIR)/$(MANDIR)
 	$(INSTALL) -c -m 755 $(CMD_TARGET) $(DESTDIR)/$(BINDIR)
 	$(INSTALL) -c -m 755 $(SHLIB_TARGET) $(DESTDIR)/$(LIBDIR)
 	cp -a $(LIB_TARGET).so $(DESTDIR)/$(LIBDIR)
 	cp -a $(LIB_TARGET).so.$(SOMAJOR) $(DESTDIR)/$(LIBDIR)
 	$(INSTALL) -c -m 644 $(HEADER_TARGET) $(DESTDIR)/$(HEADIR)
-	install $(MAN_TARGET) ${DESTDIR}/${MANDIR}/man8
+	$(INSTALL) $(MAN_TARGET) ${DESTDIR}/${MANDIR}/man8

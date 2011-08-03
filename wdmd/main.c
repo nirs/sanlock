@@ -34,6 +34,7 @@
 
 #include "wdmd.h"
 #include "wdmd_internal.h"
+#include "wdmd_sock.h"
 
 #define DEFAULT_TEST_INTERVAL 10
 #define DEFAULT_FIRE_TIMEOUT 60
@@ -284,8 +285,6 @@ static void close_clients(void)
 {
 }
 
-extern int get_socket_address(struct sockaddr_un *addr);
-
 static int setup_listener_socket(int *listener_socket)
 {
 	int rv, s;
@@ -295,7 +294,7 @@ static int setup_listener_socket(int *listener_socket)
 	if (s < 0)
 		return -errno;
 
-	rv = get_socket_address(&addr);
+	rv = wdmd_socket_address(&addr);
 	if (rv < 0)
 		return rv;
 
