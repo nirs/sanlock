@@ -286,7 +286,7 @@ int delta_lease_acquire(struct task *task,
 	}
 
  write_new:
-	new_ts = time(NULL);
+	new_ts = monotime();
 	leader.timestamp = new_ts;
 	leader.owner_id = host_id;
 	leader.owner_generation++;
@@ -402,7 +402,7 @@ int delta_lease_renew(struct task *task,
 		return SANLK_RENEW_DIFF;
 	}
 
-	new_ts = time(NULL);
+	new_ts = monotime();
 
 	if (leader.timestamp >= new_ts) {
 		log_erros(sp, "delta_renew timestamp too small");

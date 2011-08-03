@@ -26,6 +26,7 @@ CMD_SOURCE = \
 	task.c \
 	token_manager.c \
 	watchdog.c \
+	monotime.c \
 	sanlock_sock.c
 
 LIB_SOURCE = \
@@ -39,6 +40,7 @@ LIB_SOURCE = \
 	direct.c \
 	task.c \
 	direct_lib.c \
+	monotime.c \
 	sanlock_sock.c
 
 CFLAGS += -D_GNU_SOURCE -g \

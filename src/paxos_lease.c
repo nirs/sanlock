@@ -446,7 +446,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 		/* lver and mbal are already set */
 		dblock.inp = token->host_id;
 		dblock.inp2 = token->host_generation;
-		dblock.inp3 = time(NULL);
+		dblock.inp3 = monotime();
 	}
 	dblock.bal = dblock.mbal;
 	dblock.checksum = dblock_checksum(&dblock);
@@ -1102,7 +1102,7 @@ int paxos_lease_acquire(struct task *task,
 			  host_id_disk.fd);
 	}
 
-	start = time(NULL);
+	start = monotime();
 
 	while (1) {
 		error = delta_lease_leader_read(task, &host_id_disk,
@@ -1157,15 +1157,15 @@ int paxos_lease_acquire(struct task *task,
 		   by now
 
 		   if we trust that the clocks are in sync among hosts, then this
-		   check could be: if (time(NULL) - host_id_leader.timestamp >
+		   check could be: if (time() - host_id_leader.timestamp >
 		   task->host_dead_seconds), but if the clocks are out of sync,
 		   this check would easily give two hosts the lease.
 
-		   N.B. we need to be careful about ever comparing local time(NULL)
+		   N.B. we need to be careful about ever comparing local time
 		   to a time value we read off disk from another node that may
 		   have different time. */
 
-		if (time(NULL) - start > task->host_dead_seconds) {
+		if (monotime() - start > task->host_dead_seconds) {
 			log_token(token, "paxos_acquire host_id %llu expired %llu",
 				  (unsigned long long)cur_leader.owner_id,
 				  (unsigned long long)host_id_leader.timestamp);
@@ -1313,7 +1313,7 @@ int paxos_lease_acquire(struct task *task,
 
 	new_leader.write_id = token->host_id;
 	new_leader.write_generation = token->host_generation;
-	new_leader.write_timestamp = time(NULL);
+	new_leader.write_timestamp = monotime();
 
 	if (new_num_hosts)
 		new_leader.num_hosts = new_num_hosts;
@@ -1376,7 +1376,7 @@ int paxos_lease_renew(struct task *task,
 		}
 	}
 
-	new_leader.timestamp = time(NULL);
+	new_leader.timestamp = monotime();
 	new_leader.checksum = leader_checksum(&new_leader);
 
 	error = write_new_leader(task, token, &new_leader);
@@ -1450,7 +1450,7 @@ int paxos_lease_release(struct task *task,
 	leader.timestamp = LEASE_FREE;
 	leader.write_id = token->host_id;
 	leader.write_generation = token->host_generation;
-	leader.write_timestamp = time(NULL);
+	leader.write_timestamp = monotime();
 	leader.checksum = leader_checksum(&leader);
 
 	error = write_new_leader(task, token, &leader, "paxos_release");

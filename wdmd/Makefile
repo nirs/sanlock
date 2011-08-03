@@ -42,7 +42,7 @@ CFLAGS += -D_GNU_SOURCE -g \
 	-fdiagnostics-show-option \
 	-fPIE -DPIE
 
-CMD_LDFLAGS += -lwdmd
+CMD_LDFLAGS += -lwdmd -lrt
 CMD_LDFLAGS += -Wl,-z,now -Wl,-z,relro -pie
 
 LIB_LDFLAGS += -Wl,-z,relro -pie

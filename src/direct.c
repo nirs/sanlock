@@ -326,7 +326,7 @@ int direct_live_id(struct task *task,
 	if (rv < 0)
 		return rv;
 
-	start = time(NULL);
+	start = monotime();
 
 	while (1) {
 		sleep(1);
@@ -350,7 +350,7 @@ int direct_live_id(struct task *task,
 			break;
 		}
 
-		if (time(NULL) - start > task->host_dead_seconds) {
+		if (monotime() - start > task->host_dead_seconds) {
 			*live = 0;
 			break;
 		}

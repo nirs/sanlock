@@ -98,6 +98,14 @@ do { \
 } while (0)
 
 
+static uint64_t monotime(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+
+	return ts.tv_sec;
+}
 
 /*
  * test clients
@@ -341,7 +349,7 @@ static int test_clients(void)
 	int fail_count = 0;
 	int i;
 
-	t = time(NULL);
+	t = monotime();
 
 	for (i = 0; i < client_size; i++) {
 		if (!client[i].used)
@@ -435,7 +443,7 @@ static int test_files(void)
 		if (rv < 0)
 			continue;
 
-		t = time(NULL);
+		t = monotime();
 
 		if (t >= expire) {
 			log_error("test failed file %s renewal %llu expire %llu ",
@@ -523,7 +531,7 @@ static int check_script(int i)
 	if (!scripts[i].pid)
 		return 0;
 
-	begin = time(NULL);
+	begin = monotime();
 
 	while (1) {
 		rv = waitpid(scripts[i].pid, &status, WNOHANG);
@@ -533,7 +541,7 @@ static int check_script(int i)
 
 		} else if (!rv) {
 			/* pid still running */
-			if (time(NULL) - begin >= SCRIPT_WAIT_SECONDS) {
+			if (monotime() - begin >= SCRIPT_WAIT_SECONDS) {
 				rv = -ETIMEDOUT;
 				goto out;
 			}
@@ -549,7 +557,7 @@ static int check_script(int i)
 
 		} else {
 			/* pid state changed but still running */
-			if (time(NULL) - begin >= 2) {
+			if (monotime() - begin >= 2) {
 				rv = -ETIMEDOUT;
 				goto out;
 			}
@@ -666,7 +674,7 @@ static void pet_watchdog(void)
 
 	rv = ioctl(dev_fd, WDIOC_KEEPALIVE, &unused);
 
-	last_keepalive = time(NULL);
+	last_keepalive = monotime();
 	log_debug("keepalive %d", rv);
 }
 
@@ -747,8 +755,8 @@ static int test_loop(void)
 		if (daemon_quit && !active_clients())
 			break;
 
-		if (time(NULL) - test_time >= test_interval) {
-			test_time = time(NULL);
+		if (monotime() - test_time >= test_interval) {
+			test_time = monotime();
 			log_debug("test_time %llu",
 				  (unsigned long long)test_time);
 
@@ -761,7 +769,7 @@ static int test_loop(void)
 				pet_watchdog();
 		}
 
-		sleep_seconds = test_time + test_interval - time(NULL);
+		sleep_seconds = test_time + test_interval - monotime();
 		poll_timeout = (sleep_seconds > 0) ? sleep_seconds * 1000 : 1;
 		log_debug("sleep_seconds %d", sleep_seconds);
 	}

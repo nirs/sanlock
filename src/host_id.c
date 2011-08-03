@@ -187,7 +187,7 @@ int host_id_check(struct task *task, struct space *sp)
 		return 0;
 	}
 
-	gap = time(NULL) - last_success;
+	gap = monotime() - last_success;
 
 	if (gap >= task->id_renewal_fail_seconds) {
 		log_erros(sp, "host_id_check failed %d", gap);
@@ -245,7 +245,7 @@ static void *lockspace_thread(void *arg_in)
 	setup_task_aio(&task, main_task.use_aio, HOSTID_AIO_CB_SIZE);
 	memcpy(task.name, sp->space_name, NAME_ID_SIZE);
 
-	last_attempt = time(NULL);
+	last_attempt = monotime();
 
 	rv = open_disk(&sp->host_id_disk);
 	if (rv < 0) {
@@ -259,7 +259,7 @@ static void *lockspace_thread(void *arg_in)
 				     sp->space_name, our_host_name_global,
 				     sp->host_id, &leader);
 	delta_result = result;
-	delta_length = time(NULL) - last_attempt;
+	delta_length = monotime() - last_attempt;
 
 	if (result == SANLK_OK)
 		last_success = leader.timestamp;
@@ -303,7 +303,7 @@ static void *lockspace_thread(void *arg_in)
 		if (stop)
 			break;
 
-		if (time(NULL) - last_success < task.id_renewal_seconds) {
+		if (monotime() - last_success < task.id_renewal_seconds) {
 			sleep(1);
 			continue;
 		} else {
@@ -312,13 +312,13 @@ static void *lockspace_thread(void *arg_in)
 			usleep(500000);
 		}
 
-		last_attempt = time(NULL);
+		last_attempt = monotime();
 
 		result = delta_lease_renew(&task, sp, &sp->host_id_disk,
 					   sp->space_name, delta_result,
 					   &leader, &leader);
 		delta_result = result;
-		delta_length = time(NULL) - last_attempt;
+		delta_length = monotime() - last_attempt;
 
 		if (result == SANLK_OK)
 			last_success = leader.timestamp;
