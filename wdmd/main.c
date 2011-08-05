@@ -885,7 +885,7 @@ static void print_usage(void)
    would be for wdmd to fail starting if it found a pid file left over from
    its previous run. */
 
-#define RELEASE_VERSION "1.0"
+#define RELEASE_VERSION "1.1"
    
 int main(int argc, char *argv[])
 {
