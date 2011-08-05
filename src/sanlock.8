@@ -1,4 +1,4 @@
-.TH SANLOCK 8 2011-08-02
+.TH SANLOCK 8 2011-08-05
 
 .SH NAME
 sanlock \- shared storage lock manager
@@ -14,14 +14,13 @@ hosts with shared storage.  All lease management and coordination is done
 through reading and writing blocks on the shared storage.  Two types of
 leases are used, each based on a different algorithm:
 
-"delta leases" are slow to acquire and demand regular i/o to shared
-storage.  A delta lease exists in a single sector of shared storage.
-Acquiring a delta lease involves reads and writes to that sector separated
-by specific delays.  Once acquired, the lease must be renewed by writing a
-new timestamp to the sector regularly.  sanlock only uses delta leases
-internally to hold a lease on its host_id.  The host_id leases prevent two
-hosts from using the same host_id and provide basic host liveness
-information based on the renewals.
+"delta leases" are slow to acquire and require regular i/o to shared
+storage.  A delta lease exists in a single sector of storage.  Acquiring a
+delta lease involves reads and writes to that sector separated by specific
+delays.  Once acquired, a lease must be renewed by updating a timestamp in
+the sector regularly.  sanlock uses a delta lease internally to hold a
+lease on a host_id.  host_id leases prevent two hosts from using the same
+host_id and provide basic host liveness information based on the renewals.
 
 "paxos leases" are generally fast to acquire and sanlock makes them
 available to applications as general purpose resource leases.  A paxos
@@ -29,13 +28,13 @@ lease exists in 1MB of shared storage (8MB for 4k sectors).  Acquiring a
 paxos lease involves reads and writes to max_hosts (2000) sectors in a
 specific sequence specified by the Disk Paxos algorithm.  paxos leases use
 host_id's internally to indicate the owner of the lease, and the algorithm
-will not work if different hosts use the same host_id.  So, the delta
-leases provide the unique host_id's used in paxos leases.  paxos leases
-also use delta leases to check if a host_id is alive.
+fails if different hosts use the same host_id.  So, delta leases provide
+the unique host_id's used in paxos leases.  paxos leases also refer to
+delta leases to check if a host_id is alive.
 
 Before sanlock can be used, the user must assign each host a host_id,
 which is a number between 1 and 2000.  Two hosts should not be given the
-same host_id.
+same host_id (even though delta leases attempt to detect this mistake.)
 
 sanlock views a pool of storage as a "lockspace".  Each distinct pool of
 storage, e.g. from different sources, would typically be defined as a
@@ -45,71 +44,73 @@ Part of this storage space must be reserved and initialized for sanlock to
 store delta leases.  Each host that wants to use the lockspace must first
 acquire a delta lease on its host_id number within the lockspace.  (See
 the add_lockspace action/api.)  The space required for 2000 delta leases
-in the lockspace (for all possible hosts, max_hosts, which is 2000) is 1MB
-(8MB for 4k sectors).  (This is the same size as that required for a
-single paxos lease.)
+in the lockspace (for 2000 possible host_id's) is 1MB (8MB for 4k
+sectors).  (This is the same size required for a single paxos lease.)
 
-The following example illustrates these ideas.
+More storage space must be reserved and initialized for paxos leases,
+according to the needs of the applications using sanlock.
+
+The following steps illustrate these concepts using the command line.
+Applications may choose to do these same steps through libsanlock.
 
 1. Create storage pools and reserve and initialize host_id leases
 .br
 two different LUNs on a SAN: /dev/sdb, /dev/sdc
 .br
-vgcreate pool1 /dev/sdb
+# vgcreate pool1 /dev/sdb
 .br
-vgcreate pool2 /dev/sdc
+# vgcreate pool2 /dev/sdc
 .br
-lvcreate -n hostid_leases -L 1MB pool1
+# lvcreate -n hostid_leases -L 1MB pool1
 .br
-lvcreate -n hostid_leases -L 1MB pool2
+# lvcreate -n hostid_leases -L 1MB pool2
 .br
-sanlock direct init -s lockspace1:0:/dev/pool1/hostid_leases:0
+# sanlock direct init -s LS1:0:/dev/pool1/hostid_leases:0
 .br
-sanlock direct init -s lockspace2:0:/dev/pool2/hostid_leases:0
+# sanlock direct init -s LS2:0:/dev/pool2/hostid_leases:0
 .br
 
 2. Start the sanlock daemon on each host
 .br
-sanlock daemon
+# sanlock daemon
 .br
 
 3. Add each lockspace to be used
 .br
 host1:
 .br
-sanlock client add_lockspace -s lockspace1:1:/dev/pool1/hostid_leases:0
+# sanlock client add_lockspace -s LS1:1:/dev/pool1/hostid_leases:0
 .br
-sanlock client add_lockspace -s lockspace2:1:/dev/pool2/hostid_leases:0
+# sanlock client add_lockspace -s LS2:1:/dev/pool2/hostid_leases:0
 .br
 host2:
 .br
-sanlock client add_lockspace -s lockspace1:2:/dev/pool1/hostid_leases:0
+# sanlock client add_lockspace -s LS1:2:/dev/pool1/hostid_leases:0
 .br
-sanlock client add_lockspace -s lockspace2:2:/dev/pool2/hostid_leases:0
+# sanlock client add_lockspace -s LS2:2:/dev/pool2/hostid_leases:0
 .br
 
 4. Applications can now reserve/initialize space for resource leases, and
 then acquire the leases as they need to access the resources.
 
 The resource leases that are created and how they are used depends on the
-application.  For example, say application A, running on multiple hosts,
+application.  For example, say application A, running on host1 and host2,
 needs to synchronize access to data it stores on /dev/pool1/Adata.  A
 could use a resource lease as follows:
 
 5. Reserve and initialize a single resource lease for Adata
 .br
-lvcreate -n Adata_lease -L 1MB pool1
+# lvcreate -n Adata_lease -L 1MB pool1
 .br
-sanlock direct init -r lockspace1:Adata:/dev/pool1/Adata_lease:0
+# sanlock direct init -r LS1:Adata:/dev/pool1/Adata_lease:0
 .br
 
 6. Acquire the lease from the app using libsanlock (see sanlock_register,
-sanlock_acquire).  If the app is already running as pid 1234, and has
+sanlock_acquire).  If the app is already running as pid 123, and has
 registered with the sanlock daemon, the lease can be added for it
 manually.
 .br
-sanlock client acquire
-        -p 1234 -r lockspace1:Adata:/dev/pool1/Adata_lease:0
+# sanlock client acquire -r LS1:Adata:/dev/pool1/Adata_lease:0 -p 123
 .br
 
 .B offsets
@@ -121,16 +122,16 @@ offsets may be used to place leases on the same device rather than using
 separate devices and offset 0 as shown in examples above, e.g. these
 commands above:
 .br
-sanlock direct init -s lockspace1:0:/dev/pool1/hostid_leases:0
+# sanlock direct init -s LS1:0:/dev/pool1/hostid_leases:0
 .br
-sanlock direct init -r lockspace1:Adata:/dev/pool1/Adata_lease:0
+# sanlock direct init -r LS1:Adata:/dev/pool1/Adata_lease:0
 .br
 could be replaced by:
 .br
 .br
-sanlock direct init -s lockspace1:0:/dev/pool1/leases:0
+# sanlock direct init -s LS1:0:/dev/pool1/leases:0
 .br
-sanlock direct init -r lockspace1:Adata:/dev/pool1/leases:1048576
+# sanlock direct init -r LS1:Adata:/dev/pool1/leases:1048576
 
 .B failures
 
@@ -142,28 +143,42 @@ period of time (usually because storage access is lost), sanlock will kill
 any process holding a resource lease within the lockspace.
 
 If the sanlock daemon crashes or gets stuck, it will no longer renew the
-expiry time of the host_id's in the wdmd daemon, and the watchdog device
-will reset the host.
+expiry time of its per-host_id connections to the wdmd daemon, and the
+watchdog device will reset the host.
 
 .B watchdog
 
-The watchdog device is used to further protect shared resources in case
-processes cannot be killed when a host_id fails to be renewed.  The
-watchdog device will reset the host withing a known fixed time period from
-the last successful host_id renewal.  This known time is the length of
-time that sanlock on another host must wait before granting the resource
-lease that was held by a process on the failed host.
+sanlock uses the
+.BR wdmd (8)
+daemon to access /dev/watchdog.  A separate wdmd connection is maintained
+with wdmd for each host_id being renewed.  Each host_id connection has an
+expiry time for some seconds in the future.  After each successful host_id
+renewal, sanlock updates the associated expiry time in wdmd.  If wdmd
+finds any connection expired, it will not pet /dev/watchdog.  After enough
+successive expired/failed checks, the watchdog device will fire and reset
+the host.
 
-The sanlock daemon uses the wdmd daemon to multiplex petting the watchdog
-device for all host_id's that are held and being renewed.  The watchdog is
-managed so it will reset the host if any host_id fails to be renewed for
-fixed period of time.
+After a number of failed attempts to renew a host_id, sanlock kills any
+process using that lockspace.  Once all those processes have exited,
+sanlock will unregister the associated wdmd connection.  wdmd will no
+longer find the expired connection, and will resume petting /dev/watchdog
+(assuming it finds no other failed/expired tests.)  If the killed
+processes did not exit quickly enough, the expired wdmd connection will
+not be unregistered, and /dev/watchdog will reset the host.
 
-.B levels of protection
+Based on these known timeout values, sanlock on another host can
+calculate, based on the last host_id renewal, when the failed host will
+have been reset by its watchdog (or killed all the necessary processes).
+
+If the sanlock daemon itself fails, crashes, get stuck, it will no longer
+update the expiry time for its host_id connections to wdmd, which will
+also lead to the watchdog resetting the host.
+
+.B safety
 
 sanlock leases are meant to guarantee that two process on two hosts are
 never allowed to hold the same resource lease at once.  If they were, the
-resource being protected could be corrupted.  There are three levels of
+resource being protected may be corrupted.  There are three levels of
 protection built into sanlock itself:
 
 1. The paxos leases and delta leases themselves.
@@ -174,7 +189,6 @@ leases in the lockspace.
 
 3. If the pids do not exit after being killed, or if the sanlock daemon
 fails, the watchdog device resets the host.
-
 
 .SH OPTIONS
 
@@ -192,38 +206,38 @@ COMMAND can be one of three primary top level choices
 .BR -D "    "
 no fork and print all logging to stderr
 
-.BI -Q " num"
+.BR -Q " 0|1"
 quiet error messages for common lock contention
 
-.BI -R " num"
+.BR -R " 0|1"
 renewal debugging, log debug info for each renewal
 
-.BI -L " num"
-write logging at level and up to logfile (-1 none)
+.BI -L " pri"
+write logging at priority level and up to logfile (-1 none)
 
-.BI -S " num"
-write logging at level and up to syslog (-1 none)
+.BI -S " pri"
+write logging at priority level and up to syslog (-1 none)
 
-.BI -U " num"
-uid
+.BI -U " uid"
+user id
 
-.BI -G " num"
-gid
+.BI -G " gid"
+group id
 
 .BI -t " num"
 max worker threads
 
-.BI -w " num"
-use watchdog through wdmd (1 yes, 0 no, default 1)
+.BR -w " 0|1"
+use watchdog through wdmd
 
-.BI -h " num"
-use high priority features (1 yes, 0 no, default 1)
+.BR -h " 0|1"
+use high priority features (realtime scheduling, mlockall)
 
-.BI \-a " num"
-use async i/o (1 yes, 0 no, default 1)
+.BR \-a " 0|1"
+use async i/o
 
-.BI -o " num"
-io timeout in seconds (default 10)
+.BI -o " sec"
+io timeout in seconds
 
 .B "sanlock client"
 .I action
@@ -232,7 +246,7 @@ io timeout in seconds (default 10)
 .B sanlock client status
 
 Print processes, lockspaces, and resources being manged by the sanlock
-daemon.
+daemon.  Add -D to show extra internal daemon status for debugging.
 
 .B sanlock client log_dump
 
@@ -282,11 +296,11 @@ held.
 .I action
 [options]
 
-.BI \-a " num"
-use async i/o (1 yes, 0 no, default 1)
+.BR \-a " 0|1"
+use async i/o
 
-.BI -o " num"
-io timeout in seconds (default 10)
+.BI -o " sec"
+io timeout in seconds
 
 .BR "sanlock direct init -s" " LOCKSPACE"
 .br
@@ -341,13 +355,12 @@ sanlock daemon's conclusion unless the configured timeouts match.)
 
 Read disk sectors and print leader records for delta or paxos leases.
 
-
 .SS
 LOCKSPACE option string
 
 .BR \-s " " \fIlockspace_name\fP:\fIhost_id\fP:\fIpath\fP:\fIoffset\fP
 .P
-.IR lockspace_name " name of the lockspace"
+.IR lockspace_name " name of lockspace"
 .br
 .IR host_id " local host identifier in lockspace"
 .br
@@ -370,6 +383,14 @@ RESOURCE option string
 .IR offset " offset on path (bytes)"
 .br
 .IR lver " optional leader version"
+
+.SS Defaults
+
+.B sanlock help
+shows the default values for the options above.
+
+.B sanlock version
+shows the build version.
 
 .SH SEE ALSO
 .BR wdmd (8)
