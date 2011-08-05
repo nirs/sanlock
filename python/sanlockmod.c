@@ -16,8 +16,6 @@
 #define __unused __attribute__ ((unused))
 #endif
 
-#define SKERRNO(x) (-x)
-
 /* Sanlock module */
 PyObject *py_module;
 
@@ -30,7 +28,13 @@ __set_exception(int en, char *msg)
     char *err_name;
     PyObject *exc_tuple;
 
-    err_name = strerror(en);
+    if (en < 0 && en > -200) {
+        en = -en;
+        err_name = strerror(en);
+    } else {
+        err_name = "Sanlock exception";
+    }
+
     exc_tuple = Py_BuildValue("(iss)", en, msg, err_name);
 
     if (exc_tuple == NULL) {
@@ -116,8 +120,7 @@ py_register(PyObject *self __unused, PyObject *args)
     sanlockfd = sanlock_register();
 
     if (sanlockfd < 0) {
-        __set_exception(SKERRNO(sanlockfd),
-                        "Sanlock registration failed");
+        __set_exception(sanlockfd, "Sanlock registration failed");
         return NULL;
     }
 
@@ -154,7 +157,7 @@ py_init_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        __set_exception(SKERRNO(rv), "Sanlock lockspace init failure");
+        __set_exception(rv, "Sanlock lockspace init failure");
         return NULL;
     }
 
@@ -195,7 +198,7 @@ py_init_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        __set_exception(SKERRNO(rv), "Sanlock resource init failure");
+        __set_exception(rv, "Sanlock resource init failure");
         goto exit_fail;
     }
 
@@ -233,7 +236,7 @@ py_add_lockspace(PyObject *self __unused, PyObject *args)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        __set_exception(SKERRNO(rv), "Sanlock lockspace add failure");
+        __set_exception(rv, "Sanlock lockspace add failure");
         return NULL;
     }
 
@@ -266,7 +269,7 @@ py_rem_lockspace(PyObject *self __unused, PyObject *args)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        __set_exception(SKERRNO(rv), "Sanlock lockspace remove failure");
+        __set_exception(rv, "Sanlock lockspace remove failure");
         return NULL;
     }
 
@@ -302,7 +305,7 @@ py_acquire(PyObject *self __unused, PyObject *args)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        __set_exception(SKERRNO(rv), "Sanlock resource not acquired");
+        __set_exception(rv, "Sanlock resource not acquired");
         goto exit_fail;
     }
 
@@ -343,7 +346,7 @@ py_release(PyObject *self __unused, PyObject *args)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        __set_exception(SKERRNO(rv), "Sanlock resource not released");
+        __set_exception(rv, "Sanlock resource not released");
         goto exit_fail;
     }
 
@@ -376,7 +379,7 @@ py_get_alignment(PyObject *self __unused, PyObject *args)
     Py_END_ALLOW_THREADS
 
     if (rv < 0) {
-        __set_exception(SKERRNO(rv), "Unable to get device alignment");
+        __set_exception(rv, "Unable to get device alignment");
         return NULL;
     }
 
