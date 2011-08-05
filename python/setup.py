@@ -7,14 +7,13 @@
 from distutils.core import setup, Extension
 
 sanlocklib = ['sanlock']
-sanlockmod = Extension(name = 'sanlockmod',
-                       sources = ['sanlockmod.c'],
+sanlock = Extension(name = 'sanlock',
+                       sources = ['sanlock.c'],
                        include_dirs = ['../src'],
                        library_dirs = ['../src'],
                        libraries = sanlocklib)
 
-setup(name = 'SANLock',
+setup(name = 'Sanlock',
       version = '1.0',
-      description = 'SANLock python package',
-      ext_modules = [sanlockmod],
-      py_modules = ['sanlock'])
+      description = 'Sanlock python package',
+      ext_modules = [sanlock])

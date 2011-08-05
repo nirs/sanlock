@@ -17,7 +17,7 @@
 #endif
 
 /* Sanlock module */
-PyDoc_STRVAR(pydoc_sanlockmod, "\
+PyDoc_STRVAR(pydoc_sanlock, "\
 Copyright (C) 2010-2011 Red Hat, Inc.  All rights reserved.\n\
 This copyrighted material is made available to anyone wishing to use,\n\
 modify, copy, or redistribute it subject to the terms and conditions\n\
@@ -135,6 +135,39 @@ py_register(PyObject *self __unused, PyObject *args)
     }
 
     return PyInt_FromLong(sanlockfd);
+}
+
+/* get_alignment */
+PyDoc_STRVAR(pydoc_get_alignment, "\
+get_alignment(path) -> int\n\
+Get device alignment.");
+
+static PyObject *
+py_get_alignment(PyObject *self __unused, PyObject *args)
+{
+    int rv;
+    const char *path;
+    struct sanlk_disk disk;
+
+    /* parse python tuple */
+    if (!PyArg_ParseTuple(args, "s", &path)) {
+        return NULL;
+    }
+
+    memset(&disk, 0, sizeof(struct sanlk_disk));
+    strncpy(disk.path, path, SANLK_PATH_LEN - 1);
+
+    /* get device alignment (gil disabled) */
+    Py_BEGIN_ALLOW_THREADS
+    rv = sanlock_direct_align(&disk);
+    Py_END_ALLOW_THREADS
+
+    if (rv < 0) {
+        __set_exception(rv, "Unable to get device alignment");
+        return NULL;
+    }
+
+    return PyInt_FromLong(rv);
 }
 
 /* init_lockspace */
@@ -402,41 +435,8 @@ exit_fail:
     return NULL;
 }
 
-/* get_alignment */
-PyDoc_STRVAR(pydoc_get_alignment, "\
-get_alignment(path) -> int\n\
-Get device alignment.");
-
-static PyObject *
-py_get_alignment(PyObject *self __unused, PyObject *args)
-{
-    int rv;
-    const char *path;
-    struct sanlk_disk disk;
-
-    /* parse python tuple */
-    if (!PyArg_ParseTuple(args, "s", &path)) {
-        return NULL;
-    }
-
-    memset(&disk, 0, sizeof(struct sanlk_disk));
-    strncpy(disk.path, path, SANLK_PATH_LEN - 1);
-
-    /* get device alignment (gil disabled) */
-    Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_direct_align(&disk);
-    Py_END_ALLOW_THREADS
-
-    if (rv < 0) {
-        __set_exception(rv, "Unable to get device alignment");
-        return NULL;
-    }
-
-    return PyInt_FromLong(rv);
-}
-
 static PyMethodDef
-sanlockmod_methods[] = {
+sanlock_methods[] = {
     {"register", py_register, METH_NOARGS, pydoc_register},
     {"get_alignment", py_get_alignment, METH_VARARGS, pydoc_get_alignment},
     {"init_lockspace", (PyCFunction) py_init_lockspace,
@@ -451,17 +451,17 @@ sanlockmod_methods[] = {
 };
 
 PyMODINIT_FUNC
-initsanlockmod(void)
+initsanlock(void)
 {
-    py_module = Py_InitModule4("sanlockmod",
-                sanlockmod_methods, pydoc_sanlockmod, NULL, PYTHON_API_VERSION);
+    py_module = Py_InitModule4("sanlock",
+                sanlock_methods, pydoc_sanlock, NULL, PYTHON_API_VERSION);
 
     /* Python's module loader doesn't support clean recovery from errors */
     if (py_module == NULL)
         return;
 
     /* Initializing sanlock exception */
-    py_exception = PyErr_NewException("sanlockmod.SanlockException", NULL, NULL);
+    py_exception = PyErr_NewException("sanlock.SanlockException", NULL, NULL);
     Py_INCREF(py_exception);
     PyModule_AddObject(py_module, "SanlockException", py_exception);
 }
