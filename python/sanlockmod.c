@@ -17,6 +17,11 @@
 #endif
 
 /* Sanlock module */
+PyDoc_STRVAR(pydoc_sanlockmod, "\
+Copyright (C) 2010-2011 Red Hat, Inc.  All rights reserved.\n\
+This copyrighted material is made available to anyone wishing to use,\n\
+modify, copy, or redistribute it subject to the terms and conditions\n\
+of the GNU General Public License v.2.");
 PyObject *py_module;
 
 /* Sanlock exception */
@@ -112,6 +117,11 @@ exit_fail:
     return -1;
 }
 
+/* register */
+PyDoc_STRVAR(pydoc_register, "\
+register() -> int\n\
+Register to sanlock daemon and return the connection fd.");
+
 static PyObject *
 py_register(PyObject *self __unused, PyObject *args)
 {
@@ -126,6 +136,12 @@ py_register(PyObject *self __unused, PyObject *args)
 
     return PyInt_FromLong(sanlockfd);
 }
+
+/* init_lockspace */
+PyDoc_STRVAR(pydoc_init_lockspace, "\
+init_lockspace(lockspace, path, offset=0, max_hosts=0, num_hosts=0, \
+use_aio=True)\n\
+Initialize a device to be used as sanlock lockspace.");
 
 static PyObject *
 py_init_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
@@ -164,6 +180,12 @@ py_init_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     Py_RETURN_NONE;
 }
 
+/* init_resource */
+PyDoc_STRVAR(pydoc_init_resource, "\
+init_resource(lockspace, resource, disks, max_hosts=0, num_hosts=0, \
+use_aio=True)\n\
+Initialize a device to be used as sanlock resource.\n\
+The disks must be in the format: [(path, offset), ... ]");
 
 static PyObject *
 py_init_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
@@ -210,6 +232,11 @@ exit_fail:
     return NULL;
 }
 
+/* add_lockspace */
+PyDoc_STRVAR(pydoc_add_lockspace, "\
+add_lockspace(lockspace, host_id, path, offset=0)\n\
+Add a lockspace, acquiring a host_id in it.");
+
 static PyObject *
 py_add_lockspace(PyObject *self __unused, PyObject *args)
 {
@@ -243,6 +270,11 @@ py_add_lockspace(PyObject *self __unused, PyObject *args)
     Py_RETURN_NONE;
 }
 
+/* rem_lockspace */
+PyDoc_STRVAR(pydoc_rem_lockspace, "\
+rem_lockspace(lockspace, host_id, path, offset=0)\n\
+Remove a lockspace, releasing the acquired host_id.");
+
 static PyObject *
 py_rem_lockspace(PyObject *self __unused, PyObject *args)
 {
@@ -275,6 +307,12 @@ py_rem_lockspace(PyObject *self __unused, PyObject *args)
 
     Py_RETURN_NONE;
 }
+
+/* acquire */
+PyDoc_STRVAR(pydoc_acquire, "\
+acquire(fd, lockspace, resource, disks)\n\
+Acquire a resource lease for the current process.\n\
+The disks must be in the format: [(path, offset), ... ]");
 
 static PyObject *
 py_acquire(PyObject *self __unused, PyObject *args)
@@ -317,6 +355,12 @@ exit_fail:
     return NULL;
 }
 
+/* release */
+PyDoc_STRVAR(pydoc_release, "\
+release(fd, lockspace, resource, disks)\n\
+Release a resource lease for the current process.\n\
+The disks must be in the format: [(path, offset), ... ]");
+
 static PyObject *
 py_release(PyObject *self __unused, PyObject *args)
 {
@@ -358,6 +402,11 @@ exit_fail:
     return NULL;
 }
 
+/* get_alignment */
+PyDoc_STRVAR(pydoc_get_alignment, "\
+get_alignment(path) -> int\n\
+Get device alignment.");
+
 static PyObject *
 py_get_alignment(PyObject *self __unused, PyObject *args)
 {
@@ -388,35 +437,24 @@ py_get_alignment(PyObject *self __unused, PyObject *args)
 
 static PyMethodDef
 sanlockmod_methods[] = {
-    {"register",
-            py_register, METH_NOARGS, "Register to sanlock daemon."},
-    {"get_alignment",
-            py_get_alignment, METH_VARARGS, "Get device alignment."},
-    {"init_lockspace",
-            (PyCFunction) py_init_lockspace, METH_VARARGS|METH_KEYWORDS,
-            "Initialize a device to be used as sanlock lockspace."},
-    {"init_resource",
-            (PyCFunction) py_init_resource, METH_VARARGS|METH_KEYWORDS,
-            "Initialize a device to be used as sanlock resource."},
-    {"add_lockspace",
-            py_add_lockspace, METH_VARARGS,
-            "Add a lockspace, acquiring a host_id in it."},
-    {"rem_lockspace",
-            py_rem_lockspace, METH_VARARGS,
-            "Remove a lockspace, releasing our host_id in it."},
-    {"acquire",
-            py_acquire, METH_VARARGS,
-            "Acquire a resource lease for the current process."},
-    {"release",
-            py_release, METH_VARARGS,
-            "Release a resource lease for the current process."},
+    {"register", py_register, METH_NOARGS, pydoc_register},
+    {"get_alignment", py_get_alignment, METH_VARARGS, pydoc_get_alignment},
+    {"init_lockspace", (PyCFunction) py_init_lockspace,
+                        METH_VARARGS|METH_KEYWORDS, pydoc_init_lockspace},
+    {"init_resource", (PyCFunction) py_init_resource,
+                        METH_VARARGS|METH_KEYWORDS, pydoc_init_resource},
+    {"add_lockspace", py_add_lockspace, METH_VARARGS, pydoc_add_lockspace},
+    {"rem_lockspace", py_rem_lockspace, METH_VARARGS, pydoc_rem_lockspace},
+    {"acquire", py_acquire, METH_VARARGS, pydoc_acquire},
+    {"release", py_release, METH_VARARGS, pydoc_release},
     {NULL, NULL, 0, NULL}
 };
 
 PyMODINIT_FUNC
 initsanlockmod(void)
 {
-    py_module = Py_InitModule("sanlockmod", sanlockmod_methods);
+    py_module = Py_InitModule4("sanlockmod",
+                sanlockmod_methods, pydoc_sanlockmod, NULL, PYTHON_API_VERSION);
 
     /* Python's module loader doesn't support clean recovery from errors */
     if (py_module == NULL)
