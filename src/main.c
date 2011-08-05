@@ -2438,10 +2438,12 @@ static void print_usage(void)
 	printf("  <lver>                optional leader version\n");
 	printf("\n");
 	printf("Limits:\n");
-	printf("offsets must be 1MB aligned for storage with 512 byte sectors (8MB for 4096)\n");
+	printf("offset alignment with 512 byte sectors: %d (1MB)\n", 1024 * 1024);
+	printf("offset alignment with 4096 byte sectors: %d (8MB)\n", 1024 * 1024 * 8);
 	printf("maximum name length for lockspaces and resources: %d\n", SANLK_NAME_LEN);
 	printf("maximum path length: %d\n", SANLK_PATH_LEN);
 	printf("maximum host_id: %d\n", DEFAULT_MAX_HOSTS);
+	printf("maximum client process connections: 1000\n"); /* NALLOC */
 	printf("\n");
 }
 
