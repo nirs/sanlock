@@ -22,9 +22,11 @@
 #include "task.h"
 
 void log_level(int space_id GNUC_UNUSED, int token_id GNUC_UNUSED,
+	       char *name GNUC_UNUSED,
 	       int level GNUC_UNUSED, const char *fmt GNUC_UNUSED, ...);
 
 void log_level(int space_id GNUC_UNUSED, int token_id GNUC_UNUSED,
+	       char *name GNUC_UNUSED,
 	       int level GNUC_UNUSED, const char *fmt GNUC_UNUSED, ...)
 {
 }

@@ -30,6 +30,9 @@
 #include <sys/time.h>
 #include <sys/un.h>
 #include <sys/mman.h>
+#include <sys/mman.h>
+#include <sys/utsname.h>
+#include <uuid/uuid.h>
 
 #define EXTERN
 #include "sanlock_internal.h"
@@ -48,9 +51,9 @@
 #include "sanlock_admin.h"
 
 /* priorities are LOG_* from syslog.h */
-int log_logfile_priority = LOG_ERR;
+int log_logfile_priority = LOG_WARNING;
 int log_syslog_priority = LOG_ERR;
-int log_stderr_priority = LOG_ERR;
+int log_stderr_priority = -1; /* -D sets this to LOG_DEBUG */
 
 struct client {
 	int used;
@@ -106,6 +109,10 @@ static struct thread_pool pool;
 extern struct list_head spaces;
 extern struct list_head spaces_rem;
 extern pthread_mutex_t spaces_mutex;
+
+static struct random_data rand_data;
+static char rand_state[32];
+static pthread_mutex_t rand_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* FIXME: add a mutex for client array so we don't try to expand it
    while a cmd thread is using it.  Or, with a thread pool we know
@@ -853,16 +860,6 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 		token->token_id = token_id_counter++;
 		new_tokens[i] = token;
 		alloc_count++;
-
-		/* We use the token_id in log messages because the combination
-		 * of full length space_name+resource_name in each log message
-		 * would make excessively long lines. */
-
-		log_token(token, "cmd_acquire %d,%d,%d %.48s:%.48s:%s:%llu",
-			  cl_ci, cl_fd, cl_pid,
-			  token->r.lockspace_name, token->r.name,
-			  token->disks[0].path,
-			  (unsigned long long)token->disks[0].offset);
 	}
 
 	rv = recv(fd, &opt, sizeof(struct sanlk_options), MSG_WAITALL);
@@ -916,6 +913,15 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 		}
 		token->host_id = space.host_id;
 		token->host_generation = space.host_generation;
+
+		/* save a record of what this token_id is for later debugging */
+		log_level(space.space_id, token->token_id, NULL, LOG_WARNING,
+			  "resource %.48s:%.48s:%.256s:%llu for %d,%d,%d",
+			  token->r.lockspace_name,
+			  token->r.name,
+			  token->r.disks[0].path,
+			  (unsigned long long)token->r.disks[0].offset,
+			  cl_ci, cl_fd, cl_pid);
 	}
 
 	for (i = 0; i < new_tokens_count; i++) {
@@ -1416,6 +1422,7 @@ static void *thread_pool_worker(void *data)
 	struct task task;
 	struct cmd_args *ca;
 
+	memset(&task, 0, sizeof(struct task));
 	setup_task_timeouts(&task, main_task.io_timeout_seconds);
 	setup_task_aio(&task, main_task.use_aio, WORKER_AIO_CB_SIZE);
 	snprintf(task.name, NAME_ID_SIZE, "worker%ld", (long)data);
@@ -2118,6 +2125,56 @@ static void setup_priority(void)
 	}
 }
 
+/* return a random int between a and b inclusive */
+
+int get_rand(int a, int b);
+
+int get_rand(int a, int b)
+{
+	int32_t val;
+	int rv;
+
+	pthread_mutex_lock(&rand_mutex);
+	rv = random_r(&rand_data, &val);
+	pthread_mutex_unlock(&rand_mutex);
+	if (rv < 0)
+		return rv;
+
+	return a + (int) (((float)(b - a + 1)) * val / (RAND_MAX+1.0));
+}
+
+static void setup_host_name(void)
+{
+	struct utsname name;
+	char uuid[37];
+	uuid_t uu;
+
+	memset(rand_state, 0, sizeof(rand_state));
+	memset(&rand_data, 0, sizeof(rand_data));
+
+	initstate_r(time(NULL), rand_state, sizeof(rand_state), &rand_data);
+
+	/* use host name from command line */
+
+	if (com.our_host_name[0]) {
+		memcpy(our_host_name_global, com.our_host_name, SANLK_NAME_LEN);
+		return;
+	}
+
+	/* make up something that's likely to be different among hosts */
+
+	memset(&our_host_name_global, 0, sizeof(our_host_name_global));
+	memset(&name, 0, sizeof(name));
+	memset(&uuid, 0, sizeof(uuid));
+
+	uname(&name);
+	uuid_generate(uu);
+	uuid_unparse_lower(uu, uuid);
+
+	snprintf(our_host_name_global, NAME_ID_SIZE, "%s.%s",
+		 uuid, name.nodename);
+}
+
 static int do_daemon(void)
 {
 	struct sigaction act;
@@ -2157,9 +2214,13 @@ static int do_daemon(void)
 
 	setup_logging();
 
-	log_error("sanlock daemon started aio %d %d renew %d %d",
+	setup_host_name();
+
+	log_error("sanlock daemon started aio %d %d renew %d %d host %s time %llu",
 		  main_task.use_aio, main_task.io_timeout_seconds,
-		  main_task.id_renewal_seconds, main_task.id_renewal_fail_seconds);
+		  main_task.id_renewal_seconds, main_task.id_renewal_fail_seconds,
+		  our_host_name_global,
+		  (unsigned long long)time(NULL));
 
 	setup_priority();
 
@@ -2601,6 +2662,8 @@ static int read_command_line(int argc, char *argv[])
 			break;
 		case 'a':
 			com.aio_arg = atoi(optionarg);
+			if (com.aio_arg && com.aio_arg != 1)
+				com.aio_arg = 1;
 			break;
 		case 't':
 			com.max_worker_threads = atoi(optionarg);
@@ -2895,8 +2958,10 @@ static int do_direct(void)
 		break;
 
 	case ACT_ACQUIRE_ID:
+		setup_host_name();
+
 		rv = direct_acquire_id(&main_task, &com.lockspace,
-				       com.our_host_name);
+				       our_host_name_global);
 		log_tool("acquire_id done %d", rv);
 		break;
 

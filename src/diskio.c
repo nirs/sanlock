@@ -306,10 +306,11 @@ static struct aicb *find_callback_slot(struct task *task)
 		struct iocb *ev_iocb = event.obj;
 		struct aicb *ev_aicb = container_of(ev_iocb, struct aicb, iocb);
 
+		log_taske(task, "aio collect %p:%p:%p result %ld:%ld old free",
+			  ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 		ev_aicb->used = 0;
-
-		log_error("aio %s clear iocb %p event result %ld %ld",
-			  task->name, ev_iocb, event.res, event.res2);
+		free(ev_aicb->buf);
+		ev_aicb->buf = NULL;
 		goto find;
 	}
 	return NULL;
@@ -349,7 +350,8 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 
 	rv = io_submit(task->aio_ctx, 1, &iocb);
 	if (rv < 0) {
-		log_error("aio %s io_submit error %d", task->name, rv);
+		log_taske(task, "aio submit %p:%p:%p rv %d fd %d cmd %d",
+			  aicb, iocb, buf, rv, fd, cmd);
 		goto out;
 	}
 
@@ -368,7 +370,8 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 	if (rv == -EINTR)
 		goto retry;
 	if (rv < 0) {
-		log_error("aio %s io_getevents error %d", task->name, rv);
+		log_taske(task, "aio getevent %p:%p:%p rv %d",
+			  aicb, iocb, buf, rv);
 		goto out;
 	}
 	if (rv == 1) {
@@ -378,21 +381,21 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 		ev_aicb->used = 0;
 
 		if (ev_iocb != iocb) {
-			log_error("aio %s other iocb %p event result %ld %ld",
-				  task->name, ev_iocb, event.res, event.res2);
+			log_taske(task, "aio collect %p:%p:%p result %ld:%ld other free",
+				  ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 			free(ev_aicb->buf);
 			ev_aicb->buf = NULL;
 			goto retry;
 		}
 		if ((int)event.res < 0) {
-			log_error("aio %s event result %ld %ld",
-				  task->name, event.res, event.res2);
+			log_taske(task, "aio collect %p:%p:%p result %ld:%ld match res",
+				  ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 			rv = event.res;
 			goto out;
 		}
 		if (event.res != len) {
-			log_error("aio %s event len %d result %lu %lu",
-				  task->name, len, event.res, event.res2);
+			log_taske(task, "aio collect %p:%p:%p result %ld:%ld match len %d",
+				  ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2, len);
 			rv = -EMSGSIZE;
 			goto out;
 		}
@@ -415,9 +418,8 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 
 	task->to_count++;
 
-	log_error("aio %s iocb %p timeout sec %d count %u ios %u",
-		  task->name, iocb, task->io_timeout_seconds,
-		  task->to_count, task->io_count);
+	log_taske(task, "aio timeout %p:%p:%p sec %d to_count %d",
+		  aicb, iocb, buf, task->io_timeout_seconds, task->to_count);
 
 	rv = io_cancel(task->aio_ctx, iocb, &event);
 	if (!rv) {
@@ -428,7 +430,7 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 		rv = SANLK_AIO_TIMEOUT;
 
 		if (cmd == IO_CMD_PREAD)
-			task->read_timeout = aicb;
+			task->read_iobuf_timeout_aicb = aicb;
 	}
  out:
 	return rv;
@@ -438,6 +440,7 @@ static int do_write_aio_linux(int fd, uint64_t offset, char *buf, int len, struc
 {
 	return do_linux_aio(fd, offset, buf, len, task, IO_CMD_PWRITE);
 }
+
 static int do_read_aio_linux(int fd, uint64_t offset, char *buf, int len, struct task *task)
 {
 	return do_linux_aio(fd, offset, buf, len, task, IO_CMD_PREAD);
@@ -689,32 +692,26 @@ int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 	return rv;
 }
 
-/* Try to reap the event of a previously timed out read_sectors.
-   A task's last timed out read is saved in task->read_timeout. */
+/* Try to reap the event of a previously timed out read_iobuf.
+   The aicb used in a task's last timed out read_iobuf is
+   task->read_iobuf_timeout_aicb . */
 
-int read_sectors_reap(const struct sync_disk *disk, uint64_t sector_nr,
-		      uint32_t sector_count, char *data, int data_len,
-		      struct task *task, const char *blktype GNUC_UNUSED)
+int read_iobuf_reap(int fd, uint64_t offset, char *iobuf, int iobuf_len, struct task *task)
 {
 	struct timespec ts;
 	struct aicb *aicb;
 	struct iocb *iocb;
 	struct io_event event;
-	char *iobuf;
-	uint64_t offset;
-	int iobuf_len;
 	int rv;
 
-	iobuf_len = sector_count * disk->sector_size;
-	offset = disk->offset + (sector_nr * disk->sector_size);
-
-	aicb = task->read_timeout;
+	aicb = task->read_iobuf_timeout_aicb;
 	iocb = &aicb->iocb;
-	iobuf = iocb->u.c.buf;
 
 	if (!aicb->used)
 		return -EINVAL;
-	if (iocb->aio_fildes != disk->fd)
+	if (iocb->aio_fildes != fd)
+		return -EINVAL;
+	if (iocb->u.c.buf != iobuf)
 		return -EINVAL;
 	if (iocb->u.c.nbytes != iobuf_len)
 		return -EINVAL;
@@ -732,7 +729,8 @@ int read_sectors_reap(const struct sync_disk *disk, uint64_t sector_nr,
 	if (rv == -EINTR)
 		goto retry;
 	if (rv < 0) {
-		log_error("reap aio %s io_getevents error %d", task->name, rv);
+		log_taske(task, "aio getevent %p:%p:%p rv %d r",
+			  aicb, iocb, iobuf, rv);
 		goto out;
 	}
 	if (rv == 1) {
@@ -742,28 +740,29 @@ int read_sectors_reap(const struct sync_disk *disk, uint64_t sector_nr,
 		ev_aicb->used = 0;
 
 		if (ev_iocb != iocb) {
-			log_error("reap aio %s other iocb %p event result %ld %ld",
-				  task->name, ev_iocb, event.res, event.res2);
+			log_taske(task, "aio collect %p:%p:%p result %ld:%ld other free r",
+				  ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 			free(ev_aicb->buf);
 			ev_aicb->buf = NULL;
 			goto retry;
 		}
 		if ((int)event.res < 0) {
-			log_error("reap aio %s event result %ld %ld",
-				  task->name, event.res, event.res2);
+			log_taske(task, "aio collect %p:%p:%p result %ld:%ld match res r",
+				  ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 			rv = event.res;
 			goto out;
 		}
 		if (event.res != iobuf_len) {
-			log_error("reap aio %s event len %d result %lu %lu",
-				  task->name, iobuf_len, event.res, event.res2);
+			log_taske(task, "aio collect %p:%p:%p result %ld:%ld match len %d r",
+				  ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2, iobuf_len);
 			rv = -EMSGSIZE;
 			goto out;
 		}
 
+		log_taske(task, "aio collect %p:%p:%p result %ld:%ld match reap",
+			  ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
+
 		rv = 0;
-		memcpy(data, iobuf, data_len);
-		free(iobuf);
 		goto out;
 	}
 

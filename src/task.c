@@ -114,14 +114,76 @@ void setup_task_aio(struct task *task, int use_aio, int cb_size)
 	task->use_aio = 0;
 }
 
-/* TODO: do we need/want to go through all task->callbacks that are still used
-   and wait to reap events for them before doing io_destroy? */
-
 void close_task_aio(struct task *task)
 {
-	if (task->use_aio)
-		io_destroy(task->aio_ctx);
+	struct timespec ts;
+	struct io_event event;
+	uint64_t last_warn;
+	int rv, i, used, warn;
 
+	if (!task->use_aio)
+		goto skip_aio;
+
+	memset(&ts, 0, sizeof(struct timespec));
+	ts.tv_sec = task->io_timeout_seconds;
+
+	last_warn = time(NULL);
+
+	/* wait for all outstanding aio to complete before
+	   destroying aio context, freeing iocb and buffers */
+
+	while (1) {
+		warn = 0;
+
+		if (time(NULL) - last_warn >= task->io_timeout_seconds) {
+			last_warn = time(NULL);
+			warn = 1;
+		}
+
+		used = 0;
+
+		for (i = 0; i < task->cb_size; i++) {
+			if (!task->callbacks[i].used)
+				continue;
+			used++;
+
+			if (!warn)
+				continue;
+			log_taske(task, "close_task_aio %d %p busy",
+				  i, &task->callbacks[i]);
+		}
+
+		if (!used)
+			break;
+
+		memset(&event, 0, sizeof(event));
+
+		rv = io_getevents(task->aio_ctx, 1, 1, &event, &ts);
+		if (rv == -EINTR)
+			continue;
+		if (rv < 0)
+			break;
+		if (rv == 1) {
+			struct iocb *ev_iocb = event.obj;
+			struct aicb *ev_aicb = container_of(ev_iocb, struct aicb, iocb);
+
+			if (ev_aicb->buf == task->iobuf)
+				task->iobuf = NULL;
+
+			log_taske(task, "aio collect %p:%p:%p result %ld:%ld close free",
+				  ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
+
+			ev_aicb->used = 0;
+			free(ev_aicb->buf);
+			ev_aicb->buf = NULL;
+		}
+	}
+	io_destroy(task->aio_ctx);
+
+	if (task->iobuf)
+		free(task->iobuf);
+
+ skip_aio:
 	if (task->callbacks)
 		free(task->callbacks);
 	task->callbacks = NULL;

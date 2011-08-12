@@ -193,6 +193,7 @@ static void *async_release_thread(void *arg GNUC_UNUSED)
 	struct resource *r;
 	struct token *token;
 
+	memset(&task, 0, sizeof(struct task));
 	setup_task_timeouts(&task, main_task.io_timeout_seconds);
 	setup_task_aio(&task, main_task.use_aio, RELEASE_AIO_CB_SIZE);
 	sprintf(task.name, "%s", "release");

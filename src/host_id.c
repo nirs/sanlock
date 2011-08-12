@@ -21,9 +21,7 @@
 #include <syslog.h>
 #include <sys/types.h>
 #include <sys/time.h>
-#include <sys/utsname.h>
 #include <sys/un.h>
-#include <uuid/uuid.h>
 
 #include "sanlock_internal.h"
 #include "sanlock_sock.h"
@@ -35,10 +33,6 @@
 #include "task.h"
 
 static unsigned int space_id_counter = 1;
-
-static struct random_data rand_data;
-static char rand_state[32];
-static pthread_mutex_t rand_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 struct list_head spaces;
 struct list_head spaces_add;
@@ -241,6 +235,7 @@ static void *lockspace_thread(void *arg_in)
 
 	sp = (struct space *)arg_in;
 
+	memset(&task, 0, sizeof(struct task));
 	setup_task_timeouts(&task, main_task.io_timeout_seconds);
 	setup_task_aio(&task, main_task.use_aio, HOSTID_AIO_CB_SIZE);
 	memcpy(task.name, sp->space_name, NAME_ID_SIZE);
@@ -293,9 +288,6 @@ static void *lockspace_thread(void *arg_in)
 	sp->host_generation = leader.owner_generation;
 
 	while (1) {
-		if (stop)
-			break;
-
 		pthread_mutex_lock(&sp->mutex);
 		stop = sp->thread_stop;
 		pthread_mutex_unlock(&sp->mutex);
@@ -348,14 +340,18 @@ static void *lockspace_thread(void *arg_in)
 				  result, delta_length,
 				  (unsigned long long)sp->lease_status.renewal_last_success);
 
-			if (!sp->lease_status.corrupt_result) {
+			if (!sp->lease_status.corrupt_result)
 				sp->lease_status.corrupt_result = corrupt_result(result);
-				log_erros(sp, "renewal error %d is corruption",
-					  sp->lease_status.corrupt_result);
-			}
 		}
-		stop = sp->thread_stop;
 		pthread_mutex_unlock(&sp->mutex);
+
+		/* TODO: pass off all the delta leases we read (in task->iobuf)
+		   for analysis by another thread */
+
+		/*
+		if (result == SANLK_OK)
+			queue_delta_lease_analysis(sp, task->iobuf);
+		*/
 	}
 
 	/* unlink called below to get it done ASAP */
@@ -453,6 +449,14 @@ int add_lockspace(struct sanlk_lockspace *ls)
 	sp->space_id = space_id_counter++;
 	list_add(&sp->list, &spaces_add);
 	pthread_mutex_unlock(&spaces_mutex);
+
+	/* save a record of what this space_id is for later debugging */
+	log_level(sp->space_id, 0, NULL, LOG_WARNING,
+		  "lockspace %.48s:%llu:%.256s:%llu",
+		  sp->space_name,
+		  (unsigned long long)sp->host_id,
+		  sp->host_id_disk.path,
+		  (unsigned long long)sp->host_id_disk.offset);
 
 	rv = pthread_create(&sp->thread, NULL, lockspace_thread, sp);
 	if (rv < 0) {
@@ -603,55 +607,10 @@ void free_lockspaces(int wait)
 	pthread_mutex_unlock(&spaces_mutex);
 }
 
-/* return a random int between a and b inclusive */
-
-int get_rand(int a, int b)
-{
-	int32_t val;
-	int rv;
-
-	pthread_mutex_lock(&rand_mutex);
-	rv = random_r(&rand_data, &val);
-	pthread_mutex_unlock(&rand_mutex);
-	if (rv < 0)
-		return rv;
-
-	return a + (int) (((float)(b - a + 1)) * val / (RAND_MAX+1.0));
-}
-
 void setup_spaces(void)
 {
-	struct utsname name;
-	char uuid[37];
-	uuid_t uu;
-
 	INIT_LIST_HEAD(&spaces);
 	INIT_LIST_HEAD(&spaces_add);
 	INIT_LIST_HEAD(&spaces_rem);
-
-	memset(rand_state, 0, sizeof(rand_state));
-	memset(&rand_data, 0, sizeof(rand_data));
-
-	initstate_r(time(NULL), rand_state, sizeof(rand_state), &rand_data);
-
-	/* use host name from command line */
-
-	if (com.our_host_name[0]) {
-		memcpy(our_host_name_global, com.our_host_name, SANLK_NAME_LEN);
-		return;
-	}
-
-	/* make up something that's likely to be different among hosts */
-
-	memset(&our_host_name_global, 0, sizeof(our_host_name_global));
-	memset(&name, 0, sizeof(name));
-	memset(&uuid, 0, sizeof(uuid));
-
-	uname(&name);
-	uuid_generate(uu);
-	uuid_unparse_lower(uu, uuid);
-
-	snprintf(our_host_name_global, NAME_ID_SIZE, "%s.%s",
-		 uuid, name.nodename);
 }
 

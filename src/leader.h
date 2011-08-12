@@ -21,7 +21,7 @@
 
 #define DELTA_DISK_MAGIC 0x12212010
 #define DELTA_DISK_VERSION_MAJOR 0x00030000
-#define DELTA_DISK_VERSION_MINOR 0x00000001
+#define DELTA_DISK_VERSION_MINOR 0x00000002
 
 /* for all disk structures:
    uint64 aligned on 8 byte boundaries,

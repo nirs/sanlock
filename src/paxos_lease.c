@@ -30,6 +30,8 @@
 #include "delta_lease.h"
 #include "paxos_lease.h"
 
+int get_rand(int a, int b);
+
 struct request_record {
 	uint64_t lver;
 	uint8_t force_mode;

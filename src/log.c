@@ -100,7 +100,7 @@ static void _log_save_ent(int level, int len)
  *    logfile and/or syslog (so callers don't block writing messages to files)
  */
 
-void log_level(int space_id, int token_id, int level, const char *fmt, ...)
+void log_level(int space_id, int token_id, char *name_in, int level, const char *fmt, ...)
 {
 	va_list ap;
 	char name[NAME_ID_SIZE + 1];
@@ -109,19 +109,19 @@ void log_level(int space_id, int token_id, int level, const char *fmt, ...)
 
 	memset(name, 0, sizeof(name));
 
-	if (!space_id && !token_id)
-		snprintf(name, NAME_ID_SIZE, "-");
-	else if (space_id && !token_id)
-		snprintf(name, NAME_ID_SIZE, "s%u", space_id);
+	if (space_id && !token_id)
+		snprintf(name, NAME_ID_SIZE, "s%u ", space_id);
 	else if (!space_id && token_id)
-		snprintf(name, NAME_ID_SIZE, "t%u", token_id);
+		snprintf(name, NAME_ID_SIZE, "r%u ", token_id);
 	else if (space_id && token_id)
-		snprintf(name, NAME_ID_SIZE, "s%u:t%u", space_id, token_id);
+		snprintf(name, NAME_ID_SIZE, "s%u:r%u ", space_id, token_id);
+	else if (name_in)
+		snprintf(name, NAME_ID_SIZE, "%.8s ", name_in);
 
 	pthread_mutex_lock(&log_mutex);
 
-	ret = snprintf(log_str + pos, len - pos, "%ld %s ",
-		       time(NULL), name);
+	ret = snprintf(log_str + pos, len - pos, "%llu %s",
+		       (unsigned long long)monotime(), name);
 	pos += ret;
 
 	va_start(ap, fmt);
