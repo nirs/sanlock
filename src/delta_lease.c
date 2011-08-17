@@ -325,6 +325,7 @@ int delta_lease_renew(struct task *task,
 		      struct sync_disk *disk,
 		      char *space_name,
 		      int prev_result,
+		      int *read_result,
 		      struct leader_record *leader_last,
 		      struct leader_record *leader_ret)
 {
@@ -338,12 +339,11 @@ int delta_lease_renew(struct task *task,
 	if (!leader_last)
 		return -EINVAL;
 
+	*read_result = SANLK_ERROR;
+
 	host_id = leader_last->owner_id;
 
-	/* read all delta leases */
-	iobuf_len = direct_align(disk);
-	if (iobuf_len <= 0)
-		return -EINVAL;
+	iobuf_len = sp->align_size;
 
 	/* offset of our leader_record */
 	offset = (host_id - 1) * disk->sector_size;
@@ -428,6 +428,7 @@ int delta_lease_renew(struct task *task,
 	}
 
  read_done:
+	*read_result = SANLK_OK;
 	memcpy(&leader, task->iobuf+offset, sizeof(struct leader_record));
 
 	rv = verify_leader(disk, space_name, host_id, &leader, "delta_renew");

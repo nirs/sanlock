@@ -546,7 +546,9 @@ static int main_loop(void)
 	struct timeval now, last_check;
 	int poll_timeout, check_interval;
 	unsigned int ms;
-	int i, rv, empty, space_dead;
+	int i, rv, empty, check_all;
+	char *check_buf = NULL;
+	int check_buf_len = 0;
 
 	gettimeofday(&last_check, NULL);
 	poll_timeout = STANDARD_CHECK_INTERVAL;
@@ -582,9 +584,21 @@ static int main_loop(void)
 			continue;
 		}
 		last_check = now;
+		check_interval = STANDARD_CHECK_INTERVAL;
 
 		pthread_mutex_lock(&spaces_mutex);
 		list_for_each_entry_safe(sp, safe, &spaces, list) {
+			check_all = 0;
+
+			if (sp->align_size > check_buf_len) {
+				if (check_buf)
+					free(check_buf);
+				check_buf_len = sp->align_size;
+				check_buf = malloc(check_buf_len);
+			}
+			if (check_buf)
+				memset(check_buf, 0, check_buf_len);
+
 			if (sp->killing_pids) {
 				if (all_pids_dead(sp)) {
 					log_space(sp, "set thread_stop");
@@ -596,24 +610,26 @@ static int main_loop(void)
 				} else {
 					kill_pids(sp);
 				}
-				check_interval = RECOVERY_CHECK_INTERVAL;
 			} else {
-				space_dead = !host_id_check(&main_task, sp);
+				rv = check_our_lease(&main_task, sp,
+						     &check_all, check_buf);
 
-				if (space_dead || external_shutdown ||
-				    sp->external_remove) {
-					log_space(sp, "set killing_pids dead %d "
+				if (rv || external_shutdown || sp->external_remove) {
+					log_space(sp, "set killing_pids check %d "
 						  "shutdown %d remove %d",
-						  space_dead, external_shutdown,
+						  rv, external_shutdown,
 						  sp->external_remove);
-					sp->space_dead = space_dead;
+					sp->space_dead = 1;
 					sp->killing_pids = 1;
 					kill_pids(sp);
-					check_interval = RECOVERY_CHECK_INTERVAL;
-				} else {
-					check_interval = STANDARD_CHECK_INTERVAL;
 				}
 			}
+
+			if (!sp->killing_pids && check_all)
+				check_other_leases(&main_task, sp, check_buf);
+
+			if (sp->killing_pids)
+				check_interval = RECOVERY_CHECK_INTERVAL;
 		}
 		empty = list_empty(&spaces);
 		pthread_mutex_unlock(&spaces_mutex);
@@ -3018,6 +3034,7 @@ int main(int argc, char *argv[])
 	int rv;
 
 	BUILD_BUG_ON(sizeof(struct sanlk_disk) != sizeof(struct sync_disk));
+	BUILD_BUG_ON(sizeof(struct leader_record) > LEADER_RECORD_MAX);
 	
 	memset(&com, 0, sizeof(com));
 	com.use_watchdog = DEFAULT_USE_WATCHDOG;

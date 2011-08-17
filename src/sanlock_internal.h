@@ -102,14 +102,28 @@ struct lease_status {
 	uint64_t acquire_last_success;
 	uint64_t renewal_last_attempt;
 	uint64_t renewal_last_success;
+
+	uint32_t renewal_read_count;
+	uint32_t renewal_read_check;
+	char *renewal_read_buf;
+};
+
+struct host_info {
+	uint64_t last_check; /* local monotime */
+	uint64_t last_live; /* local monotime */
+	uint64_t last_req; /* local monotime */
+	uint64_t owner_id;
+	uint64_t owner_generation;
+	uint64_t timestamp; /* remote monotime */
 };
 
 struct space {
+	struct list_head list;
 	char space_name[NAME_ID_SIZE];
 	uint64_t host_id;
 	uint64_t host_generation;
 	struct sync_disk host_id_disk;
-	struct list_head list;
+	int align_size;
 	int space_id; /* used to refer to this space instance in log messages */
 	int space_dead;
 	int killing_pids;
@@ -119,6 +133,9 @@ struct space {
 	pthread_mutex_t mutex; /* protects lease_status, thread_stop  */
 	struct lease_status lease_status;
 	int wd_fd;
+	uint32_t req_count;
+	uint32_t req_check;
+	struct host_info host_info[DEFAULT_MAX_HOSTS];
 };
 
 struct sm_header {
@@ -439,6 +456,8 @@ struct task {
 	int id_renewal_warn_seconds; /* configured */
 
 	int host_dead_seconds;       /* calculated */
+
+	int request_finish_seconds;  /* calculated */
 
 	unsigned int io_count;       /* stats */
 	unsigned int to_count;       /* stats */

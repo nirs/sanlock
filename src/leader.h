@@ -17,7 +17,7 @@
 
 #define PAXOS_DISK_MAGIC 0x06152010
 #define PAXOS_DISK_VERSION_MAJOR 0x00050000
-#define PAXOS_DISK_VERSION_MINOR 0x00000001
+#define PAXOS_DISK_VERSION_MINOR 0x00000001 
 
 #define DELTA_DISK_MAGIC 0x12212010
 #define DELTA_DISK_VERSION_MAJOR 0x00030000
@@ -62,5 +62,11 @@ struct leader_record {
 	uint64_t write_generation;	/* for extra info, debug */
 	uint64_t write_timestamp;	/* for extra info, debug */
 };
+
+/* leader_record can use first 256 bytes of a sector,
+   bitmap uses the last 256 bytes */
+
+#define LEADER_RECORD_MAX 256
+#define HOSTID_BITMAP_OFFSET 256
 
 #endif

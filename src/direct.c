@@ -191,7 +191,7 @@ static int do_delta_action(int action,
 	struct leader_record leader;
 	struct sync_disk sd;
 	struct space space;
-	int rv;
+	int read_result, rv;
 
 	/* for log_space in delta functions */
 	memset(&space, 0, sizeof(space));
@@ -230,6 +230,7 @@ static int do_delta_action(int action,
 		rv = delta_lease_renew(task, &space, &sd,
 				       ls->name,
 				       -1,
+				       &read_result,
 				       &leader,
 				       &leader);
 		break;

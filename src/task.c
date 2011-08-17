@@ -51,6 +51,7 @@ void setup_task_timeouts(struct task *task, int io_timeout_arg)
 	task->id_renewal_fail_seconds = id_renewal_fail_seconds;
 	task->id_renewal_warn_seconds = id_renewal_warn_seconds;
 	task->host_dead_seconds = host_dead_seconds;
+	task->request_finish_seconds = 3 * id_renewal_seconds; /* random */
 	/* the rest are calculated as needed in place */
 
 	/* hack to make just main thread log this info */
