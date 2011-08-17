@@ -38,7 +38,7 @@ int connect_socket(int *sock_fd)
 
 	s = socket(AF_LOCAL, SOCK_STREAM, 0);
 	if (s < 0)
-		return -1;
+		return -errno;
 
 	rv = sanlock_socket_address(&addr);
 	if (rv < 0)
@@ -46,7 +46,7 @@ int connect_socket(int *sock_fd)
 
 	rv = connect(s, (struct sockaddr *) &addr, sizeof(struct sockaddr_un));
 	if (rv < 0) {
-		rv = -1;
+		rv = -errno;
 		close(s);
 		return rv;
 	}
@@ -70,7 +70,7 @@ int send_header(int sock, int cmd, uint32_t cmd_flags, int datalen,
 
 	rv = send(sock, (void *) &header, sizeof(struct sm_header), 0);
 	if (rv < 0)
-		return -1;
+		return -errno;
 
 	return 0;
 }
