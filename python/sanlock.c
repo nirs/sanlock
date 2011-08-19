@@ -435,6 +435,23 @@ exit_fail:
     return NULL;
 }
 
+/* exception_errno */
+PyDoc_STRVAR(pydoc_errno, "exception errno");
+
+static PyObject *
+py_exception_errno(PyObject *self, PyBaseExceptionObject *exc_obj)
+{
+    PyObject *exc_errno;
+
+    exc_errno = PyTuple_GetItem(exc_obj->args, 0);
+
+    if (exc_errno == NULL)
+        return NULL;
+
+    Py_INCREF(exc_errno);
+    return exc_errno;
+}
+
 static PyMethodDef
 sanlock_methods[] = {
     {"register", py_register, METH_NOARGS, pydoc_register},
@@ -450,9 +467,43 @@ sanlock_methods[] = {
     {NULL, NULL, 0, NULL}
 };
 
+static PyMethodDef
+sanlock_exception = {
+    "errno", (PyCFunction) py_exception_errno, METH_O, pydoc_errno
+};
+
+static void
+initexception(void)
+{
+    int rv;
+    PyObject *dict, *func, *meth;
+
+    dict = PyDict_New();
+
+    if (dict == NULL)
+        return;
+
+    func = PyCFunction_New(&sanlock_exception, NULL);
+    meth = PyObject_CallFunction((PyObject *) &PyProperty_Type, "O", func);
+    Py_DECREF(func);
+
+    if (meth == NULL)
+        return;
+
+    rv = PyDict_SetItemString(dict, sanlock_exception.ml_name, meth);
+    Py_DECREF(meth);
+
+    if (rv < 0)
+        return;
+
+    py_exception = PyErr_NewException("sanlock.SanlockException", NULL, dict);
+    Py_DECREF(dict);
+}
+
 PyMODINIT_FUNC
 initsanlock(void)
 {
+
     py_module = Py_InitModule4("sanlock",
                 sanlock_methods, pydoc_sanlock, NULL, PYTHON_API_VERSION);
 
@@ -461,7 +512,11 @@ initsanlock(void)
         return;
 
     /* Initializing sanlock exception */
-    py_exception = PyErr_NewException("sanlock.SanlockException", NULL, NULL);
+    initexception();
+
+    if (py_exception == NULL)
+        return;
+
     Py_INCREF(py_exception);
     PyModule_AddObject(py_module, "SanlockException", py_exception);
 }
