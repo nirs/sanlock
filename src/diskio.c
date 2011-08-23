@@ -153,6 +153,11 @@ int open_disk(struct sync_disk *disk)
 	}
 
 	align_size = direct_align(disk);
+	if (align_size < 0) {
+		rv = align_size;
+		close(fd);
+		goto fail;
+	}
 
 	if (disk->offset % align_size) {
 		rv = -EBADSLT;

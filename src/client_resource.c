@@ -536,6 +536,7 @@ int sanlock_args_to_state(int res_count,
 		free(str);
 	}
 
+	/* caller to free state */
 	*res_state = state;
 	return 0;
 }
@@ -592,6 +593,7 @@ int sanlock_state_to_args(char *res_state,
 		memset(str, 0, sizeof(str));
 	}
 
+	/* caller to free res_count res and args */
 	*res_count = arg_count;
 	*res_args = args;
 	return 0;
@@ -616,6 +618,9 @@ int sanlock_str_to_lockspace(char *str, struct sanlk_lockspace *ls)
 	char *path = NULL;
 	char *offset = NULL;
 	int i;
+
+	if (!str)
+		return -EINVAL;
 
 	for (i = 0; i < strlen(str); i++) {
 		if (str[i] == '\\') {
@@ -646,8 +651,8 @@ int sanlock_str_to_lockspace(char *str, struct sanlk_lockspace *ls)
 		offset++;
 	}
 
-	if (str)
-		strncpy(ls->name, str, NAME_ID_SIZE);
+	strncpy(ls->name, str, NAME_ID_SIZE);
+
 	if (host_id)
 		ls->host_id = atoll(host_id);
 	if (path)

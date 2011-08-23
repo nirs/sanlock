@@ -779,7 +779,7 @@ static int _leader_read_multiple(struct task *task,
 	if (!majority_disks(token, num_reads)) {
 		log_errot(token, "%s leader read error %d", caller, rv);
 		error = SANLK_LEADER_READ;
-		goto fail;
+		goto out;
 	}
 
 	/* check that a majority of disks have the same leader */
@@ -801,13 +801,11 @@ static int _leader_read_multiple(struct task *task,
 	if (!found) {
 		log_errot(token, "%s leader inconsistent", caller);
 		error = SANLK_LEADER_DIFF;
-		goto fail;
+		goto out;
 	}
 
-	memcpy(leader_ret, &leader, sizeof(struct leader_record));
-	return SANLK_OK;
-
- fail:
+	error = SANLK_OK;
+ out:
 	memcpy(leader_ret, &leader, sizeof(struct leader_record));
 	free(leaders);
 	free(leader_reps);
@@ -1481,6 +1479,8 @@ int paxos_lease_init(struct task *task,
 		max_hosts = DEFAULT_MAX_HOSTS;
 
 	align_size = direct_align(&token->disks[0]);
+	if (align_size < 0)
+		return align_size;
 
 	if (token->disks[0].sector_size * (2 + max_hosts) > align_size)
 		return -E2BIG;

@@ -356,6 +356,11 @@ static void *lockspace_thread(void *arg_in)
 	opened = 1;
 
 	sp->align_size = direct_align(&sp->host_id_disk);
+	if (sp->align_size < 0) {
+		log_erros(sp, "direct_align error");
+		acquire_result = sp->align_size;
+		goto set_status;
+	}
 
 	sp->lease_status.renewal_read_buf = malloc(sp->align_size);
 	if (!sp->lease_status.renewal_read_buf) {
