@@ -25,11 +25,11 @@
 #include "diskio.h"
 #include "direct.h"
 #include "log.h"
-#include "crc32c.h"
 #include "host_id.h"
 #include "delta_lease.h"
 #include "paxos_lease.h"
 
+uint32_t crc32c(uint32_t crc, uint8_t *data, size_t length);
 int get_rand(int a, int b);
 
 struct request_record {
@@ -208,7 +208,7 @@ static int read_request(struct task *task,
 
 static uint32_t dblock_checksum(struct paxos_dblock *pd)
 {
-	return crc32c((uint32_t)~1, (char *)pd, DBLOCK_CHECKSUM_LEN);
+	return crc32c((uint32_t)~1, (uint8_t *)pd, DBLOCK_CHECKSUM_LEN);
 }
 
 static int verify_dblock(struct token *token, struct paxos_dblock *pd)
@@ -566,7 +566,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 
 uint32_t leader_checksum(struct leader_record *lr)
 {
-	return crc32c((uint32_t)~1, (char *)lr, LEADER_CHECKSUM_LEN);
+	return crc32c((uint32_t)~1, (uint8_t *)lr, LEADER_CHECKSUM_LEN);
 }
 
 static void log_leader_error(int result,

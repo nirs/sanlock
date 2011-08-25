@@ -1,11 +1,3 @@
-/*
- * Copyright (C) 2010-2011 Red Hat, Inc.  All rights reserved.
- *
- * This copyrighted material is made available to anyone wishing to use,
- * modify, copy, or redistribute it subject to the terms and conditions
- * of the GNU General Public License v.2.
- */
-
 /* 
  * Copied from the btrfs-progs source code, which...
  * Copied from the kernel source code, lib/libcrc32c.c.
@@ -14,11 +6,9 @@
  * under the terms of the GNU General Public License as published by the Free
  * Software Foundation; either version 2 of the License, or (at your option) 
  * any later version.
- *
  */
 #include <unistd.h>
 #include <stdint.h>
-#include "crc32c.h"
 
 /*
  * This is the CRC-32C table
@@ -101,11 +91,12 @@ static const uint32_t crc32c_table[256] = {
  * crc using table.
  */
 
-uint32_t crc32c_le(uint32_t crc, unsigned char const *data, size_t length)
+uint32_t crc32c(uint32_t crc, uint8_t *data, size_t length);
+
+uint32_t crc32c(uint32_t crc, uint8_t *data, size_t length)
 {
 	while (length--)
-		crc =
-		    crc32c_table[(crc ^ *data++) & 0xFFL] ^ (crc >> 8);
+		crc = crc32c_table[(crc ^ *data++) & 0xFFL] ^ (crc >> 8);
 
 	return crc;
 }
