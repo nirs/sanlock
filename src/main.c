@@ -1343,6 +1343,105 @@ static void cmd_inquire(struct task *task, struct cmd_args *ca)
 	client_resume(ca->ci_in);
 }
 
+static void cmd_request(struct task *task, struct cmd_args *ca)
+{
+	struct sm_header h;
+	struct token *token;
+	struct sanlk_resource res;
+	uint64_t owner_id;
+	uint32_t force_mode;
+	int token_len, disks_len;
+	int j, fd, rv, result;
+
+	fd = client[ca->ci_in].fd;
+
+	force_mode = ca->header.data;
+
+	/* receiving and setting up token copied from cmd_acquire */
+
+	rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
+	if (rv != sizeof(struct sanlk_resource)) {
+		log_error("cmd_request %d,%d recv %d %d",
+			   ca->ci_in, fd, rv, errno);
+		result = -ENOTCONN;
+		goto reply;
+	}
+
+	if (!res.num_disks || res.num_disks > MAX_DISKS) {
+		result = -ERANGE;
+		goto reply;
+	}
+
+	disks_len = res.num_disks * sizeof(struct sync_disk);
+	token_len = sizeof(struct token) + disks_len;
+
+	token = malloc(token_len);
+	if (!token) {
+		result = -ENOMEM;
+		goto reply;
+	}
+
+	memset(token, 0, token_len);
+	token->disks = (struct sync_disk *)&token->r.disks[0]; /* shorthand */
+	token->r.num_disks = res.num_disks;
+	memcpy(token->r.lockspace_name, res.lockspace_name, SANLK_NAME_LEN);
+	memcpy(token->r.name, res.name, SANLK_NAME_LEN);
+
+	token->acquire_lver = res.lver;
+	token->acquire_data64 = res.data64;
+	token->acquire_data32 = res.data32;
+	token->acquire_flags = res.flags;
+
+	/*
+	 * receive sanlk_disk's / sync_disk's
+	 *
+	 * WARNING: as a shortcut, this requires that sync_disk and
+	 * sanlk_disk match; this is the reason for the pad fields
+	 * in sanlk_disk (TODO: let these differ?)
+	 */
+
+	rv = recv(fd, token->disks, disks_len, MSG_WAITALL);
+	if (rv != disks_len) {
+		free(token);
+		result = -ENOTCONN;
+		goto reply;
+	}
+
+	/* zero out pad1 and pad2, see WARNING above */
+	for (j = 0; j < token->r.num_disks; j++) {
+		token->disks[j].sector_size = 0;
+		token->disks[j].fd = -1;
+	}
+
+	log_debug("cmd_request %d,%d force_mode %u %.48s:%.48s:%.256s:%llu",
+		  ca->ci_in, fd, force_mode,
+		  token->r.lockspace_name,
+		  token->r.name,
+		  token->disks[0].path,
+		  (unsigned long long)token->r.disks[0].offset);
+
+	result = request_token(task, token, force_mode, &owner_id);
+
+	if (result < 0)
+		goto reply;
+
+#if 0
+	host_bitmap_set(token, owner_id);
+#endif
+
+ reply:
+	free(token);
+	log_debug("cmd_request %d,%d done %d", ca->ci_in, fd, result);
+
+	memcpy(&h, &ca->header, sizeof(struct sm_header));
+	h.length = sizeof(h);
+	h.data = result;
+	h.data2 = 0;
+	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
+
+	client_resume(ca->ci_in);
+}
+
 static void cmd_add_lockspace(struct cmd_args *ca)
 {
 	struct sm_header h;
@@ -1421,6 +1520,9 @@ static void call_cmd(struct task *task, struct cmd_args *ca)
 		break;
 	case SM_CMD_INQUIRE:
 		cmd_inquire(task, ca);
+		break;
+	case SM_CMD_REQUEST:
+		cmd_request(task, ca);
 		break;
 	case SM_CMD_ADD_LOCKSPACE:
 		strcpy(client[ca->ci_in].owner_name, "add_lockspace");
@@ -1770,7 +1872,10 @@ static void cmd_restrict(int ci, int fd, struct sm_header *h_recv)
 	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
 }
 
-static void process_cmd_thread_lockspace(int ci_in, struct sm_header *h_recv)
+/* cmd comes from a transient client/fd set up just to pass the cmd,
+   and is not being done on behalf of another registered client/fd */
+
+static void process_cmd_thread_unregistered(int ci_in, struct sm_header *h_recv)
 {
 	struct cmd_args *ca;
 	struct sm_header h;
@@ -1784,12 +1889,7 @@ static void process_cmd_thread_lockspace(int ci_in, struct sm_header *h_recv)
 	ca->ci_in = ci_in;
 	memcpy(&ca->header, h_recv, sizeof(struct sm_header));
 
-	if (h_recv->cmd == SM_CMD_ADD_LOCKSPACE)
-		strcpy(client[ci_in].owner_name, "add_lockspace");
-	else if (h_recv->cmd == SM_CMD_REM_LOCKSPACE)
-		strcpy(client[ci_in].owner_name, "rem_lockspace");
-	else
-		strcpy(client[ci_in].owner_name, "cmd_lockspace");
+	snprintf(client[ci_in].owner_name, SANLK_NAME_LEN, "cmd%d", h_recv->cmd);
 
 	rv = thread_pool_add_work(ca);
 	if (rv < 0)
@@ -1807,7 +1907,10 @@ static void process_cmd_thread_lockspace(int ci_in, struct sm_header *h_recv)
 	close(client[ci_in].fd);
 }
 
-static void process_cmd_thread_resource(int ci_in, struct sm_header *h_recv)
+/* cmd either comes from a registered client/fd,
+   or is targeting a registered client/fd */
+
+static void process_cmd_thread_registered(int ci_in, struct sm_header *h_recv)
 {
 	struct cmd_args *ca;
 	struct sm_header h;
@@ -2024,10 +2127,11 @@ static void process_connection(int ci)
 		break;
 	case SM_CMD_ADD_LOCKSPACE:
 	case SM_CMD_REM_LOCKSPACE:
+	case SM_CMD_REQUEST:
 		rv = client_suspend(ci);
 		if (rv < 0)
 			return;
-		process_cmd_thread_lockspace(ci, &h);
+		process_cmd_thread_unregistered(ci, &h);
 		break;
 	case SM_CMD_ACQUIRE:
 	case SM_CMD_RELEASE:
@@ -2037,7 +2141,7 @@ static void process_connection(int ci)
 		rv = client_suspend(ci);
 		if (rv < 0)
 			return;
-		process_cmd_thread_resource(ci, &h);
+		process_cmd_thread_registered(ci, &h);
 		break;
 	default:
 		log_error("ci %d cmd %d unknown", ci, h.cmd);
@@ -2491,6 +2595,7 @@ static void print_usage(void)
 	printf("sanlock client acquire -r RESOURCE -p <pid>\n");
 	printf("sanlock client release -r RESOURCE -p <pid>\n");
 	printf("sanlock client inquire -p <pid>\n");
+	printf("sanlock client request -r RESOURCE\n");
 	printf("\n");
 	printf("sanlock direct <action> [-a 0|1] [-o 0|1]\n");
 	printf("sanlock direct init -s LOCKSPACE\n");
@@ -2594,6 +2699,8 @@ static int read_command_line(int argc, char *argv[])
 			com.action = ACT_RELEASE;
 		else if (!strcmp(act, "inquire"))
 			com.action = ACT_INQUIRE;
+		else if (!strcmp(act, "request"))
+			com.action = ACT_REQUEST;
 		else {
 			log_tool("client action \"%s\" is unknown", act);
 			exit(EXIT_FAILURE);
@@ -2714,6 +2821,9 @@ static int read_command_line(int argc, char *argv[])
 			break;
 		case 'g':
 			com.local_host_generation = atoll(optionarg);
+			break;
+		case 'f':
+			com.force_mode = strtoul(optionarg, NULL, 0);
 			break;
 		case 's':
 			parse_arg_lockspace(optionarg); /* com.lockspace */
@@ -2900,6 +3010,12 @@ static int do_client(void)
 		if (rv < 0)
 			break;
 		log_tool("\"%s\"", res_state);
+		break;
+
+	case ACT_REQUEST:
+		log_tool("request");
+		rv = sanlock_request(0, com.force_mode, com.res_args[0]);
+		log_tool("request done %d", rv);
 		break;
 
 	default:

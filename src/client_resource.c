@@ -325,6 +325,50 @@ int sanlock_release(int sock, int pid, uint32_t flags, int res_count,
 	return rv;
 }
 
+int sanlock_request(uint32_t flags, uint32_t force_mode,
+		    struct sanlk_resource *res)
+{
+	struct sm_header h;
+	int fd, rv, datalen;
+
+	datalen = sizeof(struct sanlk_resource) +
+		  sizeof(struct sanlk_disk) * res->num_disks;
+
+	rv = connect_socket(&fd);
+	if (rv < 0)
+		return rv;
+
+	rv = send_header(fd, SM_CMD_REQUEST, flags, datalen, force_mode, 0);
+	if (rv < 0)
+		goto out;
+
+	rv = send(fd, res, sizeof(struct sanlk_resource), 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	rv = send(fd, res->disks, sizeof(struct sanlk_disk) * res->num_disks, 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	/* get result */
+
+	memset(&h, 0, sizeof(h));
+
+	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	if (rv != sizeof(h)) {
+		rv = -1;
+		goto out;
+	}
+	rv = (int)h.data;
+ out:
+	close(fd);
+	return rv;
+}
+
 /*
  * convert from struct sanlk_resource to string with format:
  * <lockspace_name>:<resource_name>:<path>:<offset>[:<path>:<offset>...]:<lver>

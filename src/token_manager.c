@@ -185,6 +185,51 @@ int release_token(struct task *task, struct token *token)
 	return rv; /* SANLK_OK */
 }
 
+int request_token(struct task *task, struct token *token, uint32_t force_mode,
+		  uint64_t *owner_id)
+{
+#if 0
+	struct leader_record leader;
+	struct request_record req;
+	int rv;
+
+	rv = open_disks(token->disks, token->r.num_disks);
+	if (!majority_disks(token, rv)) {
+		log_errot(token, "request open_disk error %s", token->disks[0].path);
+		return -ENODEV;
+	}
+
+	rv = paxos_lease_leader_read(task, token, &leader, "request");
+	if (rv < 0)
+		goto out;
+
+	if (leader.timestamp == LEASE_FREE) {
+	}
+
+	if (leader.lver >= token->acquire_lver) {
+	}
+
+	*owner_id = leader.owner_id;
+
+	rv = paxos_lease_request_read(task, token, &req);
+	if (rv < 0)
+		goto out;
+
+	if (req.lver >= token->acquire_lver) {
+		goto out;
+	}
+
+	req.lver = token->acquire_lver;
+	req.force_mode = force_mode;
+
+	rv = paxos_lease_request_write(task, token, &req);
+ out:
+	close_disks(token->disks, token->r.num_disks);
+	return rv;
+#endif
+	return -1;
+}
+
 /* thread that releases tokens of pid's that die */
 
 static void *async_release_thread(void *arg GNUC_UNUSED)

@@ -138,17 +138,6 @@ struct space {
 	struct host_info host_info[DEFAULT_MAX_HOSTS];
 };
 
-struct sm_header {
-	uint32_t magic;
-	uint32_t version;
-	uint32_t cmd;
-	uint32_t cmd_flags;
-	uint32_t length;
-	uint32_t seq;
-	uint32_t data;
-	uint32_t data2;
-};
-
 /*
  * Example of watchdog behavior when host_id renewals fail, assuming
  * that sanlock cannot successfully kill the pids it is supervising that
@@ -502,6 +491,7 @@ struct command_line {
 	int num_hosts;				/* -n */
 	int max_hosts;				/* -m */
 	int res_count;
+	uint32_t force_mode;
 	char our_host_name[SANLK_NAME_LEN+1];
 	char *dump_path;
 	struct sanlk_lockspace lockspace;	/* -s LOCKSPACE */
@@ -526,6 +516,7 @@ enum {
 	ACT_ACQUIRE, 
 	ACT_RELEASE,
 	ACT_INQUIRE, 
+	ACT_REQUEST,
 	ACT_ACQUIRE_ID,
 	ACT_RELEASE_ID,
 	ACT_RENEW_ID,

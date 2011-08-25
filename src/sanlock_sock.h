@@ -22,6 +22,18 @@ enum {
 	SM_CMD_RELEASE		= 8,
 	SM_CMD_INQUIRE		= 9,
 	SM_CMD_RESTRICT		= 10,
+	SM_CMD_REQUEST		= 11,
+};
+
+struct sm_header {
+	uint32_t magic;
+	uint32_t version;
+	uint32_t cmd; /* SM_CMD_ */
+	uint32_t cmd_flags;
+	uint32_t length;
+	uint32_t seq;
+	uint32_t data;
+	uint32_t data2;
 };
 
 #define SANLK_STATE_MAXSTR	4096

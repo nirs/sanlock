@@ -16,6 +16,9 @@ int release_token(struct task *task, struct token *token);
 
 void release_token_async(struct token *token);
 
+int request_token(struct task *task, struct token *token, uint32_t force_mode,
+		  uint64_t *owner_id);
+
 int add_resource(struct token *token, int pid);
 void del_resource(struct token *token);
 

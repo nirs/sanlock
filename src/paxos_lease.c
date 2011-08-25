@@ -34,7 +34,7 @@ int get_rand(int a, int b);
 
 struct request_record {
 	uint64_t lver;
-	uint8_t force_mode;
+	uint32_t force_mode;
 };
 
 #define DBLOCK_CHECKSUM_LEN 48 /* ends before checksum field */
@@ -189,7 +189,6 @@ static int read_leader(struct task *task,
 
 	return rv;
 }
-
 
 #if 0
 static int read_request(struct task *task,
