@@ -36,6 +36,9 @@
 
 #define EXTERN
 #include "sanlock_internal.h"
+#include "sanlock_sock.h"
+#include "sanlock_resource.h"
+#include "sanlock_admin.h"
 #include "diskio.h"
 #include "log.h"
 #include "paxos_lease.h"
@@ -46,9 +49,6 @@
 #include "lockfile.h"
 #include "watchdog.h"
 #include "task.h"
-#include "sanlock_sock.h"
-#include "sanlock_resource.h"
-#include "sanlock_admin.h"
 
 /* priorities are LOG_* from syslog.h */
 int log_logfile_priority = LOG_WARNING;

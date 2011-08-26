@@ -14,7 +14,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
-#include "sanlock_internal.h"
+#include "sanlock.h"
 #include "sanlock_sock.h"
 
 int sanlock_socket_address(struct sockaddr_un *addr)

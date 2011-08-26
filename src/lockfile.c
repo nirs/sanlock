@@ -21,8 +21,11 @@
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 #include "sanlock_internal.h"
+#include "sanlock_sock.h"
 #include "log.h"
 #include "lockfile.h"
 
