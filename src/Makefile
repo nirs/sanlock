@@ -5,13 +5,16 @@
 # of the GNU General Public License v.2.
 
 CMD_TARGET = sanlock
-LIB_TARGET = libsanlock
 HEADER_TARGET = sanlock.h sanlock_rv.h sanlock_resource.h sanlock_admin.h sanlock_direct.h
 MAN_TARGET = sanlock.8
 
 SOMAJOR=1
 SOMINOR=0
-SHLIB_TARGET = $(LIB_TARGET).so.$(SOMAJOR).$(SOMINOR)
+
+LIB_ENTIRE_TARGET = libsanlock
+LIB_CLIENT_TARGET = libsanlock_client
+LIBSO_ENTIRE_TARGET = $(LIB_ENTIRE_TARGET).so.$(SOMAJOR).$(SOMINOR)
+LIBSO_CLIENT_TARGET = $(LIB_CLIENT_TARGET).so.$(SOMAJOR).$(SOMINOR)
 
 CMD_SOURCE = \
 	crc32c.c \
@@ -29,10 +32,11 @@ CMD_SOURCE = \
 	monotime.c \
 	sanlock_sock.c
 
-LIB_SOURCE = \
+LIB_ENTIRE_SOURCE = \
 	client_msg.c \
 	client_resource.c \
 	client_admin.c \
+	sanlock_sock.c \
 	crc32c.c \
 	diskio.c \
 	delta_lease.c \
@@ -40,7 +44,12 @@ LIB_SOURCE = \
 	direct.c \
 	task.c \
 	direct_lib.c \
-	monotime.c \
+	monotime.c
+
+LIB_CLIENT_SOURCE = \
+	client_msg.c \
+	client_resource.c \
+	client_admin.c \
 	sanlock_sock.c
 
 CFLAGS += -D_GNU_SOURCE -g \
@@ -68,17 +77,25 @@ CMD_CFLAGS = $(CFLAGS) -fPIE -DPIE
 CMD_LDFLAGS += -lpthread -luuid -lrt -laio -lblkid -lsanlock -L../wdmd -lwdmd
 CMD_LDFLAGS += -Wl,-z,now -Wl,-z,relro -pie
 
-LIB_LDFLAGS += -lpthread -lrt -laio -lblkid -L../wdmd -lwdmd
-LIB_LDFLAGS += -Wl,-z,relro -pie
+LIB_ENTIRE_LDFLAGS += -lpthread -lrt -laio -lblkid -L../wdmd -lwdmd
+LIB_ENTIRE_LDFLAGS += -Wl,-z,relro -pie
 
-all: $(SHLIB_TARGET) $(CMD_TARGET)
+LIB_CLIENT_LDFLAGS += -Wl,-z,relro -pie
 
-$(SHLIB_TARGET): $(LIB_SOURCE)
-	$(CC) $(CFLAGS) $(LIB_LDFLAGS) -shared -fPIC -o $@ -Wl,-soname=$(LIB_TARGET).so.$(SOMAJOR) $^
-	ln -sf $(SHLIB_TARGET) $(LIB_TARGET).so
-	ln -sf $(SHLIB_TARGET) $(LIB_TARGET).so.$(SOMAJOR)
 
-$(CMD_TARGET): $(SHLIB_TARGET) $(CMD_SOURCE)
+all: $(LIBSO_ENTIRE_TARGET) $(LIBSO_CLIENT_TARGET) $(CMD_TARGET)
+
+$(LIBSO_ENTIRE_TARGET): $(LIB_ENTIRE_SOURCE)
+	$(CC) $(CFLAGS) $(LIB_ENTIRE_LDFLAGS) -shared -fPIC -o $@ -Wl,-soname=$(LIB_ENTIRE_TARGET).so.$(SOMAJOR) $^
+	ln -sf $(LIBSO_ENTIRE_TARGET) $(LIB_ENTIRE_TARGET).so
+	ln -sf $(LIBSO_ENTIRE_TARGET) $(LIB_ENTIRE_TARGET).so.$(SOMAJOR)
+
+$(LIBSO_CLIENT_TARGET): $(LIB_CLIENT_SOURCE)
+	$(CC) $(CFLAGS) $(LIB_CLIENT_LDFLAGS) -shared -fPIC -o $@ -Wl,-soname=$(LIB_CLIENT_TARGET).so.$(SOMAJOR) $^
+	ln -sf $(LIBSO_CLIENT_TARGET) $(LIB_CLIENT_TARGET).so
+	ln -sf $(LIBSO_CLIENT_TARGET) $(LIB_CLIENT_TARGET).so.$(SOMAJOR)
+
+$(CMD_TARGET): $(LIBSO_ENTIRE_TARGET) $(CMD_SOURCE)
 	$(CC) $(CMD_CFLAGS) $(CMD_LDFLAGS) $(CMD_SOURCE) -o $@ -L.
 
 clean:
@@ -100,7 +117,9 @@ install: all
 	$(INSTALL) -d $(DESTDIR)/$(HEADIR)
 	$(INSTALL) -d $(DESTDIR)/$(MANDIR)/man8
 	$(INSTALL) -c -m 755 $(CMD_TARGET) $(DESTDIR)/$(BINDIR)
-	$(INSTALL) -c -m 755 $(SHLIB_TARGET) $(DESTDIR)/$(LIBDIR)
-	cp -a $(LIB_TARGET).so $(DESTDIR)/$(LIBDIR)
+	$(INSTALL) -c -m 755 $(LIBSO_ENTIRE_TARGET) $(DESTDIR)/$(LIBDIR)
+	$(INSTALL) -c -m 755 $(LIBSO_CLIENT_TARGET) $(DESTDIR)/$(LIBDIR)
+	cp -a $(LIB_ENTIRE_TARGET).so $(DESTDIR)/$(LIBDIR)
+	cp -a $(LIB_CLIENT_TARGET).so $(DESTDIR)/$(LIBDIR)
 	$(INSTALL) -c -m 644 $(HEADER_TARGET) $(DESTDIR)/$(HEADIR)
 	$(INSTALL) -m 644 $(MAN_TARGET) $(DESTDIR)/$(MANDIR)/man8/
