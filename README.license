@@ -1,0 +1,25 @@
+LGPLv2+
+
+src/libsanlock_client.so
+src/sanlock.h
+src/sanlock_rv.h
+src/sanlock_admin.h
+src/sanlock_resource.h
+src/sanlock_sock.h
+src/sanlock_sock.c
+src/client.c
+wdmd/libwdmd.so
+wdmd/wdmd.h
+wdmd/wdmd_sock.h
+wdmd/wdmd_sock.c
+wdmd/client.c
+
+GPLv2+
+
+src/crc32c.c (copied from btrfs-progs which copied from linux kernel)
+
+GPLv2
+
+src/list.h (copied from linux kernel)
+all other original files
+
