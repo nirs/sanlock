@@ -48,6 +48,7 @@
 
 #define SANLK_RELEASE_LVER	-250
 #define SANLK_RELEASE_OWNER	-251
+#define SANLK_REQUEST_LVER	-252
 
 /* delta_lease_renew, delta_lease_acquire */
 

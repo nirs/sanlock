@@ -162,6 +162,7 @@ int host_id_disk_info(char *name, struct sync_disk *disk)
 	return rv;
 }
 
+#if 0
 static void clear_bit(int host_id, char *bitmap)
 {
 	char *byte = bitmap + ((host_id - 1) / 8);
@@ -177,6 +178,7 @@ static void set_bit(int host_id, char *bitmap)
 
 	*byte |= bit;
 }
+#endif
 
 static int test_bit(int host_id, char *bitmap)
 {

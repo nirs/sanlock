@@ -1348,7 +1348,7 @@ static void cmd_request(struct task *task, struct cmd_args *ca)
 	uint64_t owner_id;
 	uint32_t force_mode;
 	int token_len, disks_len;
-	int j, fd, rv, result;
+	int j, fd, rv, error, result;
 
 	fd = client[ca->ci_in].fd;
 
@@ -1417,13 +1417,21 @@ static void cmd_request(struct task *task, struct cmd_args *ca)
 		  token->disks[0].path,
 		  (unsigned long long)token->r.disks[0].offset);
 
-	result = request_token(task, token, force_mode, &owner_id);
-
-	if (result < 0)
+	error = request_token(task, token, force_mode, &owner_id);
+	if (error < 0) {
+		result = error;
 		goto reply;
+	}
 
+	result = 0;
+
+	/* zero lver and force mode clears the req, don't set bitmap */
+
+	if (!token->acquire_lver && !force_mode)
+		goto reply;
 #if 0
-	host_bitmap_set(token, owner_id);
+	if (owner_id)
+		host_bitmap_set(token, owner_id);
 #endif
 
  reply:
@@ -3217,7 +3225,7 @@ static int do_direct(void)
 		break;
 
 	case ACT_DUMP:
-		rv = direct_dump(&main_task, com.dump_path);
+		rv = direct_dump(&main_task, com.dump_path, com.force_mode);
 		break;
 
 	case ACT_READ_LEADER:

@@ -420,11 +420,12 @@ int direct_read_leader(struct task *task,
 	return rv;
 }
 
-int direct_dump(struct task *task, char *dump_path)
+int direct_dump(struct task *task, char *dump_path, int force_mode)
 {
 	char *data;
 	char *colon, *off_str;
 	struct leader_record *lr;
+	struct request_record *rr;
 	struct sync_disk sd;
 	char sname[NAME_ID_SIZE+1];
 	char rname[NAME_ID_SIZE+1];
@@ -462,7 +463,7 @@ int direct_dump(struct task *task, char *dump_path)
 		goto out_close;
 	}
 
-	printf("%8s %36s %48s %10s %4s %4s %s\n",
+	printf("%8s %36s %48s %10s %4s %4s %s",
 	       "offset",
 	       "lockspace",
 	       "resource",
@@ -470,6 +471,11 @@ int direct_dump(struct task *task, char *dump_path)
 	       "own",
 	       "gen",
 	       "lver");
+
+	if (force_mode)
+		printf("/req/mode");
+
+	printf("\n");
 
 	sector_nr = 0;
 
@@ -503,18 +509,27 @@ int direct_dump(struct task *task, char *dump_path)
 					(unsigned long long)lr->timestamp,
 					(unsigned long long)lr->owner_id,
 					(unsigned long long)lr->owner_generation);
+
+				/* TODO: if force_mode, print host_ids set in bitmap */
 			}
 		} else if (lr->magic == PAXOS_DISK_MAGIC) {
 			strncpy(sname, lr->space_name, NAME_ID_SIZE);
 			strncpy(rname, lr->resource_name, NAME_ID_SIZE);
 
-			printf("%08llu %36s %48s %010llu %04llu %04llu %llu\n",
+			printf("%08llu %36s %48s %010llu %04llu %04llu %llu",
 			       (unsigned long long)(sector_nr * sd.sector_size),
 			       sname, rname,
 			       (unsigned long long)lr->timestamp,
 			       (unsigned long long)lr->owner_id,
 			       (unsigned long long)lr->owner_generation,
 			       (unsigned long long)lr->lver);
+
+			if (force_mode) {
+				rr = (struct request_record *)(data + sd.sector_size);
+				printf("/%llu/%u",
+				       (unsigned long long)rr->lver, rr->force_mode);
+			}
+			printf("\n");
 		} else {
 			break;
 		}

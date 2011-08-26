@@ -32,11 +32,6 @@
 uint32_t crc32c(uint32_t crc, uint8_t *data, size_t length);
 int get_rand(int a, int b);
 
-struct request_record {
-	uint64_t lver;
-	uint32_t force_mode;
-};
-
 #define DBLOCK_CHECKSUM_LEN 48 /* ends before checksum field */
 
 struct paxos_dblock {
@@ -82,6 +77,34 @@ int majority_disks(struct token *token, int num)
 	return 0;
 }
 
+int paxos_lease_request_read(struct task *task, struct token *token,
+			     struct request_record *rr)
+{
+	int rv;
+
+	/* 1 = request record is second sector */
+
+	rv = read_sectors(&token->disks[0], 1, 1, (char *)rr,
+			  sizeof(struct request_record),
+			  task, "request");
+	if (rv < 0)
+		return rv;
+	return SANLK_OK;
+}
+
+int paxos_lease_request_write(struct task *task, struct token *token,
+			      struct request_record *rr)
+{
+	int rv;
+
+	rv = write_sector(&token->disks[0], 1, (char *)rr,
+			  sizeof(struct request_record),
+			  task, "request");
+	if (rv < 0)
+		return rv;
+	return SANLK_OK;
+}
+
 static int write_dblock(struct task *task,
 			struct sync_disk *disk,
 			uint64_t host_id,
@@ -96,19 +119,6 @@ static int write_dblock(struct task *task,
 			  task, "dblock");
 	return rv;
 }
-
-#if 0
-static int write_request(struct task *task,
-			 struct sync_disk *disk,
-			 struct request_record *rr)
-{
-	int rv;
-
-	rv = write_sector(disk, 1, (char *)rr, sizeof(struct request_record),
-			  task, "request");
-	return rv;
-}
-#endif
 
 static int write_leader(struct task *task,
 			struct sync_disk *disk,
@@ -189,22 +199,6 @@ static int read_leader(struct task *task,
 
 	return rv;
 }
-
-#if 0
-static int read_request(struct task *task,
-			struct sync_disk *disk,
-			struct request_record *rr)
-{
-	int rv;
-
-	/* 1 = request record is second sector */
-
-	rv = read_sectors(disk, 1, (char *)rr, sizeof(struct request_record),
-			  task, "request");
-
-	return rv;
-}
-#endif
 
 static uint32_t dblock_checksum(struct paxos_dblock *pd)
 {

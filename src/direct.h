@@ -50,6 +50,6 @@ int direct_read_leader(struct task *task,
                        struct sanlk_resource *res,
                        struct leader_record *leader_ret);
 
-int direct_dump(struct task *task, char *dump_path);
+int direct_dump(struct task *task, char *dump_path, int force_mode);
 
 #endif

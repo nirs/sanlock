@@ -188,46 +188,60 @@ int release_token(struct task *task, struct token *token)
 int request_token(struct task *task, struct token *token, uint32_t force_mode,
 		  uint64_t *owner_id)
 {
-#if 0
 	struct leader_record leader;
 	struct request_record req;
 	int rv;
 
+	memset(&req, 0, sizeof(req));
+
 	rv = open_disks(token->disks, token->r.num_disks);
 	if (!majority_disks(token, rv)) {
-		log_errot(token, "request open_disk error %s", token->disks[0].path);
+		log_debug("request open_disk error %s", token->disks[0].path);
 		return -ENODEV;
 	}
+
+	if (!token->acquire_lver && !force_mode)
+		goto do_req;
 
 	rv = paxos_lease_leader_read(task, token, &leader, "request");
 	if (rv < 0)
 		goto out;
 
 	if (leader.timestamp == LEASE_FREE) {
-	}
-
-	if (leader.lver >= token->acquire_lver) {
+		*owner_id = 0;
+		rv = SANLK_OK;
+		goto out;
 	}
 
 	*owner_id = leader.owner_id;
+
+	if (leader.lver >= token->acquire_lver) {
+		rv = SANLK_ACQUIRE_LVER;
+		goto out;
+	}
 
 	rv = paxos_lease_request_read(task, token, &req);
 	if (rv < 0)
 		goto out;
 
-	if (req.lver >= token->acquire_lver) {
+	if (req.lver > token->acquire_lver) {
+		rv = SANLK_REQUEST_LVER;
 		goto out;
 	}
 
+ do_req:
 	req.lver = token->acquire_lver;
 	req.force_mode = force_mode;
 
 	rv = paxos_lease_request_write(task, token, &req);
  out:
 	close_disks(token->disks, token->r.num_disks);
+
+	log_debug("request rv %d owner %llu lver %llu mode %u",
+		  rv, (unsigned long long)*owner_id,
+		  (unsigned long long)req.lver, req.force_mode);
+
 	return rv;
-#endif
-	return -1;
 }
 
 /* thread that releases tokens of pid's that die */
