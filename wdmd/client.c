@@ -1,9 +1,10 @@
 /*
- * Copyright (C) 2011 Red Hat, Inc.  All rights reserved.
+ * Copyright (C) 2010-2011 Red Hat, Inc.  All rights reserved.
  *
- * This copyrighted material is made available to anyone wishing to use,
- * modify, copy, or redistribute it subject to the terms and conditions
- * of the GNU General Public License v.2.
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation; either
+ * version 2.1 of the License, or (at your option) any later version.
  */
 
 #include <inttypes.h>
@@ -20,7 +21,6 @@
 #include <sys/un.h>
 
 #include "wdmd.h"
-#include "wdmd_internal.h"
 #include "wdmd_sock.h"
 
 int wdmd_connect(void)

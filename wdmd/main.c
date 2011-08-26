@@ -33,8 +33,11 @@
 #include <linux/watchdog.h>
 
 #include "wdmd.h"
-#include "wdmd_internal.h"
 #include "wdmd_sock.h"
+
+#ifndef GNUC_UNUSED
+#define GNUC_UNUSED __attribute__((__unused__))
+#endif
 
 #define DEFAULT_TEST_INTERVAL 10
 #define DEFAULT_FIRE_TIMEOUT 60
