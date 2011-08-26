@@ -21,6 +21,10 @@
 
 #define SANLK_PATH_LEN		1024
 
+/* max disks in a single lease */
+
+#define SANLK_MAX_DISKS 4
+
 /*
  * max length of a sanlk_resource in string format
  * <lockspace_name>:<resource_name>:<path>:<offset>[:<path>:<offset>...]:<lver>

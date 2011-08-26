@@ -824,7 +824,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 			goto done;
 		}
 
-		if (!res.num_disks || res.num_disks > MAX_DISKS) {
+		if (!res.num_disks || res.num_disks > SANLK_MAX_DISKS) {
 			result = -ERANGE;
 			goto done;
 		}
@@ -1367,7 +1367,7 @@ static void cmd_request(struct task *task, struct cmd_args *ca)
 		goto reply;
 	}
 
-	if (!res.num_disks || res.num_disks > MAX_DISKS) {
+	if (!res.num_disks || res.num_disks > SANLK_MAX_DISKS) {
 		result = -ERANGE;
 		goto reply;
 	}

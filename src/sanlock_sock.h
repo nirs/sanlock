@@ -9,6 +9,8 @@
 #ifndef __SANLOCK_SOCK_H__
 #define __SANLOCK_SOCK_H__
 
+#define SM_MAGIC 0x04282010
+
 #define MAX_CLIENT_MSG (1024 * 1024) /* TODO: this is random */
 
 enum {

@@ -33,9 +33,7 @@ CMD_SOURCE = \
 	sanlock_sock.c
 
 LIB_ENTIRE_SOURCE = \
-	client_msg.c \
-	client_resource.c \
-	client_admin.c \
+	client.c \
 	sanlock_sock.c \
 	crc32c.c \
 	diskio.c \
@@ -47,9 +45,7 @@ LIB_ENTIRE_SOURCE = \
 	monotime.c
 
 LIB_CLIENT_SOURCE = \
-	client_msg.c \
-	client_resource.c \
-	client_admin.c \
+	client.c \
 	sanlock_sock.c
 
 CFLAGS += -D_GNU_SOURCE -g \

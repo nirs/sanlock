@@ -30,12 +30,6 @@
 
 #include <libaio.h>
 
-#define SM_MAGIC 0x04282010
-
-/* max disks in a single lease */
-
-#define MAX_DISKS 4
-
 /* default max number of hosts supported */
 
 #define DEFAULT_MAX_HOSTS 2000

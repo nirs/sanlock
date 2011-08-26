@@ -284,8 +284,8 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 	struct paxos_dblock bk_max;
 	struct paxos_dblock *bk;
 	struct sync_disk *disk;
-	char *iobuf[MAX_DISKS];
-	char **p_iobuf[MAX_DISKS];
+	char *iobuf[SANLK_MAX_DISKS];
+	char **p_iobuf[SANLK_MAX_DISKS];
 	int num_disks = token->r.num_disks;
 	int num_writes, num_reads;
 	int sector_size = token->disks[0].sector_size;
