@@ -29,6 +29,9 @@ enum {
 	SM_CMD_INQUIRE		= 9,
 	SM_CMD_RESTRICT		= 10,
 	SM_CMD_REQUEST		= 11,
+	SM_CMD_ALIGN		= 12,
+	SM_CMD_INIT_LOCKSPACE	= 13,
+	SM_CMD_INIT_RESOURCE	= 14,
 };
 
 struct sm_header {

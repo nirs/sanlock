@@ -118,7 +118,7 @@ static int do_paxos_action(int action, struct task *task,
 	}
 
 	switch (action) {
-	case ACT_INIT:
+	case ACT_DIRECT_INIT:
 		rv = paxos_lease_init(task, token, num_hosts, max_hosts);
 		break;
 
@@ -208,7 +208,7 @@ static int do_delta_action(int action,
 		return -ENODEV;
 
 	switch (action) {
-	case ACT_INIT:
+	case ACT_DIRECT_INIT:
 		rv = delta_lease_init(task, &sd, ls->name, max_hosts);
 		break;
 
@@ -388,7 +388,7 @@ int direct_init(struct task *task,
 	int rv = -1;
 
 	if (ls && ls->host_id_disk.path[0]) {
-		rv = do_delta_action(ACT_INIT, task, ls, max_hosts, NULL, NULL);
+		rv = do_delta_action(ACT_DIRECT_INIT, task, ls, max_hosts, NULL, NULL);
 
 	} else if (res) {
 		if (!res->num_disks)
@@ -397,7 +397,7 @@ int direct_init(struct task *task,
 		if (!res->disks[0].path[0])
 			return -ENODEV;
 
-		rv = do_paxos_action(ACT_INIT, task, res,
+		rv = do_paxos_action(ACT_DIRECT_INIT, task, res,
 				     max_hosts, num_hosts, 0, 0, NULL);
 	}
 

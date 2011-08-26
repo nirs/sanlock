@@ -98,6 +98,22 @@ static int send_command(int cmd, uint32_t data)
 	return sock;
 }
 
+static int recv_result(int fd)
+{
+	struct sm_header h;
+	int rv;
+
+	memset(&h, 0, sizeof(struct sm_header));
+
+	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	if (rv < 0)
+		return -errno;
+	if (rv != sizeof(h))
+		return -1;
+
+	return (int)h.data;
+}
+
 int sanlock_shutdown(void)
 {
 	int fd;
@@ -268,7 +284,6 @@ int sanlock_status(int debug)
 
 static int cmd_lockspace(int cmd, struct sanlk_lockspace *ls, uint32_t flags)
 {
-	struct sm_header h;
 	int rv, fd;
 
 	rv = connect_socket(&fd);
@@ -285,20 +300,7 @@ static int cmd_lockspace(int cmd, struct sanlk_lockspace *ls, uint32_t flags)
 		goto out;
 	}
 
-	memset(&h, 0, sizeof(h));
-
-	rv = recv(fd, &h, sizeof(struct sm_header), MSG_WAITALL);
-	if (rv != sizeof(h)) {
-		rv = -1;
-		goto out;
-	}
-
-	if (h.data) {
-		rv = (int)h.data;
-		goto out;
-	}
-
-	rv = 0;
+	rv = recv_result(fd);
  out:
 	close(fd);
 	return rv;
@@ -312,6 +314,82 @@ int sanlock_add_lockspace(struct sanlk_lockspace *ls, uint32_t flags)
 int sanlock_rem_lockspace(struct sanlk_lockspace *ls, uint32_t flags)
 {
 	return cmd_lockspace(SM_CMD_REM_LOCKSPACE, ls, flags);
+}
+
+int sanlock_align(struct sanlk_disk *disk)
+{
+	int rv, fd;
+
+	rv = connect_socket(&fd);
+	if (rv < 0)
+		return rv;
+
+	rv = send_header(fd, SM_CMD_ALIGN, 0, sizeof(struct sanlk_disk), 0, 0);
+	if (rv < 0)
+		goto out;
+
+	rv = send(fd, (void *)disk, sizeof(struct sanlk_disk), 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	rv = recv_result(fd);
+ out:
+	close(fd);
+	return rv;
+}
+
+int sanlock_init(struct sanlk_lockspace *ls,
+		 struct sanlk_resource *res,
+		 int max_hosts, int num_hosts)
+{
+	int rv, fd, cmd, datalen;
+
+	if (!ls && !res)
+		return -EINVAL;
+
+	rv = connect_socket(&fd);
+	if (rv < 0)
+		return rv;
+
+	if (ls && ls->host_id_disk.path[0]) {
+		cmd = SM_CMD_INIT_LOCKSPACE;
+		datalen = sizeof(struct sanlk_lockspace);
+	} else {
+		cmd = SM_CMD_INIT_RESOURCE;
+		datalen = sizeof(struct sanlk_resource) +
+			  sizeof(struct sanlk_disk) * res->num_disks;
+	}
+
+	rv = send_header(fd, cmd, 0, datalen, max_hosts, num_hosts);
+	if (rv < 0)
+		goto out;
+
+	if (ls) {
+		rv = send(fd, ls, sizeof(struct sanlk_lockspace), 0);
+		if (rv < 0) {
+			rv = -errno;
+			goto out;
+		}
+	} else {
+		rv = send(fd, res, sizeof(struct sanlk_resource), 0);
+		if (rv < 0) {
+			rv = -errno;
+			goto out;
+		}
+
+		rv = send(fd, res->disks, sizeof(struct sanlk_disk) * res->num_disks, 0);
+		if (rv < 0) {
+			rv = -errno;
+			goto out;
+		}
+	}
+
+	rv = recv_result(fd);
+ out:
+	close(fd);
+	return rv;
 }
 
 /* src has colons unescaped, dst should have them escaped with backslash */
@@ -359,22 +437,13 @@ int sanlock_register(void)
 
 int sanlock_restrict(int sock, uint32_t flags)
 {
-	struct sm_header h;
 	int rv;
 
 	rv = send_header(sock, SM_CMD_RESTRICT, flags, 0, 0, -1);
 	if (rv < 0)
 		return rv;
 
-	memset(&h, 0, sizeof(h));
-
-	rv = recv(sock, &h, sizeof(h), MSG_WAITALL);
-	if (rv != sizeof(h)) {
-		rv = -1;
-		goto out;
-	}
-	rv = (int)h.data;
- out:
+	rv = recv_result(sock);
 	return rv;
 }
 
@@ -384,7 +453,6 @@ int sanlock_acquire(int sock, int pid, uint32_t flags, int res_count,
 {
 	struct sanlk_resource *res;
 	struct sanlk_options opt;
-	struct sm_header h;
 	int rv, i, fd, data2;
 	int datalen = 0;
 
@@ -459,16 +527,7 @@ int sanlock_acquire(int sock, int pid, uint32_t flags, int res_count,
 		}
 	}
 
-	/* get result */
-
-	memset(&h, 0, sizeof(h));
-
-	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
-	if (rv != sizeof(h)) {
-		rv = -1;
-		goto out;
-	}
-	rv = (int)h.data;
+	rv = recv_result(fd);
  out:
 	if (sock == -1)
 		close(fd);
@@ -557,7 +616,6 @@ int sanlock_inquire(int sock, int pid, uint32_t flags, int *res_count,
 int sanlock_release(int sock, int pid, uint32_t flags, int res_count,
 		    struct sanlk_resource *res_args[])
 {
-	struct sm_header h;
 	int fd, rv, i, data2, datalen;
 
 	if (sock == -1) {
@@ -591,16 +649,7 @@ int sanlock_release(int sock, int pid, uint32_t flags, int res_count,
 		}
 	}
 
-	/* get result */
-
-	memset(&h, 0, sizeof(h));
-
-	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
-	if (rv != sizeof(h)) {
-		rv = -1;
-		goto out;
-	}
-	rv = (int)h.data;
+	rv = recv_result(fd);
  out:
 	if (sock == -1)
 		close(fd);
@@ -610,7 +659,6 @@ int sanlock_release(int sock, int pid, uint32_t flags, int res_count,
 int sanlock_request(uint32_t flags, uint32_t force_mode,
 		    struct sanlk_resource *res)
 {
-	struct sm_header h;
 	int fd, rv, datalen;
 
 	datalen = sizeof(struct sanlk_resource) +
@@ -636,16 +684,7 @@ int sanlock_request(uint32_t flags, uint32_t force_mode,
 		goto out;
 	}
 
-	/* get result */
-
-	memset(&h, 0, sizeof(h));
-
-	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
-	if (rv != sizeof(h)) {
-		rv = -1;
-		goto out;
-	}
-	rv = (int)h.data;
+	rv = recv_result(fd);
  out:
 	close(fd);
 	return rv;

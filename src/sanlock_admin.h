@@ -41,4 +41,22 @@ int sanlock_add_lockspace(struct sanlk_lockspace *ls, uint32_t flags);
 
 int sanlock_rem_lockspace(struct sanlk_lockspace *ls, uint32_t flags);
 
+/*
+ * Returns the alignment in bytes required by sanlock_init()
+ * (1MB for disks with 512 sectors, 8MB for disks with 4096 sectors)
+ */
+
+int sanlock_align(struct sanlk_disk *disk);
+
+/*
+ * Ask sanlock daemon to initialize disk space.
+ * Use max_hosts = 0 for default value.
+ * Use num_hosts = 0 for default value.
+ * Provide either lockspace or resource, not both
+ */
+
+int sanlock_init(struct sanlk_lockspace *ls,
+		 struct sanlk_resource *res,
+		 int max_hosts, int num_hosts);
+
 #endif
