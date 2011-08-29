@@ -201,7 +201,7 @@ int request_token(struct task *task, struct token *token, uint32_t force_mode,
 	}
 
 	if (!token->acquire_lver && !force_mode)
-		goto do_req;
+		goto req_read;
 
 	rv = paxos_lease_leader_read(task, token, &leader, "request");
 	if (rv < 0)
@@ -216,20 +216,38 @@ int request_token(struct task *task, struct token *token, uint32_t force_mode,
 	*owner_id = leader.owner_id;
 
 	if (leader.lver >= token->acquire_lver) {
-		rv = SANLK_ACQUIRE_LVER;
+		rv = SANLK_REQUEST_OLD;
 		goto out;
 	}
 
+ req_read:
 	rv = paxos_lease_request_read(task, token, &req);
 	if (rv < 0)
 		goto out;
+
+	if (req.magic != REQ_DISK_MAGIC) {
+		rv = SANLK_REQUEST_MAGIC;
+		goto out;
+	}
+
+	if ((req.version & 0xFFFF0000) != REQ_DISK_VERSION_MAJOR) {
+		rv = SANLK_REQUEST_VERSION;
+		goto out;
+	}
+
+	if (!token->acquire_lver && !force_mode)
+		goto req_write;
+
+	/* > instead of >= so multiple hosts can request the same
+	   version at once and all succeed */
 
 	if (req.lver > token->acquire_lver) {
 		rv = SANLK_REQUEST_LVER;
 		goto out;
 	}
 
- do_req:
+req_write:
+	req.version = REQ_DISK_VERSION_MAJOR | REQ_DISK_VERSION_MINOR;
 	req.lver = token->acquire_lver;
 	req.force_mode = force_mode;
 

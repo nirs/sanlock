@@ -69,7 +69,13 @@ struct leader_record {
 #define LEADER_RECORD_MAX 256
 #define HOSTID_BITMAP_OFFSET 256
 
+#define REQ_DISK_MAGIC 0x08292011
+#define REQ_DISK_VERSION_MAJOR 0x00010000
+#define REQ_DISK_VERSION_MINOR 0x00000001
+
 struct request_record {
+	uint32_t magic;
+	uint32_t version;
 	uint64_t lver;
 	uint32_t force_mode;
 };

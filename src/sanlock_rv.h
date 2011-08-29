@@ -48,12 +48,18 @@
 
 #define SANLK_RELEASE_LVER	-250
 #define SANLK_RELEASE_OWNER	-251
-#define SANLK_REQUEST_LVER	-252
 
 /* delta_lease_renew, delta_lease_acquire */
 
 #define SANLK_RENEW_OWNER	-260
 #define SANLK_RENEW_DIFF	-261
 #define SANLK_HOSTID_BUSY	-262
+
+/* request_token */
+
+#define SANLK_REQUEST_MAGIC	-270
+#define SANLK_REQUEST_VERSION	-271
+#define SANLK_REQUEST_OLD	-272
+#define SANLK_REQUEST_LVER	-273
 
 #endif

@@ -1461,7 +1461,9 @@ int paxos_lease_init(struct task *task,
 {
 	char *iobuf, **p_iobuf;
 	struct leader_record *leader;
+	struct request_record *rr;
 	int iobuf_len;
+	int sector_size;
 	int align_size;
 	int aio_timeout = 0;
 	int rv, d;
@@ -1471,11 +1473,13 @@ int paxos_lease_init(struct task *task,
 	if (!max_hosts)
 		max_hosts = DEFAULT_MAX_HOSTS;
 
+	sector_size = token->disks[0].sector_size;
+
 	align_size = direct_align(&token->disks[0]);
 	if (align_size < 0)
 		return align_size;
 
-	if (token->disks[0].sector_size * (2 + max_hosts) > align_size)
+	if (sector_size * (2 + max_hosts) > align_size)
 		return -E2BIG;
 
 	iobuf_len = align_size;
@@ -1491,13 +1495,17 @@ int paxos_lease_init(struct task *task,
 	leader = (struct leader_record *)iobuf;
 	leader->magic = PAXOS_DISK_MAGIC;
 	leader->version = PAXOS_DISK_VERSION_MAJOR | PAXOS_DISK_VERSION_MINOR;
-	leader->sector_size = token->disks[0].sector_size;
+	leader->sector_size = sector_size;
 	leader->num_hosts = num_hosts;
 	leader->max_hosts = max_hosts;
 	leader->timestamp = LEASE_FREE;
 	strncpy(leader->space_name, token->r.lockspace_name, NAME_ID_SIZE);
 	strncpy(leader->resource_name, token->r.name, NAME_ID_SIZE);
 	leader->checksum = leader_checksum(leader);
+
+	rr = (struct request_record *)(iobuf + sector_size);
+	rr->magic = REQ_DISK_MAGIC;
+	rr->version = REQ_DISK_VERSION_MAJOR | REQ_DISK_VERSION_MINOR;
 
 	for (d = 0; d < token->r.num_disks; d++) {
 		rv = write_iobuf(token->disks[d].fd, token->disks[d].offset,
