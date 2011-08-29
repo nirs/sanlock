@@ -1425,15 +1425,11 @@ static void cmd_request(struct task *task, struct cmd_args *ca)
 
 	result = 0;
 
-	/* zero lver and force mode clears the req, don't set bitmap */
-
 	if (!token->acquire_lver && !force_mode)
 		goto reply;
-#if 0
-	if (owner_id)
-		host_bitmap_set(token, owner_id);
-#endif
 
+	if (owner_id)
+		host_info_set_bit(token->r.lockspace_name, owner_id);
  reply:
 	free(token);
 	log_debug("cmd_request %d,%d done %d", ca->ci_in, fd, result);

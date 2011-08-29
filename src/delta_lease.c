@@ -324,17 +324,18 @@ int delta_lease_renew(struct task *task,
 		      struct space *sp,
 		      struct sync_disk *disk,
 		      char *space_name,
+		      char *bitmap,
 		      int prev_result,
 		      int *read_result,
 		      struct leader_record *leader_last,
 		      struct leader_record *leader_ret)
 {
 	struct leader_record leader;
-	uint64_t host_id, offset;
-	uint64_t new_ts;
 	char **p_iobuf;
-	int iobuf_len, io_timeout_save;
-	int rv;
+	char **p_wbuf;
+	char *wbuf;
+	uint64_t host_id, id_offset, new_ts;
+	int rv, iobuf_len, sector_size, io_timeout_save;
 
 	if (!leader_last)
 		return -EINVAL;
@@ -345,9 +346,11 @@ int delta_lease_renew(struct task *task,
 
 	iobuf_len = sp->align_size;
 
+	sector_size = disk->sector_size;
+
 	/* offset of our leader_record */
-	offset = (host_id - 1) * disk->sector_size;
-	if (offset > iobuf_len)
+	id_offset = (host_id - 1) * sector_size;
+	if (id_offset > iobuf_len)
 		return -EINVAL;
 
 
@@ -429,7 +432,7 @@ int delta_lease_renew(struct task *task,
 
  read_done:
 	*read_result = SANLK_OK;
-	memcpy(&leader, task->iobuf+offset, sizeof(struct leader_record));
+	memcpy(&leader, task->iobuf+id_offset, sizeof(struct leader_record));
 
 	rv = verify_leader(disk, space_name, host_id, &leader, "delta_renew");
 	if (rv < 0)
@@ -466,6 +469,16 @@ int delta_lease_renew(struct task *task,
 	leader.timestamp = new_ts;
 	leader.checksum = leader_checksum(&leader);
 
+	p_wbuf = &wbuf;
+	rv = posix_memalign((void *)p_wbuf, getpagesize(), sector_size);
+	if (rv) {
+		log_erros(sp, "dela_renew write memalign rv %d", rv);
+		return -ENOMEM;
+	}
+	memset(wbuf, 0, sector_size);
+	memcpy(wbuf, &leader, sizeof(struct leader_record));
+	memcpy(wbuf+LEADER_RECORD_MAX, bitmap, HOSTID_BITMAP_SIZE);
+
 	/* extend io timeout for this one write; we need to give this write
 	   every chance to succeed, and there's no point in letting it time
 	   out.  there's nothing we would do but retry it, and timing out and
@@ -474,8 +487,10 @@ int delta_lease_renew(struct task *task,
 	io_timeout_save = task->io_timeout_seconds;
 	task->io_timeout_seconds = task->host_dead_seconds;
 
-	rv = write_sector(disk, host_id - 1, (char *)&leader, sizeof(struct leader_record),
-			  task, "delta_leader");
+	rv = write_iobuf(disk->fd, disk->offset+id_offset, wbuf, sector_size, task);
+
+	if (rv != SANLK_AIO_TIMEOUT)
+		free(wbuf);
 
 	task->io_timeout_seconds = io_timeout_save;
 

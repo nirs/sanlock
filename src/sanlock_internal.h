@@ -107,6 +107,7 @@ struct host_info {
 	uint64_t owner_id;
 	uint64_t owner_generation;
 	uint64_t timestamp; /* remote monotime */
+	uint64_t set_bit_time;
 };
 
 struct space {

@@ -38,6 +38,21 @@ int host_id_disk_info(char *name GNUC_UNUSED, struct sync_disk *disk GNUC_UNUSED
 	return -1;
 }
 
+/* copied from host_id.c */
+
+int test_id_bit(int host_id, char *bitmap);
+
+int test_id_bit(int host_id, char *bitmap)
+{
+	char *byte = bitmap + ((host_id - 1) / 8);
+	unsigned int bit = (host_id - 1) % 8;
+	char mask;
+
+	mask = 1 << bit;
+
+	return (*byte & mask);
+}
+
 int get_rand(int a, int b);
 
 int get_rand(int a, int b)

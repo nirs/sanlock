@@ -170,22 +170,85 @@ static void clear_bit(int host_id, char *bitmap)
 
 	*byte &= ~bit;
 }
-
-static void set_bit(int host_id, char *bitmap)
-{
-	char *byte = bitmap + ((host_id - 1) / 8);
-	unsigned int bit = host_id % 8;
-
-	*byte |= bit;
-}
 #endif
 
-static int test_bit(int host_id, char *bitmap)
+static void set_id_bit(int host_id, char *bitmap, char *c)
 {
 	char *byte = bitmap + ((host_id - 1) / 8);
-	unsigned int bit = host_id % 8;
+	unsigned int bit = (host_id - 1) % 8;
+	char mask;
 
-	return *byte & bit;
+	mask = 1 << bit;
+
+	*byte |= mask;
+
+	*c = *byte;
+}
+
+/* FIXME: another copy in direct_lib.c */
+
+int test_id_bit(int host_id, char *bitmap)
+{
+	char *byte = bitmap + ((host_id - 1) / 8);
+	unsigned int bit = (host_id - 1) % 8;
+	char mask;
+
+	mask = 1 << bit;
+
+	return (*byte & mask);
+}
+
+int host_info_set_bit(char *space_name, uint64_t host_id)
+{
+	struct space *sp;
+	int found = 0;
+
+	if (!host_id || host_id > DEFAULT_MAX_HOSTS)
+		return -EINVAL;
+
+	pthread_mutex_lock(&spaces_mutex);
+	list_for_each_entry(sp, &spaces, list) {
+		if (strncmp(sp->space_name, space_name, NAME_ID_SIZE))
+			continue;
+		found = 1;
+		break;
+	}
+	pthread_mutex_unlock(&spaces_mutex);
+
+	if (!found)
+		return -ENOSPC;
+
+	pthread_mutex_lock(&sp->mutex);
+	sp->host_info[host_id-1].set_bit_time = monotime();
+	pthread_mutex_unlock(&sp->mutex);
+	return 0;
+}
+
+static void create_bitmap(struct task *task, struct space *sp, char *bitmap)
+{
+	uint64_t now;
+	int i;
+	char c;
+
+	now = monotime();
+
+	pthread_mutex_lock(&sp->mutex);
+	for (i = 0; i < DEFAULT_MAX_HOSTS; i++) {
+		if (i+1 == sp->host_id)
+			continue;
+
+		if (!sp->host_info[i].set_bit_time)
+			continue;
+
+		if (now - sp->host_info[i].set_bit_time > task->request_finish_seconds) {
+			log_space(sp, "bitmap clear host_id %d", i+1);
+			sp->host_info[i].set_bit_time = 0;
+		} else {
+			set_id_bit(i+1, bitmap, &c);
+			log_space(sp, "bitmap set host_id %d byte %x", i+1, c);
+		}
+	}
+	pthread_mutex_unlock(&sp->mutex);
 }
 
 /*
@@ -206,7 +269,7 @@ void check_other_leases(struct task *task, struct space *sp, char *buf)
 	struct host_info *info;
 	char *bitmap;
 	uint64_t now;
-	int i, new;
+	int i, new = 0;
 
 	disk = &sp->host_id_disk;
 
@@ -235,7 +298,7 @@ void check_other_leases(struct task *task, struct space *sp, char *buf)
 
 		bitmap = (char *)leader + HOSTID_BITMAP_OFFSET;
 
-		if (!test_bit(sp->host_id, bitmap))
+		if (!test_id_bit(sp->host_id, bitmap))
 			continue;
 
 		/* this host has made a request for us, we won't take a new
@@ -246,7 +309,7 @@ void check_other_leases(struct task *task, struct space *sp, char *buf)
 
 		log_space(sp, "request from host_id %d", i+1);
 		info->last_req = now;
-		new = 1;
+		new++;
 	}
 
 	/* TODO: add a thread that will periodically scan spaces and
@@ -331,6 +394,7 @@ static int corrupt_result(int result)
 
 static void *lockspace_thread(void *arg_in)
 {
+	char bitmap[HOSTID_BITMAP_SIZE];
 	struct task task;
 	struct space *sp;
 	struct leader_record leader;
@@ -441,11 +505,15 @@ static void *lockspace_thread(void *arg_in)
 		 * and the length of time between successful renewals
 		 */
 
+		memset(bitmap, 0, sizeof(bitmap));
+		create_bitmap(&task, sp, bitmap);
+
 		delta_begin = monotime();
 
 		delta_result = delta_lease_renew(&task, sp, &sp->host_id_disk,
-						 sp->space_name, delta_result,
-						 &read_result, &leader, &leader);
+						 sp->space_name, bitmap,
+						 delta_result, &read_result,
+						 &leader, &leader);
 		delta_length = monotime() - delta_begin;
 
 		if (delta_result == SANLK_OK) {

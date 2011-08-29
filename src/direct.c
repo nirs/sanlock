@@ -191,7 +191,10 @@ static int do_delta_action(int action,
 	struct leader_record leader;
 	struct sync_disk sd;
 	struct space space;
+	char bitmap[HOSTID_BITMAP_SIZE];
 	int read_result, rv;
+
+	memset(bitmap, 0, sizeof(bitmap));
 
 	/* for log_space in delta functions */
 	memset(&space, 0, sizeof(space));
@@ -229,6 +232,7 @@ static int do_delta_action(int action,
 			return rv;
 		rv = delta_lease_renew(task, &space, &sd,
 				       ls->name,
+				       bitmap,
 				       -1,
 				       &read_result,
 				       &leader,
@@ -420,9 +424,11 @@ int direct_read_leader(struct task *task,
 	return rv;
 }
 
+int test_id_bit(int host_id, char *bitmap);
+
 int direct_dump(struct task *task, char *dump_path, int force_mode)
 {
-	char *data;
+	char *data, *bitmap;
 	char *colon, *off_str;
 	struct leader_record *lr;
 	struct request_record *rr;
@@ -431,7 +437,7 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 	char rname[NAME_ID_SIZE+1];
 	uint64_t sector_nr;
 	int sector_count, datalen, align_size;
-	int i, rv;
+	int i, rv, b;
 
 	memset(&sd, 0, sizeof(struct sync_disk));
 
@@ -503,14 +509,21 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 				strncpy(sname, lr->space_name, NAME_ID_SIZE);
 				strncpy(rname, lr->resource_name, NAME_ID_SIZE);
 
-				printf("%08llu %36s %48s %010llu %04llu %04llu\n",
+				printf("%08llu %36s %48s %010llu %04llu %04llu",
 					(unsigned long long)((sector_nr + i) * sd.sector_size),
 					sname, rname,
 					(unsigned long long)lr->timestamp,
 					(unsigned long long)lr->owner_id,
 					(unsigned long long)lr->owner_generation);
 
-				/* TODO: if force_mode, print host_ids set in bitmap */
+				if (force_mode) {
+					bitmap = (char *)lr + LEADER_RECORD_MAX;
+					for (b = 0; b < DEFAULT_MAX_HOSTS; b++) {
+						if (test_id_bit(b+1, bitmap))
+							printf(" %d", b+1);
+					}
+				}
+				printf("\n");
 			}
 		} else if (lr->magic == PAXOS_DISK_MAGIC) {
 			strncpy(sname, lr->space_name, NAME_ID_SIZE);
