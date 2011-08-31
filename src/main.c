@@ -1438,6 +1438,55 @@ static void cmd_request(struct task *task, struct cmd_args *ca)
 	client_resume(ca->ci_in);
 }
 
+static void cmd_examine(struct task *task GNUC_UNUSED, struct cmd_args *ca)
+{
+	union {
+		struct sanlk_resource r;
+		struct sanlk_lockspace s;
+	} buf;
+	struct sanlk_resource *res = NULL;
+	struct sanlk_lockspace *ls = NULL;
+	char *space_name = NULL;
+	char *res_name = NULL;
+	int fd, rv, result, count = 0, datalen;
+
+	fd = client[ca->ci_in].fd;
+
+	if (ca->header.cmd == SM_CMD_EXAMINE_RESOURCE) {
+		datalen = sizeof(struct sanlk_resource);
+		res = &buf.r;
+	} else {
+		datalen = sizeof(struct sanlk_lockspace);
+		ls = &buf.s;
+	}
+
+	rv = recv(fd, &buf, datalen, MSG_WAITALL);
+	if (rv != datalen) {
+		log_error("cmd_examine %d,%d recv %d %d",
+			  ca->ci_in, fd, rv, errno);
+		result = -ENOTCONN;
+		goto reply;
+	}
+
+	if (res) {
+		space_name = res->lockspace_name;
+		res_name = res->name;
+	} else {
+		space_name = ls->name;
+	}
+
+	log_debug("cmd_examine %d,%d %.48s %.48s",
+		  ca->ci_in, fd, space_name, res_name ? res_name : "");
+
+	count = set_resource_examine(space_name, res_name);
+	result = 0;
+ reply:
+	log_debug("cmd_examine %d,%d done %d", ca->ci_in, fd, count);
+
+	send_result(fd, &ca->header, result);
+	client_resume(ca->ci_in);
+}
+
 static void cmd_add_lockspace(struct cmd_args *ca)
 {
 	struct sanlk_lockspace lockspace;
@@ -1697,6 +1746,10 @@ static void call_cmd(struct task *task, struct cmd_args *ca)
 		break;
 	case SM_CMD_INIT_RESOURCE:
 		cmd_init_resource(task, ca);
+		break;
+	case SM_CMD_EXAMINE_LOCKSPACE:
+	case SM_CMD_EXAMINE_RESOURCE:
+		cmd_examine(task, ca);
 		break;
 	};
 }
@@ -2277,6 +2330,8 @@ static void process_connection(int ci)
 	case SM_CMD_ADD_LOCKSPACE:
 	case SM_CMD_REM_LOCKSPACE:
 	case SM_CMD_REQUEST:
+	case SM_CMD_EXAMINE_RESOURCE:
+	case SM_CMD_EXAMINE_LOCKSPACE:
 	case SM_CMD_ALIGN:
 	case SM_CMD_INIT_LOCKSPACE:
 	case SM_CMD_INIT_RESOURCE:
@@ -2741,8 +2796,7 @@ static void print_usage(void)
 	printf("sanlock client status [-D]\n");
 	printf("sanlock client log_dump\n");
 	printf("sanlock client shutdown\n");
-	printf("sanlock client init -s LOCKSPACE\n");
-	printf("sanlock client init -r RESOURCE\n");
+	printf("sanlock client init -s LOCKSPACE | -r RESOURCE\n");
 	printf("sanlock client align -s LOCKSPACE\n");
 	printf("sanlock client add_lockspace -s LOCKSPACE\n");
 	printf("sanlock client rem_lockspace -s LOCKSPACE\n");
@@ -2750,13 +2804,12 @@ static void print_usage(void)
 	printf("sanlock client acquire -r RESOURCE -p <pid>\n");
 	printf("sanlock client release -r RESOURCE -p <pid>\n");
 	printf("sanlock client inquire -p <pid>\n");
-	printf("sanlock client request -r RESOURCE\n");
+	printf("sanlock client request -r RESOURCE -f <force_mode>\n");
+	printf("sanlock client examine -r RESOURCE | -s LOCKSPACE\n");
 	printf("\n");
 	printf("sanlock direct <action> [-a 0|1] [-o 0|1]\n");
-	printf("sanlock direct init -s LOCKSPACE\n");
-	printf("sanlock direct init -r RESOURCE\n");
-	printf("sanlock direct read_leader -s LOCKSPACE\n");
-	printf("sanlock direct read_leader -r RESOURCE\n");
+	printf("sanlock direct init -s LOCKSPACE | -r RESOURCE\n");
+	printf("sanlock direct read_leader -s LOCKSPACE | -r RESOURCE\n");
 	printf("sanlock direct read_id -s LOCKSPACE\n");
 	printf("sanlock direct live_id -s LOCKSPACE\n");
 	printf("sanlock direct dump <path>[:<offset>]\n");
@@ -2856,6 +2909,8 @@ static int read_command_line(int argc, char *argv[])
 			com.action = ACT_INQUIRE;
 		else if (!strcmp(act, "request"))
 			com.action = ACT_REQUEST;
+		else if (!strcmp(act, "examine"))
+			com.action = ACT_EXAMINE;
 		else if (!strcmp(act, "align"))
 			com.action = ACT_CLIENT_ALIGN;
 		else if (!strcmp(act, "init"))
@@ -3175,6 +3230,15 @@ static int do_client(void)
 		log_tool("request");
 		rv = sanlock_request(0, com.force_mode, com.res_args[0]);
 		log_tool("request done %d", rv);
+		break;
+
+	case ACT_EXAMINE:
+		log_tool("examine");
+		if (com.lockspace.host_id_disk.path[0])
+			rv = sanlock_examine(0, &com.lockspace, NULL);
+		else
+			rv = sanlock_examine(0, NULL, com.res_args[0]);
+		log_tool("examine done %d", rv);
 		break;
 
 	case ACT_CLIENT_ALIGN:

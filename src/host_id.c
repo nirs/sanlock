@@ -32,6 +32,7 @@
 #include "watchdog.h"
 #include "task.h"
 #include "direct.h"
+#include "token_manager.h"
 
 static unsigned int space_id_counter = 1;
 
@@ -144,6 +145,17 @@ int get_space_info(char *space_name, struct space *sp_out)
 	pthread_mutex_unlock(&spaces_mutex);
 
 	return rv;
+}
+
+void block_watchdog_updates(char *space_name)
+{
+	struct space *sp;
+
+	pthread_mutex_lock(&spaces_mutex);
+	sp = _search_space(space_name, NULL, 0, &spaces, NULL, NULL);
+	if (sp)
+		sp->block_watchdog_updates = 1;
+	pthread_mutex_unlock(&spaces_mutex);
 }
 
 int host_id_disk_info(char *name, struct sync_disk *disk)
@@ -269,7 +281,7 @@ void check_other_leases(struct task *task, struct space *sp, char *buf)
 	struct host_info *info;
 	char *bitmap;
 	uint64_t now;
-	int i, new = 0;
+	int i, new;
 
 	disk = &sp->host_id_disk;
 
@@ -309,18 +321,11 @@ void check_other_leases(struct task *task, struct space *sp, char *buf)
 
 		log_space(sp, "request from host_id %d", i+1);
 		info->last_req = now;
-		new++;
+		new = 1;
 	}
 
-	/* TODO: add a thread that will periodically scan spaces and
-	   for any with req_count > req_check, scan request blocks for
-	   all locally held paxos leases in that lockspace. */
-
-	if (new) {
-		pthread_mutex_lock(&sp->mutex);
-		sp->req_count++;
-		pthread_mutex_unlock(&sp->mutex);
-	}
+	if (new)
+		set_resource_examine(sp->space_name, NULL);
 }
 
 /*
@@ -546,7 +551,9 @@ static void *lockspace_thread(void *arg_in)
 		 * pet the watchdog
 		 */
 
-		if (delta_result == SANLK_OK && !sp->thread_stop)
+		if (delta_result == SANLK_OK &&
+		    !sp->thread_stop &&
+		    !sp->block_watchdog_updates)
 			update_watchdog_file(sp, last_success);
 
 		pthread_mutex_unlock(&sp->mutex);

@@ -24,6 +24,7 @@
 
 #include "sanlock.h"
 #include "sanlock_rv.h"
+#include "sanlock_resource.h"
 #include "leader.h"
 #include "list.h"
 #include "monotime.h"
@@ -60,9 +61,11 @@ struct sync_disk {
 	int fd;			/* sanlk_disk pad2 */
 };
 
-/* Once token and token->disks are initialized by the main loop, the only
-   fields that are modified are disk fd's by open_disks() in the lease
-   threads. */
+/*
+ * There are two different wrappers around a sanlk_resource:
+ * 'struct token' keeps track of resources per-client, client.tokens[]
+ * 'struct resource' keeps track of resources globally, resources list
+ */
 
 struct token {
 	/* values copied from acquire res arg */
@@ -121,13 +124,12 @@ struct space {
 	int space_dead;
 	int killing_pids;
 	int external_remove;
+	int block_watchdog_updates;
 	int thread_stop;
 	pthread_t thread;
 	pthread_mutex_t mutex; /* protects lease_status, thread_stop  */
 	struct lease_status lease_status;
 	int wd_fd;
-	uint32_t req_count;
-	uint32_t req_check;
 	struct host_info host_info[DEFAULT_MAX_HOSTS];
 };
 
@@ -420,7 +422,7 @@ struct space {
 #define HOSTID_AIO_CB_SIZE 64
 #define WORKER_AIO_CB_SIZE 8
 #define DIRECT_AIO_CB_SIZE 8
-#define RELEASE_AIO_CB_SIZE 64
+#define RESOURCE_AIO_CB_SIZE 64
 #define LIB_AIO_CB_SIZE 8
 
 struct aicb {
@@ -520,6 +522,7 @@ enum {
 	ACT_READ_LEADER,
 	ACT_CLIENT_INIT,
 	ACT_CLIENT_ALIGN,
+	ACT_EXAMINE,
 };
 
 EXTERN int external_shutdown;

@@ -19,6 +19,7 @@
 #include <pthread.h>
 #include <time.h>
 #include <syslog.h>
+#include <signal.h>
 #include <sys/types.h>
 #include <sys/time.h>
 
@@ -28,21 +29,57 @@
 #include "paxos_lease.h"
 #include "token_manager.h"
 #include "task.h"
+#include "host_id.h"
 
 static struct list_head resources;
 static struct list_head dispose_resources;
 static pthread_mutex_t resource_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t resource_cond = PTHREAD_COND_INITIALIZER;
-static pthread_t release_thread;
-static int release_thread_stop;
+static pthread_t resource_pt;
+static int resource_thread_stop;
+static int resource_examine;
 
 struct resource {
 	struct list_head list;
-	char space_name[NAME_ID_SIZE+1];
-	char resource_name[NAME_ID_SIZE+1];
 	struct token *token;
 	int pid;
+	int examine;
+	uint64_t lver;
+	struct sanlk_resource r;
 };
+
+int set_resource_examine(char *space_name, char *res_name)
+{
+	struct resource *r;
+	int count = 0;
+
+	pthread_mutex_lock(&resource_mutex);
+	list_for_each_entry(r, &resources, list) {
+		if (strncmp(r->r.lockspace_name, space_name, NAME_ID_SIZE))
+			continue;
+		if (res_name && strncmp(r->r.name, res_name, NAME_ID_SIZE))
+			continue;
+		r->examine = 1;
+		resource_examine = 1;
+		count++;
+	}
+	if (count)
+		pthread_cond_signal(&resource_cond);
+	pthread_mutex_unlock(&resource_mutex);
+
+	return count;
+}
+
+static struct resource *find_resource_examine(void)
+{
+	struct resource *r;
+
+	list_for_each_entry(r, &resources, list) {
+		if (r->examine)
+			return r;
+	}
+	return NULL;
+}
 
 static struct resource *find_resource(struct token *token,
 				      struct list_head *head)
@@ -50,19 +87,34 @@ static struct resource *find_resource(struct token *token,
 	struct resource *r;
 
 	list_for_each_entry(r, head, list) {
-		if (strncmp(r->space_name, token->r.lockspace_name, NAME_ID_SIZE))
+		if (strncmp(r->r.lockspace_name, token->r.lockspace_name, NAME_ID_SIZE))
 			continue;
-		if (strncmp(r->resource_name, token->r.name, NAME_ID_SIZE))
+		if (strncmp(r->r.name, token->r.name, NAME_ID_SIZE))
 			continue;
 		return r;
 	}
 	return NULL;
 }
 
+static void save_resource_lver(struct token *token, uint64_t lver)
+{
+	struct resource *r;
+
+	pthread_mutex_lock(&resource_mutex);
+	r = find_resource(token, &resources);
+	if (r)
+		r->lver = lver;
+	pthread_mutex_unlock(&resource_mutex);
+
+	if (!r)
+		log_errot(token, "save_resource_lver no r");
+
+}
+
 int add_resource(struct token *token, int pid)
 {
 	struct resource *r;
-	int rv;
+	int rv, disks_len, r_len;
 
 	pthread_mutex_lock(&resource_mutex);
 
@@ -82,15 +134,17 @@ int add_resource(struct token *token, int pid)
 		goto out;
 	}
 
-	r = malloc(sizeof(struct resource));
+	disks_len = token->r.num_disks * sizeof(struct sync_disk);
+	r_len = sizeof(struct resource) + disks_len;
+
+	r = malloc(r_len);
 	if (!r) {
 		rv = -ENOMEM;
 		goto out;
 	}
-
-	memset(r, 0, sizeof(struct resource));
-	strncpy(r->space_name, token->r.lockspace_name, NAME_ID_SIZE);
-	strncpy(r->resource_name, token->r.name, NAME_ID_SIZE);
+	memset(r, 0, r_len);
+	memcpy(&r->r, &token->r, sizeof(struct sanlk_resource));
+	memcpy(&r->r.disks, &token->r.disks, disks_len);
 	r->token = token;
 	r->pid = pid;
 	list_add_tail(&r->list, &resources);
@@ -151,6 +205,8 @@ int acquire_token(struct task *task, struct token *token,
 
 	if (rv < 0)
 		return rv;
+
+	save_resource_lver(token, token->leader.lver);
 
 	memcpy(&token->leader, &leader_ret, sizeof(struct leader_record));
 	token->r.lver = token->leader.lver;
@@ -246,7 +302,7 @@ int request_token(struct task *task, struct token *token, uint32_t force_mode,
 		goto out;
 	}
 
-req_write:
+ req_write:
 	req.version = REQ_DISK_VERSION_MAJOR | REQ_DISK_VERSION_MINOR;
 	req.lver = token->acquire_lver;
 	req.force_mode = force_mode;
@@ -262,46 +318,158 @@ req_write:
 	return rv;
 }
 
-/* thread that releases tokens of pid's that die */
+static int examine_token(struct task *task, struct token *token,
+			 struct request_record *req_out)
+{
+	struct request_record req;
+	int rv;
 
-static void *async_release_thread(void *arg GNUC_UNUSED)
+	memset(&req, 0, sizeof(req));
+
+	rv = open_disks(token->disks, token->r.num_disks);
+	if (!majority_disks(token, rv)) {
+		log_debug("request open_disk error %s", token->disks[0].path);
+		return -ENODEV;
+	}
+
+	rv = paxos_lease_request_read(task, token, &req);
+	if (rv < 0)
+		goto out;
+
+	if (req.magic != REQ_DISK_MAGIC) {
+		rv = SANLK_REQUEST_MAGIC;
+		goto out;
+	}
+
+	if ((req.version & 0xFFFF0000) != REQ_DISK_VERSION_MAJOR) {
+		rv = SANLK_REQUEST_VERSION;
+		goto out;
+	}
+
+	memcpy(req_out, &req, sizeof(struct request_record));
+ out:
+	close_disks(token->disks, token->r.num_disks);
+
+	log_debug("examine rv %d lver %llu mode %u",
+		  rv, (unsigned long long)req.lver, req.force_mode);
+
+	return rv;
+}
+
+/*
+ * - releases tokens of pid's that die
+ * - examines request blocks of resources
+ */
+
+static void *resource_thread(void *arg GNUC_UNUSED)
 {
 	struct task task;
 	struct resource *r;
-	struct token *token;
+	struct token *token, *tt = NULL;
+	struct request_record req;
+	uint64_t lver;
+	int rv, j, pid, tt_len;
 
 	memset(&task, 0, sizeof(struct task));
 	setup_task_timeouts(&task, main_task.io_timeout_seconds);
-	setup_task_aio(&task, main_task.use_aio, RELEASE_AIO_CB_SIZE);
-	sprintf(task.name, "%s", "release");
+	setup_task_aio(&task, main_task.use_aio, RESOURCE_AIO_CB_SIZE);
+	sprintf(task.name, "%s", "resource");
+
+	/* a fake/tmp token struct we copy necessary res info into,
+	   because other functions take a token struct arg */
+
+	tt_len = sizeof(struct token) + (SANLK_MAX_DISKS * sizeof(struct sync_disk));
+	tt = malloc(tt_len);
+	if (!tt) {
+		log_error("resource_thread tt malloc error");
+		goto out;
+	}
+	memset(tt, 0, tt_len);
+	tt->disks = (struct sync_disk *)&tt->r.disks[0];
 
 	while (1) {
 		pthread_mutex_lock(&resource_mutex);
-		while (list_empty(&dispose_resources)) {
-			if (release_thread_stop) {
+		while (list_empty(&dispose_resources) && !resource_examine) {
+			if (resource_thread_stop) {
 				pthread_mutex_unlock(&resource_mutex);
 				goto out;
 			}
 			pthread_cond_wait(&resource_cond, &resource_mutex);
 		}
 
-		r = list_first_entry(&dispose_resources, struct resource, list);
-		pthread_mutex_unlock(&resource_mutex);
+		if (!list_empty(&dispose_resources)) {
+			r = list_first_entry(&dispose_resources, struct resource, list);
+			pthread_mutex_unlock(&resource_mutex);
 
-		token = r->token;
-		release_token(&task, token);
+			token = r->token;
+			release_token(&task, token);
 
-		/* we don't want to remove r from dispose_list until after the
-		   lease is released because we don't want a new token for
-		   the same resource to be added and attempt to acquire
-		   the lease until after it's been released */
+			/* we don't want to remove r from dispose_list until after the
+		   	   lease is released because we don't want a new token for
+		   	   the same resource to be added and attempt to acquire
+		   	   the lease until after it's been released */
 
-		pthread_mutex_lock(&resource_mutex);
-		_del_resource(r);
-		pthread_mutex_unlock(&resource_mutex);
-		free(token);
+			pthread_mutex_lock(&resource_mutex);
+			_del_resource(r);
+			pthread_mutex_unlock(&resource_mutex);
+			free(token);
+
+		} else if (resource_examine) {
+			r = find_resource_examine();
+			if (!r) {
+				resource_examine = 0;
+				pthread_mutex_unlock(&resource_mutex);
+				continue;
+			}
+			r->examine = 0;
+
+			/* we can't safely access r->token here, and
+			   r may be freed after we release mutex, so copy
+			   everything we need before unlocking mutex */
+
+			pid = r->pid;
+			lver = r->lver;
+			memcpy(&tt->r, &r->r, sizeof(struct sanlk_resource));
+			memcpy(&tt->r.disks, &r->r.disks, r->r.num_disks * sizeof(struct sync_disk));
+			pthread_mutex_unlock(&resource_mutex);
+
+			for (j = 0; j < tt->r.num_disks; j++) {
+				tt->disks[j].sector_size = 0;
+				tt->disks[j].fd = -1;
+			}
+
+			rv = examine_token(&task, tt, &req);
+
+			if (rv != SANLK_OK)
+				continue;
+
+			if (!req.force_mode || !req.lver)
+				continue;
+
+			if (req.lver <= lver) {
+				log_debug("examine req lver %llu our lver %llu",
+					  (unsigned long long)req.lver,
+					  (unsigned long long)lver);
+				continue;
+			}
+
+			if (req.force_mode == SANLK_REQ_KILL_PID) {
+				/* look up r again to check it still exists and
+				   pid is same? */
+
+				log_error("req_kill_pid %d %.48s:%.48s", pid,
+					  tt->r.lockspace_name, tt->r.name);
+				kill(pid, SIGKILL);
+
+			} else if (req.force_mode == SANLK_REQ_BLOCK_WD) {
+				log_error("req_block_wd %.48s", tt->r.lockspace_name);
+				block_watchdog_updates(tt->r.lockspace_name);
+			}
+		}
 	}
  out:
+	if (tt)
+		free(tt);
 	close_task_aio(&task);
 	return NULL;
 }
@@ -332,7 +500,7 @@ int setup_token_manager(void)
 	INIT_LIST_HEAD(&resources);
 	INIT_LIST_HEAD(&dispose_resources);
 
-	rv = pthread_create(&release_thread, NULL, async_release_thread, NULL);
+	rv = pthread_create(&resource_pt, NULL, resource_thread, NULL);
 	if (rv)
 		return -1;
 	return 0;
@@ -341,9 +509,9 @@ int setup_token_manager(void)
 void close_token_manager(void)
 {
 	pthread_mutex_lock(&resource_mutex);
-	release_thread_stop = 1;
+	resource_thread_stop = 1;
 	pthread_cond_signal(&resource_cond);
 	pthread_mutex_unlock(&resource_mutex);
-	pthread_join(release_thread, NULL);
+	pthread_join(resource_pt, NULL);
 }
 

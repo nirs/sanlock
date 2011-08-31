@@ -12,6 +12,7 @@
 int print_space_state(struct space *sp, char *str);
 int _get_space_info(char *space_name, struct space *sp_out);
 int get_space_info(char *space_name, struct space *sp_out);
+void block_watchdog_updates(char *space_name);
 int host_id_disk_info(char *name, struct sync_disk *disk);
 int host_info_set_bit(char *space_name, uint64_t host_id);
 int host_info_clear_bit(char *space_name, uint64_t host_id);

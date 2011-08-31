@@ -20,17 +20,23 @@
  * registered pid
  */
 
-int sanlock_register(void);
+/* restrict flags */
+#define SANLK_RESTRICT_ALL	0x00000001
 
-#define SANLK_RESTRICT_ALL 0x1
+/* release flags */
+#define SANLK_REL_ALL		0x00000001
+
+/* request flags */
+#define SANLK_REQ_KILL_PID	0x00000001
+#define SANLK_REQ_BLOCK_WD	0x00000002
+
+int sanlock_register(void);
 
 int sanlock_restrict(int sock, uint32_t flags);
 
 int sanlock_acquire(int sock, int pid, uint32_t flags, int res_count,
 		    struct sanlk_resource *res_args[],
 		    struct sanlk_options *opt_in);
-
-#define SANLK_REL_ALL 0x1
 
 int sanlock_release(int sock, int pid, uint32_t flags, int res_count,
 		    struct sanlk_resource *res_args[]);
@@ -41,11 +47,13 @@ int sanlock_inquire(int sock, int pid, uint32_t flags, int *res_count,
 int sanlock_request(uint32_t flags, uint32_t force_mode,
 		    struct sanlk_resource *res);
 
+int sanlock_examine(uint32_t flags, struct sanlk_lockspace *ls,
+		    struct sanlk_resource *res);
+
 /*
  * Functions to convert between string and struct resource formats.
  * All allocate space for returned data that the caller must free.
  */
-
 
 /*
  * convert from struct sanlk_resource to string with format:

@@ -690,6 +690,45 @@ int sanlock_request(uint32_t flags, uint32_t force_mode,
 	return rv;
 }
 
+int sanlock_examine(uint32_t flags, struct sanlk_lockspace *ls,
+		    struct sanlk_resource *res)
+{
+	char *data;
+	int rv, fd, cmd, datalen;
+
+	if (!ls && !res)
+		return -EINVAL;
+
+	rv = connect_socket(&fd);
+	if (rv < 0)
+		return rv;
+
+	if (ls && ls->host_id_disk.path[0]) {
+		cmd = SM_CMD_EXAMINE_LOCKSPACE;
+		datalen = sizeof(struct sanlk_lockspace);
+		data = (char *)ls;
+	} else {
+		cmd = SM_CMD_EXAMINE_RESOURCE;
+		datalen = sizeof(struct sanlk_resource);
+		data = (char *)res;
+	}
+
+	rv = send_header(fd, cmd, flags, datalen, 0, 0);
+	if (rv < 0)
+		goto out;
+
+	rv = send(fd, data, datalen, 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	rv = recv_result(fd);
+ out:
+	close(fd);
+	return rv;
+}
+
 /*
  * convert from struct sanlk_resource to string with format:
  * <lockspace_name>:<resource_name>:<path>:<offset>[:<path>:<offset>...]:<lver>
