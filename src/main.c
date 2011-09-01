@@ -734,7 +734,7 @@ static int check_new_tokens_space(struct client *cl,
 	for (i = 0; i < new_tokens_count; i++) {
 		token = new_tokens[i];
 
-		rv = _get_space_info(token->r.lockspace_name, &space);
+		rv = _lockspace_info(token->r.lockspace_name, &space);
 
 		if (!rv && !space.killing_pids && space.host_id == token->host_id)
 			continue;
@@ -928,7 +928,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 
 	for (i = 0; i < new_tokens_count; i++) {
 		token = new_tokens[i];
-		rv = get_space_info(token->r.lockspace_name, &space);
+		rv = lockspace_info(token->r.lockspace_name, &space);
 		if (rv < 0 || space.killing_pids) {
 			log_errot(token, "cmd_acquire %d,%d,%d invalid lockspace "
 				  "found %d failed %d name %.48s",
@@ -1429,7 +1429,7 @@ static void cmd_request(struct task *task, struct cmd_args *ca)
 		goto reply;
 
 	if (owner_id)
-		host_info_set_bit(token->r.lockspace_name, owner_id);
+		host_status_set_bit(token->r.lockspace_name, owner_id);
  reply:
 	free(token);
 	log_debug("cmd_request %d,%d done %d", ca->ci_in, fd, result);

@@ -123,7 +123,7 @@ static struct space *_search_space(char *name,
 	return NULL;
 }
 
-int _get_space_info(char *space_name, struct space *sp_out)
+int _lockspace_info(char *space_name, struct space *sp_out)
 {
 	struct space *sp;
 
@@ -136,12 +136,28 @@ int _get_space_info(char *space_name, struct space *sp_out)
 	return -1;
 }
 
-int get_space_info(char *space_name, struct space *sp_out)
+int lockspace_info(char *space_name, struct space *sp_out)
 {
 	int rv;
 
 	pthread_mutex_lock(&spaces_mutex);
-	rv = _get_space_info(space_name, sp_out);
+	rv = _lockspace_info(space_name, sp_out);
+	pthread_mutex_unlock(&spaces_mutex);
+
+	return rv;
+}
+
+int lockspace_disk(char *space_name, struct sync_disk *disk)
+{
+	struct space space;
+	int rv;
+
+	pthread_mutex_lock(&spaces_mutex);
+	rv = _lockspace_info(space_name, &space);
+	if (!rv) {
+		memcpy(disk, &space.host_id_disk, sizeof(struct sync_disk));
+		disk->fd = -1;
+	}
 	pthread_mutex_unlock(&spaces_mutex);
 
 	return rv;
@@ -156,22 +172,6 @@ void block_watchdog_updates(char *space_name)
 	if (sp)
 		sp->block_watchdog_updates = 1;
 	pthread_mutex_unlock(&spaces_mutex);
-}
-
-int host_id_disk_info(char *name, struct sync_disk *disk)
-{
-	struct space space;
-	int rv;
-
-	pthread_mutex_lock(&spaces_mutex);
-	rv = _get_space_info(name, &space);
-	if (!rv) {
-		memcpy(disk, &space.host_id_disk, sizeof(struct sync_disk));
-		disk->fd = -1;
-	}
-	pthread_mutex_unlock(&spaces_mutex);
-
-	return rv;
 }
 
 #if 0
@@ -210,7 +210,7 @@ int test_id_bit(int host_id, char *bitmap)
 	return (*byte & mask);
 }
 
-int host_info_set_bit(char *space_name, uint64_t host_id)
+int host_status_set_bit(char *space_name, uint64_t host_id)
 {
 	struct space *sp;
 	int found = 0;
@@ -231,7 +231,7 @@ int host_info_set_bit(char *space_name, uint64_t host_id)
 		return -ENOSPC;
 
 	pthread_mutex_lock(&sp->mutex);
-	sp->host_info[host_id-1].set_bit_time = monotime();
+	sp->host_status[host_id-1].set_bit_time = monotime();
 	pthread_mutex_unlock(&sp->mutex);
 	return 0;
 }
@@ -249,12 +249,12 @@ static void create_bitmap(struct task *task, struct space *sp, char *bitmap)
 		if (i+1 == sp->host_id)
 			continue;
 
-		if (!sp->host_info[i].set_bit_time)
+		if (!sp->host_status[i].set_bit_time)
 			continue;
 
-		if (now - sp->host_info[i].set_bit_time > task->request_finish_seconds) {
+		if (now - sp->host_status[i].set_bit_time > task->request_finish_seconds) {
 			log_space(sp, "bitmap clear host_id %d", i+1);
-			sp->host_info[i].set_bit_time = 0;
+			sp->host_status[i].set_bit_time = 0;
 		} else {
 			set_id_bit(i+1, bitmap, &c);
 			log_space(sp, "bitmap set host_id %d byte %x", i+1, c);
@@ -278,7 +278,7 @@ void check_other_leases(struct task *task, struct space *sp, char *buf)
 {
 	struct leader_record *leader;
 	struct sync_disk *disk;
-	struct host_info *info;
+	struct host_status *hs;
 	char *bitmap;
 	uint64_t now;
 	int i, new;
@@ -292,21 +292,21 @@ void check_other_leases(struct task *task, struct space *sp, char *buf)
 		if (i+1 == sp->host_id)
 			continue;
 
-		info = &sp->host_info[i];
-		info->last_check = now;
+		hs = &sp->host_status[i];
+		hs->last_check = now;
 
 		leader = (struct leader_record *)(buf + (i * disk->sector_size));
 
-		if (info->owner_id == leader->owner_id &&
-		    info->owner_generation == leader->owner_generation &&
-		    info->timestamp == leader->timestamp) {
+		if (hs->owner_id == leader->owner_id &&
+		    hs->owner_generation == leader->owner_generation &&
+		    hs->timestamp == leader->timestamp) {
 			continue;
 		}
 
-		info->owner_id = leader->owner_id;
-		info->owner_generation = leader->owner_generation;
-		info->timestamp = leader->timestamp;
-		info->last_live = now;
+		hs->owner_id = leader->owner_id;
+		hs->owner_generation = leader->owner_generation;
+		hs->timestamp = leader->timestamp;
+		hs->last_live = now;
 
 		bitmap = (char *)leader + HOSTID_BITMAP_OFFSET;
 
@@ -316,11 +316,11 @@ void check_other_leases(struct task *task, struct space *sp, char *buf)
 		/* this host has made a request for us, we won't take a new
 		   request from this host for another request_finish_seconds */
 
-		if (now - info->last_req < task->request_finish_seconds)
+		if (now - hs->last_req < task->request_finish_seconds)
 			continue;
 
 		log_space(sp, "request from host_id %d", i+1);
-		info->last_req = now;
+		hs->last_req = now;
 		new = 1;
 	}
 

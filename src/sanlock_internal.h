@@ -103,7 +103,7 @@ struct lease_status {
 	char *renewal_read_buf;
 };
 
-struct host_info {
+struct host_status {
 	uint64_t last_check; /* local monotime */
 	uint64_t last_live; /* local monotime */
 	uint64_t last_req; /* local monotime */
@@ -126,11 +126,11 @@ struct space {
 	int external_remove;
 	int block_watchdog_updates;
 	int thread_stop;
+	int wd_fd;
 	pthread_t thread;
 	pthread_mutex_t mutex; /* protects lease_status, thread_stop  */
 	struct lease_status lease_status;
-	int wd_fd;
-	struct host_info host_info[DEFAULT_MAX_HOSTS];
+	struct host_status host_status[DEFAULT_MAX_HOSTS];
 };
 
 /*

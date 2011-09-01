@@ -1070,7 +1070,7 @@ int paxos_lease_acquire(struct task *task,
 	if (!disk_open) {
 		memset(&host_id_disk, 0, sizeof(host_id_disk));
 
-		rv = host_id_disk_info(cur_leader.space_name, &host_id_disk);
+		rv = lockspace_disk(cur_leader.space_name, &host_id_disk);
 		if (rv < 0) {
 			log_errot(token, "paxos_acquire no lockspace info %.48s",
 			  	  cur_leader.space_name);

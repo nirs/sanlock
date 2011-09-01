@@ -10,12 +10,12 @@
 #define __HOST_ID__H__
 
 int print_space_state(struct space *sp, char *str);
-int _get_space_info(char *space_name, struct space *sp_out);
-int get_space_info(char *space_name, struct space *sp_out);
+int _lockspace_info(char *space_name, struct space *sp_out);
+int lockspace_info(char *space_name, struct space *sp_out);
+int lockspace_disk(char *space_name, struct sync_disk *disk);
 void block_watchdog_updates(char *space_name);
-int host_id_disk_info(char *name, struct sync_disk *disk);
-int host_info_set_bit(char *space_name, uint64_t host_id);
-int host_info_clear_bit(char *space_name, uint64_t host_id);
+int host_status_set_bit(char *space_name, uint64_t host_id);
+int host_status_clear_bit(char *space_name, uint64_t host_id);
 int test_id_bit(int host_id, char *bitmap);
 int check_our_lease(struct task *task, struct space *sp, int *check_all, char *check_buf);
 void check_other_leases(struct task *task, struct space *sp, char *buf);
