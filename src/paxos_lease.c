@@ -1147,16 +1147,7 @@ int paxos_lease_acquire(struct task *task,
 
 		/* if the owner hasn't renewed its host_id lease for
 		   host_dead_seconds then its watchdog should have fired
-		   by now
-
-		   if we trust that the clocks are in sync among hosts, then this
-		   check could be: if (time() - host_id_leader.timestamp >
-		   task->host_dead_seconds), but if the clocks are out of sync,
-		   this check would easily give two hosts the lease.
-
-		   N.B. we need to be careful about ever comparing local time
-		   to a time value we read off disk from another node that may
-		   have different time. */
+		   by now */
 
 		if (monotime() - start > task->host_dead_seconds) {
 			log_token(token, "paxos_acquire host_id %llu expired %llu",
@@ -1164,14 +1155,6 @@ int paxos_lease_acquire(struct task *task,
 				  (unsigned long long)host_id_leader.timestamp);
 			goto run;
 		}
-#if 0
-		if (time(NULL) - host_id_leader.timestamp > task->host_dead_seconds) {
-			log_token(token, "paxos_acquire host_id %llu expired %llu",
-				  (unsigned long long)cur_leader.owner_id,
-				  (unsigned long long)host_id_leader.timestamp);
-			goto run;
-		}
-#endif
 
 		/* the owner is renewing its host_id so it's alive */
 
