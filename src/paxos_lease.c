@@ -1011,15 +1011,16 @@ int paxos_lease_acquire(struct task *task,
 	struct leader_record new_leader;
 	struct paxos_dblock our_dblock;
 	struct paxos_dblock dblock;
-	time_t start;
+	struct host_status hs;
+	uint64_t wait_start, now;
+	uint64_t last_timestamp;
 	uint64_t next_lver;
 	uint64_t our_mbal = 0;
-	uint64_t last_timestamp = 0;
 	int copy_cur_leader = 0;
 	int disk_open = 0;
 	int error, rv, us;
 
-	log_token(token, "paxos_acquire begin acquire_lver %llu flags %x",
+	log_token(token, "paxos_acquire begin lver %llu flags %x",
 		  (unsigned long long)acquire_lver, flags);
  restart:
 
@@ -1063,10 +1064,6 @@ int paxos_lease_acquire(struct task *task,
 	 * its watchdog has triggered and we can go for the paxos lease.
 	 */
 
-	log_token(token, "paxos_acquire check owner_id %llu gen %llu",
-		  (unsigned long long)cur_leader.owner_id,
-		  (unsigned long long)cur_leader.owner_generation);
-
 	if (!disk_open) {
 		memset(&host_id_disk, 0, sizeof(host_id_disk));
 
@@ -1085,17 +1082,28 @@ int paxos_lease_acquire(struct task *task,
 			error = SANLK_ACQUIRE_IDDISK;
 			goto out;
 		}
-
-		log_token(token, "paxos_acquire lockspace %.48s "
-			  "path %s offset %llu sector_size %u fd %d",
-			  cur_leader.space_name,
-			  host_id_disk.path,
-			  (unsigned long long)host_id_disk.offset,
-			  host_id_disk.sector_size,
-			  host_id_disk.fd);
 	}
 
-	start = monotime();
+	rv = host_info(cur_leader.space_name, cur_leader.owner_id, &hs);
+	if (!rv && hs.last_check && hs.last_live &&
+	    hs.owner_id == cur_leader.owner_id &&
+	    hs.owner_generation == cur_leader.owner_generation) {
+		wait_start = hs.last_live;
+		last_timestamp = hs.timestamp;
+	} else {
+		wait_start = monotime();
+		last_timestamp = 0;
+	}
+
+	log_token(token, "paxos_acquire owner %llu %llu %llu "
+		  "host_status %llu %llu %llu wait_start %llu",
+		  (unsigned long long)cur_leader.owner_id,
+		  (unsigned long long)cur_leader.owner_generation,
+		  (unsigned long long)cur_leader.timestamp,
+		  (unsigned long long)hs.owner_id,
+		  (unsigned long long)hs.owner_generation,
+		  (unsigned long long)hs.timestamp,
+		  (unsigned long long)wait_start);
 
 	while (1) {
 		error = delta_lease_leader_read(task, &host_id_disk,
@@ -1104,9 +1112,14 @@ int paxos_lease_acquire(struct task *task,
 						&host_id_leader,
 						"paxos_acquire");
 		if (error < 0) {
-			log_errot(token, "paxos_acquire host_id %llu read %d",
+			log_errot(token, "paxos_acquire owner %llu %llu %llu "
+				  "delta read %d fd %d path %s off %llu ss %u",
 				  (unsigned long long)cur_leader.owner_id,
-				  error);
+				  (unsigned long long)cur_leader.owner_generation,
+				  (unsigned long long)cur_leader.timestamp,
+				  error, host_id_disk.fd, host_id_disk.path,
+				  (unsigned long long)host_id_disk.offset,
+				  host_id_disk.sector_size);
 			goto out;
 		}
 
@@ -1116,62 +1129,82 @@ int paxos_lease_acquire(struct task *task,
 		   and acquiring cannot take less than host_dead_seconds */
 
 		if (host_id_leader.timestamp == LEASE_FREE) {
-			log_token(token, "paxos_acquire host_id %llu free",
+			log_token(token, "paxos_acquire owner %llu delta free",
 				  (unsigned long long)cur_leader.owner_id);
 			goto run;
 		}
 
 		/* another host has acquired the host_id of the host that
 		   owned this paxos lease; acquiring a host_id also cannot be
-		   done in less than host_dead_seconds */
+		   done in less than host_dead_seconds, or
 
-		if (host_id_leader.owner_id != cur_leader.owner_id) {
-			log_token(token, "paxos_acquire host_id %llu owner %llu",
-				  (unsigned long long)cur_leader.owner_id,
-				  (unsigned long long)host_id_leader.owner_id);
-			goto run;
-		}
-
-		/* the host_id that owns this lease may be alive, but it
+		   the host_id that owns this lease may be alive, but it
 		   owned the lease in a previous generation without freeing it,
 		   and no longer owns it */
 
-		if (host_id_leader.owner_generation > cur_leader.owner_generation) {
-			log_token(token, "paxos_acquire host_id %llu "
-				  "generation now %llu old %llu",
+		if (host_id_leader.owner_id != cur_leader.owner_id ||
+		    host_id_leader.owner_generation > cur_leader.owner_generation) {
+			log_errot(token, "paxos_acquire owner %llu %llu %llu "
+				  "delta %llu %llu %llu mismatch",
 				  (unsigned long long)cur_leader.owner_id,
+				  (unsigned long long)cur_leader.owner_generation,
+				  (unsigned long long)cur_leader.timestamp,
+				  (unsigned long long)host_id_leader.owner_id,
 				  (unsigned long long)host_id_leader.owner_generation,
-				  (unsigned long long)cur_leader.owner_generation);
-			goto run;
-		}
-
-		/* if the owner hasn't renewed its host_id lease for
-		   host_dead_seconds then its watchdog should have fired
-		   by now */
-
-		if (monotime() - start > task->host_dead_seconds) {
-			log_token(token, "paxos_acquire host_id %llu expired %llu",
-				  (unsigned long long)cur_leader.owner_id,
 				  (unsigned long long)host_id_leader.timestamp);
 			goto run;
 		}
 
+		if (!last_timestamp) {
+			last_timestamp = host_id_leader.timestamp;
+			goto skip_live_check;
+		}
+
 		/* the owner is renewing its host_id so it's alive */
 
-		if (last_timestamp && (host_id_leader.timestamp != last_timestamp)) {
+		if (host_id_leader.timestamp != last_timestamp) {
 			if (flags & PAXOS_ACQUIRE_QUIET_FAIL) {
-				log_token(token, "paxos_acquire host_id %llu alive",
-					  (unsigned long long)cur_leader.owner_id);
+				log_token(token, "paxos_acquire owner %llu "
+					  "delta %llu %llu %llu alive",
+					  (unsigned long long)cur_leader.owner_id,
+					  (unsigned long long)host_id_leader.owner_id,
+					  (unsigned long long)host_id_leader.owner_generation,
+					  (unsigned long long)host_id_leader.timestamp);
 			} else {
-				log_errot(token, "paxos_acquire host_id %llu alive",
-					  (unsigned long long)cur_leader.owner_id);
+				log_errot(token, "paxos_acquire owner %llu "
+					  "delta %llu %llu %llu alive",
+					  (unsigned long long)cur_leader.owner_id,
+					  (unsigned long long)host_id_leader.owner_id,
+					  (unsigned long long)host_id_leader.owner_generation,
+					  (unsigned long long)host_id_leader.timestamp);
 			}
 			error = SANLK_ACQUIRE_IDLIVE;
 			goto out;
 		}
 
-		last_timestamp = host_id_leader.timestamp;
 
+		/* if the owner hasn't renewed its host_id lease for
+		   host_dead_seconds then its watchdog should have fired
+		   by now */
+
+		now = monotime();
+
+		if (now - wait_start > task->host_dead_seconds) {
+			log_token(token, "paxos_acquire owner %llu %llu %llu "
+				  "delta %llu %llu %llu dead %llu-%llu>%d",
+				  (unsigned long long)cur_leader.owner_id,
+				  (unsigned long long)cur_leader.owner_generation,
+				  (unsigned long long)cur_leader.timestamp,
+				  (unsigned long long)host_id_leader.owner_id,
+				  (unsigned long long)host_id_leader.owner_generation,
+				  (unsigned long long)host_id_leader.timestamp,
+				  (unsigned long long)now,
+				  (unsigned long long)wait_start,
+				  task->host_dead_seconds);
+			goto run;
+		}
+
+ skip_live_check:
 		/* TODO: test with sleep(2) here */
 		sleep(1);
 

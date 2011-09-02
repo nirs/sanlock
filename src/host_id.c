@@ -236,6 +236,29 @@ int host_status_set_bit(char *space_name, uint64_t host_id)
 	return 0;
 }
 
+int host_info(char *space_name, uint64_t host_id, struct host_status *hs_out)
+{
+	struct space *sp;
+	int found = 0;
+
+	if (!host_id || host_id > DEFAULT_MAX_HOSTS)
+		return -EINVAL;
+
+	pthread_mutex_lock(&spaces_mutex);
+	list_for_each_entry(sp, &spaces, list) {
+		if (strncmp(sp->space_name, space_name, NAME_ID_SIZE))
+			continue;
+		memcpy(hs_out, &sp->host_status[host_id-1], sizeof(struct host_status));
+		found = 1;
+		break;
+	}
+	pthread_mutex_unlock(&spaces_mutex);
+
+	if (!found)
+		return -ENOSPC;
+	return 0;
+}
+
 static void create_bitmap(struct task *task, struct space *sp, char *bitmap)
 {
 	uint64_t now;
@@ -262,17 +285,6 @@ static void create_bitmap(struct task *task, struct space *sp, char *bitmap)
 	}
 	pthread_mutex_unlock(&sp->mutex);
 }
-
-/*
- * when entering the monitor loop in paxos_lease, once
- * last_check - last_live > host_dead_seconds, it's expired
- * 
- * at local time t=last_live, we read timstamp=X
- * at local time t=last_check, we read timestamp=X
- * so once the difference between last_live and last_check
- * is > host_dead_seconds, the host has not renewed it's
- * timestamp in host_dead_seconds.
- */
 
 void check_other_leases(struct task *task, struct space *sp, char *buf)
 {
