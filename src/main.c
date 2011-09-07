@@ -1952,6 +1952,25 @@ static int print_token_state(struct token *t, char *str)
  * 14. [repeat 7-13 for each client]
  */
 
+/*
+ * TODO:
+ * increase max transfer size
+ * send spaces/spaces_add/spaces_rem instead of just spaces
+ * use resources/dispose_resources to send resource state instead of cl->tokens
+ *
+ * . daemon
+ * . clients
+ * . lockspaces from spaces/spaces_add/spaces_rem
+ * . resources from resources/dispose_resources
+ *
+ * in print function,
+ * for each client pid, go through resources and print any for that pid, clear the res
+ * print any remaining detached resources (orphan, dispose)
+ *
+ * sanlock client host_status <lockspace_name>
+ * send sp->host_status[] for the named lockspace
+ */
+
 static void cmd_status(int fd, struct sm_header *h_recv)
 {
 	struct sm_header h;

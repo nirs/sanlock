@@ -39,11 +39,13 @@ static pthread_t resource_pt;
 static int resource_thread_stop;
 static int resource_examine;
 
+#define R_EXAMINE    0x00000001
+
 struct resource {
 	struct list_head list;
 	struct token *token;
 	int pid;
-	int examine;
+	uint32_t flags;
 	uint64_t lver;
 	struct sanlk_resource r;
 };
@@ -59,7 +61,7 @@ int set_resource_examine(char *space_name, char *res_name)
 			continue;
 		if (res_name && strncmp(r->r.name, res_name, NAME_ID_SIZE))
 			continue;
-		r->examine = 1;
+		r->flags |= R_EXAMINE;
 		resource_examine = 1;
 		count++;
 	}
@@ -75,7 +77,7 @@ static struct resource *find_resource_examine(void)
 	struct resource *r;
 
 	list_for_each_entry(r, &resources, list) {
-		if (r->examine)
+		if (r->flags & R_EXAMINE)
 			return r;
 	}
 	return NULL;
@@ -421,7 +423,7 @@ static void *resource_thread(void *arg GNUC_UNUSED)
 				pthread_mutex_unlock(&resource_mutex);
 				continue;
 			}
-			r->examine = 0;
+			r->flags &= ~R_EXAMINE;
 
 			/* we can't safely access r->token here, and
 			   r may be freed after we release mutex, so copy
@@ -482,6 +484,7 @@ void release_token_async(struct token *token)
 	r = find_resource(token, &resources);
 	if (r) {
 		/* assert r->token == token ? */
+
 		if (token->space_dead || (token->acquire_result != SANLK_OK)) {
 			_del_resource(r);
 			free(token);
