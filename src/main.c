@@ -424,10 +424,6 @@ static int client_using_space(struct client *cl, struct space *sp)
 		log_spoke(sp, token, "client_using_space pid %d", cl->pid);
 		token->space_dead = sp->space_dead;
 		rv = 1;
-
-		/* we could break here after finding one if we didn't care
-		 * about setting token->space_dead which isn't really
-		 * necessary; it just avoids trying to release the token */
 	}
 	return rv;
 }
@@ -586,9 +582,42 @@ static int main_loop(void)
 		last_check = now;
 		check_interval = STANDARD_CHECK_INTERVAL;
 
+		/*
+		 * check the condition of each lockspace,
+		 * if pids are being killed, have pids all exited?
+		 * is its host_id being renewed?, if not kill pids
+		 */
+
 		pthread_mutex_lock(&spaces_mutex);
 		list_for_each_entry_safe(sp, safe, &spaces, list) {
-			check_all = 0;
+
+			if (sp->killing_pids && all_pids_dead(sp)) {
+				/*
+				 * move sp to spaces_rem so main_loop
+				 * will no longer see it.
+				 */
+				log_space(sp, "set thread_stop");
+				pthread_mutex_lock(&sp->mutex);
+				sp->thread_stop = 1;
+				unlink_watchdog_file(sp);
+				pthread_mutex_unlock(&sp->mutex);
+				list_move(&sp->list, &spaces_rem);
+				continue;
+			}
+
+			if (sp->killing_pids) {
+				/*
+				 * continue to kill the pids with increasing
+				 * levels of severity until they all exit
+				 */
+				kill_pids(sp);
+				check_interval = RECOVERY_CHECK_INTERVAL;
+				continue;
+			}
+
+			/*
+			 * check host_id lease renewal
+			 */
 
 			if (sp->align_size > check_buf_len) {
 				if (check_buf)
@@ -599,37 +628,21 @@ static int main_loop(void)
 			if (check_buf)
 				memset(check_buf, 0, check_buf_len);
 
-			if (sp->killing_pids) {
-				if (all_pids_dead(sp)) {
-					log_space(sp, "set thread_stop");
-					pthread_mutex_lock(&sp->mutex);
-					sp->thread_stop = 1;
-					unlink_watchdog_file(sp);
-					pthread_mutex_unlock(&sp->mutex);
-					list_move(&sp->list, &spaces_rem);
-				} else {
-					kill_pids(sp);
-				}
-			} else {
-				rv = check_our_lease(&main_task, sp,
-						     &check_all, check_buf);
+			check_all = 0;
 
-				if (rv || external_shutdown || sp->external_remove) {
-					log_space(sp, "set killing_pids check %d "
-						  "shutdown %d remove %d",
-						  rv, external_shutdown,
-						  sp->external_remove);
-					sp->space_dead = 1;
-					sp->killing_pids = 1;
-					kill_pids(sp);
-				}
-			}
+			rv = check_our_lease(&main_task, sp, &check_all, check_buf);
 
-			if (!sp->killing_pids && check_all)
-				check_other_leases(&main_task, sp, check_buf);
-
-			if (sp->killing_pids)
+			if (rv || external_shutdown || sp->external_remove) {
+				log_space(sp, "set killing_pids check %d shutdown %d remove %d",
+					  rv, external_shutdown, sp->external_remove);
+				sp->space_dead = 1;
+				sp->killing_pids = 1;
+				kill_pids(sp);
 				check_interval = RECOVERY_CHECK_INTERVAL;
+
+			} else if (check_all) {
+				check_other_leases(&main_task, sp, check_buf);
+			}
 		}
 		empty = list_empty(&spaces);
 		pthread_mutex_unlock(&spaces_mutex);
@@ -1515,6 +1528,51 @@ static void cmd_add_lockspace(struct cmd_args *ca)
 	send_result(fd, &ca->header, result);
 	client_resume(ca->ci_in);
 }
+
+/*
+ * TODO: rem_lockspace works like a renewal failure would, and abandons
+ * resource leases (tokens) without releasing them.  Unlike the renewal
+ * failure case, rem_lockspace most likely releases the host_id.
+ *
+ * What might be nice is an option where rem_lockspace would try to
+ * release resource leases before releasing the lockspace host_id.
+ * (We don't really want to be releasing tokens after we've released
+ * our host_id for the token's lockspace.)
+ *
+ * - kill all pids (by looking at struct resource pid?)
+ * - wait for all pids to exit
+ * o have us or other thread release their tokens/resources
+ * o wait for tokens/resources to be released, although the release
+ *   may fail or time out, we don't want to wait too long
+ * - set sp->external_remove
+ * - main_loop sets sp->thread_stop (should find no pids)
+ * - main_loop unlinks watchdog
+ * - lockspace_thread releases host_id
+ *
+ * The aim is that we kill pids and wait for resources to be released
+ * before main_loop gets involved and before the lockspace_thread is
+ * told to stop.
+ *
+ * An alternative messy is to add another condition to the current
+ * main_loop checks:
+ *
+ * if (sp->killing_pids && all_pids_dead(sp) && all_tokens_released(sp)) {
+ * 	sp->thread_stop = 1;
+ * 	unlink_watchdog_file(sp);
+ * 	list_move(spaces_rem);
+ * }
+ *
+ * all_tokens_released would just return 1 in case we're not doing
+ * the releases
+ *
+ * release_token_async would need to learn to put the resources onto
+ * dispose list in this case
+ *
+ * consider using the resources/dispose_resources list for all_pids_dead
+ * and kill_pids?  instead of the clients[].tokens[] loops?  actually,
+ * could we remove tokens and cl->tokens altogether and just use the
+ * resources list?
+ */
 
 static void cmd_rem_lockspace(struct cmd_args *ca)
 {

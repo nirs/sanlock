@@ -278,7 +278,7 @@ This will allow resources to be acquired in the lockspace.
 
 Tell the sanlock daemon to release the specified host_id in the lockspace.
 Any processes holding resource leases in this lockspace will be killed,
-and the leases released.
+and the resource leases not released.
 
 .BR "sanlock client command -r" " RESOURCE " \
 \fB-c\fP " " \fIpath\fP " " \fIargs\fP
