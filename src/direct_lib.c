@@ -31,9 +31,16 @@ void log_level(int space_id GNUC_UNUSED, int token_id GNUC_UNUSED,
 {
 }
 
-int host_id_disk_info(char *name GNUC_UNUSED, struct sync_disk *disk GNUC_UNUSED);
+int lockspace_disk(char *space_name GNUC_UNUSED, struct sync_disk *disk GNUC_UNUSED);
 
-int host_id_disk_info(char *name GNUC_UNUSED, struct sync_disk *disk GNUC_UNUSED)
+int lockspace_disk(char *space_name GNUC_UNUSED, struct sync_disk *disk GNUC_UNUSED)
+{
+	return -1;
+}
+
+int host_info(char *space_name, uint64_t host_id, struct host_status *hs_out);
+
+int host_info(char *space_name GNUC_UNUSED, uint64_t host_id GNUC_UNUSED, struct host_status *hs_out GNUC_UNUSED)
 {
 	return -1;
 }
