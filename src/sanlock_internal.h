@@ -124,7 +124,6 @@ struct space {
 	int space_dead;
 	int killing_pids;
 	int external_remove;
-	int block_watchdog_updates;
 	int thread_stop;
 	int wd_fd;
 	pthread_t thread;

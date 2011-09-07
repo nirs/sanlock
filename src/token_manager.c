@@ -462,10 +462,8 @@ static void *resource_thread(void *arg GNUC_UNUSED)
 				log_error("req_kill_pid %d %.48s:%.48s", pid,
 					  tt->r.lockspace_name, tt->r.name);
 				kill(pid, SIGKILL);
-
-			} else if (req.force_mode == SANLK_REQ_BLOCK_WD) {
-				log_error("req_block_wd %.48s", tt->r.lockspace_name);
-				block_watchdog_updates(tt->r.lockspace_name);
+			} else {
+				log_error("req force_mode unknown %u", req.force_mode);
 			}
 		}
 	}

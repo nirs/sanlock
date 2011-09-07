@@ -28,7 +28,6 @@
 
 /* request flags */
 #define SANLK_REQ_KILL_PID	0x00000001
-#define SANLK_REQ_BLOCK_WD	0x00000002
 
 int sanlock_register(void);
 

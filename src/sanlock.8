@@ -477,11 +477,6 @@ take:
 process has exited, the resource lease will be released, and can then be
 acquired by anyone.
 
-\fB2\fP (BLOCK_WD): stop updating the watchdog (/dev/watchdog keepalive
-via wdmd_test_live) for the lockspace, which will lead to /dev/watchdog
-firing and reseting the host.  The resource lease can be acquired after
-the timeout for a failed host.
-
 .SH SEE ALSO
 .BR wdmd (8)
 

@@ -163,17 +163,6 @@ int lockspace_disk(char *space_name, struct sync_disk *disk)
 	return rv;
 }
 
-void block_watchdog_updates(char *space_name)
-{
-	struct space *sp;
-
-	pthread_mutex_lock(&spaces_mutex);
-	sp = _search_space(space_name, NULL, 0, &spaces, NULL, NULL);
-	if (sp)
-		sp->block_watchdog_updates = 1;
-	pthread_mutex_unlock(&spaces_mutex);
-}
-
 #if 0
 static void clear_bit(int host_id, char *bitmap)
 {
@@ -563,9 +552,7 @@ static void *lockspace_thread(void *arg_in)
 		 * pet the watchdog
 		 */
 
-		if (delta_result == SANLK_OK &&
-		    !sp->thread_stop &&
-		    !sp->block_watchdog_updates)
+		if (delta_result == SANLK_OK && !sp->thread_stop)
 			update_watchdog_file(sp, last_success);
 
 		pthread_mutex_unlock(&sp->mutex);
