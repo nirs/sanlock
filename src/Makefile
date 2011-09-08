@@ -30,6 +30,7 @@ CMD_SOURCE = \
 	token_manager.c \
 	watchdog.c \
 	monotime.c \
+	client_cmd.c \
 	sanlock_sock.c
 
 LIB_ENTIRE_SOURCE = \

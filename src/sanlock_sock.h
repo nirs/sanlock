@@ -34,6 +34,7 @@ enum {
 	SM_CMD_INIT_RESOURCE	= 14,
 	SM_CMD_EXAMINE_LOCKSPACE = 15,
 	SM_CMD_EXAMINE_RESOURCE	 = 16,
+	SM_CMD_HOST_STATUS	 = 17,
 };
 
 struct sm_header {
@@ -50,9 +51,10 @@ struct sm_header {
 #define SANLK_STATE_MAXSTR	4096
 
 #define SANLK_STATE_DAEMON      1
-#define SANLK_STATE_LOCKSPACE   2
-#define SANLK_STATE_CLIENT      3
+#define SANLK_STATE_CLIENT      2
+#define SANLK_STATE_LOCKSPACE   3
 #define SANLK_STATE_RESOURCE    4
+#define SANLK_STATE_HOST	5
 
 struct sanlk_state {
 	uint32_t type; /* SANLK_STATE_ */

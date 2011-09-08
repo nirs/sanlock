@@ -9,7 +9,7 @@
 #ifndef __LOG_H__
 #define __LOG_H__
 
-void log_level(int space_id, int token_id, char *name_in, int level, const char *fmt, ...)
+void log_level(uint32_t space_id, uint32_t token_id, char *name_in, int level, const char *fmt, ...)
 	__attribute__((format(printf, 5, 6)));
 
 int setup_logging(void);

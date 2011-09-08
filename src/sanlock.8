@@ -248,6 +248,12 @@ io timeout in seconds
 Print processes, lockspaces, and resources being manged by the sanlock
 daemon.  Add -D to show extra internal daemon status for debugging.
 
+.BR "sanlock client host_status -s" " LOCKSPACE"
+
+Print state of host_id delta leases read during the last renewal.
+Only lockspace_name is used from the LOCKSPACE argument.
+Add -D to show extra internal daemon status for debugging.
+
 .B sanlock client log_dump
 
 Print the sanlock daemon internal debug log.

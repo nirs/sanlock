@@ -11,14 +11,6 @@
 #define __SANLOCK_ADMIN_H__
 
 /*
- * daemon admin/managment
- */
-
-int sanlock_status(int debug);
-int sanlock_log_dump(void);
-int sanlock_shutdown(void);
-
-/*
  * add_lockspace returns:
  * 0: the lockspace has been added successfully
  * -EEXIST: the lockspace already exists

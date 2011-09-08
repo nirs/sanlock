@@ -34,43 +34,7 @@
 #include "direct.h"
 #include "token_manager.h"
 
-static unsigned int space_id_counter = 1;
-
-struct list_head spaces;
-struct list_head spaces_add;
-struct list_head spaces_rem;
-pthread_mutex_t spaces_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-int print_space_state(struct space *sp, char *str)
-{
-	memset(str, 0, SANLK_STATE_MAXSTR);
-
-	snprintf(str, SANLK_STATE_MAXSTR-1,
-		 "space_id=%u "
-		 "host_generation=%llu "
-		 "space_dead=%d "
-		 "killing_pids=%d "
-		 "corrupt_result=%d "
-		 "acquire_last_result=%d "
-		 "renewal_last_result=%d "
-		 "acquire_last_attempt=%llu "
-		 "acquire_last_success=%llu "
-		 "renewal_last_attempt=%llu "
-		 "renewal_last_success=%llu",
-		 sp->space_id,
-		 (unsigned long long)sp->host_generation,
-		 sp->space_dead,
-		 sp->killing_pids,
-		 sp->lease_status.corrupt_result,
-		 sp->lease_status.acquire_last_result,
-		 sp->lease_status.renewal_last_result,
-		 (unsigned long long)sp->lease_status.acquire_last_attempt,
-		 (unsigned long long)sp->lease_status.acquire_last_success,
-		 (unsigned long long)sp->lease_status.renewal_last_attempt,
-		 (unsigned long long)sp->lease_status.renewal_last_success);
-
-	return strlen(str) + 1;
-}
+static uint32_t space_id_counter = 1;
 
 static struct space *_search_space(char *name,
 				   struct sync_disk *disk,
@@ -121,6 +85,11 @@ static struct space *_search_space(char *name,
 		}
 	}
 	return NULL;
+}
+
+struct space *find_lockspace(char *name)
+{
+	return _search_space(name, NULL, 0, &spaces, &spaces_rem, &spaces_add);
 }
 
 int _lockspace_info(char *space_name, struct space *sp_out)
@@ -290,9 +259,6 @@ void check_other_leases(struct task *task, struct space *sp, char *buf)
 	new = 0;
 
 	for (i = 0; i < DEFAULT_MAX_HOSTS; i++) {
-		if (i+1 == sp->host_id)
-			continue;
-
 		hs = &sp->host_status[i];
 		hs->last_check = now;
 
@@ -308,6 +274,9 @@ void check_other_leases(struct task *task, struct space *sp, char *buf)
 		hs->owner_generation = leader->owner_generation;
 		hs->timestamp = leader->timestamp;
 		hs->last_live = now;
+
+		if (i+1 == sp->host_id)
+			continue;
 
 		bitmap = (char *)leader + HOSTID_BITMAP_OFFSET;
 
@@ -832,12 +801,5 @@ void free_lockspaces(int wait)
 		}
 	}
 	pthread_mutex_unlock(&spaces_mutex);
-}
-
-void setup_spaces(void)
-{
-	INIT_LIST_HEAD(&spaces);
-	INIT_LIST_HEAD(&spaces_add);
-	INIT_LIST_HEAD(&spaces_rem);
 }
 

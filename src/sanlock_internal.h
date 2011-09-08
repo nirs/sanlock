@@ -79,13 +79,25 @@ struct token {
 	uint64_t host_generation;
 
 	/* internal */
-	int token_id; /* used to refer to this token instance in log messages */
+	uint32_t token_id; /* used to refer to this token instance in log messages */
 	int space_dead; /* don't bother trying to release if ls is dead */
 	int acquire_result;
 	int release_result;
 	struct leader_record leader; /* copy of last leader_record we wrote */
 
 	struct sync_disk *disks; /* shorthand, points to r.disks[0] */
+	struct sanlk_resource r;
+};
+
+#define R_EXAMINE    0x00000001
+
+struct resource {
+	struct list_head list;
+	struct token *token;
+	int pid;
+	uint32_t token_id;
+	uint32_t flags;
+	uint64_t lver;
 	struct sanlk_resource r;
 };
 
@@ -116,11 +128,11 @@ struct host_status {
 struct space {
 	struct list_head list;
 	char space_name[NAME_ID_SIZE];
+	uint32_t space_id; /* used to refer to this space instance in log messages */
 	uint64_t host_id;
 	uint64_t host_generation;
 	struct sync_disk host_id_disk;
 	int align_size;
-	int space_id; /* used to refer to this space instance in log messages */
 	int space_dead;
 	int killing_pids;
 	int external_remove;
@@ -502,6 +514,7 @@ EXTERN struct command_line com;
 
 enum {
 	ACT_STATUS = 1,
+	ACT_HOST_STATUS,
 	ACT_LOG_DUMP,
 	ACT_SHUTDOWN,
 	ACT_ADD_LOCKSPACE,
@@ -526,6 +539,16 @@ enum {
 
 EXTERN int external_shutdown;
 EXTERN char our_host_name_global[SANLK_NAME_LEN+1];
+
+EXTERN struct list_head spaces;
+EXTERN struct list_head spaces_rem;
+EXTERN struct list_head spaces_add;
+EXTERN pthread_mutex_t spaces_mutex;
+
+EXTERN struct list_head resources;
+EXTERN struct list_head dispose_resources;
+EXTERN pthread_mutex_t resource_mutex;
+EXTERN pthread_cond_t resource_cond;
 
 #endif
 

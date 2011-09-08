@@ -31,24 +31,9 @@
 #include "task.h"
 #include "host_id.h"
 
-static struct list_head resources;
-static struct list_head dispose_resources;
-static pthread_mutex_t resource_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t resource_cond = PTHREAD_COND_INITIALIZER;
 static pthread_t resource_pt;
 static int resource_thread_stop;
 static int resource_examine;
-
-#define R_EXAMINE    0x00000001
-
-struct resource {
-	struct list_head list;
-	struct token *token;
-	int pid;
-	uint32_t flags;
-	uint64_t lver;
-	struct sanlk_resource r;
-};
 
 int set_resource_examine(char *space_name, char *res_name)
 {
@@ -147,6 +132,7 @@ int add_resource(struct token *token, int pid)
 	memset(r, 0, r_len);
 	memcpy(&r->r, &token->r, sizeof(struct sanlk_resource));
 	memcpy(&r->r.disks, &token->r.disks, disks_len);
+	r->token_id = token->token_id;
 	r->token = token;
 	r->pid = pid;
 	list_add_tail(&r->list, &resources);
@@ -208,10 +194,9 @@ int acquire_token(struct task *task, struct token *token,
 	if (rv < 0)
 		return rv;
 
-	save_resource_lver(token, token->leader.lver);
-
 	memcpy(&token->leader, &leader_ret, sizeof(struct leader_record));
 	token->r.lver = token->leader.lver;
+	save_resource_lver(token, token->leader.lver);
 	return rv; /* SANLK_OK */
 }
 
@@ -497,9 +482,6 @@ void release_token_async(struct token *token)
 int setup_token_manager(void)
 {
 	int rv;
-
-	INIT_LIST_HEAD(&resources);
-	INIT_LIST_HEAD(&dispose_resources);
 
 	rv = pthread_create(&resource_pt, NULL, resource_thread, NULL);
 	if (rv)

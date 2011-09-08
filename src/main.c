@@ -49,6 +49,7 @@
 #include "lockfile.h"
 #include "watchdog.h"
 #include "task.h"
+#include "client_cmd.h"
 
 /* priorities are LOG_* from syslog.h */
 int log_logfile_priority = LOG_WARNING;
@@ -82,7 +83,7 @@ static struct pollfd *pollfd = NULL;
 static char command[COMMAND_MAX];
 static int cmd_argc;
 static char **cmd_argv;
-static unsigned int token_id_counter = 1;
+static uint32_t token_id_counter = 1;
 
 struct cmd_args {
 	struct list_head list; /* thread_pool data */
@@ -105,10 +106,6 @@ struct thread_pool {
 };
 
 static struct thread_pool pool;
-
-extern struct list_head spaces;
-extern struct list_head spaces_rem;
-extern pthread_mutex_t spaces_mutex;
 
 static struct random_data rand_data;
 static char rand_state[32];
@@ -1921,7 +1918,27 @@ static int thread_pool_create(int min_workers, int max_workers)
 	return rv;
 }
 
-static int print_daemon_state(char *str)
+/*
+ * sanlock client status
+ *
+ * 1. send_state_daemon
+ *
+ * 2. for each cl in clients
+ *     send_state_client() [sanlk_state + str_len]
+ *
+ * 3. for each sp in spaces, spaces_add, spaces_rem
+ *     send_state_lockspace() [sanlk_state + str_len + sanlk_lockspace]
+ *
+ * 4. for each r in resources, dispose_resources
+ *     send_state_resource() [sanlk_state + str_len + sanlk_resource + sanlk_disk * num_disks]
+ *
+ * sanlock client host_status <lockspace_name>
+ *
+ * 1. for each hs in sp->host_status
+ * 	send_state_host()
+ */
+
+static int print_state_daemon(char *str)
 {
 	memset(str, 0, SANLK_STATE_MAXSTR);
 
@@ -1942,7 +1959,7 @@ static int print_daemon_state(char *str)
 	return strlen(str) + 1;
 }
 
-static int print_client_state(struct client *cl, int ci, char *str)
+static int print_state_client(struct client *cl, int ci, char *str)
 {
 	memset(str, 0, SANLK_STATE_MAXSTR);
 
@@ -1969,83 +1986,202 @@ static int print_client_state(struct client *cl, int ci, char *str)
 	return strlen(str) + 1;
 }
 
-static int print_token_state(struct token *t, char *str)
+static int print_state_lockspace(struct space *sp, char *str, const char *list_name)
 {
 	memset(str, 0, SANLK_STATE_MAXSTR);
 
 	snprintf(str, SANLK_STATE_MAXSTR-1,
-		 "token_id=%u "
-		 "acquire_result=%d "
-		 "release_result=%d "
-		 "leader.lver=%llu "
-		 "leader.timestamp=%llu "
-		 "leader.owner_id=%llu "
-		 "leader.owner_generation=%llu",
-		 t->token_id,
-		 t->acquire_result,
-		 t->release_result,
-		 (unsigned long long)t->leader.lver,
-		 (unsigned long long)t->leader.timestamp,
-		 (unsigned long long)t->leader.owner_id,
-		 (unsigned long long)t->leader.owner_generation);
+		 "list=%s "
+		 "space_id=%u "
+		 "host_generation=%llu "
+		 "space_dead=%d "
+		 "killing_pids=%d "
+		 "corrupt_result=%d "
+		 "acquire_last_result=%d "
+		 "renewal_last_result=%d "
+		 "acquire_last_attempt=%llu "
+		 "acquire_last_success=%llu "
+		 "renewal_last_attempt=%llu "
+		 "renewal_last_success=%llu",
+		 list_name,
+		 sp->space_id,
+		 (unsigned long long)sp->host_generation,
+		 sp->space_dead,
+		 sp->killing_pids,
+		 sp->lease_status.corrupt_result,
+		 sp->lease_status.acquire_last_result,
+		 sp->lease_status.renewal_last_result,
+		 (unsigned long long)sp->lease_status.acquire_last_attempt,
+		 (unsigned long long)sp->lease_status.acquire_last_success,
+		 (unsigned long long)sp->lease_status.renewal_last_attempt,
+		 (unsigned long long)sp->lease_status.renewal_last_success);
 
 	return strlen(str) + 1;
 }
 
-/*
- *  0. header
- *  1. dst (sanlk_state DAEMON)
- *  2. dst.str (dst.len)
- *  3. lst (sanlk_state LOCKSPACE)
- *  4. lst.str (lst.len)			print_space_state()
- *  5. lockspace (sanlk_lockspace)
- *  6. [repeat 3-5 for each space]
- *  7. cst (sanlk_state CLIENT)
- *  8. cst.str (cst.len)			print_client_state()
- *  9. rst (sanlk_state RESOURCE)
- * 10. rst.str (rst.len)			print_token_state()
- * 11. resource (sanlk_resource)
- * 12. disks (sanlk_disk * resource.num_disks)
- * 13. [repeat 9-12 for each token]
- * 14. [repeat 7-13 for each client]
- */
+static int print_state_resource(struct resource *r, char *str, const char *list_name)
+{
+	memset(str, 0, SANLK_STATE_MAXSTR);
 
-/*
- * TODO:
- * increase max transfer size
- * send spaces/spaces_add/spaces_rem instead of just spaces
- * use resources/dispose_resources to send resource state instead of cl->tokens
- *
- * . daemon
- * . clients
- * . lockspaces from spaces/spaces_add/spaces_rem
- * . resources from resources/dispose_resources
- *
- * in print function,
- * for each client pid, go through resources and print any for that pid, clear the res
- * print any remaining detached resources (orphan, dispose)
- *
- * sanlock client host_status <lockspace_name>
- * send sp->host_status[] for the named lockspace
- */
+	snprintf(str, SANLK_STATE_MAXSTR-1,
+		 "list=%s "
+		 "flags=%x "
+		 "lver=%llu "
+		 "token_id=%u ",
+		 list_name,
+		 r->flags,
+		 (unsigned long long)r->lver,
+		 r->token_id);
+
+	return strlen(str) + 1;
+}
+
+static int print_state_host(struct host_status *hs, char *str)
+{
+	memset(str, 0, SANLK_STATE_MAXSTR);
+
+	snprintf(str, SANLK_STATE_MAXSTR-1,
+		 "last_check=%llu "
+		 "last_live=%llu "
+		 "last_req=%llu "
+		 "owner_id=%llu "
+		 "owner_generation=%llu "
+		 "timestamp=%llu ",
+		 (unsigned long long)hs->last_check,
+		 (unsigned long long)hs->last_live,
+		 (unsigned long long)hs->last_req,
+		 (unsigned long long)hs->owner_id,
+		 (unsigned long long)hs->owner_generation,
+		 (unsigned long long)hs->timestamp);
+
+	return strlen(str) + 1;
+}
+
+static void send_state_daemon(int fd)
+{
+	struct sanlk_state st;
+	char str[SANLK_STATE_MAXSTR];
+	int str_len;
+
+	memset(&st, 0, sizeof(st));
+
+	st.type = SANLK_STATE_DAEMON;
+
+	str_len = print_state_daemon(str);
+
+	st.str_len = str_len;
+
+	send(fd, &st, sizeof(st), MSG_NOSIGNAL);
+	if (str_len)
+		send(fd, str, str_len, MSG_NOSIGNAL);
+}
+
+static void send_state_client(int fd, struct client *cl, int ci)
+{
+	struct sanlk_state st;
+	char str[SANLK_STATE_MAXSTR];
+	int str_len;
+
+	memset(&st, 0, sizeof(st));
+
+	st.type = SANLK_STATE_CLIENT;
+	st.data32 = cl->pid;
+	strncpy(st.name, cl->owner_name, NAME_ID_SIZE);
+
+	str_len = print_state_client(cl, ci, str);
+
+	st.str_len = str_len;
+
+	send(fd, &st, sizeof(st), MSG_NOSIGNAL);
+	if (str_len)
+		send(fd, str, str_len, MSG_NOSIGNAL);
+}
+
+static void send_state_lockspace(int fd, struct space *sp, const char *list_name)
+{
+	struct sanlk_state st;
+	struct sanlk_lockspace lockspace;
+	char str[SANLK_STATE_MAXSTR];
+	int str_len;
+
+	memset(&st, 0, sizeof(st));
+
+	st.type = SANLK_STATE_LOCKSPACE;
+	st.data64 = sp->host_id;
+	strncpy(st.name, sp->space_name, NAME_ID_SIZE);
+
+	str_len = print_state_lockspace(sp, str, list_name);
+
+	st.str_len = str_len;
+
+	send(fd, &st, sizeof(st), MSG_NOSIGNAL);
+	if (str_len)
+		send(fd, str, str_len, MSG_NOSIGNAL);
+
+	memset(&lockspace, 0, sizeof(struct sanlk_lockspace));
+	strncpy(lockspace.name, sp->space_name, NAME_ID_SIZE);
+	lockspace.host_id = sp->host_id;
+	memcpy(&lockspace.host_id_disk, &sp->host_id_disk, sizeof(struct sanlk_disk));
+
+	send(fd, &lockspace, sizeof(lockspace), MSG_NOSIGNAL);
+}
+
+static void send_state_resource(int fd, struct resource *r, const char *list_name)
+{
+	struct sanlk_state st;
+	char str[SANLK_STATE_MAXSTR];
+	int str_len;
+	int i;
+
+	memset(&st, 0, sizeof(st));
+
+	st.type = SANLK_STATE_RESOURCE;
+	st.data32 = r->pid;
+	strncpy(st.name, r->r.name, NAME_ID_SIZE);
+
+	str_len = print_state_resource(r, str, list_name);
+
+	st.str_len = str_len;
+
+	send(fd, &st, sizeof(st), MSG_NOSIGNAL);
+	if (str_len)
+		send(fd, str, str_len, MSG_NOSIGNAL);
+
+	send(fd, &r->r, sizeof(struct sanlk_resource), MSG_NOSIGNAL);
+
+	for (i = 0; i < r->r.num_disks; i++) {
+		send(fd, &r->r.disks[i], sizeof(struct sanlk_disk), MSG_NOSIGNAL);
+	}
+}
+
+static void send_state_host(int fd, struct host_status *hs, int host_id)
+{
+	struct sanlk_state st;
+	char str[SANLK_STATE_MAXSTR];
+	int str_len;
+
+	memset(&st, 0, sizeof(st));
+
+	st.type = SANLK_STATE_HOST;
+	st.data32 = host_id;
+	st.data64 = hs->timestamp;
+
+	str_len = print_state_host(hs, str);
+
+	st.str_len = str_len;
+
+	send(fd, &st, sizeof(st), MSG_NOSIGNAL);
+	if (str_len)
+		send(fd, str, str_len, MSG_NOSIGNAL);
+}
 
 static void cmd_status(int fd, struct sm_header *h_recv)
 {
 	struct sm_header h;
-	struct sanlk_state dst;
-	struct sanlk_state lst;
-	struct sanlk_state cst;
-	struct sanlk_state rst;
-	struct sanlk_lockspace lockspace;
-	char str[SANLK_STATE_MAXSTR];
-	struct token *token;
-	struct space *sp;
 	struct client *cl;
-	int ci, i, j, str_len;
-
-	/*
-	 * send header: h
-	 */
+	struct space *sp;
+	struct resource *r;
+	int ci;
 
 	memset(&h, 0, sizeof(h));
 	memcpy(&h, h_recv, sizeof(struct sm_header));
@@ -2054,95 +2190,91 @@ static void cmd_status(int fd, struct sm_header *h_recv)
 
 	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
 
-	/*
-	 * send daemon state: dst, dst.str
-	 */
-
-	str_len = print_daemon_state(str);
-	memset(&dst, 0, sizeof(dst));
-	dst.type = SANLK_STATE_DAEMON;
-	dst.str_len = str_len;
-
-	send(fd, &dst, sizeof(dst), MSG_NOSIGNAL);
-	if (str_len)
-		send(fd, str, str_len, MSG_NOSIGNAL);
+	send_state_daemon(fd);
 
 	if (h_recv->data == SANLK_STATE_DAEMON)
 		return;
 
-	/*
-	 * send lockspace state: lst, lst.str, sanlk_lockspace
-	 */
+	for (ci = 0; ci <= client_maxi; ci++) {
+		cl = &client[ci];
+		if (!cl->used)
+			continue;
+		send_state_client(fd, cl, ci);
+	}
+
+	if (h_recv->data == SANLK_STATE_CLIENT)
+		return;
 
 	pthread_mutex_lock(&spaces_mutex);
-	list_for_each_entry(sp, &spaces, list) {
-		str_len = print_space_state(sp, str);
-		memset(&lst, 0, sizeof(lst));
-		lst.type = SANLK_STATE_LOCKSPACE;
-		lst.data64 = sp->host_id;
-		strncpy(lst.name, sp->space_name, NAME_ID_SIZE);
-		lst.str_len = str_len;
-
-		send(fd, &lst, sizeof(lst), MSG_NOSIGNAL);
-		if (str_len)
-			send(fd, str, str_len, MSG_NOSIGNAL);
-
-		memset(&lockspace, 0, sizeof(struct sanlk_lockspace));
-		strncpy(lockspace.name, sp->space_name, NAME_ID_SIZE);
-		lockspace.host_id = sp->host_id;
-		memcpy(&lockspace.host_id_disk, &sp->host_id_disk, sizeof(struct sanlk_disk));
-
-		send(fd, &lockspace, sizeof(lockspace), MSG_NOSIGNAL);
-	}
+	list_for_each_entry(sp, &spaces, list)
+		send_state_lockspace(fd, sp, "spaces");
+	list_for_each_entry(sp, &spaces_rem, list)
+		send_state_lockspace(fd, sp, "spaces_rem");
+	list_for_each_entry(sp, &spaces_rem, list)
+		send_state_lockspace(fd, sp, "spaces_add");
 	pthread_mutex_unlock(&spaces_mutex);
 
 	if (h_recv->data == SANLK_STATE_LOCKSPACE)
 		return;
 
-	/*
-	 * send client and resource state:
-	 * cst, cst.str, (rst, rst.str, resource, disk*N)*M
-	 */
+	pthread_mutex_lock(&resource_mutex);
+	list_for_each_entry(r, &resources, list)
+		send_state_resource(fd, r, "resources");
+	list_for_each_entry(r, &dispose_resources, list)
+		send_state_resource(fd, r, "dispose_resources");
+	pthread_mutex_unlock(&resource_mutex);
+}
 
-	for (ci = 0; ci <= client_maxi; ci++) {
-		cl = &client[ci];
+static void cmd_host_status(int fd, struct sm_header *h_recv)
+{
+	struct sm_header h;
+	struct sanlk_lockspace lockspace;
+	struct space *sp;
+	struct host_status *hs, *status = NULL;
+	int status_len;
+	int i, rv;
 
-		if (!cl->used)
-			continue;
+	memset(&h, 0, sizeof(h));
+	memcpy(&h, h_recv, sizeof(struct sm_header));
+	h.length = sizeof(h);
+	h.data = 0;
 
-		str_len = print_client_state(cl, ci, str);
-		memset(&cst, 0, sizeof(cst));
-		cst.type = SANLK_STATE_CLIENT;
-		cst.data32 = cl->pid;
-		strncpy(cst.name, cl->owner_name, NAME_ID_SIZE);
-		cst.str_len = str_len;
+	status_len = sizeof(struct host_status) * DEFAULT_MAX_HOSTS;
 
-		send(fd, &cst, sizeof(cst), MSG_NOSIGNAL);
-		if (str_len)
-			send(fd, str, str_len, MSG_NOSIGNAL);
-
-		for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
-			token = cl->tokens[i];
-			if (!token)
-				continue;
-
-			str_len = print_token_state(token, str);
-			memset(&rst, 0, sizeof(rst));
-			rst.type = SANLK_STATE_RESOURCE;
-			strncpy(rst.name, token->r.name, NAME_ID_SIZE);
-			rst.str_len = str_len;
-
-			send(fd, &rst, sizeof(rst), MSG_NOSIGNAL);
-			if (str_len)
-				send(fd, str, str_len, MSG_NOSIGNAL);
-
-			send(fd, &token->r, sizeof(struct sanlk_resource), MSG_NOSIGNAL);
-
-			for (j = 0; j < token->r.num_disks; j++) {
-				send(fd, &token->disks[j], sizeof(struct sanlk_disk), MSG_NOSIGNAL);
-			}
-		}
+	status = malloc(status_len);
+	if (!status) {
+		h.data = -ENOMEM;
+		goto fail;
 	}
+
+	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+	if (rv != sizeof(struct sanlk_lockspace)) {
+		h.data = -ENOTCONN;
+		goto fail;
+	}
+
+	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
+
+	pthread_mutex_lock(&spaces_mutex);
+	sp = find_lockspace(lockspace.name);
+	memcpy(status, &sp->host_status, status_len);
+	pthread_mutex_unlock(&spaces_mutex);
+
+	for (i = 0; i < DEFAULT_MAX_HOSTS; i++) {
+		hs = &status[i];
+		if (!hs->last_live && !hs->owner_id)
+			continue;
+		send_state_host(fd, hs, i+1);
+	}
+
+	if (status)
+		free(status);
+	return;
+ fail:
+	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
+
+	if (status)
+		free(status);
 }
 
 static void cmd_log_dump(int fd, struct sm_header *h_recv)
@@ -2354,6 +2486,10 @@ static void process_cmd_daemon(int ci, struct sm_header *h_recv)
 		strcpy(client[ci].owner_name, "status");
 		cmd_status(fd, h_recv);
 		break;
+	case SM_CMD_HOST_STATUS:
+		strcpy(client[ci].owner_name, "host_status");
+		cmd_host_status(fd, h_recv);
+		break;
 	case SM_CMD_LOG_DUMP:
 		strcpy(client[ci].owner_name, "log_dump");
 		cmd_log_dump(fd, h_recv);
@@ -2401,6 +2537,7 @@ static void process_connection(int ci)
 	case SM_CMD_RESTRICT:
 	case SM_CMD_SHUTDOWN:
 	case SM_CMD_STATUS:
+	case SM_CMD_HOST_STATUS:
 	case SM_CMD_LOG_DUMP:
 		process_cmd_daemon(ci, &h);
 		break;
@@ -2644,8 +2781,6 @@ static int do_daemon(void)
 	if (rv < 0)
 		goto out_threads;
 
-	setup_spaces();
-
 	main_loop();
 
 	close_token_manager();
@@ -2871,6 +3006,7 @@ static void print_usage(void)
 	printf("\n");
 	printf("sanlock client <action> [options]\n");
 	printf("sanlock client status [-D]\n");
+	printf("sanlock client host_status -s LOCKSPACE [-D]\n");
 	printf("sanlock client log_dump\n");
 	printf("sanlock client shutdown\n");
 	printf("sanlock client init -s LOCKSPACE | -r RESOURCE\n");
@@ -2968,6 +3104,8 @@ static int read_command_line(int argc, char *argv[])
 	case COM_CLIENT:
 		if (!strcmp(act, "status"))
 			com.action = ACT_STATUS;
+		else if (!strcmp(act, "host_status"))
+			com.action = ACT_HOST_STATUS;
 		else if (!strcmp(act, "log_dump"))
 			com.action = ACT_LOG_DUMP;
 		else if (!strcmp(act, "shutdown"))
@@ -3205,6 +3343,10 @@ static int do_client(void)
 	switch (com.action) {
 	case ACT_STATUS:
 		rv = sanlock_status(com.debug);
+		break;
+
+	case ACT_HOST_STATUS:
+		rv = sanlock_host_status(com.debug, com.lockspace.name);
 		break;
 
 	case ACT_LOG_DUMP:
@@ -3468,6 +3610,16 @@ int main(int argc, char *argv[])
 
 	BUILD_BUG_ON(sizeof(struct sanlk_disk) != sizeof(struct sync_disk));
 	BUILD_BUG_ON(sizeof(struct leader_record) > LEADER_RECORD_MAX);
+
+	/* initialize global variables */
+	pthread_mutex_init(&spaces_mutex, NULL);
+	pthread_mutex_init(&resource_mutex, NULL);
+	pthread_cond_init(&resource_cond, NULL);
+	INIT_LIST_HEAD(&spaces);
+	INIT_LIST_HEAD(&spaces_rem);
+	INIT_LIST_HEAD(&spaces_add);
+	INIT_LIST_HEAD(&resources);
+	INIT_LIST_HEAD(&dispose_resources);
 	
 	memset(&com, 0, sizeof(com));
 	com.use_watchdog = DEFAULT_USE_WATCHDOG;
