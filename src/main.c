@@ -2064,6 +2064,7 @@ static void send_state_daemon(int fd)
 	int str_len;
 
 	memset(&st, 0, sizeof(st));
+	strncpy(st.name, our_host_name_global, NAME_ID_SIZE);
 
 	st.type = SANLK_STATE_DAEMON;
 
@@ -2137,6 +2138,7 @@ static void send_state_resource(int fd, struct resource *r, const char *list_nam
 
 	st.type = SANLK_STATE_RESOURCE;
 	st.data32 = r->pid;
+	st.data64 = r->lver;
 	strncpy(st.name, r->r.name, NAME_ID_SIZE);
 
 	str_len = print_state_resource(r, str, list_name);
