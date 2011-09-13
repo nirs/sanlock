@@ -56,16 +56,15 @@ static void print_debug(char *str, int len)
 		printf("    %s\n", p);
 }
 
-static void status_daemon(int fd GNUC_UNUSED, struct sanlk_state *st, char *str, int debug)
+static void status_daemon(struct sanlk_state *st, char *str, int debug)
 {
 	printf("daemon %.48s\n", st->name);
 
-	if (st->str_len && debug) {
+	if (st->str_len && debug)
 		print_debug(str, st->str_len);
-	}
 }
 
-static void status_client(int fd GNUC_UNUSED, struct sanlk_state *st, char *str, int debug)
+static void status_client(struct sanlk_state *st, char *str, int debug)
 {
 	printf("p %d ", st->data32);
 	printf("%.48s\n", st->name);
@@ -74,38 +73,33 @@ static void status_client(int fd GNUC_UNUSED, struct sanlk_state *st, char *str,
 		print_debug(str, st->str_len);
 }
 
-static void status_lockspace(int fd, struct sanlk_state *st, char *str, int debug)
+static void status_lockspace(struct sanlk_state *st, char *str, char *bin, int debug)
 {
-	struct sanlk_lockspace lockspace;
-	int rv;
-
-	rv = recv(fd, &lockspace, sizeof(lockspace), MSG_WAITALL);
+	struct sanlk_lockspace *ls = (struct sanlk_lockspace *)bin;
 
 	printf("s %.48s:%llu:%s:%llu\n",
-	       lockspace.name,
-	       (unsigned long long)lockspace.host_id,
-	       lockspace.host_id_disk.path,
-	       (unsigned long long)lockspace.host_id_disk.offset);
+	       ls->name,
+	       (unsigned long long)ls->host_id,
+	       ls->host_id_disk.path,
+	       (unsigned long long)ls->host_id_disk.offset);
 
 	if (st->str_len && debug)
 		print_debug(str, st->str_len);
 }
 
-static void status_resource(int fd, struct sanlk_state *st, char *str, int debug)
+static void status_resource(struct sanlk_state *st, char *str, char *bin, int debug)
 {
-	struct sanlk_resource resource;
-	struct sanlk_disk disk;
-	int i, rv;
+	struct sanlk_resource *res = (struct sanlk_resource *)bin;
+	struct sanlk_disk *disk;
+	int i;
 
-	rv = recv(fd, &resource, sizeof(resource), MSG_WAITALL);
+	printf("r %.48s:%.48s", res->lockspace_name, res->name);
 
-	printf("r %.48s:%.48s", resource.lockspace_name, resource.name);
-
-	for (i = 0; i < resource.num_disks; i++) {
-		rv = recv(fd, &disk, sizeof(disk), MSG_WAITALL);
+	for (i = 0; i < res->num_disks; i++) {
+		disk = (struct sanlk_disk *)(bin + sizeof(struct sanlk_resource) + i * sizeof(struct sanlk_disk));
 
 		printf(":%s:%llu",
-		       disk.path, (unsigned long long)disk.offset);
+		       disk->path, (unsigned long long)disk->offset);
 	}
 	printf(":%llu p %u\n", (unsigned long long)st->data64, st->data32);
 
@@ -113,7 +107,7 @@ static void status_resource(int fd, struct sanlk_state *st, char *str, int debug
 		print_debug(str, st->str_len);
 }
 
-static void status_host(int fd GNUC_UNUSED, struct sanlk_state *st, char *str, int debug)
+static void status_host(struct sanlk_state *st, char *str, int debug)
 {
 	printf("%u timestamp %llu\n", st->data32,
 	       (unsigned long long)st->data64);
@@ -122,12 +116,213 @@ static void status_host(int fd GNUC_UNUSED, struct sanlk_state *st, char *str, i
 		print_debug(str, st->str_len);
 }
 
-int sanlock_status(int debug)
+static void print_st(struct sanlk_state *st, char *str, char *bin, int debug)
+{
+	switch (st->type) {
+	case SANLK_STATE_DAEMON:
+		status_daemon(st, str, debug);
+		break;
+	case SANLK_STATE_CLIENT:
+		status_client(st, str, debug);
+		break;
+	case SANLK_STATE_LOCKSPACE:
+		status_lockspace(st, str, bin, debug);
+		break;
+	case SANLK_STATE_RESOURCE:
+		status_resource(st, str, bin, debug);
+		break;
+	}
+}
+
+#define MAX_SORT_ENTRIES 1024
+static char *sort_bufs[MAX_SORT_ENTRIES];
+static int sort_count;
+static int sort_done;
+
+static void print_type(int type, int debug)
+{
+	struct sanlk_state *st;
+	char *buf, *str, *bin;
+	int i;
+
+	for (i = 0; i < sort_count; i++) {
+		buf = sort_bufs[i];
+		if (!buf)
+			continue;
+		st = (struct sanlk_state *)buf;
+		str = buf + sizeof(struct sanlk_state);
+		bin = buf + sizeof(struct sanlk_state) + SANLK_STATE_MAXSTR;
+
+		if (!type || st->type == type) {
+			print_st(st, str, bin, debug);
+			free(buf);
+			sort_bufs[i] = NULL;
+			sort_done++;
+		}
+	}
+}
+
+static void print_p(int p, int debug)
+{
+	struct sanlk_state *st;
+	char *buf, *str, *bin;
+	int i;
+
+	for (i = 0; i < sort_count; i++) {
+		buf = sort_bufs[i];
+		if (!buf)
+			continue;
+		st = (struct sanlk_state *)buf;
+		str = buf + sizeof(struct sanlk_state);
+		bin = buf + sizeof(struct sanlk_state) + SANLK_STATE_MAXSTR;
+
+		if (st->type != SANLK_STATE_CLIENT)
+			continue;
+
+		if (st->data32 == p) {
+			print_st(st, str, bin, debug);
+			free(buf);
+			sort_bufs[i] = NULL;
+			sort_done++;
+		}
+	}
+}
+
+static int find_type(int type, int *sort_index)
+{
+	struct sanlk_state *st;
+	char *buf;
+	int i;
+
+	for (i = 0; i < sort_count; i++) {
+		buf = sort_bufs[i];
+		if (!buf)
+			continue;
+		st = (struct sanlk_state *)buf;
+
+		if (st->type == type) {
+			*sort_index = i;
+			return 0;
+		}
+	}
+	return -1;
+}
+
+static void print_r(int p, char *s, int debug)
+{
+	struct sanlk_resource *res;
+	struct sanlk_state *st;
+	char *buf, *str, *bin;
+	int i;
+
+	for (i = 0; i < sort_count; i++) {
+		buf = sort_bufs[i];
+		if (!buf)
+			continue;
+		st = (struct sanlk_state *)buf;
+		str = buf + sizeof(struct sanlk_state);
+		bin = buf + sizeof(struct sanlk_state) + SANLK_STATE_MAXSTR;
+
+		if (st->type != SANLK_STATE_RESOURCE)
+			continue;
+
+		res = (struct sanlk_resource *)bin;
+
+		if ((p && st->data32 == p) ||
+		    (s && !strncmp(s, res->lockspace_name, SANLK_NAME_LEN))) {
+			print_st(st, str, bin, debug);
+			free(buf);
+			sort_bufs[i] = NULL;
+			sort_done++;
+		}
+	}
+}
+
+static void print_r_by_p(int debug)
+{
+	struct sanlk_state *st;
+	char *buf, *str, *bin;
+	int rv, i;
+
+	while (1) {
+		rv = find_type(SANLK_STATE_CLIENT, &i);
+		if (rv < 0)
+			return;
+
+		buf = sort_bufs[i];
+		st = (struct sanlk_state *)buf;
+		str = buf + sizeof(struct sanlk_state);
+		bin = buf + sizeof(struct sanlk_state) + SANLK_STATE_MAXSTR;
+
+		print_st(st, str, bin, debug);
+
+		print_r(st->data32, NULL, debug);
+
+		free(buf);
+		sort_bufs[i] = NULL;
+		sort_done++;
+	}
+}
+
+static void print_r_by_s(int debug)
+{
+	struct sanlk_state *st;
+	char *buf, *str, *bin;
+	int rv, i;
+
+	while (1) {
+		rv = find_type(SANLK_STATE_LOCKSPACE, &i);
+		if (rv < 0)
+			return;
+
+		buf = sort_bufs[i];
+		st = (struct sanlk_state *)buf;
+		str = buf + sizeof(struct sanlk_state);
+		bin = buf + sizeof(struct sanlk_state) + SANLK_STATE_MAXSTR;
+
+		print_st(st, str, bin, debug);
+
+		print_r(0, st->name, debug);
+
+		free(buf);
+		sort_bufs[i] = NULL;
+		sort_done++;
+	}
+}
+
+static void recv_bin(int fd, struct sanlk_state *st, char *bin)
+{
+	struct sanlk_resource *res;
+
+	if (st->type == SANLK_STATE_LOCKSPACE) {
+		recv(fd, bin, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+
+	} else if (st->type == SANLK_STATE_RESOURCE) {
+		recv(fd, bin, sizeof(struct sanlk_resource), MSG_WAITALL);
+
+		res = (struct sanlk_resource *)bin;
+
+		recv(fd, bin+sizeof(struct sanlk_resource),
+		     res->num_disks * sizeof(struct sanlk_disk),
+		     MSG_WAITALL);
+	}
+}
+
+int sanlock_status(int debug, char sort_arg)
 {
 	struct sm_header h;
-	struct sanlk_state st;
-	char str[SANLK_STATE_MAXSTR];
-	int fd, rv;
+	struct sanlk_state state;
+	char maxstr[SANLK_STATE_MAXSTR];
+	char maxbin[SANLK_STATE_MAXSTR];
+	struct sanlk_state *st;
+	char *buf, *str, *bin;
+	int fd, rv, len;
+	int sort_p = 0, sort_s = 0;
+
+	if (sort_arg == 'p')
+		sort_p = 1;
+	else if (sort_arg == 's')
+		sort_s = 1;
 
 	fd = send_command(SM_CMD_STATUS, 0);
 	if (fd < 0)
@@ -143,34 +338,74 @@ int sanlock_status(int debug)
 		goto out;
 	}
 
+	st = &state;
+	str = maxstr;
+	bin = maxbin;
+
 	while (1) {
-		rv = recv(fd, &st, sizeof(st), MSG_WAITALL);
+		if (sort_p || sort_s) {
+			len = sizeof(struct sanlk_state) + SANLK_STATE_MAXSTR*4;
+			buf = malloc(len);
+			if (!buf)
+				return -ENOMEM;
+			memset(buf, 0, len);
+			st = (struct sanlk_state *)buf;
+			str = buf + sizeof(struct sanlk_state);
+			bin = buf + sizeof(struct sanlk_state) + SANLK_STATE_MAXSTR;
+		} else {
+			memset(&state, 0, sizeof(state));
+			memset(maxstr, 0, sizeof(maxstr));
+			memset(maxbin, 0, sizeof(maxbin));
+		}
+
+		rv = recv(fd, st, sizeof(struct sanlk_state), MSG_WAITALL);
 		if (!rv)
 			break;
-		if (rv != sizeof(st))
+		if (rv != sizeof(struct sanlk_state))
 			break;
 
-		if (st.str_len) {
-			rv = recv(fd, str, st.str_len, MSG_WAITALL);
-			if (rv != st.str_len)
+		if (st->str_len) {
+			rv = recv(fd, str, st->str_len, MSG_WAITALL);
+			if (rv != st->str_len)
 				break;
 		}
 
-		switch (st.type) {
-		case SANLK_STATE_DAEMON:
-			status_daemon(fd, &st, str, debug);
-			break;
-		case SANLK_STATE_CLIENT:
-			status_client(fd, &st, str, debug);
-			break;
-		case SANLK_STATE_LOCKSPACE:
-			status_lockspace(fd, &st, str, debug);
-			break;
-		case SANLK_STATE_RESOURCE:
-			status_resource(fd, &st, str, debug);
-			break;
+		recv_bin(fd, st, bin);
+
+		if (sort_p || sort_s) {
+			if (sort_count == MAX_SORT_ENTRIES) {
+				printf("cannot sort over %d\n", MAX_SORT_ENTRIES);
+				goto out;
+			}
+			sort_bufs[sort_count++] = buf;
+			continue;
+		}
+
+		/* no sorting, print as received */
+
+		print_st(st, str, bin, debug);
+	}
+
+	if (sort_p) {
+		print_type(SANLK_STATE_DAEMON, debug);
+		print_p(-1, debug);
+		print_type(SANLK_STATE_LOCKSPACE, debug);
+		print_r_by_p(debug);
+		if (sort_done < sort_count) {
+			printf("-\n");
+			print_type(0, debug);
+		}
+	} else if (sort_s) {
+		print_type(SANLK_STATE_DAEMON, debug);
+		print_p(-1, debug);
+		print_type(SANLK_STATE_CLIENT, debug);
+		print_r_by_s(debug);
+		if (sort_done < sort_count) {
+			printf("-\n");
+			print_type(0, debug);
 		}
 	}
+
 	rv = 0;
  out:
 	close(fd);
@@ -224,12 +459,12 @@ int sanlock_host_status(int debug, char *lockspace_name)
 
 		switch (st.type) {
 		case SANLK_STATE_HOST:
-			status_host(fd, &st, str, debug);
+			status_host(&st, str, debug);
 			break;
 		}
 	}
 
-	rv = 0;
+	rv = h.data;
  out:
 	close(fd);
 	return rv;

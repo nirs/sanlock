@@ -9,7 +9,7 @@
 #ifndef __CLIENT_CMD_H__
 #define __CLIENT_CMD_H__
 
-int sanlock_status(int debug);
+int sanlock_status(int debug, char sort_arg);
 int sanlock_host_status(int debug, char *lockspace_name);
 int sanlock_log_dump(void);
 int sanlock_shutdown(void);

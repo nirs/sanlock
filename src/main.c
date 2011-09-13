@@ -2027,7 +2027,7 @@ static int print_state_resource(struct resource *r, char *str, const char *list_
 		 "list=%s "
 		 "flags=%x "
 		 "lver=%llu "
-		 "token_id=%u ",
+		 "token_id=%u",
 		 list_name,
 		 r->flags,
 		 (unsigned long long)r->lver,
@@ -2046,7 +2046,7 @@ static int print_state_host(struct host_status *hs, char *str)
 		 "last_req=%llu "
 		 "owner_id=%llu "
 		 "owner_generation=%llu "
-		 "timestamp=%llu ",
+		 "timestamp=%llu",
 		 (unsigned long long)hs->last_check,
 		 (unsigned long long)hs->last_live,
 		 (unsigned long long)hs->last_req,
@@ -2255,12 +2255,18 @@ static void cmd_host_status(int fd, struct sm_header *h_recv)
 		goto fail;
 	}
 
-	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
-
 	pthread_mutex_lock(&spaces_mutex);
 	sp = find_lockspace(lockspace.name);
-	memcpy(status, &sp->host_status, status_len);
+	if (sp)
+		memcpy(status, &sp->host_status, status_len);
 	pthread_mutex_unlock(&spaces_mutex);
+
+	if (!sp) {
+		h.data = -ENOSPC;
+		goto fail;
+	}
+
+	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
 
 	for (i = 0; i < DEFAULT_MAX_HOSTS; i++) {
 		hs = &status[i];
@@ -3007,7 +3013,7 @@ static void print_usage(void)
 	printf("  -o 0|1        io timeout in seconds (%d)\n", DEFAULT_IO_TIMEOUT);
 	printf("\n");
 	printf("sanlock client <action> [options]\n");
-	printf("sanlock client status [-D]\n");
+	printf("sanlock client status [-D] [-o p|s]\n");
 	printf("sanlock client host_status -s LOCKSPACE [-D]\n");
 	printf("sanlock client log_dump\n");
 	printf("sanlock client shutdown\n");
@@ -3231,9 +3237,13 @@ static int read_command_line(int argc, char *argv[])
 			com.high_priority = atoi(optionarg);
 			break;
 		case 'o':
-			com.io_timeout_arg = atoi(optionarg);
-			if (!com.io_timeout_arg)
-				com.io_timeout_arg = DEFAULT_IO_TIMEOUT;
+			if (com.action == ACT_STATUS) {
+				com.sort_arg = *optionarg;
+			} else {
+				com.io_timeout_arg = atoi(optionarg);
+				if (!com.io_timeout_arg)
+					com.io_timeout_arg = DEFAULT_IO_TIMEOUT;
+			}
 			break;
 		case 'n':
 			com.num_hosts = atoi(optionarg);
@@ -3344,7 +3354,7 @@ static int do_client(void)
 
 	switch (com.action) {
 	case ACT_STATUS:
-		rv = sanlock_status(com.debug);
+		rv = sanlock_status(com.debug, com.sort_arg);
 		break;
 
 	case ACT_HOST_STATUS:

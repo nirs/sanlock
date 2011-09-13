@@ -492,6 +492,7 @@ struct command_line {
 	int uid;				/* -U */
 	int gid;				/* -G */
 	int pid;				/* -p */
+	char sort_arg;
 	uint64_t local_host_id;			/* -i */
 	uint64_t local_host_generation;		/* -g */
 	int num_hosts;				/* -n */
