@@ -440,15 +440,35 @@ static void *resource_thread(void *arg GNUC_UNUSED)
 				continue;
 			}
 
-			if (req.force_mode == SANLK_REQ_KILL_PID) {
-				/* look up r again to check it still exists and
-				   pid is same? */
+			/*
+			 * TODO: add force_mode SANLK_REQ_KILL_PID_OR_RESET
+			 * which would attempt to kill the pid like KILL_PID,
+			 * but if the pid doesn't exit will block watchdog
+			 * updates to reset the host.
+			 * Here set r->block_wd_time = now + pid_exit_time,
+			 * In renewal check for any r in resources with
+			 * block_wd_time <= now, and if found will not
+			 * update the watchdog.  If the pid continues to
+			 * not exit, the wd will fire and reset the machine.
+			 * If the pid exits before pid_exit_time, no wd
+			 * updates will be skipped.
+			 */
 
-				log_error("req_kill_pid %d %.48s:%.48s", pid,
+			if (req.force_mode == SANLK_REQ_KILL_PID) {
+				/* look up r again? verify it exists and pid same */
+
+				log_debug("req force_mode %u pid %d %.48s:%.48s",
+					  req.force_mode, pid,
 					  tt->r.lockspace_name, tt->r.name);
+
+				/* TODO: share code with kill_pids() to gradually
+				 * escalate from killscript, SIGTERM, SIGKILL */
+
+				kill(pid, SIGTERM);
+				sleep(1);
 				kill(pid, SIGKILL);
 			} else {
-				log_error("req force_mode unknown %u", req.force_mode);
+				log_error("req force_mode %u unknown", req.force_mode);
 			}
 		}
 	}

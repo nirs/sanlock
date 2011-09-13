@@ -519,6 +519,7 @@ static void *lockspace_thread(void *arg_in)
 
 		/*
 		 * pet the watchdog
+		 * (don't update on thread_stop because it's probably unlinked)
 		 */
 
 		if (delta_result == SANLK_OK && !sp->thread_stop)
@@ -543,7 +544,9 @@ static void *lockspace_thread(void *arg_in)
 		}
 	}
 
-	/* unlink called below to get it done ASAP */
+	/* watchdog unlink was done in main_loop when thread_stop was set, to
+	   get it done as quickly as possible in case the wd is about to fire. */
+
 	close_watchdog_file(sp);
  out:
 	if (delta_result == SANLK_OK)
