@@ -58,6 +58,18 @@ do { \
 	printf("ERROR %llu " fmt "\n", (unsigned long long)time(NULL), ##args); \
 } while (0)
 
+static void sigterm_handler(int sig)
+{
+	log_debug("sigterm_handler %d", sig);
+}
+
+static void setup_sigterm(void)
+{
+	struct sigaction act;
+	memset(&act, 0, sizeof(act));
+	act.sa_handler = sigterm_handler;
+	sigaction(SIGTERM, &act, NULL);
+}
 
 static int kill_pid(int pid)
 {
@@ -836,6 +848,13 @@ static int do_wrap(int argc, char *argv[])
 		exit(-1);
 	}
 
+	rv = sanlock_restrict(sock, SANLK_RESTRICT_SIGKILL);
+	if (rv < 0) {
+		log_error("%s c %d sanlock_restrict error %d",
+			  count_path, pid, sock);
+		exit(-1);
+	}
+
 	rv = sanlock_acquire(sock, -1, 0, 1, &res, NULL);
 	if (rv < 0) {
 		log_error("%s c %d sanlock_acquire error %d",
@@ -1488,6 +1507,12 @@ int main(int argc, char *argv[])
 
 	else if (!strcmp(argv[1], "rw") || !strcmp(argv[1], "wr"))
 		rv = do_count(argc, argv);
+
+	else if (!strcmp(argv[1], "rwsig")) {
+		setup_sigterm();
+		argv[1] = "rw";
+		rv = do_count(argc, argv);
+	}
 
 	else if (!strcmp(argv[1], "lock"))
 		rv = do_lock(argc, argv);

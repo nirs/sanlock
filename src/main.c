@@ -66,7 +66,7 @@ struct client {
 	int suspend;
 	int need_free;
 	int killing;
-	uint32_t cmd_flags;
+	uint32_t restrict;
 	char owner_name[SANLK_NAME_LEN+1];
 	pthread_mutex_t mutex;
 	void *workfn;
@@ -183,7 +183,7 @@ static void _client_free(int ci)
 	cl->suspend = 0;
 	cl->need_free = 0;
 	cl->killing = 0;
-	cl->cmd_flags = 0;
+	cl->restrict = 0;
 	memset(cl->owner_name, 0, sizeof(cl->owner_name));
 	cl->workfn = NULL;
 	cl->deadfn = NULL;
@@ -432,7 +432,7 @@ static void kill_pids(struct space *sp)
 {
 	struct client *cl;
 	int ci, pid;
-	int sig = SIGTERM;
+	int sig;
 	int found = 0;
 
 	log_space(sp, "kill_pids %d", sp->killing_pids);
@@ -447,8 +447,6 @@ static void kill_pids(struct space *sp)
 		goto do_dump;
 	}
 
-	if (sp->killing_pids > 1)
-		sig = SIGKILL;
 	sp->killing_pids++;
 
 	for (ci = 0; ci <= client_maxi; ci++) {
@@ -463,6 +461,11 @@ static void kill_pids(struct space *sp)
 			goto unlock;
 		if (!client_using_space(cl, sp))
 			goto unlock;
+
+		if (!(cl->restrict & SANLK_RESTRICT_SIGKILL) && cl->killing > 1)
+			sig = SIGKILL;
+		else
+			sig = SIGTERM;
 
 		pid = cl->pid;
 		cl->killing++;
@@ -777,6 +780,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 	char *opt_str;
 	uint64_t acquire_lver = 0;
 	uint32_t new_num_hosts = 0;
+	uint32_t cl_restrict;
 	int token_len, disks_len;
 	int fd, rv, i, j, empty_slots;
 	int alloc_count = 0, add_count = 0, acquire_count = 0;
@@ -809,6 +813,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 		pthread_mutex_unlock(&cl->mutex);
 		goto done;
 	}
+	cl_restrict = cl->restrict;
 
 	empty_slots = 0;
 	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
@@ -962,7 +967,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 
 	for (i = 0; i < new_tokens_count; i++) {
 		token = new_tokens[i];
-		rv = add_resource(token, cl_pid);
+		rv = add_resource(token, cl_pid, cl_restrict);
 		if (rv < 0) {
 			if (!com.quiet_fail)
 				log_errot(token, "cmd_acquire %d,%d,%d add_resource %d",
@@ -1967,6 +1972,7 @@ static int print_state_client(struct client *cl, int ci, char *str)
 		 "ci=%d "
 		 "fd=%d "
 		 "pid=%d "
+		 "restrict=%x "
 		 "cmd_active=%d "
 		 "cmd_last=%d "
 		 "pid_dead=%d "
@@ -1976,6 +1982,7 @@ static int print_state_client(struct client *cl, int ci, char *str)
 		 ci,
 		 cl->fd,
 		 cl->pid,
+		 cl->restrict,
 		 cl->cmd_active,
 		 cl->cmd_last,
 		 cl->pid_dead,
@@ -2297,7 +2304,7 @@ static void cmd_restrict(int ci, int fd, struct sm_header *h_recv)
 	log_debug("cmd_restrict ci %d fd %d pid %d flags %x",
 		  ci, fd, client[ci].pid, h_recv->cmd_flags);
 
-	client[ci].cmd_flags = h_recv->cmd_flags;
+	client[ci].restrict = h_recv->cmd_flags;
 
 	send_result(fd, h_recv, 0);
 }
@@ -2532,7 +2539,7 @@ static void process_connection(int ci)
 			  ci, rv, h.magic, SM_MAGIC);
 		goto dead;
 	}
-	if (client[ci].cmd_flags & SANLK_RESTRICT_ALL) {
+	if (client[ci].restrict & SANLK_RESTRICT_ALL) {
 		log_error("ci %d fd %d pid %d cmd %d restrict all",
 			  ci, client[ci].fd, client[ci].pid, h.cmd);
 		goto dead;

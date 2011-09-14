@@ -98,7 +98,7 @@ static void save_resource_lver(struct token *token, uint64_t lver)
 
 }
 
-int add_resource(struct token *token, int pid)
+int add_resource(struct token *token, int pid, uint32_t cl_restrict)
 {
 	struct resource *r;
 	int rv, disks_len, r_len;
@@ -135,6 +135,8 @@ int add_resource(struct token *token, int pid)
 	r->token_id = token->token_id;
 	r->token = token;
 	r->pid = pid;
+	if (cl_restrict & SANLK_RESTRICT_SIGKILL)
+		r->flags |= R_NO_SIGKILL;
 	list_add_tail(&r->list, &resources);
 	rv = 0;
  out:
@@ -343,6 +345,55 @@ static int examine_token(struct task *task, struct token *token,
 	return rv;
 }
 
+static void do_req_kill_pid(struct token *tt, int pid)
+{
+	struct resource *r;
+	uint32_t flags;
+	int found = 0;
+
+	pthread_mutex_lock(&resource_mutex);
+	r = find_resource(tt, &resources);
+	if (r && r->pid == pid) {
+		found = 1;
+		flags = r->flags;
+	}
+	pthread_mutex_unlock(&resource_mutex);
+
+	if (!found) {
+		log_error("req pid %d %.48s:%.48s not found",
+			   pid, tt->r.lockspace_name, tt->r.name);
+		return;
+	}
+
+	log_debug("do_req_kill_pid %d flags %x %.48s:%.48s",
+		  pid, flags, tt->r.lockspace_name, tt->r.name);
+
+	/* TODO: share code with kill_pids() to gradually
+	 * escalate from killscript, SIGTERM, SIGKILL */
+
+	kill(pid, SIGTERM);
+
+	if (flags & R_NO_SIGKILL)
+		return;
+
+	sleep(1);
+	kill(pid, SIGKILL);
+}
+
+/*
+ * TODO? add force_mode SANLK_REQ_KILL_PID_OR_RESET
+ * which would attempt to kill the pid like KILL_PID,
+ * but if the pid doesn't exit will block watchdog
+ * updates to reset the host.
+ * Here set r->block_wd_time = now + pid_exit_time,
+ * In renewal check for any r in resources with
+ * block_wd_time <= now, and if found will not
+ * update the watchdog.  If the pid continues to
+ * not exit, the wd will fire and reset the machine.
+ * If the pid exits before pid_exit_time, no wd
+ * updates will be skipped.
+ */
+
 /*
  * - releases tokens of pid's that die
  * - examines request blocks of resources
@@ -440,33 +491,8 @@ static void *resource_thread(void *arg GNUC_UNUSED)
 				continue;
 			}
 
-			/*
-			 * TODO: add force_mode SANLK_REQ_KILL_PID_OR_RESET
-			 * which would attempt to kill the pid like KILL_PID,
-			 * but if the pid doesn't exit will block watchdog
-			 * updates to reset the host.
-			 * Here set r->block_wd_time = now + pid_exit_time,
-			 * In renewal check for any r in resources with
-			 * block_wd_time <= now, and if found will not
-			 * update the watchdog.  If the pid continues to
-			 * not exit, the wd will fire and reset the machine.
-			 * If the pid exits before pid_exit_time, no wd
-			 * updates will be skipped.
-			 */
-
 			if (req.force_mode == SANLK_REQ_KILL_PID) {
-				/* look up r again? verify it exists and pid same */
-
-				log_debug("req force_mode %u pid %d %.48s:%.48s",
-					  req.force_mode, pid,
-					  tt->r.lockspace_name, tt->r.name);
-
-				/* TODO: share code with kill_pids() to gradually
-				 * escalate from killscript, SIGTERM, SIGKILL */
-
-				kill(pid, SIGTERM);
-				sleep(1);
-				kill(pid, SIGKILL);
+				do_req_kill_pid(tt, pid);
 			} else {
 				log_error("req force_mode %u unknown", req.force_mode);
 			}

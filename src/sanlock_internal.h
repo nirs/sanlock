@@ -90,6 +90,7 @@ struct token {
 };
 
 #define R_EXAMINE    0x00000001
+#define R_NO_SIGKILL 0x00000002
 
 struct resource {
 	struct list_head list;
