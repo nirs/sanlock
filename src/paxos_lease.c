@@ -1144,7 +1144,7 @@ int paxos_lease_acquire(struct task *task,
 
 		if (host_id_leader.owner_id != cur_leader.owner_id ||
 		    host_id_leader.owner_generation > cur_leader.owner_generation) {
-			log_errot(token, "paxos_acquire owner %llu %llu %llu "
+			log_token(token, "paxos_acquire owner %llu %llu %llu "
 				  "delta %llu %llu %llu mismatch",
 				  (unsigned long long)cur_leader.owner_id,
 				  (unsigned long long)cur_leader.owner_generation,

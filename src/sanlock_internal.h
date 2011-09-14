@@ -468,6 +468,31 @@ struct task {
 
 EXTERN struct task main_task;
 
+struct client {
+	int used;
+	int fd;  /* unset is -1 */
+	int pid; /* unset is -1 */
+	int cmd_active;
+	int cmd_last;
+	int pid_dead;
+	int suspend;
+	int need_free;
+	int killing;
+	uint32_t restrict;
+	char owner_name[SANLK_NAME_LEN+1];
+	pthread_mutex_t mutex;
+	void *workfn;
+	void *deadfn;
+	struct token *tokens[SANLK_MAX_RESOURCES];
+};
+
+/*
+ * client array is only touched by main_loop, there is no lock for it.
+ * individual cl structs are accessed by worker threads using cl->mutex
+ */
+
+EXTERN struct client *client;
+
 #define WATCHDOG_FIRE_TIMEOUT 60
 #define DEFAULT_USE_AIO 1
 #define DEFAULT_IO_TIMEOUT 10
