@@ -431,11 +431,11 @@ struct space {
  * The delta lease algorithm expects real io timeouts.
  */
 
-#define HOSTID_AIO_CB_SIZE 64
-#define WORKER_AIO_CB_SIZE 8
-#define DIRECT_AIO_CB_SIZE 8
-#define RESOURCE_AIO_CB_SIZE 64
-#define LIB_AIO_CB_SIZE 8
+#define HOSTID_AIO_CB_SIZE 4
+#define WORKER_AIO_CB_SIZE 2
+#define DIRECT_AIO_CB_SIZE 1
+#define RESOURCE_AIO_CB_SIZE 2
+#define LIB_AIO_CB_SIZE 1
 
 struct aicb {
 	int used;
