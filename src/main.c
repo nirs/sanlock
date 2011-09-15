@@ -417,15 +417,27 @@ static int client_using_space(struct client *cl, struct space *sp)
 		if (strncmp(token->r.lockspace_name, sp->space_name, NAME_ID_SIZE))
 			continue;
 
-		log_spoke(sp, token, "client_using_space pid %d", cl->pid);
+		if (cl->killing < 10)
+			log_spoke(sp, token, "client_using_space pid %d", cl->pid);
 		token->space_dead = sp->space_dead;
 		rv = 1;
 	}
 	return rv;
 }
 
-/* FIXME: remove the usleep which intends to give the pid some time to exit so
-   we avoid calling kill_pids in quick repetition */
+/*
+ * TODO: move to time-based kill tracking instead of repetition based, e.g.
+ * kill pid once a second until a max pid_exit_wait after which we quit
+ * trying to kill it.  half way through pid_exit_wait shift from SIGTERM
+ * to SIGKILL (if no restriction).
+ *
+ * sp->killing pids begins at 1
+ * don't increment sp->killing pids each time
+ * when all clients have gone past pid_exit_wait, set sp->killing_pids to 2
+ * when sp->killing_pids is 2, then return immediately from kill_pids()
+ *
+ * Remove the usleep delay after a kill.
+ */
 
 static void kill_pids(struct space *sp)
 {
@@ -434,12 +446,12 @@ static void kill_pids(struct space *sp)
 	int sig;
 	int found = 0;
 
-	log_space(sp, "kill_pids %d", sp->killing_pids);
-
 	/* TODO: try killscript first if one is provided */
 
 	if (sp->killing_pids > 11)
 		return;
+
+	log_space(sp, "kill_pids %d", sp->killing_pids);
 
 	if (sp->killing_pids > 10) {
 		sp->killing_pids++;
@@ -514,8 +526,10 @@ static int all_pids_dead(struct space *sp)
 		pthread_mutex_unlock(&cl->mutex);
 
 		if (pid > 0) {
-			log_space(sp, "used by pid %d killing %d",
-				  pid, cl->killing);
+			if (cl->killing < 10) {
+				log_space(sp, "used by pid %d killing %d",
+					  pid, cl->killing);
+			}
 			return 0;
 		}
 	}
