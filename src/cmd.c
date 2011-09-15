@@ -1219,7 +1219,8 @@ static int print_state_client(struct client *cl, int ci, char *str)
 		 "cmd_active=%d "
 		 "cmd_last=%d "
 		 "pid_dead=%d "
-		 "killing=%d "
+		 "kill_count=%d "
+		 "kill_last=%llu "
 		 "suspend=%d "
 		 "need_free=%d",
 		 ci,
@@ -1229,7 +1230,8 @@ static int print_state_client(struct client *cl, int ci, char *str)
 		 cl->cmd_active,
 		 cl->cmd_last,
 		 cl->pid_dead,
-		 cl->killing,
+		 cl->kill_count,
+		 (unsigned long long)cl->kill_last,
 		 cl->suspend,
 		 cl->need_free);
 

@@ -150,7 +150,8 @@ static void _client_free(int ci)
 	cl->pid_dead = 0;
 	cl->suspend = 0;
 	cl->need_free = 0;
-	cl->killing = 0;
+	cl->kill_count = 0;
+	cl->kill_last = 0;
 	cl->restrict = 0;
 	memset(cl->owner_name, 0, sizeof(cl->owner_name));
 	cl->workfn = NULL;
@@ -417,7 +418,7 @@ static int client_using_space(struct client *cl, struct space *sp)
 		if (strncmp(token->r.lockspace_name, sp->space_name, NAME_ID_SIZE))
 			continue;
 
-		if (cl->killing < 10)
+		if (!cl->kill_count)
 			log_spoke(sp, token, "client_using_space pid %d", cl->pid);
 		token->space_dead = sp->space_dead;
 		rv = 1;
@@ -425,92 +426,89 @@ static int client_using_space(struct client *cl, struct space *sp)
 	return rv;
 }
 
-/*
- * TODO: move to time-based kill tracking instead of repetition based, e.g.
- * kill pid once a second until a max pid_exit_wait after which we quit
- * trying to kill it.  half way through pid_exit_wait shift from SIGTERM
- * to SIGKILL (if no restriction).
- *
- * sp->killing pids begins at 1
- * don't increment sp->killing pids each time
- * when all clients have gone past pid_exit_wait, set sp->killing_pids to 2
- * when sp->killing_pids is 2, then return immediately from kill_pids()
- *
- * Remove the usleep delay after a kill.
- */
+/* TODO: try killscript first if one is provided */
 
 static void kill_pids(struct space *sp)
 {
 	struct client *cl;
-	int ci, pid;
-	int sig;
-	int found = 0;
+	uint64_t now;
+	int ci, fd, pid, sig;
+	int do_kill;
 
-	/* TODO: try killscript first if one is provided */
-
-	if (sp->killing_pids > 11)
+	/*
+	 * all remaining pids using sp are stuck, we've made max attempts to
+	 * kill all, don't bother cycling through them
+	 */
+	if (sp->killing_pids > 1)
 		return;
 
-	log_space(sp, "kill_pids %d", sp->killing_pids);
-
-	if (sp->killing_pids > 10) {
-		sp->killing_pids++;
-		goto do_dump;
-	}
-
-	sp->killing_pids++;
+	now = monotime();
 
 	for (ci = 0; ci <= client_maxi; ci++) {
-		pid = -1;
+		do_kill = 0;
 
 		cl = &client[ci];
 		pthread_mutex_lock(&cl->mutex);
 
 		if (!cl->used)
 			goto unlock;
+
 		if (cl->pid <= 0)
 			goto unlock;
+
+		/* NB this cl may not be using sp, but trying to
+		   avoid the expensive client_using_space check */
+
+		if (cl->kill_count >= main_task.kill_count_max)
+			goto unlock;
+
+		if (cl->kill_count && (now - cl->kill_last < 1))
+			goto unlock;
+
 		if (!client_using_space(cl, sp))
 			goto unlock;
 
-		if (!(cl->restrict & SANLK_RESTRICT_SIGKILL) && cl->killing > 1)
-			sig = SIGKILL;
-		else
-			sig = SIGTERM;
+		cl->kill_last = now;
+		cl->kill_count++;
 
+		fd = cl->fd;
 		pid = cl->pid;
-		cl->killing++;
-		found++;
+
+		if (cl->restrict & SANLK_RESTRICT_SIGKILL)
+			sig = SIGTERM;
+		else if (cl->restrict & SANLK_RESTRICT_SIGTERM)
+			sig = SIGKILL;
+		else if (cl->kill_count <= main_task.kill_count_term)
+			sig = SIGTERM;
+		else
+			sig = SIGKILL;
+
+		do_kill = 1;
  unlock:
 		pthread_mutex_unlock(&cl->mutex);
 
-		if (pid > 0)
-			kill(pid, sig);
-	}
+		if (!do_kill)
+			continue;
 
-	if (found) {
-		log_space(sp, "kill_pids %d found %d pids", sig, found);
-		usleep(500000);
-	}
-
-	return;
-
- do_dump:
-	for (ci = 0; ci <= client_maxi; ci++) {
-		if (client[ci].pid && client[ci].killing) {
-			log_error("kill_pids %d stuck", client[ci].pid);
+		if (cl->kill_count == main_task.kill_count_max) {
+			log_erros(sp, "kill %d,%d,%d sig %d count %d final attempt",
+				  ci, fd, pid, sig, cl->kill_count);
+		} else {
+			log_space(sp, "kill %d,%d,%d sig %d count %d",
+				  ci, fd, pid, sig, cl->kill_count);
 		}
+
+		kill(pid, sig);
 	}
 }
 
 static int all_pids_dead(struct space *sp)
 {
 	struct client *cl;
-	int ci, pid;
+	int stuck = 0, check = 0;
+	int ci;
 
 	for (ci = 0; ci <= client_maxi; ci++) {
-		pid = -1;
-
 		cl = &client[ci];
 		pthread_mutex_lock(&cl->mutex);
 
@@ -521,18 +519,23 @@ static int all_pids_dead(struct space *sp)
 		if (!client_using_space(cl, sp))
 			goto unlock;
 
-		pid = cl->pid;
+		if (cl->kill_count >= main_task.kill_count_max)
+			stuck++;
+		else
+			check++;
  unlock:
 		pthread_mutex_unlock(&cl->mutex);
-
-		if (pid > 0) {
-			if (cl->killing < 10) {
-				log_space(sp, "used by pid %d killing %d",
-					  pid, cl->killing);
-			}
-			return 0;
-		}
 	}
+
+	if (stuck && !check && sp->killing_pids < 2) {
+		log_erros(sp, "killing pids stuck %d", stuck);
+		/* cause kill_pids to give up */
+		sp->killing_pids = 2;
+	}
+
+	if (stuck || check)
+		return 0;
+
 	log_space(sp, "used by no pids");
 	return 1;
 }
@@ -887,9 +890,9 @@ static void process_cmd_thread_registered(int ci_in, struct sm_header *h_recv)
 		goto out;
 	}
 
-	if (cl->killing) {
-		log_error("cmd %d %d,%d,%d killing",
-			  h_recv->cmd, ci_target, cl->fd, cl->pid);
+	if (cl->kill_count) {
+		log_error("cmd %d %d,%d,%d kill_count %d",
+			  h_recv->cmd, ci_target, cl->fd, cl->pid, cl->kill_count);
 		result = -EBUSY;
 		goto out;
 	}

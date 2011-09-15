@@ -53,13 +53,24 @@ void setup_task_timeouts(struct task *task, int io_timeout_arg)
 	int paxos_acquire_held_min = host_dead_seconds;
 	int paxos_acquire_free_max = 6 * io_timeout_seconds;
 	int paxos_acquire_free_min = 0;
+	int request_finish_seconds = 3 * id_renewal_seconds; /* random */
 
 	task->io_timeout_seconds = io_timeout_seconds;
 	task->id_renewal_seconds = id_renewal_seconds;
 	task->id_renewal_fail_seconds = id_renewal_fail_seconds;
 	task->id_renewal_warn_seconds = id_renewal_warn_seconds;
 	task->host_dead_seconds = host_dead_seconds;
-	task->request_finish_seconds = 3 * id_renewal_seconds; /* random */
+	task->request_finish_seconds = request_finish_seconds;
+
+	/* interval between each kill count is approx 1 sec, so we
+	   spend about 10 seconds sending 10 SIGTERMs to a pid,
+	   then send SIGKILLs to it. after 60 attempts the watchdog
+	   should have fired if the kills are due to failed renewal;
+	   otherwise we just give up at that point */
+
+	task->kill_count_term = 10;
+	task->kill_count_max = 60;
+
 	/* the rest are calculated as needed in place */
 
 	/* hack to make just main thread log this info */
@@ -84,6 +95,7 @@ void setup_task_timeouts(struct task *task, int io_timeout_arg)
 	log_debug("paxos_acquire_held_min %d", paxos_acquire_held_min);
 	log_debug("paxos_acquire_free_max %d", paxos_acquire_free_max);
 	log_debug("paxos_acquire_free_min %d", paxos_acquire_free_min);
+	log_debug("request_finish_seconds %d", request_finish_seconds);
 }
 
 void setup_task_aio(struct task *task, int use_aio, int cb_size)

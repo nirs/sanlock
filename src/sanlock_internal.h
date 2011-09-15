@@ -450,10 +450,10 @@ struct task {
 	int id_renewal_seconds;      /* configured */
 	int id_renewal_fail_seconds; /* configured */
 	int id_renewal_warn_seconds; /* configured */
-
 	int host_dead_seconds;       /* calculated */
-
 	int request_finish_seconds;  /* calculated */
+	int kill_count_term;         /* constant */
+	int kill_count_max;          /* constant */
 
 	unsigned int io_count;       /* stats */
 	unsigned int to_count;       /* stats */
@@ -477,8 +477,9 @@ struct client {
 	int pid_dead;
 	int suspend;
 	int need_free;
-	int killing;
+	int kill_count;
 	uint32_t restrict;
+	uint64_t kill_last;
 	char owner_name[SANLK_NAME_LEN+1];
 	pthread_mutex_t mutex;
 	void *workfn;

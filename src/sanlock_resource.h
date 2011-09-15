@@ -23,6 +23,7 @@
 /* restrict flags */
 #define SANLK_RESTRICT_ALL	0x00000001
 #define SANLK_RESTRICT_SIGKILL	0x00000002
+#define SANLK_RESTRICT_SIGTERM	0x00000004
 
 /* release flags */
 #define SANLK_REL_ALL		0x00000001
