@@ -25,7 +25,7 @@
 #include "diskio.h"
 #include "direct.h"
 #include "log.h"
-#include "host_id.h"
+#include "lockspace.h"
 #include "delta_lease.h"
 #include "paxos_lease.h"
 

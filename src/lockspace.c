@@ -28,11 +28,11 @@
 #include "diskio.h"
 #include "log.h"
 #include "delta_lease.h"
-#include "host_id.h"
+#include "lockspace.h"
+#include "resource.h"
 #include "watchdog.h"
 #include "task.h"
 #include "direct.h"
-#include "token_manager.h"
 
 static uint32_t space_id_counter = 1;
 

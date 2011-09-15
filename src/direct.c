@@ -25,7 +25,7 @@
 #include "sanlock_internal.h"
 #include "diskio.h"
 #include "log.h"
-#include "token_manager.h"
+#include "resource.h"
 #include "direct.h"
 #include "paxos_lease.h"
 #include "delta_lease.h"

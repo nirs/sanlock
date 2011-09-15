@@ -27,9 +27,9 @@
 #include "diskio.h"
 #include "log.h"
 #include "paxos_lease.h"
-#include "token_manager.h"
+#include "lockspace.h"
+#include "resource.h"
 #include "task.h"
-#include "host_id.h"
 
 static pthread_t resource_pt;
 static int resource_thread_stop;

@@ -21,13 +21,13 @@ CMD_SOURCE = \
 	delta_lease.c \
 	direct.c \
 	diskio.c \
-	host_id.c \
+	lockspace.c \
 	lockfile.c \
 	log.c \
 	main.c \
 	paxos_lease.c \
 	task.c \
-	token_manager.c \
+	resource.c \
 	watchdog.c \
 	monotime.c \
 	cmd.c \
