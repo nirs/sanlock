@@ -35,7 +35,7 @@
 
 #define DEFAULT_MAX_HOSTS 2000
 
-#define SM_LOG_DUMP_SIZE (1024*1024)
+#define LOG_DUMP_SIZE (1024*1024)
 
 /* this is just the path to the executable, not full command line */
 

@@ -1708,7 +1708,7 @@ static int do_client(void)
 		break;
 
 	case ACT_LOG_DUMP:
-		rv = sanlock_log_dump();
+		rv = sanlock_log_dump(LOG_DUMP_SIZE);
 		break;
 
 	case ACT_SHUTDOWN:

@@ -470,15 +470,22 @@ int sanlock_host_status(int debug, char *lockspace_name)
 	return rv;
 }
 
-int sanlock_log_dump(void)
+int sanlock_log_dump(int max_size)
 {
 	struct sm_header h;
-	char buf[4096];
+	char *buf;
 	int fd, rv;
 
+	buf = malloc(max_size);
+	if (!buf)
+		return -ENOMEM;
+	memset(buf, 0, max_size);
+
 	fd = send_command(SM_CMD_LOG_DUMP, 0);
-	if (fd < 0)
+	if (fd < 0) {
+		free(buf);
 		return fd;
+	}
 
 	memset(&h, 0, sizeof(h));
 
@@ -492,20 +499,27 @@ int sanlock_log_dump(void)
 		goto out;
 	}
 
+	if (h.data <= 0 || h.data > max_size)
+		goto out;
 
-	while (1) {
-		memset(buf, 0, sizeof(buf));
-
-		rv = recv(fd, buf, sizeof(buf) - 1, MSG_WAITALL);
-
-		if (rv > 0)
-			printf("%s", buf);
-		else
-			break;
+	rv = recv(fd, buf, h.data, MSG_WAITALL);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
 	}
+	if (!rv) {
+		rv = -1;
+		goto out;
+	}
+
+	printf("%s", buf);
 	printf("\n");
+
+	if (rv != h.data)
+		printf("partial dump %d of %d\n", rv, h.data);
  out:
 	close(fd);
+	free(buf);
 	return rv;
 }
 

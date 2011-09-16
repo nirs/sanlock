@@ -33,7 +33,7 @@ static pthread_t thread_handle;
 static pthread_mutex_t log_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t log_cond = PTHREAD_COND_INITIALIZER;
 
-static char log_dump[SM_LOG_DUMP_SIZE];
+static char log_dump[LOG_DUMP_SIZE];
 static unsigned int log_point;
 static unsigned int log_wrap;
 
@@ -42,9 +42,9 @@ struct entry {
 	char str[LOG_STR_LEN];
 };
 
-#define SM_LOG_DEFAULT_ENTRIES 4096
+#define LOG_DEFAULT_ENTRIES 4096
 static struct entry *log_ents;
-static unsigned int log_num_ents = SM_LOG_DEFAULT_ENTRIES;
+static unsigned int log_num_ents = LOG_DEFAULT_ENTRIES;
 static unsigned int log_head_ent; /* add at head */
 static unsigned int log_tail_ent; /* remove from tail */
 static unsigned int log_dropped;
@@ -62,10 +62,21 @@ static void _log_save_dump(int level GNUC_UNUSED, int len)
 {
 	int i;
 
+	if (len < LOG_DUMP_SIZE - log_point) {
+		memcpy(log_dump+log_point, log_str, len);
+		log_point += len;
+
+		if (log_point == LOG_DUMP_SIZE) {
+			log_point = 0;
+			log_wrap = 1;
+		}
+		return;
+	}
+
 	for (i = 0; i < len; i++) {
 		log_dump[log_point++] = log_str[i];
 
-		if (log_point == SM_LOG_DUMP_SIZE) {
+		if (log_point == LOG_DUMP_SIZE) {
 			log_point = 0;
 			log_wrap = 1;
 		}
@@ -175,17 +186,24 @@ static void write_dropped(int level, int num)
 	write_entry(level, str);
 }
 
-void write_log_dump(int fd)
+void copy_log_dump(char *buf, int *len)
 {
+	int tail_len;
+
 	pthread_mutex_lock(&log_mutex);
 
-	if (log_wrap)
-		send(fd, log_dump + log_point, SM_LOG_DUMP_SIZE - log_point, MSG_DONTWAIT);
-
-	log_dump[log_point] = '\0';
-
-	send(fd, log_dump, log_point, MSG_DONTWAIT);
-
+	if (!log_wrap && !log_point) {
+		*len = 0;
+	} else if (log_wrap) {
+		tail_len = LOG_DUMP_SIZE - log_point;
+		memcpy(buf, log_dump+log_point, tail_len);
+		if (log_point)
+			memcpy(buf+tail_len, log_dump, log_point);
+		*len = LOG_DUMP_SIZE;
+	} else {
+		memcpy(buf, log_dump, log_point-1);
+		*len = log_point-1;
+	}
 	pthread_mutex_unlock(&log_mutex);
 }
 

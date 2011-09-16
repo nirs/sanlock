@@ -11,7 +11,7 @@
 
 int sanlock_status(int debug, char sort_arg);
 int sanlock_host_status(int debug, char *lockspace_name);
-int sanlock_log_dump(void);
+int sanlock_log_dump(int max_size);
 int sanlock_shutdown(void);
 
 #endif

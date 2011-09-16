@@ -14,7 +14,7 @@ void log_level(uint32_t space_id, uint32_t token_id, char *name_in, int level, c
 
 int setup_logging(void);
 void close_logging(void);
-void write_log_dump(int fd);
+void copy_log_dump(char *buf, int *len);
 
 #define log_debug(fmt, args...)               log_level(0, 0, NULL, LOG_DEBUG, fmt, ##args)
 #define log_space(space, fmt, args...)        log_level(space->space_id, 0, NULL, LOG_DEBUG, fmt, ##args)

@@ -1196,13 +1196,15 @@ static int print_state_daemon(char *str)
 		 "io_timeout=%d "
 		 "id_renewal=%d "
 		 "id_renewal_fail=%d "
-		 "id_renewal_warn=%d",
+		 "id_renewal_warn=%d "
+		 "monotime=%llu",
 		 our_host_name_global,
 		 main_task.use_aio,
 		 main_task.io_timeout_seconds,
 		 main_task.id_renewal_seconds,
 		 main_task.id_renewal_fail_seconds,
-		 main_task.id_renewal_warn_seconds);
+		 main_task.id_renewal_warn_seconds,
+		 (unsigned long long)monotime());
 
 	return strlen(str) + 1;
 }
@@ -1537,11 +1539,18 @@ static void cmd_host_status(int fd, struct sm_header *h_recv)
 		free(status);
 }
 
+static char send_log_dump[LOG_DUMP_SIZE];
+
 static void cmd_log_dump(int fd, struct sm_header *h_recv)
 {
-	send(fd, h_recv, sizeof(struct sm_header), MSG_DONTWAIT);
+	int len;
 
-	write_log_dump(fd);
+	copy_log_dump(send_log_dump, &len);
+
+	h_recv->data = len;
+
+	send(fd, h_recv, sizeof(struct sm_header), MSG_NOSIGNAL);
+	send(fd, send_log_dump, len, MSG_NOSIGNAL);
 }
 
 static void cmd_restrict(int ci, int fd, struct sm_header *h_recv)
