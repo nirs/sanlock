@@ -1317,7 +1317,7 @@ static int parse_arg_resource(char *arg)
 	return 0;
 }
 
-#define RELEASE_VERSION "1.7"
+#define RELEASE_VERSION "1.8"
 
 /* 
  * daemon: acquires leases for the local host_id, associates them with a local
