@@ -343,26 +343,37 @@ py_rem_lockspace(PyObject *self __unused, PyObject *args)
 
 /* acquire */
 PyDoc_STRVAR(pydoc_acquire, "\
-acquire(fd, lockspace, resource, disks)\n\
-Acquire a resource lease for the current process.\n\
-The disks must be in the format: [(path, offset), ... ]");
+acquire(lockspace, resource, disks [, slkfd=fd, pid=owner])\n\
+Acquire a resource lease for the current process (using the slkfd argument\n\
+to specify the sanlock file descriptor) or for an other process (using the\n\
+pid argument).\n\
+The disks must be in the format: [(path, offset), ... ]\n");
 
 static PyObject *
-py_acquire(PyObject *self __unused, PyObject *args)
+py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, sanlockfd;
+    int rv, sanlockfd = -1, pid = -1;
     const char *lockspace, *resource;
     struct sanlk_resource *res;
     PyObject *disks;
 
+    static char *kwlist[] = {"lockspace", "resource", "disks", "slkfd",
+                                "pid", NULL};
+
     /* parse python tuple */
-    if (!PyArg_ParseTuple(args, "issO!",
-        &sanlockfd, &lockspace, &resource, &PyList_Type, &disks)) {
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|ii", kwlist,
+        &lockspace, &resource, &PyList_Type, &disks, &sanlockfd, &pid)) {
         return NULL;
     }
 
     /* parse and check sanlock resource */
     if (__parse_resource(disks, &res) != 0) {
+        return NULL;
+    }
+
+    /* check if any of the slkfd or pid parameters was given */
+    if (sanlockfd == -1 && pid == -1) {
+        __set_exception(EINVAL, "Invalid slkfd and pid values");
         return NULL;
     }
 
@@ -372,7 +383,7 @@ py_acquire(PyObject *self __unused, PyObject *args)
 
     /* acquire sanlock resource (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_acquire(sanlockfd, -1, 0, 1, &res, 0);
+    rv = sanlock_acquire(sanlockfd, pid, 0, 1, &res, 0);
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
@@ -462,7 +473,8 @@ sanlock_methods[] = {
                         METH_VARARGS|METH_KEYWORDS, pydoc_init_resource},
     {"add_lockspace", py_add_lockspace, METH_VARARGS, pydoc_add_lockspace},
     {"rem_lockspace", py_rem_lockspace, METH_VARARGS, pydoc_rem_lockspace},
-    {"acquire", py_acquire, METH_VARARGS, pydoc_acquire},
+    {"acquire", (PyCFunction) py_acquire,
+                METH_VARARGS|METH_KEYWORDS, pydoc_acquire},
     {"release", py_release, METH_VARARGS, pydoc_release},
     {NULL, NULL, 0, NULL}
 };
