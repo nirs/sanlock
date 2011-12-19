@@ -211,6 +211,12 @@ int delta_lease_acquire(struct task *task,
 	if (leader.timestamp == LEASE_FREE)
 		goto write_new;
 
+	if (!strncmp(leader.resource_name, our_host_name, NAME_ID_SIZE)) {
+		log_space(sp, "delta_acquire %llu fast reacquire",
+			  (unsigned long long)host_id);
+		goto write_new;
+	}
+
 	/* we need to ensure that a host_id cannot be acquired and released
 	 * sooner than host_dead_seconds because the change in host_id
 	 * ownership affects the host_id "liveness" determination used by paxos

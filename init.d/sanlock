@@ -25,6 +25,8 @@ prog="sanlock"
 lockfile="/var/run/$prog/$prog.pid"
 exec="/usr/sbin/$prog"
 
+SANLOCKOPTS="-U sanlock -G sanlock"
+
 [ -f /etc/sysconfig/$prog ] && . /etc/sysconfig/$prog
 
 start() {

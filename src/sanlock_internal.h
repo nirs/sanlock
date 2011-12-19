@@ -429,6 +429,10 @@ struct space {
  * 3. ios can't be reliably canceled and never really time out; an io is only
  * really dead when the machine is dead/reset or storage access is cut off.
  * The delta lease algorithm expects real io timeouts.
+ *
+ * So, the delay is really meant to represent the time until we are certain a
+ * host is safely gone and will no longer write, and for sanlock that means
+ * until the watchdog has reset it.
  */
 
 #define HOSTID_AIO_CB_SIZE 4
