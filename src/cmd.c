@@ -1632,7 +1632,19 @@ void call_cmd_daemon(int ci, struct sm_header *h_recv, int client_maxi)
 		break;
 	case SM_CMD_SHUTDOWN:
 		strcpy(client[ci].owner_name, "shutdown");
-		external_shutdown = 1;
+		if (h_recv->data) {
+			/* force */
+			external_shutdown = 1;
+		} else {
+			pthread_mutex_lock(&spaces_mutex);
+			if (list_empty(&spaces) &&
+			    list_empty(&spaces_rem) &&
+			    list_empty(&spaces_add))
+				external_shutdown = 1;
+			else
+				log_debug("ignore shutdown for spaces");
+			pthread_mutex_unlock(&spaces_mutex);
+		}
 		break;
 	case SM_CMD_STATUS:
 		strcpy(client[ci].owner_name, "status");

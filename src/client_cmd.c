@@ -523,11 +523,11 @@ int sanlock_log_dump(int max_size)
 	return rv;
 }
 
-int sanlock_shutdown(void)
+int sanlock_shutdown(uint32_t force)
 {
 	int fd;
 
-	fd = send_command(SM_CMD_SHUTDOWN, 0);
+	fd = send_command(SM_CMD_SHUTDOWN, force);
 	if (fd < 0)
 		return fd;
 

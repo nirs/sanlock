@@ -261,8 +261,10 @@ Print the sanlock daemon internal debug log.
 
 .B sanlock client shutdown
 
-Tell the sanlock daemon to exit.  Any registered processes will be killed,
-their resource leases released, and lockspaces removed.
+Ask the sanlock daemon to exit.  Without the force option (-f 0), the
+command will be ignored if any lockspaces exist.  With the force option
+(-f 1), any registered processes will be killed, their resource leases
+released, and lockspaces removed.
 
 .BR "sanlock client init -s" " LOCKSPACE"
 .br

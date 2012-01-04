@@ -1363,7 +1363,7 @@ static void print_usage(void)
 	printf("sanlock client status [-D] [-o p|s]\n");
 	printf("sanlock client host_status -s LOCKSPACE [-D]\n");
 	printf("sanlock client log_dump\n");
-	printf("sanlock client shutdown\n");
+	printf("sanlock client shutdown [-f 0|1]\n");
 	printf("sanlock client init -s LOCKSPACE | -r RESOURCE\n");
 	printf("sanlock client align -s LOCKSPACE\n");
 	printf("sanlock client add_lockspace -s LOCKSPACE\n");
@@ -1717,7 +1717,7 @@ static int do_client(void)
 
 	case ACT_SHUTDOWN:
 		log_tool("shutdown");
-		rv = sanlock_shutdown();
+		rv = sanlock_shutdown(com.force_mode);
 		log_tool("shutdown done %d", rv);
 		break;
 
