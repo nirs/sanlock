@@ -303,6 +303,50 @@ py_add_lockspace(PyObject *self __unused, PyObject *args)
     Py_RETURN_NONE;
 }
 
+/* inq_lockspace */
+PyDoc_STRVAR(pydoc_inq_lockspace, "\
+inq_lockspace(lockspace, host_id, path, offset=0)\n\
+Return True if the sanlock daemon currently owns the host_id in lockspace,\n\
+False otherwise. The special value None is returned when the daemon is\n\
+still in the process of acquiring or releasing the host_id.");
+
+static PyObject *
+py_inq_lockspace(PyObject *self __unused, PyObject *args)
+{
+    int rv;
+    const char *lockspace, *path;
+    struct sanlk_lockspace ls;
+
+    /* initialize lockspace structure */
+    memset(&ls, 0, sizeof(struct sanlk_lockspace));
+
+    /* parse python tuple */
+    if (!PyArg_ParseTuple(args, "sks|k",
+        &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset)) {
+        return NULL;
+    }
+
+    /* prepare sanlock names */
+    strncpy(ls.name, lockspace, SANLK_NAME_LEN);
+    strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN);
+
+    /* add sanlock lockspace (gil disabled) */
+    Py_BEGIN_ALLOW_THREADS
+    rv = sanlock_inq_lockspace(&ls, 0 );
+    Py_END_ALLOW_THREADS
+
+    if (rv == 0) {
+        Py_RETURN_TRUE;
+    } else if (rv == -ENOENT) {
+        Py_RETURN_FALSE;
+    } else if (rv == -EINPROGRESS) {
+        Py_RETURN_NONE;
+    }
+
+    __set_exception(rv, "Sanlock lockspace inquire failure");
+    return NULL;
+}
+
 /* rem_lockspace */
 PyDoc_STRVAR(pydoc_rem_lockspace, "\
 rem_lockspace(lockspace, host_id, path, offset=0)\n\
@@ -472,6 +516,7 @@ sanlock_methods[] = {
     {"init_resource", (PyCFunction) py_init_resource,
                         METH_VARARGS|METH_KEYWORDS, pydoc_init_resource},
     {"add_lockspace", py_add_lockspace, METH_VARARGS, pydoc_add_lockspace},
+    {"inq_lockspace", py_inq_lockspace, METH_VARARGS, pydoc_inq_lockspace},
     {"rem_lockspace", py_rem_lockspace, METH_VARARGS, pydoc_rem_lockspace},
     {"acquire", (PyCFunction) py_acquire,
                 METH_VARARGS|METH_KEYWORDS, pydoc_acquire},
