@@ -994,6 +994,7 @@ static void process_connection(int ci)
 		call_cmd_daemon(ci, &h, client_maxi);
 		break;
 	case SM_CMD_ADD_LOCKSPACE:
+	case SM_CMD_INQ_LOCKSPACE:
 	case SM_CMD_REM_LOCKSPACE:
 	case SM_CMD_REQUEST:
 	case SM_CMD_EXAMINE_RESOURCE:
@@ -1366,6 +1367,7 @@ static void print_usage(void)
 	printf("sanlock client init -s LOCKSPACE | -r RESOURCE\n");
 	printf("sanlock client align -s LOCKSPACE\n");
 	printf("sanlock client add_lockspace -s LOCKSPACE\n");
+	printf("sanlock client inq_lockspace -s LOCKSPACE\n");
 	printf("sanlock client rem_lockspace -s LOCKSPACE\n");
 	printf("sanlock client command -r RESOURCE -c <path> <args>\n");
 	printf("sanlock client acquire -r RESOURCE -p <pid>\n");
@@ -1466,6 +1468,8 @@ static int read_command_line(int argc, char *argv[])
 			com.action = ACT_SHUTDOWN;
 		else if (!strcmp(act, "add_lockspace"))
 			com.action = ACT_ADD_LOCKSPACE;
+		else if (!strcmp(act, "inq_lockspace"))
+			com.action = ACT_INQ_LOCKSPACE;
 		else if (!strcmp(act, "rem_lockspace"))
 			com.action = ACT_REM_LOCKSPACE;
 		else if (!strcmp(act, "command"))
@@ -1747,6 +1751,12 @@ static int do_client(void)
 		log_tool("add_lockspace");
 		rv = sanlock_add_lockspace(&com.lockspace, 0);
 		log_tool("add_lockspace done %d", rv);
+		break;
+
+	case ACT_INQ_LOCKSPACE:
+		log_tool("inq_lockspace");
+		rv = sanlock_inq_lockspace(&com.lockspace, 0);
+		log_tool("inq_lockspace done %d", rv);
 		break;
 
 	case ACT_REM_LOCKSPACE:

@@ -883,6 +883,35 @@ static void cmd_add_lockspace(struct cmd_args *ca)
 	client_resume(ca->ci_in);
 }
 
+static void cmd_inq_lockspace(struct cmd_args *ca)
+{
+	struct sanlk_lockspace lockspace;
+	int fd, rv, result;
+
+	fd = client[ca->ci_in].fd;
+
+	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+	if (rv != sizeof(struct sanlk_lockspace)) {
+		log_error("cmd_inq_lockspace %d,%d recv %d %d",
+			   ca->ci_in, fd, rv, errno);
+		result = -ENOTCONN;
+		goto reply;
+	}
+
+	log_debug("cmd_inq_lockspace %d,%d %.48s:%llu:%s:%llu",
+		  ca->ci_in, fd, lockspace.name,
+		  (unsigned long long)lockspace.host_id,
+		  lockspace.host_id_disk.path,
+		  (unsigned long long)lockspace.host_id_disk.offset);
+
+	result = inq_lockspace(&lockspace);
+ reply:
+	log_debug("cmd_inq_lockspace %d,%d done %d", ca->ci_in, fd, result);
+
+	send_result(fd, &ca->header, result);
+	client_resume(ca->ci_in);
+}
+
 /*
  * TODO: rem_lockspace works like a renewal failure would, and abandons
  * resource leases (tokens) without releasing them.  Unlike the renewal
@@ -1145,6 +1174,10 @@ void call_cmd_thread(struct task *task, struct cmd_args *ca)
 	case SM_CMD_ADD_LOCKSPACE:
 		strcpy(client[ca->ci_in].owner_name, "add_lockspace");
 		cmd_add_lockspace(ca);
+		break;
+	case SM_CMD_INQ_LOCKSPACE:
+		strcpy(client[ca->ci_in].owner_name, "inq_lockspace");
+		cmd_inq_lockspace(ca);
 		break;
 	case SM_CMD_REM_LOCKSPACE:
 		strcpy(client[ca->ci_in].owner_name, "rem_lockspace");

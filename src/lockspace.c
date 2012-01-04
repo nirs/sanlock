@@ -701,6 +701,34 @@ int add_lockspace(struct sanlk_lockspace *ls)
 	return rv;
 }
 
+int inq_lockspace(struct sanlk_lockspace *ls)
+{
+	int rv;
+	struct space *sp;
+
+	pthread_mutex_lock(&spaces_mutex);
+
+	sp = _search_space(ls->name, (struct sync_disk *)&ls->host_id_disk, ls->host_id,
+			   &spaces, NULL, NULL);
+
+	if (sp) {
+		rv = 0;
+		goto out;
+	} else {
+		rv = -ENOENT;
+	}
+
+	sp = _search_space(ls->name, (struct sync_disk *)&ls->host_id_disk, ls->host_id,
+			   &spaces_add, &spaces_rem, NULL);
+
+	if (sp)
+		rv = -EINPROGRESS;
+
+ out:
+	pthread_mutex_unlock(&spaces_mutex);
+	return rv;
+}
+
 int rem_lockspace(struct sanlk_lockspace *ls)
 {
 	struct space *sp, *sp2;

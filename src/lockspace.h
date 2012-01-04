@@ -19,6 +19,7 @@ int test_id_bit(int host_id, char *bitmap);
 int check_our_lease(struct task *task, struct space *sp, int *check_all, char *check_buf);
 void check_other_leases(struct task *task, struct space *sp, char *buf);
 int add_lockspace(struct sanlk_lockspace *ls);
+int inq_lockspace(struct sanlk_lockspace *ls);
 int rem_lockspace(struct sanlk_lockspace *ls);
 void free_lockspaces(int wait);
 

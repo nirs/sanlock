@@ -145,6 +145,11 @@ int sanlock_add_lockspace(struct sanlk_lockspace *ls, uint32_t flags)
 	return cmd_lockspace(SM_CMD_ADD_LOCKSPACE, ls, flags);
 }
 
+int sanlock_inq_lockspace(struct sanlk_lockspace *ls, uint32_t flags)
+{
+	return cmd_lockspace(SM_CMD_INQ_LOCKSPACE, ls, flags);
+}
+
 int sanlock_rem_lockspace(struct sanlk_lockspace *ls, uint32_t flags)
 {
 	return cmd_lockspace(SM_CMD_REM_LOCKSPACE, ls, flags);

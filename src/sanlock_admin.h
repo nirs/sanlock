@@ -22,6 +22,14 @@
 int sanlock_add_lockspace(struct sanlk_lockspace *ls, uint32_t flags);
 
 /*
+ * inq_lockspace returns:
+ * 0: the lockspace exists and is currently held
+ * -ENOENT: lockspace not found
+ */
+
+int sanlock_inq_lockspace(struct sanlk_lockspace *ls, uint32_t flags);
+
+/*
  * rem_lockspace returns:
  * 0: the lockspace has been removed successfully
  * -EINPROGRESS: the lockspace is already in the process of being removed

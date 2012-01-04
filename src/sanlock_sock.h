@@ -35,6 +35,7 @@ enum {
 	SM_CMD_EXAMINE_LOCKSPACE = 15,
 	SM_CMD_EXAMINE_RESOURCE	 = 16,
 	SM_CMD_HOST_STATUS	 = 17,
+	SM_CMD_INQ_LOCKSPACE	 = 18,
 };
 
 struct sm_header {
