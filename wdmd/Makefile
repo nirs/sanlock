@@ -42,8 +42,8 @@ CFLAGS += -D_GNU_SOURCE -g \
 	-fdiagnostics-show-option \
 	-fPIE -DPIE
 
-CMD_LDFLAGS += -lwdmd -lrt
 CMD_LDFLAGS += -Wl,-z,now -Wl,-z,relro -pie
+CMD_LDADD += -lwdmd -lrt
 
 LIB_LDFLAGS += -Wl,-z,relro -pie
 
@@ -58,10 +58,10 @@ $(SHLIB_TARGET): $(LIB_SOURCE)
 	ln -sf $(SHLIB_TARGET) $(LIB_TARGET).so.$(SOMAJOR)
 
 $(CMD_TARGET): $(SHLIB_TARGET) $(CMD_SOURCE)
-	$(CC) $(CFLAGS) $(CMD_LDFLAGS) $(CMD_SOURCE) -o $@ -L.
+	$(CC) $(CFLAGS) $(CMD_LDFLAGS) $(CMD_SOURCE) $(CMD_LDADD) -o $@ -L.
 
 $(TEST_TARGET): $(SHLIB_TARGET) $(TEST_SOURCE)
-	$(CC) $(CFLAGS) $(TEST_LDFLAGS) $(TEST_SOURCE) -o $@ -L.
+	$(CC) $(CFLAGS) $(TEST_LDFLAGS) $(TEST_SOURCE) $(CMD_LDADD) -o $@ -L.
 
 clean:
 	rm -f *.o *.so *.so.* $(CMD_TARGET) $(TEST_TARGET)

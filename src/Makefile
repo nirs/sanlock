@@ -72,8 +72,8 @@ CFLAGS += -D_GNU_SOURCE -g \
 
 CMD_CFLAGS = $(CFLAGS) -fPIE -DPIE
 
-CMD_LDFLAGS += -lpthread -luuid -lrt -laio -lblkid -lsanlock -L../wdmd -lwdmd
 CMD_LDFLAGS += -Wl,-z,now -Wl,-z,relro -pie
+CMD_LDADD += -lpthread -luuid -lrt -laio -lblkid -lsanlock -L../wdmd -lwdmd
 
 LIB_ENTIRE_LDFLAGS += -lpthread -lrt -laio -lblkid -L../wdmd -lwdmd
 LIB_ENTIRE_LDFLAGS += -Wl,-z,relro -pie
@@ -94,7 +94,7 @@ $(LIBSO_CLIENT_TARGET): $(LIB_CLIENT_SOURCE)
 	ln -sf $(LIBSO_CLIENT_TARGET) $(LIB_CLIENT_TARGET).so.$(SOMAJOR)
 
 $(CMD_TARGET): $(LIBSO_ENTIRE_TARGET) $(CMD_SOURCE)
-	$(CC) $(CMD_CFLAGS) $(CMD_LDFLAGS) $(CMD_SOURCE) -o $@ -L.
+	$(CC) $(CMD_CFLAGS) $(CMD_LDFLAGS) $(CMD_SOURCE) $(CMD_LDADD) -o $@ -L.
 
 clean:
 	rm -f *.o *.so *.so.* $(CMD_TARGET)
