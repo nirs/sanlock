@@ -25,7 +25,8 @@ prog="sanlock"
 lockfile="/var/run/$prog/$prog.pid"
 exec="/usr/sbin/$prog"
 
-SANLOCKOPTS="-U sanlock -G sanlock"
+SANLOCKUSER="sanlock"
+SANLOCKOPTS="-U $SANLOCKUSER -G $SANLOCKUSER"
 
 [ -f /etc/sysconfig/$prog ] && . /etc/sysconfig/$prog
 
@@ -38,7 +39,7 @@ start() {
 	fi
 
 	echo -n $"Starting $prog: "
-	daemon $prog daemon $SANLOCKOPTS
+	daemon --user=$SANLOCKUSER $prog daemon $SANLOCKOPTS
 	retval=$?
 	echo
 	[ $retval -eq 0 ]
