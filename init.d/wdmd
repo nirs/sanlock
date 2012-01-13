@@ -25,6 +25,11 @@ prog="wdmd"
 lockfile="/var/run/$prog/$prog.pid"
 exec="/usr/sbin/$prog"
 
+WDMDGROUP="sanlock"
+WDMDOPTS="-G $WDMDGROUP"
+
+[ -f /etc/sysconfig/$prog ] && . /etc/sysconfig/$prog
+
 start() {
 	[ -x $exec ] || exit 5
 
@@ -34,7 +39,7 @@ start() {
 	fi
 
 	echo -n $"Starting $prog: "
-	daemon $prog
+	daemon $prog $WDMDOPTS
 	retval=$?
 	echo
 	[ $retval -eq 0 ] && touch $lockfile

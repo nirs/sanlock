@@ -13,6 +13,7 @@
 #include <getopt.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <grp.h>
 #include <fcntl.h>
 #include <string.h>
 #include <errno.h>
@@ -46,11 +47,15 @@
 #define DEFAULT_FIRE_TIMEOUT 60
 #define DEFAULT_HIGH_PRIORITY 1
 
+#define DEFAULT_SOCKET_GID 0
+#define DEFAULT_SOCKET_MODE (S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP)
+
 static int test_interval = DEFAULT_TEST_INTERVAL;
 static int fire_timeout = DEFAULT_FIRE_TIMEOUT;
 static int high_priority = DEFAULT_HIGH_PRIORITY;
 static int daemon_quit;
 static int daemon_debug;
+static int socket_gid;
 static time_t last_keepalive;
 static char lockfile_path[PATH_MAX];
 static int dev_fd;
@@ -327,7 +332,14 @@ static int setup_listener_socket(int *listener_socket)
 		return rv;
 	}
 
-	rv = fchmod(s, 666);
+	rv = chmod(addr.sun_path, DEFAULT_SOCKET_MODE);
+	if (rv < 0) {
+		rv = -errno;
+		close(s);
+		return rv;
+	}
+
+	rv = chown(addr.sun_path, -1, socket_gid);
 	if (rv < 0) {
 		rv = -errno;
 		close(s);
@@ -872,6 +884,20 @@ static void setup_priority(void)
 	}
 }
 
+static int group_to_gid(char *arg)
+{
+	struct group *gr;
+
+	gr = getgrnam(arg);
+	if (gr == NULL) {
+		log_error("group '%s' not found, "
+                          "using uid: %i", arg, DEFAULT_SOCKET_GID);
+		return DEFAULT_SOCKET_GID;
+	}
+
+	return gr->gr_gid;
+}
+
 static void print_usage_and_exit(int status)
 {
 	printf("Usage:\n");
@@ -881,6 +907,7 @@ static void print_usage_and_exit(int status)
 	printf("-D                    debug: no fork and print all logging to stderr\n");
 	printf("-H <num>              use high priority features (1 yes, 0 no, default %d)\n",
 				      DEFAULT_HIGH_PRIORITY);
+	printf("-G <groupname>        group ownership for the socket\n");
 	exit(status);
 }
 
@@ -922,7 +949,8 @@ int main(int argc, char *argv[])
 	        {0,         0,           0,  0 }
 	    };
 
-	    c = getopt_long(argc, argv, "hVDH:", long_options, &option_index);
+	    c = getopt_long(argc, argv, "hVDH:G:",
+	                    long_options, &option_index);
 	    if (c == -1)
 	         break;
 
@@ -935,6 +963,9 @@ int main(int argc, char *argv[])
 	            break;
 	        case 'D':
 	            daemon_debug = 1;
+	            break;
+	        case 'G':
+	            socket_gid = group_to_gid(optarg);
 	            break;
 	        case 'H':
 	            high_priority = atoi(optarg);

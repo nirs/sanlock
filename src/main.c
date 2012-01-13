@@ -1272,7 +1272,7 @@ static int group_to_gid(char *arg)
 	gr = getgrnam(arg);
 	if (gr == NULL) {
 		log_error("group '%s' not found, "
-                          "using uid: %i", arg, DEFAULT_SOCKET_UID);
+                          "using uid: %i", arg, DEFAULT_SOCKET_GID);
 		return DEFAULT_SOCKET_GID;
 	}
 
