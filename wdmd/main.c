@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <getopt.h>
 #include <stdint.h>
 #include <stddef.h>
 #include <fcntl.h>
@@ -38,6 +39,8 @@
 #ifndef GNUC_UNUSED
 #define GNUC_UNUSED __attribute__((__unused__))
 #endif
+
+#define RELEASE_VERSION "1.8"
 
 #define DEFAULT_TEST_INTERVAL 10
 #define DEFAULT_FIRE_TIMEOUT 60
@@ -869,15 +872,25 @@ static void setup_priority(void)
 	}
 }
 
-static void print_usage(void)
+static void print_usage_and_exit(int status)
 {
 	printf("Usage:\n");
 	printf("wdmd [options]\n\n");
-	printf("version               print version\n");
-	printf("help                  print usage\n");
+	printf("--version, -V         print version\n");
+	printf("--help, -h            print usage\n");
 	printf("-D                    debug: no fork and print all logging to stderr\n");
 	printf("-H <num>              use high priority features (1 yes, 0 no, default %d)\n",
 				      DEFAULT_HIGH_PRIORITY);
+	exit(status);
+}
+
+static void print_version_and_exit(void)
+{
+	printf("wdmd version %s tests_built%s%s%s\n", RELEASE_VERSION,
+	       scripts_built ? scripts_built : "",
+	       client_built ? client_built : "",
+	       files_built ? files_built : "");
+	exit(0);
 }
 
 /* If wdmd exits abnormally, /dev/watchdog will eventually fire, and clients
@@ -888,14 +901,9 @@ static void print_usage(void)
    would be for wdmd to fail starting if it found a pid file left over from
    its previous run. */
 
-#define RELEASE_VERSION "1.8"
- 
 int main(int argc, char *argv[])
 {
-	char optchar;
-	char *optionarg;
-	char *p;
-	int i, rv;
+	int rv;
 
 	/*
 	 * TODO:
@@ -904,61 +912,34 @@ int main(int argc, char *argv[])
 	 * -f <num> enable test files (1 yes, 0 no, default ...)
 	 */
 
-	if ((argc > 1) &&
-	    !strcmp(argv[1], "version")) {
-		printf("wdmd version %s tests_built%s%s%s\n", RELEASE_VERSION,
-		       scripts_built ? scripts_built : "",
-		       client_built ? client_built : "",
-		       files_built ? files_built : "");
-		return 0;
-	}
+	while (1) {
+	    int c;
+	    int option_index = 0;
 
-	if ((argc > 1) &&
-	    (!strcmp(argv[1], "help") || !strcmp(argv[1], "--help") || !strcmp(argv[1], "-h"))) {
-		print_usage();
-		return 0;
-	}
+	    static struct option long_options[] = {
+	        {"help",    no_argument, 0,  'h' },
+	        {"version", no_argument, 0,  'V' },
+	        {0,         0,           0,  0 }
+	    };
 
-	for (i = 1; i < argc; ) {
-		p = argv[i];
+	    c = getopt_long(argc, argv, "hVDH:", long_options, &option_index);
+	    if (c == -1)
+	         break;
 
-		if ((p[0] != '-') || (strlen(p) != 2)) {
-			fprintf(stderr, "unknown option %s\n", p);
-			fprintf(stderr, "space required before option value\n");
-			exit(EXIT_FAILURE);
-		}
-
-		optchar = p[1];
-		i++;
-
-		/* the only option that does not have optionarg */
-		if (optchar == 'D') {
-			daemon_debug = 1;
-			continue;
-		}
-
-		if (i >= argc) {
-			fprintf(stderr, "option '%c' requires arg\n", optchar);
-			exit(EXIT_FAILURE);
-		}
-
-		optionarg = argv[i];
-
-		switch (optchar) {
-		case 'H':
-			high_priority = atoi(optionarg);
-			break;
-		default:
-			fprintf(stderr, "unknown option: %c\n", optchar);
-			exit(EXIT_FAILURE);
-		}
-
-		i++;
-	}
-
-	if ((argc > 1) &&
-	    !strcmp(argv[1], "-D")) {
-		daemon_debug = 1;
+	    switch (c) {
+	        case 'h':
+                    print_usage_and_exit(0);
+	            break;
+	        case 'V':
+                    print_version_and_exit();
+	            break;
+	        case 'D':
+	            daemon_debug = 1;
+	            break;
+	        case 'H':
+	            high_priority = atoi(optarg);
+	            break;
+	    }
 	}
 
 	if (!daemon_debug) {
