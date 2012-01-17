@@ -1105,7 +1105,7 @@ static void setup_priority(void)
 
 	rv = mlockall(MCL_CURRENT | MCL_FUTURE);
 	if (rv < 0) {
-		log_error("mlockall failed");
+		log_error("mlockall failed: %s", strerror(errno));
 	}
 
 	rv = sched_get_priority_max(SCHED_RR);
@@ -1117,8 +1117,8 @@ static void setup_priority(void)
 	sched_param.sched_priority = rv;
 	rv = sched_setscheduler(0, SCHED_RR|SCHED_RESET_ON_FORK, &sched_param);
 	if (rv < 0) {
-		log_error("could not set RR|RESET_ON_FORK priority %d err %d",
-			  sched_param.sched_priority, errno);
+		log_error("set scheduler RR|RESET_ON_FORK priority %d failed: %s",
+			  sched_param.sched_priority, strerror(errno));
 	}
 }
 
