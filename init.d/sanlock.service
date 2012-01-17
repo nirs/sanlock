@@ -3,7 +3,8 @@ After=syslog.target wdmd.service
 
 [Service]
 Type=forking
-ExecStart=/usr/sbin/sanlock daemon $OPTIONS
+ExecStart=/lib/systemd/systemd-sanlock start
+ExecStop=/lib/systemd/systemd-sanlock stop
 
 [Install]
 WantedBy=multi-user.target

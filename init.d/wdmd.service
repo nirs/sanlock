@@ -3,7 +3,8 @@ After=syslog.target
 
 [Service]
 Type=forking
-ExecStart=/usr/sbin/wdmd $OPTIONS
+ExecStart=/lib/systemd/systemd-wdmd start
+ExecStop=/lib/systemd/systemd-wdmd stop
 
 [Install]
 WantedBy=multi-user.target
