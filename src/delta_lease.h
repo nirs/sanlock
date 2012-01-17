@@ -3,7 +3,7 @@
  *
  * This copyrighted material is made available to anyone wishing to use,
  * modify, copy, or redistribute it subject to the terms and conditions
- * of the GNU General Public License v.2.
+ * of the GNU General Public License v2 or (at your option) any later version.
  */
 
 #ifndef __DELTA_LEASE_H__

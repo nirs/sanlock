@@ -3,7 +3,7 @@
  *
  * This copyrighted material is made available to anyone wishing to use,
  * modify, copy, or redistribute it subject to the terms and conditions
- * of the GNU General Public License v.2.
+ * of the GNU General Public License v2 or (at your option) any later version.
  */
 
 #include <Python.h>
@@ -21,7 +21,7 @@ PyDoc_STRVAR(pydoc_sanlock, "\
 Copyright (C) 2010-2011 Red Hat, Inc.  All rights reserved.\n\
 This copyrighted material is made available to anyone wishing to use,\n\
 modify, copy, or redistribute it subject to the terms and conditions\n\
-of the GNU General Public License v.2.");
+of the GNU General Public License v2 or (at your option) any later version.");
 PyObject *py_module;
 
 /* Sanlock exception */
