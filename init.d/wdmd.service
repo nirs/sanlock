@@ -1,0 +1,10 @@
+Description=Watchdog Multiplexing Daemon
+After=syslog.target
+
+[Service]
+Type=forking
+ExecStart=/usr/sbin/wdmd $OPTIONS
+
+[Install]
+WantedBy=multi-user.target
+
