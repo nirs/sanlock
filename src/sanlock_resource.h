@@ -52,6 +52,19 @@ int sanlock_examine(uint32_t flags, struct sanlk_lockspace *ls,
 		    struct sanlk_resource *res);
 
 /*
+ * Set a host's mode for the resource.  A standard lease is acquired, the
+ * mode is set if compatible with existing modes, the lease is released.
+ * The resource lease used here is not associated with a pid.
+ */
+
+#define SANLK_MODE_NL		0
+#define SANLK_MODE_SH		3
+#define SANLK_MODE_EX		5
+
+int sanlock_setmode(uint32_t flags, uint64_t host_id, int mode,
+		    struct sanlk_resource *res);
+
+/*
  * Functions to convert between string and struct resource formats.
  * All allocate space for returned data that the caller must free.
  */

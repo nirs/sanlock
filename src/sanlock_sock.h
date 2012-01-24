@@ -36,6 +36,7 @@ enum {
 	SM_CMD_EXAMINE_RESOURCE	 = 16,
 	SM_CMD_HOST_STATUS	 = 17,
 	SM_CMD_INQ_LOCKSPACE	 = 18,
+	SM_CMD_SETMODE		 = 19,
 };
 
 struct sm_header {
@@ -47,6 +48,7 @@ struct sm_header {
 	uint32_t seq;
 	uint32_t data;
 	uint32_t data2;
+	uint64_t data64;
 };
 
 #define SANLK_STATE_MAXSTR	4096

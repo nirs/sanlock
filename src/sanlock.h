@@ -53,6 +53,7 @@ struct sanlk_disk {
 
 #define SANLK_RES_LVER		0x1	/* lver field is set */
 #define SANLK_RES_NUM_HOSTS	0x2	/* data32 field is new num_hosts */
+#define SANLK_RES_MODE		0x4
 
 struct sanlk_resource {
 	char lockspace_name[SANLK_NAME_LEN]; /* terminating \0 not required */

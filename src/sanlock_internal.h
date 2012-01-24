@@ -117,6 +117,7 @@ struct lease_status {
 };
 
 struct host_status {
+	uint64_t first_check; /* local monotime */
 	uint64_t last_check; /* local monotime */
 	uint64_t last_live; /* local monotime */
 	uint64_t last_req; /* local monotime */
@@ -530,6 +531,7 @@ struct command_line {
 	int max_hosts;				/* -m */
 	int res_count;
 	uint32_t force_mode;
+	int lock_mode;
 	char our_host_name[SANLK_NAME_LEN+1];
 	char *dump_path;
 	struct sanlk_lockspace lockspace;	/* -s LOCKSPACE */
@@ -568,6 +570,7 @@ enum {
 	ACT_CLIENT_INIT,
 	ACT_CLIENT_ALIGN,
 	ACT_EXAMINE,
+	ACT_SETMODE,
 };
 
 EXTERN int external_shutdown;

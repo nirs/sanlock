@@ -61,7 +61,7 @@ static int connect_socket(int *sock_fd)
 }
 
 static int send_header(int sock, int cmd, uint32_t cmd_flags, int datalen,
-		       uint32_t data, uint32_t data2)
+		       uint32_t data, uint32_t data2, uint64_t data64)
 {
 	struct sm_header header;
 	int rv;
@@ -73,6 +73,7 @@ static int send_header(int sock, int cmd, uint32_t cmd_flags, int datalen,
 	header.length = sizeof(header) + datalen;
 	header.data = data;
 	header.data2 = data2;
+	header.data64 = data64;
 
 	rv = send(sock, (void *) &header, sizeof(struct sm_header), 0);
 	if (rv < 0)
@@ -91,7 +92,7 @@ int send_command(int cmd, uint32_t data)
 	if (rv < 0)
 		return rv;
 
-	rv = send_header(sock, cmd, 0, 0, data, 0);
+	rv = send_header(sock, cmd, 0, 0, data, 0, 0);
 	if (rv < 0) {
 		close(sock);
 		return rv;
@@ -124,7 +125,7 @@ static int cmd_lockspace(int cmd, struct sanlk_lockspace *ls, uint32_t flags)
 	if (rv < 0)
 		return rv;
 
-	rv = send_header(fd, cmd, flags, sizeof(struct sanlk_lockspace), 0, 0);
+	rv = send_header(fd, cmd, flags, sizeof(struct sanlk_lockspace), 0, 0, 0);
 	if (rv < 0)
 		goto out;
 
@@ -163,7 +164,7 @@ int sanlock_align(struct sanlk_disk *disk)
 	if (rv < 0)
 		return rv;
 
-	rv = send_header(fd, SM_CMD_ALIGN, 0, sizeof(struct sanlk_disk), 0, 0);
+	rv = send_header(fd, SM_CMD_ALIGN, 0, sizeof(struct sanlk_disk), 0, 0, 0);
 	if (rv < 0)
 		goto out;
 
@@ -201,7 +202,7 @@ int sanlock_init(struct sanlk_lockspace *ls,
 			  sizeof(struct sanlk_disk) * res->num_disks;
 	}
 
-	rv = send_header(fd, cmd, 0, datalen, max_hosts, num_hosts);
+	rv = send_header(fd, cmd, 0, datalen, max_hosts, num_hosts, 0);
 	if (rv < 0)
 		goto out;
 
@@ -265,7 +266,7 @@ int sanlock_register(void)
 	if (rv < 0)
 		return rv;
 
-	rv = send_header(sock, SM_CMD_REGISTER, 0, 0, 0, 0);
+	rv = send_header(sock, SM_CMD_REGISTER, 0, 0, 0, 0, 0);
 	if (rv < 0) {
 		close(sock);
 		return rv;
@@ -278,7 +279,7 @@ int sanlock_restrict(int sock, uint32_t flags)
 {
 	int rv;
 
-	rv = send_header(sock, SM_CMD_RESTRICT, flags, 0, 0, -1);
+	rv = send_header(sock, SM_CMD_RESTRICT, flags, 0, 0, -1, 0);
 	if (rv < 0)
 		return rv;
 
@@ -333,7 +334,7 @@ int sanlock_acquire(int sock, int pid, uint32_t flags, int res_count,
 		fd = sock;
 	}
 
-	rv = send_header(fd, SM_CMD_ACQUIRE, flags, datalen, res_count, data2);
+	rv = send_header(fd, SM_CMD_ACQUIRE, flags, datalen, res_count, data2, 0);
 	if (rv < 0)
 		return rv;
 
@@ -402,7 +403,7 @@ int sanlock_inquire(int sock, int pid, uint32_t flags, int *res_count,
 		fd = sock;
 	}
 
-	rv = send_header(fd, SM_CMD_INQUIRE, flags, 0, 0, data2);
+	rv = send_header(fd, SM_CMD_INQUIRE, flags, 0, 0, data2, 0);
 	if (rv < 0)
 		return rv;
 
@@ -476,7 +477,7 @@ int sanlock_release(int sock, int pid, uint32_t flags, int res_count,
 
 	datalen = res_count * sizeof(struct sanlk_resource);
 
-	rv = send_header(fd, SM_CMD_RELEASE, flags, datalen, res_count, data2);
+	rv = send_header(fd, SM_CMD_RELEASE, flags, datalen, res_count, data2, 0);
 	if (rv < 0)
 		goto out;
 
@@ -507,7 +508,7 @@ int sanlock_request(uint32_t flags, uint32_t force_mode,
 	if (rv < 0)
 		return rv;
 
-	rv = send_header(fd, SM_CMD_REQUEST, flags, datalen, force_mode, 0);
+	rv = send_header(fd, SM_CMD_REQUEST, flags, datalen, force_mode, 0, 0);
 	if (rv < 0)
 		goto out;
 
@@ -552,11 +553,45 @@ int sanlock_examine(uint32_t flags, struct sanlk_lockspace *ls,
 		data = (char *)res;
 	}
 
-	rv = send_header(fd, cmd, flags, datalen, 0, 0);
+	rv = send_header(fd, cmd, flags, datalen, 0, 0, 0);
 	if (rv < 0)
 		goto out;
 
 	rv = send(fd, data, datalen, 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	rv = recv_result(fd);
+ out:
+	close(fd);
+	return rv;
+}
+
+int sanlock_setmode(uint32_t flags, uint64_t host_id, int mode,
+		    struct sanlk_resource *res)
+{
+	int fd, rv, datalen;
+
+	datalen = sizeof(struct sanlk_resource) +
+		  sizeof(struct sanlk_disk) * res->num_disks;
+
+	rv = connect_socket(&fd);
+	if (rv < 0)
+		return rv;
+
+	rv = send_header(fd, SM_CMD_SETMODE, flags, datalen, mode, 0, host_id);
+	if (rv < 0)
+		goto out;
+
+	rv = send(fd, res, sizeof(struct sanlk_resource), 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	rv = send(fd, res->disks, sizeof(struct sanlk_disk) * res->num_disks, 0);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;

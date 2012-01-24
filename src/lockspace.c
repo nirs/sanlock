@@ -262,6 +262,9 @@ void check_other_leases(struct task *task, struct space *sp, char *buf)
 		hs = &sp->host_status[i];
 		hs->last_check = now;
 
+		if (!hs->first_check)
+			hs->first_check = now;
+
 		leader = (struct leader_record *)(buf + (i * disk->sector_size));
 
 		if (hs->owner_id == leader->owner_id &&
