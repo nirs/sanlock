@@ -42,12 +42,10 @@
 #define LEADER_CHECKSUM_LEN 168
 #define LEASE_FREE 0
 
-#define LEADER_FL_MODE 0x00000001
-
 struct leader_record {
 	uint32_t magic;
 	uint32_t version;
-	uint32_t flags;
+	uint32_t unused0;
 	uint32_t sector_size;
 	uint64_t num_hosts;
 	uint64_t max_hosts;
@@ -81,14 +79,6 @@ struct request_record {
 	uint32_t version;
 	uint64_t lver;
 	uint32_t force_mode;
-};
-
-#define DBLOCK_MAX_LEN 128
-
-struct mode_block {
-	uint32_t mode;
-	uint32_t unused;
-	uint64_t generation;
 };
 
 #endif

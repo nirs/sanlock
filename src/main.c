@@ -1002,7 +1002,6 @@ static void process_connection(int ci)
 	case SM_CMD_ALIGN:
 	case SM_CMD_INIT_LOCKSPACE:
 	case SM_CMD_INIT_RESOURCE:
-	case SM_CMD_SETMODE:
 		rv = client_suspend(ci);
 		if (rv < 0)
 			return;
@@ -1368,8 +1367,7 @@ static void print_usage(void)
 	printf("sanlock client host_status -s LOCKSPACE [-D]\n");
 	printf("sanlock client log_dump\n");
 	printf("sanlock client shutdown [-f 0|1]\n");
-	printf("sanlock client init -s LOCKSPACE\n");
-	printf("sanlock client init -r RESOURCE [-M]\n");
+	printf("sanlock client init -s LOCKSPACE | -r RESOURCE\n");
 	printf("sanlock client align -s LOCKSPACE\n");
 	printf("sanlock client add_lockspace -s LOCKSPACE\n");
 	printf("sanlock client inq_lockspace -s LOCKSPACE\n");
@@ -1380,11 +1378,9 @@ static void print_usage(void)
 	printf("sanlock client inquire -p <pid>\n");
 	printf("sanlock client request -r RESOURCE -f <force_mode>\n");
 	printf("sanlock client examine -r RESOURCE | -s LOCKSPACE\n");
-	printf("sanlock client setmode -r RESOURCE -m <lock_mode>\n");
 	printf("\n");
 	printf("sanlock direct <action> [-a 0|1] [-o 0|1]\n");
-	printf("sanlock direct init -s LOCKSPACE\n");
-	printf("sanlock direct init -r RESOURCE [-M]\n");
+	printf("sanlock direct init -s LOCKSPACE | -r RESOURCE\n");
 	printf("sanlock direct read_leader -s LOCKSPACE | -r RESOURCE\n");
 	printf("sanlock direct read_id -s LOCKSPACE\n");
 	printf("sanlock direct live_id -s LOCKSPACE\n");
@@ -1421,7 +1417,6 @@ static int read_command_line(int argc, char *argv[])
 	char *arg1 = argv[1];
 	char *act;
 	int i, j, len, begin_command = 0;
-	int init_mode = 0;
 
 	if (argc < 2 || !strcmp(arg1, "help") || !strcmp(arg1, "--help") ||
 	    !strcmp(arg1, "-h")) {
@@ -1492,8 +1487,6 @@ static int read_command_line(int argc, char *argv[])
 			com.action = ACT_REQUEST;
 		else if (!strcmp(act, "examine"))
 			com.action = ACT_EXAMINE;
-		else if (!strcmp(act, "setmode"))
-			com.action = ACT_SETMODE;
 		else if (!strcmp(act, "align"))
 			com.action = ACT_CLIENT_ALIGN;
 		else if (!strcmp(act, "init"))
@@ -1553,24 +1546,12 @@ static int read_command_line(int argc, char *argv[])
 		optchar = p[1];
 		i++;
 
-		/*
-		 * options that do not have optionarg
-		 */
-
+		/* the only option that does not have optionarg */
 		if (optchar == 'D') {
 			com.debug = 1;
 			log_stderr_priority = LOG_DEBUG;
 			continue;
 		}
-
-		if (optchar == 'M') {
-			init_mode = 1;
-			continue;
-		}
-
-		/*
-		 * options that require arg
-		 */
 
 		if (i >= argc) {
 			log_tool("option '%c' requires arg", optchar);
@@ -1621,11 +1602,7 @@ static int read_command_line(int argc, char *argv[])
 			com.num_hosts = atoi(optionarg);
 			break;
 		case 'm':
-			if (com.action == ACT_SETMODE) {
-				com.lock_mode = atoi(optionarg);
-			} else {
-				com.max_hosts = atoi(optionarg);
-			}
+			com.max_hosts = atoi(optionarg);
 			break;
 		case 'p':
 			com.pid = atoi(optionarg);
@@ -1669,9 +1646,6 @@ static int read_command_line(int argc, char *argv[])
 
 		i++;
 	}
-
-	if (init_mode)
-		com.res_args[0]->flags |= SANLK_RES_MODE;
 
 	/*
 	 * the remaining args are for the command
@@ -1857,13 +1831,6 @@ static int do_client(void)
 		log_tool("examine done %d", rv);
 		break;
 
-	case ACT_SETMODE:
-		log_tool("setmode %d", com.lock_mode);
-		/* TODO: add optional host_id */
-		rv = sanlock_setmode(0, 0, com.lock_mode, com.res_args[0]);
-		log_tool("setmode done %d", rv);
-		break;
-
 	case ACT_CLIENT_ALIGN:
 		log_tool("align");
 		rv = sanlock_align(&com.lockspace.host_id_disk);
@@ -1916,7 +1883,6 @@ static int do_direct(void)
 		log_tool("read_leader done %d", rv);
 		log_tool("magic 0x%0x", leader.magic);
 		log_tool("version 0x%x", leader.version);
-		log_tool("flags 0x%x", leader.flags);
 		log_tool("sector_size %u", leader.sector_size);
 		log_tool("num_hosts %llu",
 			 (unsigned long long)leader.num_hosts);

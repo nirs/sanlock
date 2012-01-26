@@ -350,13 +350,6 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 			result = rv;
 			goto done;
 		}
-		save_resource_lver(token, token->leader.lver);
-
-		/* TODO: fail and return an error if this resource
-		   has LEADER_FL_MODE in which case only setmode is allowed.
-		   It may be better to detect this right when we first read the
-		   leader record in paxos_lease_acquire */
-
 		acquire_count++;
 	}
 
@@ -773,8 +766,9 @@ static void cmd_request(struct task *task, struct cmd_args *ca)
 
 	rv = recv(fd, token->disks, disks_len, MSG_WAITALL);
 	if (rv != disks_len) {
+		free(token);
 		result = -ENOTCONN;
-		goto reply_free;
+		goto reply;
 	}
 
 	/* zero out pad1 and pad2, see WARNING above */
@@ -793,20 +787,18 @@ static void cmd_request(struct task *task, struct cmd_args *ca)
 	error = request_token(task, token, force_mode, &owner_id);
 	if (error < 0) {
 		result = error;
-		goto reply_free;
+		goto reply;
 	}
 
 	result = 0;
 
 	if (!token->acquire_lver && !force_mode)
-		goto reply_free;
+		goto reply;
 
 	if (owner_id)
 		host_status_set_bit(token->r.lockspace_name, owner_id);
-
- reply_free:
-	free(token);
  reply:
+	free(token);
 	log_debug("cmd_request %d,%d done %d", ca->ci_in, fd, result);
 
 	send_result(fd, &ca->header, result);
@@ -857,340 +849,6 @@ static void cmd_examine(struct task *task GNUC_UNUSED, struct cmd_args *ca)
 	result = 0;
  reply:
 	log_debug("cmd_examine %d,%d done %d", ca->ci_in, fd, count);
-
-	send_result(fd, &ca->header, result);
-	client_resume(ca->ci_in);
-}
-
-/* return 1 (is alive) to force a failure if we don't have enough
-   knowledge to know it's really not alive.  Later we could have this sit and
-   wait (like paxos_lease_acquire) until we have waited long enough or have
-   enough knowledge to say it's safely dead (unless of course we find it is
-   alive while waiting) */
-
-static int host_live(struct task *task, char *lockspace_name, uint64_t host_id, uint64_t gen)
-{
-	struct host_status hs;
-	uint64_t now;
-	int rv;
-
-	rv = host_info(lockspace_name, host_id, &hs);
-	if (rv) {
-		log_debug("host_live %llu %llu yes host_info %d",
-			  (unsigned long long)host_id, (unsigned long long)gen, rv);
-		return 1;
-	}
-
-	if (!hs.last_check) {
-		log_debug("host_live %llu %llu yes unchecked",
-			  (unsigned long long)host_id, (unsigned long long)gen);
-		return 1;
-	}
-
-	/* the host_id lease is free, not being used */
-	if (!hs.timestamp) {
-		log_debug("host_live %llu %llu no lease free",
-			  (unsigned long long)host_id, (unsigned long long)gen);
-		return 0;
-	}
-
-	if (hs.owner_generation > gen) {
-		log_debug("host_live %llu %llu no old gen %llu",
-			  (unsigned long long)host_id, (unsigned long long)gen,
-			  (unsigned long long)hs.owner_generation);
-		return 0;
-	}
-
-	now = monotime();
-
-	if (!hs.last_live && (now - hs.first_check > task->host_dead_seconds)) {
-		log_debug("host_live %llu %llu no first_check %llu",
-			  (unsigned long long)host_id, (unsigned long long)gen,
-			  (unsigned long long)hs.first_check);
-		return 0;
-	}
-
-	if (hs.last_live && (now - hs.last_live > task->host_dead_seconds)) {
-		log_debug("host_live %llu %llu no last_live %llu",
-			  (unsigned long long)host_id, (unsigned long long)gen,
-			  (unsigned long long)hs.last_live);
-		return 0;
-	}
-
-	log_debug("host_live %llu %llu yes recent first_check %llu last_live %llu",
-		  (unsigned long long)host_id, (unsigned long long)gen,
-		  (unsigned long long)hs.first_check,
-		  (unsigned long long)hs.last_live);
-
-	return 1;
-}
-
-/*
- * What this is aiming to do is:
- * cmd_acquire();
- * for all mblocks, if any mblock.mode is incompatible with mode
- * 	if mblock is for dead host_id, clear mblock.mode, continue
- * 	if mblock is for live host_id, return -EAGAIN
- * write mblock.mode and mblock.generation for host_id
- * cmd_release();
- */
-
-static void cmd_setmode(struct task *task, struct cmd_args *ca)
-{
-	struct token *token;
-	struct sync_disk *disk;
-	struct sanlk_resource res;
-	struct space space;
-	struct mode_block *mb;
-	char *iobuf, **p_iobuf;
-	char *rbuf, *wbuf;
-	uint64_t set_hostid, set_gen;
-	int iobuf_len;
-	int set_mode;
-	int token_len, disks_len;
-	int i, j, fd, rv, result;
-
-	fd = client[ca->ci_in].fd;
-
-	/* the two args from sanlock_setmode() */
-	set_hostid = ca->header.data64; /* TODO: add to struct */
-	set_mode = ca->header.data;
-
-	/* receiving and setting up token (copied from cmd_request) */
-
-	rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
-	if (rv != sizeof(struct sanlk_resource)) {
-		log_error("cmd_setmode %d,%d recv %d %d",
-			   ca->ci_in, fd, rv, errno);
-		result = -ENOTCONN;
-		goto reply;
-	}
-
-	if (!res.num_disks || res.num_disks > SANLK_MAX_DISKS) {
-		result = -ERANGE;
-		goto reply;
-	}
-
-	disks_len = res.num_disks * sizeof(struct sync_disk);
-	token_len = sizeof(struct token) + disks_len;
-
-	token = malloc(token_len);
-	if (!token) {
-		result = -ENOMEM;
-		goto reply;
-	}
-
-	memset(token, 0, token_len);
-	token->disks = (struct sync_disk *)&token->r.disks[0]; /* shorthand */
-	token->r.num_disks = res.num_disks;
-	memcpy(token->r.lockspace_name, res.lockspace_name, SANLK_NAME_LEN);
-	memcpy(token->r.name, res.name, SANLK_NAME_LEN);
-
-	token->acquire_lver = res.lver;
-	token->acquire_data64 = res.data64;
-	token->acquire_data32 = res.data32;
-	token->acquire_flags = res.flags;
-
-	/*
-	 * receive sanlk_disk's / sync_disk's
-	 *
-	 * WARNING: as a shortcut, this requires that sync_disk and
-	 * sanlk_disk match; this is the reason for the pad fields
-	 * in sanlk_disk (TODO: let these differ?)
-	 */
-
-	rv = recv(fd, token->disks, disks_len, MSG_WAITALL);
-	if (rv != disks_len) {
-		result = -ENOTCONN;
-		goto reply_token;
-	}
-
-	/* zero out pad1 and pad2, see WARNING above */
-	for (j = 0; j < token->r.num_disks; j++) {
-		token->disks[j].sector_size = 0;
-		token->disks[j].fd = -1;
-	}
-
-	log_debug("cmd_setmode %d,%d host_id %llu mode %u %.48s:%.48s:%.256s:%llu",
-		  ca->ci_in, fd,
-		  (unsigned long long)set_hostid, set_mode,
-		  token->r.lockspace_name,
-		  token->r.name,
-		  token->disks[0].path,
-		  (unsigned long long)token->r.disks[0].offset);
-
-	/* find what our own host_id and generation are for this lockspace */
-
-	rv = lockspace_info(token->r.lockspace_name, &space);
-	if (rv < 0 || space.killing_pids) {
-		log_error("cmd_setmode %d,%d invalid lockspace "
-			  "found %d failed %d name %.48s",
-			  ca->ci_in, fd, rv, space.killing_pids,
-			  token->r.lockspace_name);
-		result = -ENOSPC;
-		goto reply_token;
-	}
-	token->host_id = space.host_id;
-	token->host_generation = space.host_generation;
-
-	if (!set_hostid)
-		set_hostid = token->host_id;
-	if (token->host_id == set_hostid)
-		set_gen = token->host_generation;
-	else
-		set_gen = 0;
-
-	/* only allow clearing mode of host_id's that are not ours
-	   (not sure this will be needed, but it may be useful) */
-
-	if (token->host_id != set_hostid && set_mode != SANLK_MODE_NL) {
-		log_error("cmd_setmode %d,%d host_id %llu set hostid %llu mode %d",
-			  ca->ci_in, fd, (unsigned long long)token->host_id,
-			  (unsigned long long)set_hostid, set_mode);
-		result = -EINVAL;
-		goto reply_token;
-	}
-
-	rv = acquire_token(task, token, 0, 0);
-	if (rv < 0) {
-		log_error("cmd_setmode %d,%d acquire error %d", ca->ci_in, fd, rv);
-		result = rv;
-		goto reply_token;
-	}
-
-	if (!(token->leader.flags & LEADER_FL_MODE)) {
-		/* a resource lease must be initialized with the MODE
-		   flag for setmode to work */
-		log_error("cmd_setmode %d,%d no-mode resource", ca->ci_in, fd);
-		result = -EINVAL;
-		goto reply_rel;
-	}
-
-	/*
-	 * Read the entire lease area, which includes all host's sectors.
-	 * Check mblock in each host sector for other incompatible lock modes.
-	 * If we find one, but the host is dead, then clear it and continue
-	 * checking.  If no conflicts are found, write the requested mode
-	 * in the mblock.
-	 */
-
-	/* only keep modes on the first disk */
-	disk = &token->disks[0];
-
-	rv = open_disk(disk);
-	if (rv < 0) {
-		result = rv;
-		goto reply_rel;
-	}
-
-	iobuf_len = direct_align(disk);
-
-	p_iobuf = &iobuf;
-
-	rv = posix_memalign((void *)p_iobuf, getpagesize(), iobuf_len);
-	if (rv)
-		goto reply_close;
-
-	memset(iobuf, 0, iobuf_len);
-
-	rv = read_iobuf(disk->fd, disk->offset, iobuf, iobuf_len, task);
-	if (rv < 0) {
-		if (rv != SANLK_AIO_TIMEOUT)
-			free(iobuf);
-		result = rv;
-		goto reply_close;
-	}
-
-	wbuf = malloc(disk->sector_size);
-	if (!wbuf) {
-		result = -ENOMEM;
-		free(iobuf);
-		goto reply_close;
-	}
-
-	if (set_mode == SANLK_MODE_NL)
-		goto do_write;
-
-	for (i = 0; i < token->leader.num_hosts; i++) {
-		if (i+1 == set_hostid)
-			continue;
-
-		/*
-		 * The sector_nr for host_id N is:
-		 * 1 leader block + 1 request block + (N-1) host blocks.
-		 * The mode_block is DBLOCK_MAX_LEN into the sector
-		 *
-		 * rbuf is the start of the sector (where the paxos_dblock
-		 * struct exists, which we aren't modifying) for host_id i+1.
-		 */
-
-		rbuf = iobuf + ((2 + i) * disk->sector_size);
-		mb = (struct mode_block *)(rbuf + DBLOCK_MAX_LEN);
-
-		if (mb->mode == SANLK_MODE_NL)
-			continue;
-
-		if (mb->mode == SANLK_MODE_SH && set_mode == SANLK_MODE_SH)
-			continue;
-
-		/* incompatible locks */
-
-		if (host_live(task, token->r.lockspace_name, i+1, mb->generation)) {
-			log_error("cmd_setmode %d,%d mode conflict host_id %d gen %llu mode %u",
-				  ca->ci_in, fd, i+1, (unsigned long long)mb->generation, mb->mode);
-			result = -EAGAIN;
-			goto reply_free;
-		}
-
-		/* clear mode in dead host's sector */
-
-		log_error("cmd_setmode %d,%d clear dead host_id %d gen %llu mode %u",
-			  ca->ci_in, fd, i+1, (unsigned long long)mb->generation, mb->mode);
-
-		memcpy(wbuf, rbuf, disk->sector_size);
-		mb = (struct mode_block *)(wbuf + DBLOCK_MAX_LEN);
-		mb->mode = SANLK_MODE_NL;
-		mb->generation = 0;
-
-		rv = write_sector(disk, 2 + i, wbuf, disk->sector_size,
-				  task, "mblock");
-		if (rv < 0) {
-			result = rv;
-			goto reply_free;
-		}
-	}
-
-	log_debug("cmd_setmode %d,%d write host_id %llu gen %llu mode %d",
-		  ca->ci_in, fd, (unsigned long long)set_hostid,
-		  (unsigned long long)set_gen, set_mode);
-
- do_write:
-	rbuf = iobuf + ((2 + set_hostid - 1) * disk->sector_size);
-	memcpy(wbuf, rbuf, disk->sector_size);
-	mb = (struct mode_block *)(wbuf + DBLOCK_MAX_LEN);
-	mb->mode = set_mode;
-	mb->generation = set_gen;
-
-	rv = write_sector(disk, 2 + set_hostid - 1, wbuf, disk->sector_size,
-			  task, "mblock");
-	if (rv < 0) {
-		result = rv;
-		goto reply_free;
-	}
-
-	result = 0;
-
- reply_free:
-	free(wbuf);
-	free(iobuf);
- reply_close:
-	close_disks(disk, 1);
- reply_rel:
-	release_token(task, token);
- reply_token:
-	free(token);
- reply:
-	log_debug("cmd_setmode %d,%d done %d", ca->ci_in, fd, result);
 
 	send_result(fd, &ca->header, result);
 	client_resume(ca->ci_in);
@@ -1453,8 +1111,6 @@ static void cmd_init_resource(struct task *task, struct cmd_args *ca)
 	memcpy(token->r.lockspace_name, res.lockspace_name, SANLK_NAME_LEN);
 	memcpy(token->r.name, res.name, SANLK_NAME_LEN);
 
-	token->acquire_flags = res.flags;
-
 	/*
 	 * receive sanlk_disk's / sync_disk's
 	 *
@@ -1539,9 +1195,6 @@ void call_cmd_thread(struct task *task, struct cmd_args *ca)
 	case SM_CMD_EXAMINE_LOCKSPACE:
 	case SM_CMD_EXAMINE_RESOURCE:
 		cmd_examine(task, ca);
-		break;
-	case SM_CMD_SETMODE:
-		cmd_setmode(task, ca);
 		break;
 	};
 }

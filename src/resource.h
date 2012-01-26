@@ -6,8 +6,8 @@
  * of the GNU General Public License v2 or (at your option) any later version.
  */
 
-#ifndef	__RESOURCE_H__
-#define __RESOURCE_H__
+#ifndef	__TOKEN_MANAGER_H__
+#define __TOKEN_MANAGER_H__
 
 int acquire_token(struct task *task, struct token *token,
 		  uint64_t acquire_lver, int new_num_hosts);
@@ -21,8 +21,6 @@ int request_token(struct task *task, struct token *token, uint32_t force_mode,
 
 int add_resource(struct token *token, int pid, uint32_t cl_restrict);
 void del_resource(struct token *token);
-
-void save_resource_lver(struct token *token, uint64_t lver);
 
 int set_resource_examine(char *space_name, char *res_name);
 

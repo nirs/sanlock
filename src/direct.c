@@ -102,8 +102,6 @@ static int do_paxos_action(int action, struct task *task,
 	memcpy(token->r.lockspace_name, res->lockspace_name, SANLK_NAME_LEN);
 	memcpy(token->r.name, res->name, SANLK_NAME_LEN);
 
-	token->acquire_flags = res->flags;
-
 	/* WARNING sync_disk == sanlk_disk */
 
 	memcpy(token->disks, &res->disks, disks_len);
@@ -428,15 +426,6 @@ int direct_read_leader(struct task *task,
 
 int test_id_bit(int host_id, char *bitmap);
 
-static const char *mode_str(int mode)
-{
-	if (mode == 3)
-		return "SH";
-	if (mode == 5)
-		return "EX";
-	return "??";
-}
-
 int direct_dump(struct task *task, char *dump_path, int force_mode)
 {
 	char *data, *bitmap;
@@ -444,8 +433,6 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 	struct leader_record *lr;
 	struct request_record *rr;
 	struct sync_disk sd;
-	char *pd;
-	struct mode_block *mb;
 	char sname[NAME_ID_SIZE+1];
 	char rname[NAME_ID_SIZE+1];
 	uint64_t sector_nr;
@@ -556,21 +543,6 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 				       (unsigned long long)rr->lver, rr->force_mode);
 			}
 			printf("\n");
-
-			if (lr->flags & LEADER_FL_MODE) {
-				for (i = 0; i < lr->num_hosts; i++) {
-					pd = data + ((2 + i) * sd.sector_size);
-					mb = (struct mode_block *)(pd + DBLOCK_MAX_LEN);
-
-					if (!mb->mode)
-						continue;
-
-					printf("                                                                                            ");
-					printf("%s            %04d %04llu\n",
-					       mode_str(mb->mode), i+1,
-					       (unsigned long long)mb->generation);
-				}
-			}
 		} else {
 			break;
 		}

@@ -1517,10 +1517,6 @@ int paxos_lease_init(struct task *task,
 	leader->timestamp = LEASE_FREE;
 	strncpy(leader->space_name, token->r.lockspace_name, NAME_ID_SIZE);
 	strncpy(leader->resource_name, token->r.name, NAME_ID_SIZE);
-
-	if (token->acquire_flags & SANLK_RES_MODE)
-		leader->flags = LEADER_FL_MODE;
-
 	leader->checksum = leader_checksum(leader);
 
 	rr = (struct request_record *)(iobuf + sector_size);

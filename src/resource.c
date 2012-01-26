@@ -83,7 +83,7 @@ static struct resource *find_resource(struct token *token,
 	return NULL;
 }
 
-void save_resource_lver(struct token *token, uint64_t lver)
+static void save_resource_lver(struct token *token, uint64_t lver)
 {
 	struct resource *r;
 
@@ -190,14 +190,15 @@ int acquire_token(struct task *task, struct token *token,
 	close_disks(token->disks, token->r.num_disks);
 
 	log_token(token, "acquire rv %d lver %llu at %llu", rv,
-		  (unsigned long long)leader_ret.lver,
-		  (unsigned long long)leader_ret.timestamp);
+		  (unsigned long long)token->leader.lver,
+		  (unsigned long long)token->leader.timestamp);
 
 	if (rv < 0)
 		return rv;
 
 	memcpy(&token->leader, &leader_ret, sizeof(struct leader_record));
 	token->r.lver = token->leader.lver;
+	save_resource_lver(token, token->leader.lver);
 	return rv; /* SANLK_OK */
 }
 
