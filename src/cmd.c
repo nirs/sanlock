@@ -766,9 +766,8 @@ static void cmd_request(struct task *task, struct cmd_args *ca)
 
 	rv = recv(fd, token->disks, disks_len, MSG_WAITALL);
 	if (rv != disks_len) {
-		free(token);
 		result = -ENOTCONN;
-		goto reply;
+		goto reply_free;
 	}
 
 	/* zero out pad1 and pad2, see WARNING above */
@@ -787,18 +786,19 @@ static void cmd_request(struct task *task, struct cmd_args *ca)
 	error = request_token(task, token, force_mode, &owner_id);
 	if (error < 0) {
 		result = error;
-		goto reply;
+		goto reply_free;
 	}
 
 	result = 0;
 
 	if (!token->acquire_lver && !force_mode)
-		goto reply;
+		goto reply_free;
 
 	if (owner_id)
 		host_status_set_bit(token->r.lockspace_name, owner_id);
- reply:
+ reply_free:
 	free(token);
+ reply:
 	log_debug("cmd_request %d,%d done %d", ca->ci_in, fd, result);
 
 	send_result(fd, &ca->header, result);
