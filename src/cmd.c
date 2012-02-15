@@ -350,6 +350,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 			result = rv;
 			goto done;
 		}
+		save_resource_lver(token, token->leader.lver);
 		acquire_count++;
 	}
 
