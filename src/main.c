@@ -379,8 +379,10 @@ void client_pid_dead(int ci)
 
 	pthread_mutex_lock(&cl->mutex);
 	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
-		if (cl->tokens[i])
+		if (cl->tokens[i]) {
 			release_token_async(cl->tokens[i]);
+			free(cl->tokens[i]);
+		}
 	}
 
 	_client_free(ci);
@@ -420,7 +422,8 @@ static int client_using_space(struct client *cl, struct space *sp)
 
 		if (!cl->kill_count)
 			log_spoke(sp, token, "client_using_space pid %d", cl->pid);
-		token->space_dead = sp->space_dead;
+		if (sp->space_dead)
+			token->flags |= T_LS_DEAD;
 		rv = 1;
 	}
 	return rv;
@@ -1397,7 +1400,7 @@ static void print_usage(void)
 	printf("  <resource_name>	name of resource\n");
 	printf("  <path>		disk to storage reserved for leases\n");
 	printf("  <offset>		offset on path (bytes)\n");
-	printf("  <lver>                optional leader version\n");
+	printf("  <lver>                optional leader version or SH for shared lease\n");
 	printf("\n");
 	printf("Limits:\n");
 	printf("offset alignment with 512 byte sectors: %d (1MB)\n", 1024 * 1024);
@@ -1984,13 +1987,9 @@ int main(int argc, char *argv[])
 
 	/* initialize global variables */
 	pthread_mutex_init(&spaces_mutex, NULL);
-	pthread_mutex_init(&resource_mutex, NULL);
-	pthread_cond_init(&resource_cond, NULL);
 	INIT_LIST_HEAD(&spaces);
 	INIT_LIST_HEAD(&spaces_rem);
 	INIT_LIST_HEAD(&spaces_add);
-	INIT_LIST_HEAD(&resources);
-	INIT_LIST_HEAD(&dispose_resources);
 	
 	memset(&com, 0, sizeof(com));
 	com.use_watchdog = DEFAULT_USE_WATCHDOG;

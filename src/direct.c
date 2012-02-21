@@ -29,6 +29,7 @@
 #include "direct.h"
 #include "paxos_lease.h"
 #include "delta_lease.h"
+#include "mode_block.h"
 
 /*
  * cli: sanlock direct init
@@ -87,7 +88,6 @@ static int do_paxos_action(int action, struct task *task,
 	struct token *token;
 	struct leader_record leader;
 	int disks_len, token_len;
-	int num_opened;
 	int j, rv = 0;
 
 	disks_len = res->num_disks * sizeof(struct sync_disk);
@@ -111,10 +111,10 @@ static int do_paxos_action(int action, struct task *task,
 		token->disks[j].fd = -1;
 	}
 
-	num_opened = open_disks(token->disks, token->r.num_disks);
-	if (!majority_disks(token, num_opened)) {
+	rv = open_disks(token->disks, token->r.num_disks);
+	if (rv < 0) {
 		free(token);
-		return -ENODEV;
+		return rv;
 	}
 
 	switch (action) {
@@ -543,6 +543,17 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 				       (unsigned long long)rr->lver, rr->force_mode);
 			}
 			printf("\n");
+
+			for (i = 0; i < lr->num_hosts; i++) {
+				char *pd = data + ((2 + i) * sd.sector_size);
+				struct mode_block *mb = (struct mode_block *)(pd + MBLOCK_OFFSET);
+
+				if (!(mb->flags & MBLOCK_SHARED))
+					continue;
+
+				printf("                                                                                                          ");
+				printf("%04u %04llu SH\n", i+1, (unsigned long long)mb->generation);
+			}
 		} else {
 			break;
 		}

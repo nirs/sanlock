@@ -101,7 +101,11 @@ static void status_resource(struct sanlk_state *st, char *str, char *bin, int de
 		printf(":%s:%llu",
 		       disk->path, (unsigned long long)disk->offset);
 	}
-	printf(":%llu p %u\n", (unsigned long long)st->data64, st->data32);
+
+	if (res->flags & SANLK_RES_SHARED)
+		printf(":SH p %u\n", st->data32);
+	else
+		printf(":%llu p %u\n", (unsigned long long)st->data64, st->data32);
 
 	if (st->str_len && debug)
 		print_debug(str, st->str_len);

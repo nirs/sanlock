@@ -81,27 +81,51 @@ void close_disks(struct sync_disk *disks, int num_disks)
 	}
 }
 
+int majority_disks(int num_disks, int num)
+{
+	if (num_disks == 1 && !num)
+		return 0;
+
+	/* odd number of disks */
+
+	if (num_disks % 2)
+		return num >= ((num_disks / 2) + 1);
+
+	/* even number of disks */
+
+	if (num > (num_disks / 2))
+		return 1;
+
+	if (num < (num_disks / 2))
+		return 0;
+
+	/* TODO: half of disks are majority if tiebreaker disk is present */
+	return 0;
+}
+
 /* 
  * set fd in each disk
- * returns number of opened disks
+ * returns 0 if majority of disks were opened successfully, -EXXX otherwise
  */
 
 int open_disks_fd(struct sync_disk *disks, int num_disks)
 {
 	struct sync_disk *disk;
 	int num_opens = 0;
-	int d, fd;
+	int d, fd, rv;
 
 	for (d = 0; d < num_disks; d++) {
 		disk = &disks[d];
 
 		if (disk->fd != -1) {
 			log_error("open fd %d exists %s", disk->fd, disk->path);
+			rv = -1;
 			goto fail;
 		}
 
 		fd = open(disk->path, O_RDWR | O_DIRECT | O_SYNC, 0);
 		if (fd < 0) {
+			rv = -errno;
 			log_error("open error %d %s", fd, disk->path);
 			continue;
 		}
@@ -109,11 +133,17 @@ int open_disks_fd(struct sync_disk *disks, int num_disks)
 		disk->fd = fd;
 		num_opens++;
 	}
-	return num_opens;
+
+	if (!majority_disks(num_disks, num_opens)) {
+		/* rv is open errno */
+		goto fail;
+	}
+
+	return 0;
 
  fail:
 	close_disks(disks, num_disks);
-	return 0;
+	return rv;
 }
 
 /* 
@@ -180,14 +210,14 @@ int open_disk(struct sync_disk *disk)
 /*
  * set fd and sector_size in each disk
  * verify all sector_size's match
- * returns number of opened disks
+ * returns 0 if majority of disks were opened successfully, -EXXX otherwise
  */
 
 int open_disks(struct sync_disk *disks, int num_disks)
 {
 	struct sync_disk *disk;
 	int num_opens = 0;
-	int d, rv;
+	int d, err, rv;
 	uint32_t ss = 0;
 
 	for (d = 0; d < num_disks; d++) {
@@ -199,9 +229,11 @@ int open_disks(struct sync_disk *disks, int num_disks)
 			goto fail;
 		}
 
-		rv = open_disk(disk);
-		if (rv < 0)
-			goto fail;
+		err = open_disk(disk);
+		if (err < 0) {
+			rv = err;
+			continue;
+		}
 
 		if (!ss) {
 			ss = disk->sector_size;
@@ -213,11 +245,17 @@ int open_disks(struct sync_disk *disks, int num_disks)
 
 		num_opens++;
 	}
-	return num_opens;
+
+	if (!majority_disks(num_disks, num_opens)) {
+		/* rv is from open err */
+		goto fail;
+	}
+
+	return 0;
 
  fail:
 	close_disks(disks, num_disks);
-	return 0;
+	return rv;
 }
 
 static int do_write(int fd, uint64_t offset, const char *buf, int len, struct task *task)
@@ -665,8 +703,10 @@ int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 	int iobuf_len;
 	int rv;
 
-	if (!disk->sector_size)
+	if (!disk->sector_size) {
+		log_error("read_sectors %s zero sector_size", blktype);
 		return -EINVAL;
+	}
 
 	iobuf_len = sector_count * disk->sector_size;
 	offset = disk->offset + (sector_nr * disk->sector_size);

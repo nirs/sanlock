@@ -142,7 +142,7 @@ static void clear_bit(int host_id, char *bitmap)
 }
 #endif
 
-static void set_id_bit(int host_id, char *bitmap, char *c)
+void set_id_bit(int host_id, char *bitmap, char *c)
 {
 	char *byte = bitmap + ((host_id - 1) / 8);
 	unsigned int bit = (host_id - 1) % 8;
@@ -152,7 +152,8 @@ static void set_id_bit(int host_id, char *bitmap, char *c)
 
 	*byte |= mask;
 
-	*c = *byte;
+	if (c)
+		*c = *byte;
 }
 
 /* FIXME: another copy in direct_lib.c */
@@ -261,6 +262,9 @@ void check_other_leases(struct task *task, struct space *sp, char *buf)
 	for (i = 0; i < DEFAULT_MAX_HOSTS; i++) {
 		hs = &sp->host_status[i];
 		hs->last_check = now;
+
+		if (!hs->first_check)
+			hs->first_check = now;
 
 		leader = (struct leader_record *)(buf + (i * disk->sector_size));
 

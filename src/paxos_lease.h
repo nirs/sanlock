@@ -14,8 +14,6 @@
 
 uint32_t leader_checksum(struct leader_record *lr);
 
-int majority_disks(struct token *token, int num);
-
 int paxos_lease_leader_read(struct task *task,
 			    struct token *token,
 			    struct leader_record *leader_ret,

@@ -28,11 +28,12 @@
 #include "lockspace.h"
 #include "delta_lease.h"
 #include "paxos_lease.h"
+#include "resource.h"
 
 uint32_t crc32c(uint32_t crc, uint8_t *data, size_t length);
 int get_rand(int a, int b);
 
-#define DBLOCK_CHECKSUM_LEN 48 /* ends before checksum field */
+#define DBLOCK_CHECKSUM_LEN	 48  /* ends before checksum field */
 
 struct paxos_dblock {
 	uint64_t mbal;
@@ -54,27 +55,6 @@ static uint32_t roundup_power_of_two(uint32_t val)
 	val |= val >> 16;
 	val++;
 	return val;
-}
-
-int majority_disks(struct token *token, int num)
-{
-	int num_disks = token->r.num_disks;
-
-	/* odd number of disks */
-
-	if (num_disks % 2)
-		return num >= ((num_disks / 2) + 1);
-
-	/* even number of disks */
-
-	if (num > (num_disks / 2))
-		return 1;
-
-	if (num < (num_disks / 2))
-		return 0;
-
-	/* TODO: half of disks are majority if tiebreaker disk is present */
-	return 0;
 }
 
 int paxos_lease_request_read(struct task *task, struct token *token,
@@ -336,7 +316,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 		num_writes++;
 	}
 
-	if (!majority_disks(token, num_writes)) {
+	if (!majority_disks(num_disks, num_writes)) {
 		log_errot(token, "ballot %llu dblock write error %d",
 			  (unsigned long long)next_lver, rv);
 		error = SANLK_DBLOCK_WRITE;
@@ -366,6 +346,8 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 			rv = verify_dblock(token, bk);
 			if (rv < 0)
 				continue;
+
+			check_mode_block(token, q, (char *)bk);
 
 			if (bk->lver < dblock.lver)
 				continue;
@@ -409,7 +391,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 		}
 	}
 
-	if (!majority_disks(token, num_reads)) {
+	if (!majority_disks(num_disks, num_reads)) {
 		log_errot(token, "ballot %llu dblock read error %d",
 			  (unsigned long long)next_lver, rv);
 		error = SANLK_DBLOCK_READ;
@@ -482,7 +464,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 		num_writes++;
 	}
 
-	if (!majority_disks(token, num_writes)) {
+	if (!majority_disks(num_disks, num_writes)) {
 		log_errot(token, "ballot %llu our dblock write2 error %d",
 			  (unsigned long long)next_lver, rv);
 		error = SANLK_DBLOCK_WRITE;
@@ -537,7 +519,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 		}
 	}
 
-	if (!majority_disks(token, num_reads)) {
+	if (!majority_disks(num_disks, num_reads)) {
 		log_errot(token, "ballot %llu dblock read2 error %d",
 			  (unsigned long long)next_lver, rv);
 		error = SANLK_DBLOCK_READ;
@@ -769,7 +751,7 @@ static int _leader_read_multiple(struct task *task,
 		}
 	}
 
-	if (!majority_disks(token, num_reads)) {
+	if (!majority_disks(num_disks, num_reads)) {
 		log_errot(token, "%s leader read error %d", caller, rv);
 		error = SANLK_LEADER_READ;
 		goto out;
@@ -780,7 +762,7 @@ static int _leader_read_multiple(struct task *task,
 	found = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		if (!majority_disks(token, leader_reps[d]))
+		if (!majority_disks(num_disks, leader_reps[d]))
 			continue;
 
 		/* leader on d is the same on a majority of disks,
@@ -973,7 +955,7 @@ static int write_new_leader(struct task *task,
 		num_writes++;
 	}
 
-	if (!majority_disks(token, num_writes)) {
+	if (!majority_disks(num_disks, num_writes)) {
 		log_errot(token, "%s write_new_leader error %d owner %llu %llu %llu",
 			  caller, rv,
 			  (unsigned long long)nl->owner_id,
@@ -1076,9 +1058,9 @@ int paxos_lease_acquire(struct task *task,
 		}
 		host_id_disk.fd = -1;
 
-		disk_open = open_disks_fd(&host_id_disk, 1);
-		if (disk_open != 1) {
-			log_errot(token, "paxos_acquire cannot open host_id_disk");
+		rv = open_disks_fd(&host_id_disk, 1);
+		if (rv < 0) {
+			log_errot(token, "paxos_acquire open host_id_disk error %d", rv);
 			error = SANLK_ACQUIRE_IDDISK;
 			goto out;
 		}
@@ -1408,7 +1390,7 @@ int paxos_lease_release(struct task *task,
 
 	error = paxos_lease_leader_read(task, token, &leader, "paxos_release");
 	if (error < 0) {
-		log_errot(token, "release error cannot read leader");
+		log_errot(token, "paxos_release leader_read error %d", error);
 		goto out;
 	}
 

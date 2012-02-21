@@ -65,21 +65,17 @@ static void release_cl_tokens(struct task *task, struct client *cl)
 		if (!token)
 			continue;
 		release_token(task, token);
-		del_resource(token);
 		free(token);
 	}
 }
 
 static void release_new_tokens(struct task *task, struct token *new_tokens[],
-			       int alloc_count, int add_count, int acquire_count)
+			       int alloc_count, int acquire_count)
 {
 	int i;
 
 	for (i = 0; i < acquire_count; i++)
 		release_token(task, new_tokens[i]);
-
-	for (i = 0; i < add_count; i++)
-		del_resource(new_tokens[i]);
 
 	for (i = 0; i < alloc_count; i++)
 		free(new_tokens[i]);
@@ -130,12 +126,9 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 	struct sanlk_options opt;
 	struct space space;
 	char *opt_str;
-	uint64_t acquire_lver = 0;
-	uint32_t new_num_hosts = 0;
-	uint32_t cl_restrict;
 	int token_len, disks_len;
 	int fd, rv, i, j, empty_slots;
-	int alloc_count = 0, add_count = 0, acquire_count = 0;
+	int alloc_count = 0, acquire_count = 0;
 	int pos = 0, pid_dead = 0;
 	int new_tokens_count;
 	int recv_done = 0;
@@ -165,7 +158,6 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 		pthread_mutex_unlock(&cl->mutex);
 		goto done;
 	}
-	cl_restrict = cl->restrict;
 
 	empty_slots = 0;
 	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
@@ -219,6 +211,8 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 		token->r.num_disks = res.num_disks;
 		memcpy(token->r.lockspace_name, res.lockspace_name, SANLK_NAME_LEN);
 		memcpy(token->r.name, res.name, SANLK_NAME_LEN);
+		if (res.flags & SANLK_RES_SHARED)
+			token->r.flags |= SANLK_RES_SHARED;
 
 		token->acquire_lver = res.lver;
 		token->acquire_data64 = res.data64;
@@ -306,6 +300,9 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 		}
 		token->host_id = space.host_id;
 		token->host_generation = space.host_generation;
+		token->pid = cl_pid;
+		if (cl->restrict & SANLK_RESTRICT_SIGKILL)
+			token->flags |= T_RESTRICT_SIGKILL;
 
 		/* save a record of what this token_id is for later debugging */
 		log_level(space.space_id, token->token_id, NULL, LOG_WARNING,
@@ -319,38 +316,19 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 
 	for (i = 0; i < new_tokens_count; i++) {
 		token = new_tokens[i];
-		rv = add_resource(token, cl_pid, cl_restrict);
-		if (rv < 0) {
-			if (!com.quiet_fail)
-				log_errot(token, "cmd_acquire %d,%d,%d add_resource %d",
-					  cl_ci, cl_fd, cl_pid, rv);
-			result = rv;
-			goto done;
-		}
-		add_count++;
-	}
 
-	for (i = 0; i < new_tokens_count; i++) {
-		token = new_tokens[i];
-
-		if (token->acquire_flags & SANLK_RES_LVER)
-			acquire_lver = token->acquire_lver;
-		if (token->acquire_flags & SANLK_RES_NUM_HOSTS)
-			new_num_hosts = token->acquire_data32;
-
-		rv = acquire_token(task, token, acquire_lver, new_num_hosts);
+		rv = acquire_token(task, token);
 		if (rv < 0) {
 			if (rv == SANLK_ACQUIRE_IDLIVE && com.quiet_fail) {
-				log_token(token, "cmd_acquire %d,%d,%d paxos_lease %d",
+				log_token(token, "cmd_acquire %d,%d,%d acquire_token %d",
 					  cl_ci, cl_fd, cl_pid, rv);
 			} else {
-				log_errot(token, "cmd_acquire %d,%d,%d paxos_lease %d",
+				log_errot(token, "cmd_acquire %d,%d,%d acquire_token %d",
 					  cl_ci, cl_fd, cl_pid, rv);
 			}
 			result = rv;
 			goto done;
 		}
-		save_resource_lver(token, token->leader.lver);
 		acquire_count++;
 	}
 
@@ -445,7 +423,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 	/* 2. Success acquiring leases, and pid is dead */
 
 	if (!result && pid_dead) {
-		release_new_tokens(task, new_tokens, alloc_count, add_count, acquire_count);
+		release_new_tokens(task, new_tokens, alloc_count, acquire_count);
 		release_cl_tokens(task, cl);
 		client_free(cl_ci);
 		result = -ENOTTY;
@@ -455,14 +433,14 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 	/* 3. Failure acquiring leases, and pid is live */
 
 	if (result && !pid_dead) {
-		release_new_tokens(task, new_tokens, alloc_count, add_count, acquire_count);
+		release_new_tokens(task, new_tokens, alloc_count, acquire_count);
 		goto reply;
 	}
 
 	/* 4. Failure acquiring leases, and pid is dead */
 
 	if (result && pid_dead) {
-		release_new_tokens(task, new_tokens, alloc_count, add_count, acquire_count);
+		release_new_tokens(task, new_tokens, alloc_count, acquire_count);
 		release_cl_tokens(task, cl);
 		client_free(cl_ci);
 		goto reply;
@@ -555,7 +533,6 @@ static void cmd_release(struct task *task, struct cmd_args *ca)
 		rv = release_token(task, token);
 		if (rv < 0)
 			result = rv;
-		del_resource(token);
 		free(token);
 	}
 
@@ -1079,7 +1056,7 @@ static void cmd_init_resource(struct task *task, struct cmd_args *ca)
 	struct token *token;
 	struct sanlk_resource res;
 	int token_len, disks_len;
-	int j, fd, rv, result, num_opened;
+	int j, fd, rv, result;
 
 	fd = client[ca->ci_in].fd;
 
@@ -1139,9 +1116,9 @@ static void cmd_init_resource(struct task *task, struct cmd_args *ca)
 		  token->disks[0].path,
 		  (unsigned long long)token->r.disks[0].offset);
 
-	num_opened = open_disks(token->disks, token->r.num_disks);
-	if (!majority_disks(token, num_opened)) {
-		result = -ENODEV;
+	rv = open_disks(token->disks, token->r.num_disks);
+	if (rv < 0) {
+		result = rv;
 		goto reply;
 	}
 
@@ -1314,12 +1291,10 @@ static int print_state_resource(struct resource *r, char *str, const char *list_
 	snprintf(str, SANLK_STATE_MAXSTR-1,
 		 "list=%s "
 		 "flags=%x "
-		 "lver=%llu "
-		 "token_id=%u",
+		 "lver=%llu",
 		 list_name,
 		 r->flags,
-		 (unsigned long long)r->lver,
-		 r->token_id);
+		 (unsigned long long)r->leader.lver);
 
 	return strlen(str) + 1;
 }
@@ -1415,7 +1390,9 @@ static void send_state_lockspace(int fd, struct space *sp, const char *list_name
 	send(fd, &lockspace, sizeof(lockspace), MSG_NOSIGNAL);
 }
 
-static void send_state_resource(int fd, struct resource *r, const char *list_name)
+void send_state_resource(int fd, struct resource *r, const char *list_name);
+
+void send_state_resource(int fd, struct resource *r, const char *list_name)
 {
 	struct sanlk_state st;
 	char str[SANLK_STATE_MAXSTR];
@@ -1426,7 +1403,7 @@ static void send_state_resource(int fd, struct resource *r, const char *list_nam
 
 	st.type = SANLK_STATE_RESOURCE;
 	st.data32 = r->pid;
-	st.data64 = r->lver;
+	st.data64 = r->leader.lver;
 	strncpy(st.name, r->r.name, NAME_ID_SIZE);
 
 	str_len = print_state_resource(r, str, list_name);
@@ -1470,7 +1447,6 @@ static void cmd_status(int fd, struct sm_header *h_recv, int client_maxi)
 	struct sm_header h;
 	struct client *cl;
 	struct space *sp;
-	struct resource *r;
 	int ci;
 
 	memset(&h, 0, sizeof(h));
@@ -1507,12 +1483,10 @@ static void cmd_status(int fd, struct sm_header *h_recv, int client_maxi)
 	if (h_recv->data == SANLK_STATE_LOCKSPACE)
 		return;
 
-	pthread_mutex_lock(&resource_mutex);
-	list_for_each_entry(r, &resources, list)
-		send_state_resource(fd, r, "resources");
-	list_for_each_entry(r, &dispose_resources, list)
-		send_state_resource(fd, r, "dispose_resources");
-	pthread_mutex_unlock(&resource_mutex);
+	/* resource.c will iterate through private lists and call
+	   back here for each r */
+
+	send_state_resources(fd);
 }
 
 static void cmd_host_status(int fd, struct sm_header *h_recv)

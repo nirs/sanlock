@@ -19,7 +19,8 @@ void print_res(struct sanlk_resource *res)
 		printf(" \"%s\" %llu", res->disks[i].path,
 		       (unsigned long long)res->disks[i].offset);
 	}
-	printf(" %llu\n", (unsigned long long)res->lver);
+	printf(" flags %x", res->flags);
+	printf(" lver %llu\n", (unsigned long long)res->lver);
 }
 
 int main(int argc, char *argv[])

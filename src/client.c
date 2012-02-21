@@ -606,8 +606,11 @@ int sanlock_res_to_str(struct sanlk_resource *res, char **str_ret)
 		pos += ret;
 	}
 
-	ret = snprintf(str + pos, len - pos, ":%llu",
-		       (unsigned long long)res->lver);
+	if (res->flags & SANLK_RES_SHARED)
+		ret = snprintf(str + pos, len - pos, ":SH");
+	else
+		ret = snprintf(str + pos, len - pos, ":%llu",
+			       (unsigned long long)res->lver);
 
 	if (ret > len - pos)
 		goto fail;
@@ -707,8 +710,12 @@ int sanlock_str_to_res(char *str, struct sanlk_resource **res_ret)
 
 		} else if (!(sub_count % 2)) {
 			if (have_lver && (d == num_disks)) {
-				res->flags |= SANLK_RES_LVER;
-				res->lver = strtoull(sub, NULL, 0);
+				if (!strncmp(sub, "SH", 2)) {
+					res->flags |= SANLK_RES_SHARED;
+				} else {
+					res->flags |= SANLK_RES_LVER;
+					res->lver = strtoull(sub, NULL, 0);
+				}
 			} else {
 				strncpy(res->disks[d].path, sub, SANLK_PATH_LEN - 1);
 			}

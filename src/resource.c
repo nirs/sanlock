@@ -30,42 +30,416 @@
 #include "lockspace.h"
 #include "resource.h"
 #include "task.h"
+#include "mode_block.h"
+
+/* from cmd.c */
+void send_state_resource(int fd, struct resource *r, const char *list_name);
 
 static pthread_t resource_pt;
 static int resource_thread_stop;
-static int resource_examine;
+static int resource_thread_work;
+static struct list_head resources_held;
+static struct list_head resources_add;
+static struct list_head resources_rem;
+static pthread_mutex_t resource_mutex;
+static pthread_cond_t resource_cond;
 
-int set_resource_examine(char *space_name, char *res_name)
+
+void send_state_resources(int fd)
 {
 	struct resource *r;
-	int count = 0;
 
 	pthread_mutex_lock(&resource_mutex);
-	list_for_each_entry(r, &resources, list) {
-		if (strncmp(r->r.lockspace_name, space_name, NAME_ID_SIZE))
-			continue;
-		if (res_name && strncmp(r->r.name, res_name, NAME_ID_SIZE))
-			continue;
-		r->flags |= R_EXAMINE;
-		resource_examine = 1;
-		count++;
-	}
-	if (count)
-		pthread_cond_signal(&resource_cond);
+	list_for_each_entry(r, &resources_held, list)
+		send_state_resource(fd, r, "resources_held");
+	list_for_each_entry(r, &resources_add, list)
+		send_state_resource(fd, r, "resources_add");
+	list_for_each_entry(r, &resources_rem, list)
+		send_state_resource(fd, r, "resources_rem");
 	pthread_mutex_unlock(&resource_mutex);
-
-	return count;
 }
 
-static struct resource *find_resource_examine(void)
-{
-	struct resource *r;
+/* return 1 (is alive) to force a failure if we don't have enough
+   knowledge to know it's really not alive.  Later we could have this sit and
+   wait (like paxos_lease_acquire) until we have waited long enough or have
+   enough knowledge to say it's safely dead (unless of course we find it is
+   alive while waiting) */
 
-	list_for_each_entry(r, &resources, list) {
-		if (r->flags & R_EXAMINE)
-			return r;
+static int host_live(struct task *task, char *lockspace_name, uint64_t host_id, uint64_t gen)
+{
+	struct host_status hs;
+	uint64_t now;
+	int rv;
+
+	rv = host_info(lockspace_name, host_id, &hs);
+	if (rv) {
+		log_debug("host_live %llu %llu yes host_info %d",
+			  (unsigned long long)host_id, (unsigned long long)gen, rv);
+		return 1;
 	}
-	return NULL;
+
+	if (!hs.last_check) {
+		log_debug("host_live %llu %llu yes unchecked",
+			  (unsigned long long)host_id, (unsigned long long)gen);
+		return 1;
+	}
+
+	/* the host_id lease is free, not being used */
+	if (!hs.timestamp) {
+		log_debug("host_live %llu %llu no lease free",
+			  (unsigned long long)host_id, (unsigned long long)gen);
+		return 0;
+	}
+
+	if (hs.owner_generation > gen) {
+		log_debug("host_live %llu %llu no old gen %llu",
+			  (unsigned long long)host_id, (unsigned long long)gen,
+			  (unsigned long long)hs.owner_generation);
+		return 0;
+	}
+
+	now = monotime();
+
+	if (!hs.last_live && (now - hs.first_check > task->host_dead_seconds)) {
+		log_debug("host_live %llu %llu no first_check %llu",
+			  (unsigned long long)host_id, (unsigned long long)gen,
+			  (unsigned long long)hs.first_check);
+		return 0;
+	}
+
+	if (hs.last_live && (now - hs.last_live > task->host_dead_seconds)) {
+		log_debug("host_live %llu %llu no last_live %llu",
+			  (unsigned long long)host_id, (unsigned long long)gen,
+			  (unsigned long long)hs.last_live);
+		return 0;
+	}
+
+	log_debug("host_live %llu %llu yes recent first_check %llu last_live %llu",
+		  (unsigned long long)host_id, (unsigned long long)gen,
+		  (unsigned long long)hs.first_check,
+		  (unsigned long long)hs.last_live);
+
+	return 1;
+}
+
+void check_mode_block(struct token *token, int q, char *dblock)
+{
+	struct mode_block *mb;
+
+	mb = (struct mode_block *)(dblock + MBLOCK_OFFSET);
+
+	if (mb->flags & MBLOCK_SHARED) {
+		set_id_bit(q + 1, token->shared_bitmap, NULL);
+		token->shared_count++;
+	}
+}
+
+static int set_mode_block(struct task *task, struct token *token,
+			  uint64_t host_id, uint64_t gen, uint32_t flags)
+{
+	struct sync_disk *disk;
+	struct mode_block *mb;
+	char *iobuf, **p_iobuf;
+	uint64_t offset;
+	int num_disks = token->r.num_disks;
+	int iobuf_len, rv, d;
+
+	disk = &token->disks[0];
+
+	iobuf_len = disk->sector_size;
+
+	p_iobuf = &iobuf;
+
+	rv = posix_memalign((void *)p_iobuf, getpagesize(), iobuf_len);
+	if (rv)
+		return -ENOMEM;
+
+	for (d = 0; d < num_disks; d++) {
+		disk = &token->disks[d];
+
+		offset = disk->offset + ((2 + host_id - 1) * disk->sector_size);
+
+		rv = read_iobuf(disk->fd, offset, iobuf, iobuf_len, task);
+		if (rv < 0)
+			break;
+
+		mb = (struct mode_block *)(iobuf + MBLOCK_OFFSET);
+		mb->flags = flags;
+		mb->generation = gen;
+
+		rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len, task);
+		if (rv < 0)
+			break;
+	}
+
+	if (rv < 0) {
+		log_errot(token, "set_mode_block host_id %llu flags %x gen %llu d %d rv %d",
+			  (unsigned long long)host_id, flags, (unsigned long long)gen, d, rv);
+	} else {
+		log_token(token, "set_mode_block host_id %llu flags %x gen %llu",
+			  (unsigned long long)host_id, flags, (unsigned long long)gen);
+	}
+
+	if (rv != SANLK_AIO_TIMEOUT)
+		free(iobuf);
+	return rv;
+}
+
+static int read_mode_block(struct task *task, struct token *token,
+			   uint64_t host_id, uint64_t *max_gen)
+{
+	struct sync_disk *disk;
+	struct mode_block *mb;
+	char *iobuf, **p_iobuf;
+	uint64_t offset;
+	uint64_t max = 0;
+	int num_disks = token->r.num_disks;
+	int iobuf_len, rv, d;
+
+	disk = &token->disks[0];
+
+	iobuf_len = disk->sector_size;
+
+	p_iobuf = &iobuf;
+
+	rv = posix_memalign((void *)p_iobuf, getpagesize(), iobuf_len);
+	if (rv)
+		return -ENOMEM;
+
+	for (d = 0; d < num_disks; d++) {
+		disk = &token->disks[d];
+
+		offset = disk->offset + ((2 + host_id - 1) * disk->sector_size);
+
+		rv = read_iobuf(disk->fd, offset, iobuf, iobuf_len, task);
+		if (rv < 0)
+			break;
+
+		mb = (struct mode_block *)(iobuf + MBLOCK_OFFSET);
+
+		if (!(mb->flags & MBLOCK_SHARED))
+			continue;
+
+		if (!max || mb->generation > max)
+			max = mb->generation;
+	}
+
+	if (rv != SANLK_AIO_TIMEOUT)
+		free(iobuf);
+
+	*max_gen = max;
+	return rv;
+}
+
+static int clear_dead_shared(struct task *task, struct token *token,
+			     int num_hosts, int *live_count)
+{
+	uint64_t host_id, max_gen = 0;
+	int i, rv, live = 0;
+
+	for (i = 0; i < num_hosts; i++) {
+		host_id = i + 1;
+
+		if (host_id == token->host_id)
+			continue;
+
+		if (!test_id_bit(host_id, token->shared_bitmap))
+			continue;
+
+		rv = read_mode_block(task, token, host_id, &max_gen);
+		if (rv < 0) {
+			log_errot(token, "clear_dead_shared read_mode_block %llu %d",
+				  (unsigned long long)host_id, rv);
+			return rv;
+		}
+
+		if (host_live(task, token->r.lockspace_name, host_id, max_gen)) {
+			log_token(token, "clear_dead_shared host_id %llu gen %llu alive",
+				  (unsigned long long)host_id, (unsigned long long)max_gen);
+			live++;
+			continue;
+		}
+
+		rv = set_mode_block(task, token, host_id, 0, 0);
+		if (rv < 0) {
+			log_errot(token, "clear_dead_shared host_id %llu set_mode_block %d",
+				  (unsigned long long)host_id, rv);
+			return rv;
+		}
+
+		log_token(token, "clear_dead_shared host_id %llu gen %llu dead and cleared",
+			  (unsigned long long)host_id, (unsigned long long)max_gen);
+	}
+
+	*live_count = live;
+	return rv;
+}
+
+/* return < 0 on error, 1 on success */
+
+static int acquire_disk(struct task *task, struct token *token,
+			uint64_t acquire_lver, int new_num_hosts,
+			struct leader_record *leader)
+{
+	struct leader_record leader_tmp;
+	int rv;
+	uint32_t flags = 0;
+
+	if (com.quiet_fail)
+		flags |= PAXOS_ACQUIRE_QUIET_FAIL;
+
+	memset(&leader_tmp, 0, sizeof(leader_tmp));
+
+	rv = paxos_lease_acquire(task, token, flags, &leader_tmp, acquire_lver,
+				 new_num_hosts);
+
+	log_token(token, "acquire_disk rv %d lver %llu at %llu", rv,
+		  (unsigned long long)leader_tmp.lver,
+		  (unsigned long long)leader_tmp.timestamp);
+
+	if (rv < 0)
+		return rv;
+
+	memcpy(leader, &leader_tmp, sizeof(struct leader_record));
+	return rv; /* SANLK_OK */
+}
+
+/* return < 0 on error, 1 on success */
+
+static int release_disk(struct task *task, struct token *token,
+			 struct leader_record *leader)
+{
+	struct leader_record leader_tmp;
+	int rv;
+
+	rv = paxos_lease_release(task, token, leader, &leader_tmp);
+
+	log_token(token, "release_disk rv %d", rv);
+
+	if (rv < 0)
+		return rv;
+
+	memcpy(leader, &leader_tmp, sizeof(struct leader_record));
+	return rv; /* SANLK_OK */
+}
+
+static int _release_token(struct task *task, struct token *token, int opened,
+			  int nodisk)
+{
+	struct resource *r = token->resource;
+	uint64_t lver;
+	int last_token = 0;
+	int rv;
+
+	/* We keep r on the resources_rem list while doing the actual release 
+	   on disk so another acquire for the same resource will see it on
+	   the list and fail. we can't have one thread releasing and another
+	   acquiring the same resource.  While on the rem list, the resource
+	   can't be used by anyone. */
+
+	pthread_mutex_lock(&resource_mutex);
+	list_del(&token->list);
+	if (list_empty(&r->tokens)) {
+		list_move(&r->list, &resources_rem);
+		last_token = 1;
+	}
+	lver = r->leader.lver;
+	pthread_mutex_unlock(&resource_mutex);
+
+	if ((r->flags & R_SHARED) && !last_token) {
+		/* will release when final sh token is released */
+		log_token(token, "release_token more shared");
+		return SANLK_OK;
+	}
+
+	if (!last_token) {
+		/* should never happen */
+		log_errot(token, "release_token exclusive not last");
+		return SANLK_ERROR;
+	}
+
+	if (!lver) {
+		/* never acquired on disk so no need to release on disk */
+		rv = SANLK_OK;
+		goto out;
+	}
+
+	if (nodisk)
+		goto out;
+
+	if (!opened) {
+		rv = open_disks_fd(token->disks, token->r.num_disks);
+		if (rv < 0) {
+			/* it's not terrible if we can't do the disk release */
+			rv = SANLK_OK;
+			goto out;
+		}
+	}
+
+	if (r->flags & R_SHARED) {
+		rv = set_mode_block(task, token, token->host_id, 0, 0);
+	} else {
+		rv = release_disk(task, token, &r->leader);
+	}
+
+	close_disks(token->disks, token->r.num_disks);
+
+ out:
+	if (rv < 0)
+		log_errot(token, "release_token rv %d flags %x lver %llu o %d n %d",
+			  rv, r->flags, (unsigned long long)lver, opened, nodisk);
+	else
+		log_token(token, "release_token flags %x", r->flags);
+
+	pthread_mutex_lock(&resource_mutex);
+	list_del(&r->list);
+	pthread_mutex_unlock(&resource_mutex);
+	free(r);
+
+	return rv;
+}
+
+static int release_token_nodisk(struct task *task, struct token *token)
+{
+	return _release_token(task, token, 0, 1);
+}
+
+static int release_token_opened(struct task *task, struct token *token)
+{
+	return _release_token(task, token, 1, 0);
+}
+
+int release_token(struct task *task, struct token *token)
+{
+	return _release_token(task, token, 0, 0);
+}
+
+/* We're releasing a token from the main thread, in which we don't want to block,
+   so we can't do a real release involving disk io.  So, pass the release off to
+   the resource_thread. */
+
+void release_token_async(struct token *token)
+{
+	struct resource *r = token->resource;
+
+	pthread_mutex_lock(&resource_mutex);
+	list_del(&token->list);
+	if (list_empty(&r->tokens)) {
+		if ((token->flags & T_LS_DEAD) || !r->leader.lver) {
+			/* don't bother trying to release if the lockspace
+			   is dead (release will probably fail), or the
+			   lease wasn't never acquired */
+			list_del(&r->list);
+			free(r);
+		} else {
+			r->flags |= R_THREAD_RELEASE;
+			r->release_token_id = token->token_id;
+			resource_thread_work = 1;
+			list_move(&r->list, &resources_rem);
+			pthread_cond_signal(&resource_cond);
+		}
+	}
+	pthread_mutex_unlock(&resource_mutex);
 }
 
 static struct resource *find_resource(struct token *token,
@@ -83,150 +457,171 @@ static struct resource *find_resource(struct token *token,
 	return NULL;
 }
 
-void save_resource_lver(struct token *token, uint64_t lver)
+static void copy_disks(void *dst, void *src, int num_disks)
 {
-	struct resource *r;
+	struct sync_disk *d, *s;
+	int i;
 
-	pthread_mutex_lock(&resource_mutex);
-	r = find_resource(token, &resources);
-	if (r)
-		r->lver = lver;
-	pthread_mutex_unlock(&resource_mutex);
+	d = (struct sync_disk *)dst;
+	s = (struct sync_disk *)src;
 
-	if (!r)
-		log_errot(token, "save_resource_lver no r");
+	for (i = 0; i < num_disks; i++) {
+		memcpy(d->path, s->path, SANLK_PATH_LEN);
+		d->offset = s->offset;
+		d->sector_size = s->sector_size;
 
+		/* fd's are private */
+		d->fd = -1;
+
+		d++;
+		s++;
+	}
 }
 
-int add_resource(struct token *token, int pid, uint32_t cl_restrict)
+static struct resource *new_resource(struct token *token)
 {
 	struct resource *r;
-	int rv, disks_len, r_len;
-
-	pthread_mutex_lock(&resource_mutex);
-
-	r = find_resource(token, &resources);
-	if (r) {
-		if (!com.quiet_fail)
-			log_errot(token, "add_resource name exists");
-		rv = -EEXIST;
-		goto out;
-	}
-
-	r = find_resource(token, &dispose_resources);
-	if (r) {
-		if (!com.quiet_fail)
-			log_errot(token, "add_resource disposed");
-		rv = -EAGAIN;
-		goto out;
-	}
+	int disks_len, r_len;
 
 	disks_len = token->r.num_disks * sizeof(struct sync_disk);
 	r_len = sizeof(struct resource) + disks_len;
 
 	r = malloc(r_len);
-	if (!r) {
-		rv = -ENOMEM;
-		goto out;
-	}
+	if (!r)
+		return NULL;
+
 	memset(r, 0, r_len);
 	memcpy(&r->r, &token->r, sizeof(struct sanlk_resource));
-	memcpy(&r->r.disks, &token->r.disks, disks_len);
-	r->token_id = token->token_id;
-	r->token = token;
-	r->pid = pid;
-	if (cl_restrict & SANLK_RESTRICT_SIGKILL)
-		r->flags |= R_NO_SIGKILL;
-	list_add_tail(&r->list, &resources);
-	rv = 0;
- out:
-	pthread_mutex_unlock(&resource_mutex);
-	return rv;
+
+	/* disks copied after open_disks because open_disks sets sector_size
+	   which we want copied */
+
+	INIT_LIST_HEAD(&r->tokens);
+
+	r->host_id = token->host_id;
+	r->host_generation = token->host_generation;
+
+	if (token->acquire_flags & SANLK_RES_SHARED) {
+		r->flags |= R_SHARED;
+	} else {
+		r->pid = token->pid;
+		if (token->flags & T_RESTRICT_SIGKILL)
+			r->flags |= R_RESTRICT_SIGKILL;
+	}
+
+	return r;
 }
 
-/* resource_mutex must be held */
-
-static void _del_resource(struct resource *r)
+int acquire_token(struct task *task, struct token *token)
 {
-	list_del(&r->list);
-	free(r);
-}
-
-void del_resource(struct token *token)
-{
+	struct leader_record leader;
 	struct resource *r;
+	uint64_t acquire_lver = 0;
+	uint32_t new_num_hosts = 0;
+	int rv, live_count = 0;
+
+	if (token->acquire_flags & SANLK_RES_LVER)
+		acquire_lver = token->acquire_lver;
+	if (token->acquire_flags & SANLK_RES_NUM_HOSTS)
+		new_num_hosts = token->acquire_data32;
 
 	pthread_mutex_lock(&resource_mutex);
-	r = find_resource(token, &resources);
-	if (r)
-		_del_resource(r);
+
+	r = find_resource(token, &resources_rem);
+	if (r) {
+		if (!com.quiet_fail)
+			log_errot(token, "acquire_token resource being removed");
+		pthread_mutex_unlock(&resource_mutex);
+		return -EAGAIN;
+	}
+
+	r = find_resource(token, &resources_add);
+	if (r) {
+		log_errot(token, "acquire_token resource being added");
+		pthread_mutex_unlock(&resource_mutex);
+		return -EBUSY;
+	}
+
+	r = find_resource(token, &resources_held);
+	if (r && (token->acquire_flags & SANLK_RES_SHARED) && (r->flags & R_SHARED)) {
+		/* multiple shared holders allowed */
+		log_token(token, "acquire_token add shared");
+		token->resource = r;
+		list_add(&token->list, &r->tokens);
+		pthread_mutex_unlock(&resource_mutex);
+		return SANLK_OK;
+	}
+
+	if (r) {
+		log_errot(token, "acquire_token resource exists");
+		pthread_mutex_unlock(&resource_mutex);
+		return -EEXIST;
+	}
+
+	r = new_resource(token);
+	if (!r) {
+		pthread_mutex_unlock(&resource_mutex);
+		return -ENOMEM;
+	}
+
+	list_add(&token->list, &r->tokens);
+	list_add(&r->list, &resources_add);
+	token->resource = r;
 	pthread_mutex_unlock(&resource_mutex);
-}
-
-/* return < 0 on error, 1 on success */
-
-int acquire_token(struct task *task, struct token *token,
-		  uint64_t acquire_lver, int new_num_hosts)
-{
-	struct leader_record leader_ret;
-	int rv;
-	uint32_t flags = 0;
-
-	if (com.quiet_fail)
-		flags |= PAXOS_ACQUIRE_QUIET_FAIL;
 
 	rv = open_disks(token->disks, token->r.num_disks);
-	if (!majority_disks(token, rv)) {
-		log_errot(token, "acquire open_disk error %s", token->disks[0].path);
-		return -ENODEV;
+	if (rv < 0) {
+		log_errot(token, "acquire_token open error %d", rv);
+		release_token_nodisk(task, token);
+		return rv;
 	}
 
-	rv = paxos_lease_acquire(task, token, flags, &leader_ret, acquire_lver,
-				 new_num_hosts);
+	copy_disks(&r->r.disks, &token->r.disks, token->r.num_disks);
 
-	token->acquire_result = rv;
-
-	/* we could leave this open so release does not have to reopen */
-	close_disks(token->disks, token->r.num_disks);
-
-	log_token(token, "acquire rv %d lver %llu at %llu", rv,
-		  (unsigned long long)leader_ret.lver,
-		  (unsigned long long)leader_ret.timestamp);
-
-	if (rv < 0)
+	rv = acquire_disk(task, token, acquire_lver, new_num_hosts, &leader);
+	if (rv < 0) {
+		release_token_opened(task, token);
 		return rv;
-
-	memcpy(&token->leader, &leader_ret, sizeof(struct leader_record));
-	token->r.lver = token->leader.lver;
-	return rv; /* SANLK_OK */
-}
-
-/* return < 0 on error, 1 on success */
-
-int release_token(struct task *task, struct token *token)
-{
-	struct leader_record leader_ret;
-	int rv;
-
-	rv = open_disks_fd(token->disks, token->r.num_disks);
-	if (!majority_disks(token, rv)) {
-		log_errot(token, "release open_disk error %s", token->disks[0].path);
-		return -ENODEV;
 	}
 
-	rv = paxos_lease_release(task, token, &token->leader, &leader_ret);
+	memcpy(&r->leader, &leader, sizeof(struct leader_record));
 
-	token->release_result = rv;
+	if (token->acquire_flags & SANLK_RES_SHARED) {
+		rv = set_mode_block(task, token, token->host_id,
+				    token->host_generation, MBLOCK_SHARED);
+		if (rv < 0) {
+			release_token_opened(task, token);
+			return rv;
+		} else {
+			release_disk(task, token, &leader);
+			/* the token is kept, the paxos lease is released but with shared set */
+			goto out;
+		}
+	}
 
+	if (!token->shared_count)
+		goto out;
+
+	rv = clear_dead_shared(task, token, leader.num_hosts, &live_count);
+	if (rv < 0) {
+		release_token_opened(task, token);
+		return rv;
+	}
+
+	if (live_count) {
+		/* a live host with a sh lock exists */
+		release_token_opened(task, token);
+		return -EAGAIN;
+	}
+
+ out:
 	close_disks(token->disks, token->r.num_disks);
 
-	log_token(token, "release rv %d", rv);
+	pthread_mutex_lock(&resource_mutex);
+	list_move(&r->list, &resources_held);
+	pthread_mutex_unlock(&resource_mutex);
 
-	if (rv < 0)
-		return rv;
-
-	memcpy(&token->leader, &leader_ret, sizeof(struct leader_record));
-	return rv; /* SANLK_OK */
+	return SANLK_OK;
 }
 
 int request_token(struct task *task, struct token *token, uint32_t force_mode,
@@ -239,9 +634,9 @@ int request_token(struct task *task, struct token *token, uint32_t force_mode,
 	memset(&req, 0, sizeof(req));
 
 	rv = open_disks(token->disks, token->r.num_disks);
-	if (!majority_disks(token, rv)) {
-		log_debug("request open_disk error %s", token->disks[0].path);
-		return -ENODEV;
+	if (rv < 0) {
+		log_errot(token, "request_token open error %d", rv);
+		return rv;
 	}
 
 	if (!token->acquire_lver && !force_mode)
@@ -299,7 +694,7 @@ int request_token(struct task *task, struct token *token, uint32_t force_mode,
  out:
 	close_disks(token->disks, token->r.num_disks);
 
-	log_debug("request rv %d owner %llu lver %llu mode %u",
+	log_debug("request_token rv %d owner %llu lver %llu mode %u",
 		  rv, (unsigned long long)*owner_id,
 		  (unsigned long long)req.lver, req.force_mode);
 
@@ -313,12 +708,6 @@ static int examine_token(struct task *task, struct token *token,
 	int rv;
 
 	memset(&req, 0, sizeof(req));
-
-	rv = open_disks(token->disks, token->r.num_disks);
-	if (!majority_disks(token, rv)) {
-		log_debug("request open_disk error %s", token->disks[0].path);
-		return -ENODEV;
-	}
 
 	rv = paxos_lease_request_read(task, token, &req);
 	if (rv < 0)
@@ -336,9 +725,7 @@ static int examine_token(struct task *task, struct token *token,
 
 	memcpy(req_out, &req, sizeof(struct request_record));
  out:
-	close_disks(token->disks, token->r.num_disks);
-
-	log_debug("examine rv %d lver %llu mode %u",
+	log_debug("examine_token rv %d lver %llu mode %u",
 		  rv, (unsigned long long)req.lver, req.force_mode);
 
 	return rv;
@@ -351,7 +738,7 @@ static void do_req_kill_pid(struct token *tt, int pid)
 	int found = 0;
 
 	pthread_mutex_lock(&resource_mutex);
-	r = find_resource(tt, &resources);
+	r = find_resource(tt, &resources_held);
 	if (r && r->pid == pid) {
 		found = 1;
 		flags = r->flags;
@@ -372,40 +759,117 @@ static void do_req_kill_pid(struct token *tt, int pid)
 
 	kill(pid, SIGTERM);
 
-	if (flags & R_NO_SIGKILL)
+	if (flags & R_RESTRICT_SIGKILL)
 		return;
 
 	sleep(1);
 	kill(pid, SIGKILL);
 }
 
-/*
- * TODO? add force_mode SANLK_REQ_KILL_PID_OR_RESET
- * which would attempt to kill the pid like KILL_PID,
- * but if the pid doesn't exit will block watchdog
- * updates to reset the host.
- * Here set r->block_wd_time = now + pid_exit_time,
- * In renewal check for any r in resources with
- * block_wd_time <= now, and if found will not
- * update the watchdog.  If the pid continues to
- * not exit, the wd will fire and reset the machine.
- * If the pid exits before pid_exit_time, no wd
- * updates will be skipped.
- */
+int set_resource_examine(char *space_name, char *res_name)
+{
+	struct resource *r;
+	int count = 0;
+
+	pthread_mutex_lock(&resource_mutex);
+	list_for_each_entry(r, &resources_held, list) {
+		if (strncmp(r->r.lockspace_name, space_name, NAME_ID_SIZE))
+			continue;
+		if (res_name && strncmp(r->r.name, res_name, NAME_ID_SIZE))
+			continue;
+		r->flags |= R_THREAD_EXAMINE;
+		resource_thread_work = 1;
+		count++;
+	}
+	if (count)
+		pthread_cond_signal(&resource_cond);
+	pthread_mutex_unlock(&resource_mutex);
+
+	return count;
+}
 
 /*
+ * resource_thread
  * - releases tokens of pid's that die
  * - examines request blocks of resources
  */
+
+static struct resource *find_resource_flag(struct list_head *head, uint32_t flag)
+{
+	struct resource *r;
+
+	list_for_each_entry(r, head, list) {
+		if (r->flags & flag)
+			return r;
+	}
+	return NULL;
+}
+
+static void resource_thread_release(struct task *task, struct resource *r, struct token *tt)
+{
+	int rv;
+
+	rv = open_disks_fd(tt->disks, tt->r.num_disks);
+	if (rv < 0) {
+		log_errot(tt, "resource_thread_release open error %d", rv);
+		goto out;
+	}
+
+	if (r->flags & R_SHARED) {
+		set_mode_block(task, tt, tt->host_id, 0, 0);
+	} else {
+		release_disk(task, tt, &r->leader);
+	}
+
+	close_disks(tt->disks, tt->r.num_disks);
+ out:
+	pthread_mutex_lock(&resource_mutex);
+	list_del(&r->list);
+	pthread_mutex_unlock(&resource_mutex);
+	free(r);
+}
+
+static void resource_thread_examine(struct task *task, struct token *tt, int pid, uint64_t lver)
+{
+	struct request_record req;
+	int rv;
+
+	rv = open_disks_fd(tt->disks, tt->r.num_disks);
+	if (rv < 0) {
+		log_errot(tt, "resource_thread_examine open error %d", rv);
+		return;
+	}
+
+	rv = examine_token(task, tt, &req);
+
+	close_disks(tt->disks, tt->r.num_disks);
+
+	if (rv != SANLK_OK)
+		return;
+
+	if (!req.force_mode || !req.lver)
+		return;
+
+	if (req.lver <= lver) {
+		log_debug("examine req lver %llu our lver %llu",
+			  (unsigned long long)req.lver, (unsigned long long)lver);
+		return;
+	}
+
+	if (req.force_mode == SANLK_REQ_KILL_PID) {
+		do_req_kill_pid(tt, pid);
+	} else {
+		log_error("req force_mode %u unknown", req.force_mode);
+	}
+}
 
 static void *resource_thread(void *arg GNUC_UNUSED)
 {
 	struct task task;
 	struct resource *r;
-	struct token *token, *tt = NULL;
-	struct request_record req;
+	struct token *tt = NULL;
 	uint64_t lver;
-	int rv, j, pid, tt_len;
+	int pid, tt_len;
 
 	memset(&task, 0, sizeof(struct task));
 	setup_task_timeouts(&task, main_task.io_timeout_seconds);
@@ -421,12 +885,10 @@ static void *resource_thread(void *arg GNUC_UNUSED)
 		log_error("resource_thread tt malloc error");
 		goto out;
 	}
-	memset(tt, 0, tt_len);
-	tt->disks = (struct sync_disk *)&tt->r.disks[0];
 
 	while (1) {
 		pthread_mutex_lock(&resource_mutex);
-		while (list_empty(&dispose_resources) && !resource_examine) {
+		while (!resource_thread_work) {
 			if (resource_thread_stop) {
 				pthread_mutex_unlock(&resource_mutex);
 				goto out;
@@ -434,68 +896,50 @@ static void *resource_thread(void *arg GNUC_UNUSED)
 			pthread_cond_wait(&resource_cond, &resource_mutex);
 		}
 
-		if (!list_empty(&dispose_resources)) {
-			r = list_first_entry(&dispose_resources, struct resource, list);
-			pthread_mutex_unlock(&resource_mutex);
+		/* FIXME: it's not nice how we copy a bunch of stuff
+		 * from token to r so that we can later copy it back from
+		 * r into a temp token.  The whole duplication of stuff
+		 * between token and r would be nice to clean up. */
 
-			token = r->token;
-			release_token(&task, token);
+		memset(tt, 0, tt_len);
+		tt->disks = (struct sync_disk *)&tt->r.disks[0];
 
-			/* we don't want to remove r from dispose_list until after the
-		   	   lease is released because we don't want a new token for
-		   	   the same resource to be added and attempt to acquire
-		   	   the lease until after it's been released */
-
-			pthread_mutex_lock(&resource_mutex);
-			_del_resource(r);
-			pthread_mutex_unlock(&resource_mutex);
-			free(token);
-
-		} else if (resource_examine) {
-			r = find_resource_examine();
-			if (!r) {
-				resource_examine = 0;
-				pthread_mutex_unlock(&resource_mutex);
-				continue;
-			}
-			r->flags &= ~R_EXAMINE;
-
-			/* we can't safely access r->token here, and
-			   r may be freed after we release mutex, so copy
-			   everything we need before unlocking mutex */
-
-			pid = r->pid;
-			lver = r->lver;
+		r = find_resource_flag(&resources_rem, R_THREAD_RELEASE);
+		if (r) {
 			memcpy(&tt->r, &r->r, sizeof(struct sanlk_resource));
-			memcpy(&tt->r.disks, &r->r.disks, r->r.num_disks * sizeof(struct sync_disk));
+			copy_disks(&tt->r.disks, &r->r.disks, r->r.num_disks);
+			tt->host_id = r->host_id;
+			tt->host_generation = r->host_generation;
+			tt->token_id = r->release_token_id;
+
+			r->flags &= ~R_THREAD_RELEASE;
 			pthread_mutex_unlock(&resource_mutex);
 
-			for (j = 0; j < tt->r.num_disks; j++) {
-				tt->disks[j].sector_size = 0;
-				tt->disks[j].fd = -1;
-			}
-
-			rv = examine_token(&task, tt, &req);
-
-			if (rv != SANLK_OK)
-				continue;
-
-			if (!req.force_mode || !req.lver)
-				continue;
-
-			if (req.lver <= lver) {
-				log_debug("examine req lver %llu our lver %llu",
-					  (unsigned long long)req.lver,
-					  (unsigned long long)lver);
-				continue;
-			}
-
-			if (req.force_mode == SANLK_REQ_KILL_PID) {
-				do_req_kill_pid(tt, pid);
-			} else {
-				log_error("req force_mode %u unknown", req.force_mode);
-			}
+			resource_thread_release(&task, r, tt);
+			continue;
 		}
+
+		r = find_resource_flag(&resources_held, R_THREAD_EXAMINE);
+		if (r) {
+			/* make copies of things we need because we can't use r
+			   once we unlock the mutex since it could be released */
+
+			memcpy(&tt->r, &r->r, sizeof(struct sanlk_resource));
+			copy_disks(&tt->r.disks, &r->r.disks, r->r.num_disks);
+			tt->host_id = r->host_id;
+			tt->host_generation = r->host_generation;
+			pid = r->pid;
+			lver = r->leader.lver;
+
+			r->flags &= ~R_THREAD_EXAMINE;
+			pthread_mutex_unlock(&resource_mutex);
+
+			resource_thread_examine(&task, tt, pid, lver);
+			continue;
+		}
+
+		resource_thread_work = 0;
+		pthread_mutex_unlock(&resource_mutex);
 	}
  out:
 	if (tt)
@@ -504,29 +948,15 @@ static void *resource_thread(void *arg GNUC_UNUSED)
 	return NULL;
 }
 
-void release_token_async(struct token *token)
-{
-	struct resource *r;
-
-	pthread_mutex_lock(&resource_mutex);
-	r = find_resource(token, &resources);
-	if (r) {
-		/* assert r->token == token ? */
-
-		if (token->space_dead || (token->acquire_result != SANLK_OK)) {
-			_del_resource(r);
-			free(token);
-		} else {
-			list_move(&r->list, &dispose_resources);
-			pthread_cond_signal(&resource_cond);
-		}
-	}
-	pthread_mutex_unlock(&resource_mutex);
-}
-
 int setup_token_manager(void)
 {
 	int rv;
+
+	pthread_mutex_init(&resource_mutex, NULL);
+	pthread_cond_init(&resource_cond, NULL);
+	INIT_LIST_HEAD(&resources_add);
+	INIT_LIST_HEAD(&resources_rem);
+	INIT_LIST_HEAD(&resources_held);
 
 	rv = pthread_create(&resource_pt, NULL, resource_thread, NULL);
 	if (rv)

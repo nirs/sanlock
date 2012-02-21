@@ -67,6 +67,9 @@ struct sync_disk {
  * 'struct resource' keeps track of resources globally, resources list
  */
 
+#define T_RESTRICT_SIGKILL	0x00000001 /* inherited from client->restrict */
+#define T_LS_DEAD		0x00000002 /* don't bother trying to release if ls is dead */
+
 struct token {
 	/* values copied from acquire res arg */
 	uint64_t acquire_lver;
@@ -79,26 +82,32 @@ struct token {
 	uint64_t host_generation;
 
 	/* internal */
+	struct list_head list; /* resource->tokens */
+	struct resource *resource;
+	int pid;
+	uint32_t flags;
 	uint32_t token_id; /* used to refer to this token instance in log messages */
-	int space_dead; /* don't bother trying to release if ls is dead */
-	int acquire_result;
-	int release_result;
-	struct leader_record leader; /* copy of last leader_record we wrote */
+	int shared_count;
+	char shared_bitmap[HOSTID_BITMAP_SIZE]; /* bit set for host_id with SH */
 
 	struct sync_disk *disks; /* shorthand, points to r.disks[0] */
 	struct sanlk_resource r;
 };
 
-#define R_EXAMINE    0x00000001
-#define R_NO_SIGKILL 0x00000002
+#define R_SHARED     		0x00000001
+#define R_THREAD_EXAMINE    	0x00000002
+#define R_THREAD_RELEASE	0x00000004
+#define R_RESTRICT_SIGKILL	0x00000008 /* inherited from token */
 
 struct resource {
 	struct list_head list;
-	struct token *token;
-	int pid;
-	uint32_t token_id;
+	struct list_head tokens;     /* only one token when ex, multiple sh */
+	uint64_t host_id;
+	uint64_t host_generation;
+	int pid;                     /* copied from token when ex */
 	uint32_t flags;
-	uint64_t lver;
+	uint32_t release_token_id;   /* copy to temp token (tt) for log messages */
+	struct leader_record leader; /* copy of last leader_record we wrote */
 	struct sanlk_resource r;
 };
 
@@ -117,6 +126,7 @@ struct lease_status {
 };
 
 struct host_status {
+	uint64_t first_check; /* local monotime */
 	uint64_t last_check; /* local monotime */
 	uint64_t last_live; /* local monotime */
 	uint64_t last_req; /* local monotime */
@@ -577,11 +587,6 @@ EXTERN struct list_head spaces;
 EXTERN struct list_head spaces_rem;
 EXTERN struct list_head spaces_add;
 EXTERN pthread_mutex_t spaces_mutex;
-
-EXTERN struct list_head resources;
-EXTERN struct list_head dispose_resources;
-EXTERN pthread_mutex_t resource_mutex;
-EXTERN pthread_cond_t resource_cond;
 
 #endif
 

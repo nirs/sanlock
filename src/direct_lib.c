@@ -45,6 +45,14 @@ int host_info(char *space_name GNUC_UNUSED, uint64_t host_id GNUC_UNUSED, struct
 	return -1;
 }
 
+struct token;
+
+void check_mode_block(struct token *token GNUC_UNUSED, int q GNUC_UNUSED, char *dblock GNUC_UNUSED);
+
+void check_mode_block(struct token *token GNUC_UNUSED, int q GNUC_UNUSED, char *dblock GNUC_UNUSED)
+{
+}
+
 /* copied from host_id.c */
 
 int test_id_bit(int host_id, char *bitmap);

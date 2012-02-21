@@ -16,6 +16,7 @@ int lockspace_disk(char *space_name, struct sync_disk *disk);
 int host_info(char *space_name, uint64_t host_id, struct host_status *hs_out);
 int host_status_set_bit(char *space_name, uint64_t host_id);
 int test_id_bit(int host_id, char *bitmap);
+void set_id_bit(int host_id, char *bitmap, char *c);
 int check_our_lease(struct task *task, struct space *sp, int *check_all, char *check_buf);
 void check_other_leases(struct task *task, struct space *sp, char *buf);
 int add_lockspace(struct sanlk_lockspace *ls);
