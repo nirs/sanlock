@@ -35,7 +35,7 @@ start() {
 
 	if [ ! -d /var/run/$prog ]; then
 		install -d -o $SANLOCKUSER -g $SANLOCKUSER -m 775 /var/run/$prog
-		[ -x /usr/sbin/restorecon ] && restorecon /var/run/$prog
+		[ -x /sbin/restorecon ] && restorecon /var/run/$prog
 	fi
 
 	echo -n $"Starting $prog: "

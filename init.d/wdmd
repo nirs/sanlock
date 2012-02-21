@@ -35,7 +35,7 @@ start() {
 
 	if [ ! -d /var/run/$prog ]; then
 		mkdir -p /var/run/$prog
-		[ -x /usr/sbin/restorecon ] && restorecon /var/run/$prog
+		[ -x /sbin/restorecon ] && restorecon /var/run/$prog
 	fi
 
 	echo -n $"Starting $prog: "
