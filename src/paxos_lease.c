@@ -1220,6 +1220,11 @@ int paxos_lease_acquire(struct task *task,
 	 * current host_id and generation?
 	 */
 
+	/* This next_lver assignment is based on the original cur_leader, not a
+	   re-reading of the leader here, i.e. we cannot just re-read the leader
+	   here, and make next_lver one more than that.  This is because another
+	   node may have made us the owner of next_lver as it is now. */
+
 	next_lver = cur_leader.lver + 1;
 
 	if (!our_dblock.mbal)
@@ -1269,6 +1274,23 @@ int paxos_lease_acquire(struct task *task,
 			error = SANLK_ACQUIRE_OWNED;
 		}
 		goto out;
+	}
+
+	if (tmp_leader.lver > next_lver) {
+		/*
+		 * A case where this was observed: for next_lver 65 we abort1, and delay.
+		 * While sleeping, the lease v65 (which was acquired during our abort1) is
+		 * released and then reacquired as v66.  When we goto retry_ballot, our
+		 * next_lver is 65, but the current lver on disk is 66, causing us to
+		 * we fail in the larger1 check.)
+		 */
+		log_token(token, "paxos_acquire stale next_lver %llu now %llu owner %llu %llu %llu",
+			  (unsigned long long)next_lver,
+			  (unsigned long long)tmp_leader.lver,
+			  (unsigned long long)tmp_leader.owner_id,
+			  (unsigned long long)tmp_leader.owner_generation,
+			  (unsigned long long)tmp_leader.timestamp);
+		goto restart;
 	}
 
 	error = run_ballot(task, token, cur_leader.num_hosts, next_lver, our_mbal,
