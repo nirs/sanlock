@@ -349,17 +349,20 @@ static int _release_token(struct task *task, struct token *token, int opened,
 	if ((r->flags & R_SHARED) && !last_token) {
 		/* will release when final sh token is released */
 		log_token(token, "release_token more shared");
+		close_disks(token->disks, token->r.num_disks);
 		return SANLK_OK;
 	}
 
 	if (!last_token) {
 		/* should never happen */
 		log_errot(token, "release_token exclusive not last");
+		close_disks(token->disks, token->r.num_disks);
 		return SANLK_ERROR;
 	}
 
 	if (!lver) {
 		/* never acquired on disk so no need to release on disk */
+		close_disks(token->disks, token->r.num_disks);
 		rv = SANLK_OK;
 		goto out;
 	}
