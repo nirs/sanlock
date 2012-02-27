@@ -1293,6 +1293,12 @@ int paxos_lease_acquire(struct task *task,
 		goto restart;
 	}
 
+	if (memcmp(&cur_leader, &tmp_leader, sizeof(struct leader_record))) {
+		/* I don't think this should ever happen. */
+		log_errot(token, "paxos_acquire restart leader changed2");
+		goto restart;
+	}
+
 	error = run_ballot(task, token, cur_leader.num_hosts, next_lver, our_mbal,
 			   &dblock);
 
