@@ -1064,6 +1064,7 @@ int paxos_lease_acquire(struct task *task,
 			error = SANLK_ACQUIRE_IDDISK;
 			goto out;
 		}
+		disk_open = 1;
 	}
 
 	rv = host_info(cur_leader.space_name, cur_leader.owner_id, &hs);
