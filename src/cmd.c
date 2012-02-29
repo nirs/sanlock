@@ -319,7 +319,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 
 		rv = acquire_token(task, token);
 		if (rv < 0) {
-			if (rv == SANLK_ACQUIRE_IDLIVE && com.quiet_fail) {
+			if ((rv == SANLK_ACQUIRE_IDLIVE || rv == -EAGAIN) && com.quiet_fail) {
 				log_token(token, "cmd_acquire %d,%d,%d acquire_token %d",
 					  cl_ci, cl_fd, cl_pid, rv);
 			} else {

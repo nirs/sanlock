@@ -111,6 +111,7 @@ static int write_leader(struct task *task,
 	return rv;
 }
 
+#if 0
 static int read_dblock(struct task *task,
 		       struct sync_disk *disk,
 		       uint64_t host_id,
@@ -125,7 +126,6 @@ static int read_dblock(struct task *task,
 	return rv;
 }
 
-#if 0
 static int read_dblocks(struct task *task,
 			struct sync_disk *disk,
 			struct paxos_dblock *pds,
@@ -498,10 +498,30 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 				continue;
 
 			if (bk->lver > dblock.lver) {
-				/* I don't think this should happen */
-				log_errot(token, "ballot %llu larger2 lver[%d] %llu",
+				/*
+				 * This happens when we choose another host's bk, that host
+				 * acquires the lease itself, releases it, and reacquires it
+				 * with a new lver, all before we get here, at which point
+				 * we see the larger lver.  I believe case this would always
+				 * also be caught the the bk->mbal > dblock.mbal condition
+				 * below.
+				 */
+				log_errot(token, "ballot %llu larger2 lver[%d] %llu dblock %llu",
 					  (unsigned long long)next_lver, q,
-					  (unsigned long long)bk->lver);
+					  (unsigned long long)bk->lver,
+					  (unsigned long long)dblock.lver);
+				log_errot(token, "ballot %llu larger2 mbal[%d] %llu dblock %llu",
+					  (unsigned long long)next_lver, q,
+					  (unsigned long long)bk->mbal,
+					  (unsigned long long)dblock.mbal);
+				log_errot(token, "ballot %llu larger2 inp[%d] %llu %llu %llu dblock %llu %llu %llu",
+					  (unsigned long long)next_lver, q,
+					  (unsigned long long)bk->inp,
+					  (unsigned long long)bk->inp2,
+					  (unsigned long long)bk->inp3,
+					  (unsigned long long)dblock.inp,
+					  (unsigned long long)dblock.inp2,
+					  (unsigned long long)dblock.inp3);
 				error = SANLK_DBLOCK_LVER;
 				goto out;
 			}
@@ -668,10 +688,10 @@ static int leaders_match(struct leader_record *a, struct leader_record *b)
 	return 0;
 }
 
-static int _leader_read_single(struct task *task,
-			       struct token *token,
-			       struct leader_record *leader_ret,
-			       const char *caller)
+static int _leader_read_one(struct task *task,
+			    struct token *token,
+			    struct leader_record *leader_ret,
+			    const char *caller)
 {
 	struct leader_record leader;
 	int rv;
@@ -690,10 +710,12 @@ static int _leader_read_single(struct task *task,
 	return rv;
 }
 
-static int _leader_read_multiple(struct task *task,
-				 struct token *token,
-				 struct leader_record *leader_ret,
-				 const char *caller)
+/* TODO: completely untested */
+
+static int _leader_read_num(struct task *task,
+			    struct token *token,
+			    struct leader_record *leader_ret,
+			    const char *caller)
 {
 	struct leader_record leader;
 	struct leader_record *leaders;
@@ -794,13 +816,13 @@ int paxos_lease_leader_read(struct task *task,
 {
 	int rv;
 
-	/* _leader_read_multiple works fine for the single disk case, but
+	/* _leader_read_num works fine for the single disk case, but
 	   we can cut out a bunch of stuff when we know there's one disk */
 
 	if (token->r.num_disks > 1)
-		rv = _leader_read_multiple(task, token, leader_ret, caller);
+		rv = _leader_read_num(task, token, leader_ret, caller);
 	else
-		rv = _leader_read_single(task, token, leader_ret, caller);
+		rv = _leader_read_one(task, token, leader_ret, caller);
 
 	if (rv == SANLK_OK)
 		log_token(token, "%s leader %llu owner %llu %llu %llu", caller,
@@ -812,32 +834,25 @@ int paxos_lease_leader_read(struct task *task,
 	return rv;
 }
 
-static int _leader_dblock_read_single(struct task *task,
-				      struct token *token,
-				      struct leader_record *leader_ret,
-				      struct paxos_dblock *our_dblock,
-				      const char *caller)
+static int _lease_read_one(struct task *task,
+			   struct token *token,
+			   struct sync_disk *disk,
+			   struct leader_record *leader_ret,
+			   struct paxos_dblock *our_dblock,
+			   uint64_t *max_mbal,
+			   int *max_q,
+			   const char *caller)
 {
-	struct sync_disk *disk = &token->disks[0];
 	char *iobuf, **p_iobuf;
 	uint32_t host_id = token->host_id;
-	int sector_size = disk->sector_size;
-	int sector_count;
-	int rv, iobuf_len;
+	uint32_t sector_size = disk->sector_size;
+	struct paxos_dblock *bk;
+	uint64_t tmp_mbal = 0;
+	int q, tmp_q = -1, rv, iobuf_len;
 
-	/* sector 0: leader record
-	   sector 1: empty
-	   sector 2: dblock host_id 1
-	   sector 3: dblock host_id 2
-	   sector 4: dblock host_id 3
-	   for host_id N we need to read N+2 sectors */
-
-	sector_count = roundup_power_of_two(host_id + 2);
-
-	iobuf_len = sector_count * sector_size;
-
-	if (!iobuf_len)
-		return -EINVAL;
+	iobuf_len = direct_align(disk);
+	if (iobuf_len < 0)
+		return iobuf_len;
 
 	p_iobuf = &iobuf;
 
@@ -853,87 +868,171 @@ static int _leader_dblock_read_single(struct task *task,
 
 	memcpy(leader_ret, iobuf, sizeof(struct leader_record));
 
-	rv = verify_leader(token, &token->disks[0], leader_ret, caller);
+	memcpy(our_dblock, iobuf + ((host_id + 1) * sector_size), sizeof(struct paxos_dblock));
 
-	memcpy(our_dblock, iobuf + (sector_size * (host_id + 1)),
-	       sizeof(struct paxos_dblock));
+	rv = verify_leader(token, disk, leader_ret, caller);
+	if (rv < 0)
+		goto out;
+
+	for (q = 0; q < leader_ret->num_hosts; q++) {
+		bk = (struct paxos_dblock *)(iobuf + ((2 + q) * sector_size));
+
+		rv = verify_dblock(token, bk);
+		if (rv < 0)
+			goto out;
+
+		if (!tmp_mbal || bk->mbal > tmp_mbal) {
+			tmp_mbal = bk->mbal;
+			tmp_q = q;
+		}
+	}
+	*max_mbal = tmp_mbal;
+	*max_q = tmp_q;
+
  out:
 	if (rv != SANLK_AIO_TIMEOUT)
 		free(iobuf);
 	return rv;
 }
 
-/* TODO: the point of a combined leader+dblock read is to reduce iops by
-   reading the leader and our dblock in a single read covering both, which
-   this function obviously does not do. */
+/* TODO: completely untested */
 
-static int _leader_dblock_read_multiple(struct task *task,
-					struct token *token,
-					struct leader_record *leader_ret,
-					struct paxos_dblock *our_dblock,
-					const char *caller)
+static int _lease_read_num(struct task *task,
+			   struct token *token,
+			   struct leader_record *leader_ret,
+			   struct paxos_dblock *our_dblock,
+			   uint64_t *max_mbal,
+			   int *max_q,
+			   const char *caller)
 {
-	struct paxos_dblock dblock;
-	uint64_t our_mbal = 0;
-	int d, num_reads;
-	int rv;
+	struct paxos_dblock dblock_one;
+	struct leader_record leader_one;
+	struct leader_record *leaders;
+	uint64_t tmp_mbal = 0;
+	uint64_t mbal_one;
+	int *leader_reps;
+	int num_disks = token->r.num_disks;
+	int leaders_len, leader_reps_len;
+	int i, d, rv, found, num_reads, q_one, tmp_q = -1;
 
-	rv = _leader_read_multiple(task, token, leader_ret, caller);
-	if (rv < 0)
-		return rv;
+	leaders_len = num_disks * sizeof(struct leader_record);
+	leader_reps_len = num_disks * sizeof(int);
+
+	leaders = malloc(leaders_len);
+	if (!leaders)
+		return -ENOMEM;
+
+	leader_reps = malloc(leader_reps_len);
+	if (!leader_reps) {
+		free(leaders);
+		return -ENOMEM;
+	}
+
+	memset(leaders, 0, leaders_len);
+	memset(leader_reps, 0, leader_reps_len);
 
 	num_reads = 0;
 
-	for (d = 0; d < token->r.num_disks; d++) {
-		rv = read_dblock(task, &token->disks[d], token->host_id, &dblock);
+	for (d = 0; d < num_disks; d++) {
+		rv = _lease_read_one(task, token, &token->disks[d], &leader_one,
+				     &dblock_one, &mbal_one, &q_one, caller);
 		if (rv < 0)
 			continue;
+
 		num_reads++;
 
-		if (dblock.mbal > our_mbal) {
-			our_mbal = dblock.mbal;
-			memcpy(our_dblock, &dblock, sizeof(struct paxos_dblock));
+		if (!tmp_mbal || mbal_one > tmp_mbal) {
+			tmp_mbal = mbal_one;
+			tmp_q = q_one;
+			memcpy(our_dblock, &dblock_one, sizeof(struct paxos_dblock));
+		}
+
+		memcpy(&leaders[d], &leader_one, sizeof(struct leader_record));
+
+		leader_reps[d] = 1;
+
+		/* count how many times the same leader block repeats */
+
+		for (i = 0; i < d; i++) {
+			if (leaders_match(&leaders[d], &leaders[i])) {
+				leader_reps[i]++;
+				break;
+			}
 		}
 	}
+	*max_mbal = tmp_mbal;
+	*max_q = tmp_q;
 
 	if (!num_reads) {
-		log_errot(token, "paxos_acquire cannot read our dblock %d", rv);
+		log_errot(token, "%s lease_read_num cannot read disks %d", caller, rv);
 		rv = SANLK_DBLOCK_READ;
+		goto out;
 	}
 
+	found = 0;
+
+	for (d = 0; d < num_disks; d++) {
+		if (!majority_disks(num_disks, leader_reps[d]))
+			continue;
+
+		/* leader on d is the same on a majority of disks,
+		   leader becomes the prototype for new_leader */
+
+		memcpy(leader_ret, &leaders[d], sizeof(struct leader_record));
+		found = 1;
+		break;
+	}
+
+	if (!found) {
+		log_errot(token, "%s lease_read_num leader inconsistent", caller);
+		rv = SANLK_LEADER_DIFF;
+	}
+ out:
+	free(leaders);
+	free(leader_reps);
 	return rv;
 }
 
-/* read the leader_record and our own dblock in a single larger read op
-   instead of two smaller read ops */
+/*
+ * read all the initial values needed to start disk paxos:
+ * - the leader record
+ * - our own dblock
+ * - the max mbal from all dblocks
+ *
+ * Read the entire lease area in one i/o and copy all those
+ * values from it.
+ */
 
-static int paxos_lease_leader_dblock_read(struct task *task,
-					  struct token *token,
-					  struct leader_record *leader_ret,
-					  struct paxos_dblock *our_dblock,
-					  const char *caller)
+static int paxos_lease_read(struct task *task, struct token *token,
+			    struct leader_record *leader_ret,
+			    uint64_t *max_mbal, const char *caller)
 {
-	int rv;
+	struct paxos_dblock our_dblock;
+	int rv, q = -1;
 
 	if (token->r.num_disks > 1)
-		rv = _leader_dblock_read_multiple(task, token, leader_ret, our_dblock, caller);
+		rv = _lease_read_num(task, token,
+				     leader_ret, &our_dblock, max_mbal, &q, caller);
 	else
-		rv = _leader_dblock_read_single(task, token, leader_ret, our_dblock, caller);
+		rv = _lease_read_one(task, token, &token->disks[0],
+				     leader_ret, &our_dblock, max_mbal, &q, caller);
 
 	if (rv == SANLK_OK)
-		log_token(token, "%s leader %llu owner %llu %llu %llu "
+		log_token(token, "%s leader %llu owner %llu %llu %llu max mbal[%d] %llu "
 			  "our_dblock %llu %llu %llu %llu %llu %llu",
 			  caller,
 			  (unsigned long long)leader_ret->lver,
 			  (unsigned long long)leader_ret->owner_id,
 			  (unsigned long long)leader_ret->owner_generation,
 			  (unsigned long long)leader_ret->timestamp,
-			  (unsigned long long)our_dblock->mbal,
-			  (unsigned long long)our_dblock->bal,
-			  (unsigned long long)our_dblock->inp,
-			  (unsigned long long)our_dblock->inp2,
-			  (unsigned long long)our_dblock->inp3,
-			  (unsigned long long)our_dblock->lver);
+			  q,
+			  (unsigned long long)*max_mbal,
+			  (unsigned long long)our_dblock.mbal,
+			  (unsigned long long)our_dblock.bal,
+			  (unsigned long long)our_dblock.inp,
+			  (unsigned long long)our_dblock.inp2,
+			  (unsigned long long)our_dblock.inp3,
+			  (unsigned long long)our_dblock.lver);
 
 	return rv;
 }
@@ -979,6 +1078,22 @@ static int write_new_leader(struct task *task,
  * won't wake up and finally write what will then be an old invalid leader.
  */
 
+/*
+ * i/o required to acquire a free lease
+ * (1 disk in token, 512 byte sectors, default num_hosts of 2000)
+ *
+ * paxos_lease_acquire()
+ * 	paxos_lease_read()	1 read   1 MB (entire lease area)
+ * 	run_ballot()
+ * 		write_dblock()	1 write  512 bytes (1 dblock sector)
+ * 		read_iobuf()	1 read   1 MB (round up num_hosts + 2 sectors)
+ * 		write_dblock()  1 write  512 bytes (1 dblock sector)
+ * 		read_iobuf()	1 read   1 MB (round up num_hosts + 2 sectors)
+ * 	write_new_leader()	1 write  512 bytes (1 leader sector)
+ *
+ * 				6 i/os = 3 1MB reads, 3 512 byte writes
+ */
+
 int paxos_lease_acquire(struct task *task,
 			struct token *token,
 			uint32_t flags,
@@ -991,23 +1106,23 @@ int paxos_lease_acquire(struct task *task,
 	struct leader_record cur_leader;
 	struct leader_record tmp_leader;
 	struct leader_record new_leader;
-	struct paxos_dblock our_dblock;
 	struct paxos_dblock dblock;
 	struct host_status hs;
 	uint64_t wait_start, now;
 	uint64_t last_timestamp;
 	uint64_t next_lver;
-	uint64_t our_mbal = 0;
+	uint64_t max_mbal;
+	uint64_t num_mbal;
+	uint64_t our_mbal;
 	int copy_cur_leader = 0;
 	int disk_open = 0;
 	int error, rv, us;
 
-	log_token(token, "paxos_acquire begin lver %llu flags %x",
-		  (unsigned long long)acquire_lver, flags);
+	log_token(token, "paxos_acquire begin %x %llu %d",
+		  flags, (unsigned long long)acquire_lver, new_num_hosts);
  restart:
 
-	error = paxos_lease_leader_dblock_read(task, token, &cur_leader, &our_dblock,
-					       "paxos_acquire");
+	error = paxos_lease_read(task, token, &cur_leader, &max_mbal, "paxos_acquire");
 	if (error < 0)
 		goto out;
 
@@ -1228,10 +1343,12 @@ int paxos_lease_acquire(struct task *task,
 
 	next_lver = cur_leader.lver + 1;
 
-	if (!our_dblock.mbal)
+	if (!max_mbal) {
 		our_mbal = token->host_id;
-	else
-		our_mbal = our_dblock.mbal + cur_leader.max_hosts;
+	} else {
+		num_mbal = max_mbal - (max_mbal % cur_leader.max_hosts);
+		our_mbal = num_mbal + cur_leader.max_hosts + token->host_id;
+	}
 
  retry_ballot:
 
@@ -1255,7 +1372,7 @@ int paxos_lease_acquire(struct task *task,
 		    tmp_leader.owner_generation == token->host_generation) {
 			/* not a problem, but interesting to see, so use log_error */
 
-			log_errot(token, "paxos_acquire %llu owner our inp "
+			log_errot(token, "paxos_acquire %llu owner is our inp "
 				  "%llu %llu %llu commited by %llu",
 				  (unsigned long long)next_lver,
 				  (unsigned long long)tmp_leader.owner_id,
@@ -1268,9 +1385,11 @@ int paxos_lease_acquire(struct task *task,
 		} else {
 			/* not a problem, but interesting to see, so use log_error */
 
-			log_errot(token, "paxos_acquire %llu owner is %llu",
+			log_errot(token, "paxos_acquire %llu owner is %llu %llu %llu",
 				  (unsigned long long)next_lver,
-				  (unsigned long long)tmp_leader.owner_id);
+				  (unsigned long long)tmp_leader.owner_id,
+				  (unsigned long long)tmp_leader.owner_generation,
+				  (unsigned long long)tmp_leader.timestamp);
 
 			error = SANLK_ACQUIRE_OWNED;
 		}
