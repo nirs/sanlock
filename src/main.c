@@ -134,8 +134,7 @@ static void _client_free(int ci)
 	}
 
 	if (cl->suspend) {
-		/* could happen, use log_debug */
-		log_error("client_free ci %d is suspended", ci);
+		log_debug("client_free ci %d is suspended", ci);
 		cl->need_free = 1;
 		goto out;
 	}
@@ -245,8 +244,7 @@ void client_resume(int ci)
 	cl->suspend = 0;
 
 	if (cl->need_free) {
-		/* could happen, use log_debug */
-		log_error("client_resume ci %d need_free", ci);
+		log_debug("client_resume ci %d need_free", ci);
 		_client_free(ci);
 	} else {
 		/* make poll() watch this connection */
