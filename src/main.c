@@ -972,11 +972,13 @@ static void process_connection(int ci)
 	if (!rv)
 		return;
 	if (rv < 0) {
-		log_error("ci %d recv error %d", ci, errno);
-		return;
+		log_error("ci %d fd %d pid %d recv errno %d",
+			  ci, client[ci].fd, client[ci].pid, errno);
+		goto dead;
 	}
 	if (rv != sizeof(h)) {
-		log_error("ci %d recv size %d", ci, rv);
+		log_error("ci %d fd %d pid %d recv size %d",
+			  ci, client[ci].fd, client[ci].pid, rv);
 		goto dead;
 	}
 	if (h.magic != SM_MAGIC) {
