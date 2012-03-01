@@ -127,7 +127,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 	struct space space;
 	char *opt_str;
 	int token_len, disks_len;
-	int fd, rv, i, j, empty_slots;
+	int fd, rv, i, j, empty_slots, lvl;
 	int alloc_count = 0, acquire_count = 0;
 	int pos = 0, pid_dead = 0;
 	int new_tokens_count;
@@ -319,13 +319,21 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 
 		rv = acquire_token(task, token);
 		if (rv < 0) {
-			if ((rv == SANLK_ACQUIRE_IDLIVE || rv == -EAGAIN) && com.quiet_fail) {
-				log_token(token, "cmd_acquire %d,%d,%d acquire_token %d",
-					  cl_ci, cl_fd, cl_pid, rv);
-			} else {
-				log_errot(token, "cmd_acquire %d,%d,%d acquire_token %d",
-					  cl_ci, cl_fd, cl_pid, rv);
+			switch (rv) {
+			case -EEXIST:
+			case -EAGAIN:
+			case -EBUSY:
+				lvl = LOG_DEBUG;
+				break;
+			case SANLK_ACQUIRE_IDLIVE:
+				lvl = com.quiet_fail ? LOG_DEBUG : LOG_ERR;
+				break;
+			default:
+				lvl = LOG_ERR;
 			}
+			log_level(0, token->token_id, NULL, lvl,
+				  "cmd_acquire %d,%d,%d acquire_token %d",
+				  cl_ci, cl_fd, cl_pid, rv);
 			result = rv;
 			goto done;
 		}

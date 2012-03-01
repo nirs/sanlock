@@ -540,7 +540,8 @@ int acquire_token(struct task *task, struct token *token)
 
 	r = find_resource(token, &resources_add);
 	if (r) {
-		log_errot(token, "acquire_token resource being added");
+		if (!com.quiet_fail)
+			log_errot(token, "acquire_token resource being added");
 		pthread_mutex_unlock(&resource_mutex);
 		return -EBUSY;
 	}
@@ -556,7 +557,8 @@ int acquire_token(struct task *task, struct token *token)
 	}
 
 	if (r) {
-		log_errot(token, "acquire_token resource exists");
+		if (!com.quiet_fail)
+			log_errot(token, "acquire_token resource exists");
 		pthread_mutex_unlock(&resource_mutex);
 		return -EEXIST;
 	}

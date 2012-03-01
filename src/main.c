@@ -50,6 +50,8 @@
 #include "client_cmd.h"
 #include "cmd.h"
 
+#define RELEASE_VERSION "1.9"
+
 struct thread_pool {
 	int num_workers;
 	int max_workers;
@@ -1219,7 +1221,8 @@ static int do_daemon(void)
 
 	setup_host_name();
 
-	log_error("sanlock daemon started aio %d %d renew %d %d host %s time %llu",
+	log_error("sanlock daemon started %s aio %d %d renew %d %d host %s time %llu",
+		  RELEASE_VERSION,
 		  main_task.use_aio, main_task.io_timeout_seconds,
 		  main_task.id_renewal_seconds, main_task.id_renewal_fail_seconds,
 		  our_host_name_global,
@@ -1326,8 +1329,6 @@ static int parse_arg_resource(char *arg)
 	}
 	return 0;
 }
-
-#define RELEASE_VERSION "1.9"
 
 /* 
  * daemon: acquires leases for the local host_id, associates them with a local
