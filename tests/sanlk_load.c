@@ -525,17 +525,17 @@ int do_rand_child(void)
 				lock_state[s1][r1] = n1;
 				lock_state[s2][r2] = n2;
 			}
+
 			m1 = IV;
 			m2 = IV;
 		}
 		if (m1 > UN && m2 > UN) {
 			/* both picks are locked, unlock both together */
 
-			rv = release_two(pid, fd, s1, r1, s2, r2);
-			if (!rv) {
-				lock_state[s1][r1] = UN;
-				lock_state[s2][r2] = UN;
-			}
+			release_two(pid, fd, s1, r1, s2, r2);
+			lock_state[s1][r1] = UN;
+			lock_state[s2][r2] = UN;
+
 			m1 = IV;
 			m2 = IV;
 		}
@@ -554,19 +554,16 @@ int do_rand_child(void)
 				lock_state[s2][r2] = n2;
 		}
 		if (m1 > UN) {
-			rv = release_one(pid, fd, s1, r1);
-			if (!rv)
-				lock_state[s1][r1] = UN;
+			release_one(pid, fd, s1, r1);
+			lock_state[s1][r1] = UN;
 		}
 		if (m2 > UN) {
-			rv = release_one(pid, fd, s2, r2);
-			if (!rv)
-				lock_state[s2][r2] = UN;
+			release_one(pid, fd, s2, r2);
+			lock_state[s2][r2] = UN;
 		}
 		if (full) {
-			rv = release_all(pid, fd);
-			if (!rv)
-				memset(lock_state, 0, sizeof(lock_state));
+			release_all(pid, fd);
+			memset(lock_state, 0, sizeof(lock_state));
 		}
 		if ((iter % 10) == 0) {
 			display_rv(pid);
