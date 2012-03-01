@@ -1609,7 +1609,7 @@ void call_cmd_daemon(int ci, struct sm_header *h_recv, int client_maxi)
 		strcpy(client[ci].owner_name, "shutdown");
 		if (h_recv->data) {
 			/* force */
-			external_shutdown = 1;
+			external_shutdown = 2;
 		} else {
 			pthread_mutex_lock(&spaces_mutex);
 			if (list_empty(&spaces) &&
@@ -1617,7 +1617,7 @@ void call_cmd_daemon(int ci, struct sm_header *h_recv, int client_maxi)
 			    list_empty(&spaces_add))
 				external_shutdown = 1;
 			else
-				log_debug("ignore shutdown for spaces");
+				log_debug("ignore shutdown, lockspace exists");
 			pthread_mutex_unlock(&spaces_mutex);
 		}
 		break;

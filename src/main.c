@@ -649,9 +649,9 @@ static int main_loop(void)
 
 			rv = check_our_lease(&main_task, sp, &check_all, check_buf);
 
-			if (rv || external_shutdown || sp->external_remove) {
-				log_space(sp, "set killing_pids check %d shutdown %d remove %d",
-					  rv, external_shutdown, sp->external_remove);
+			if (rv || sp->external_remove || (external_shutdown > 1)) {
+				log_space(sp, "set killing_pids check %d remove %d",
+					  rv, sp->external_remove);
 				sp->space_dead = 1;
 				sp->killing_pids = 1;
 				kill_pids(sp);
@@ -664,8 +664,13 @@ static int main_loop(void)
 		empty = list_empty(&spaces);
 		pthread_mutex_unlock(&spaces_mutex);
 
-		if (empty && external_shutdown)
+		if (external_shutdown && empty)
 			break;
+
+		if (external_shutdown == 1) {
+			log_debug("ignore shutdown, lockspace exists");
+			external_shutdown = 0;
+		}
 
 		free_lockspaces(0);
 
