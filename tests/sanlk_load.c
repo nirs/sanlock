@@ -33,6 +33,11 @@
 #define DEFAULT_PID_COUNT 4
 #define MAX_RV 300
 
+#define IV -1
+#define UN 0
+#define SH 3
+#define EX 5
+
 int prog_stop;
 int debug = 0;
 char error_buf[4096];
@@ -205,6 +210,7 @@ static int check_lock_state(int pid, int result, int count, char *res_state)
 	}
 }
 
+#if 0
 static int remove_lockspace(int i)
 {
 	struct sanlk_lockspace ls;
@@ -227,6 +233,7 @@ static int remove_lockspace(int i)
 	printf("rem done\n");
 	return 0;
 }
+#endif
 
 static int add_lockspace(int i)
 {
@@ -266,7 +273,7 @@ static int add_lockspaces(void)
 	return 0;
 }
 
-static int do_one(int pid, int fd, int ls1, int res1, int *full, int acquire)
+static int do_one(int pid, int fd, int _s1, int _r1, int *full, int acquire)
 {
 	char buf1[sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk)];
 	struct sanlk_resource *r1;
@@ -275,10 +282,10 @@ static int do_one(int pid, int fd, int ls1, int res1, int *full, int acquire)
 	memset(buf1, 0, sizeof(buf1));
 	r1 = (struct sanlk_resource *)&buf1;
 
-	sprintf(r1->lockspace_name, "lockspace%d", ls1);
-	sprintf(r1->name, "resource%d", res1);
-	sprintf(r1->disks[0].path, "%s%d", lock_disk_base, ls1);
-	r1->disks[0].offset = (res1+1)*LEASE_SIZE;
+	sprintf(r1->lockspace_name, "lockspace%d", _s1);
+	sprintf(r1->name, "resource%d", _r1);
+	sprintf(r1->disks[0].path, "%s%d", lock_disk_base, _s1);
+	r1->disks[0].offset = (_r1+1)*LEASE_SIZE;
 	r1->num_disks = 1;
 
 	if (acquire) {
@@ -291,14 +298,14 @@ static int do_one(int pid, int fd, int ls1, int res1, int *full, int acquire)
 	}
 
 	log_debug("%d %s %d,%d = %d",
-		  pid, acquire ? "acquire" : "release", ls1, res1, rv);
+		  pid, acquire ? "acquire" : "release", _s1, _r1, rv);
 
 	save_rv(pid, rv, acquire);
 
 	return rv;
 }
 
-static int do_two(int pid, int fd, int ls1, int res1, int ls2, int res2, int *full, int acquire)
+static int do_two(int pid, int fd, int _s1, int _r1, int _s2, int _r2, int *full, int acquire)
 {
 	char buf1[sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk)];
 	char buf2[sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk)];
@@ -318,16 +325,16 @@ static int do_two(int pid, int fd, int ls1, int res1, int ls2, int res2, int *fu
 	res_args[0] = r1;
 	res_args[1] = r2;
 
-	sprintf(r1->lockspace_name, "lockspace%d", ls1);
-	sprintf(r1->name, "resource%d", res1);
-	sprintf(r1->disks[0].path, "%s%d", lock_disk_base, ls1);
-	r1->disks[0].offset = (res1+1)*LEASE_SIZE;
+	sprintf(r1->lockspace_name, "lockspace%d", _s1);
+	sprintf(r1->name, "resource%d", _r1);
+	sprintf(r1->disks[0].path, "%s%d", lock_disk_base, _s1);
+	r1->disks[0].offset = (_r1+1)*LEASE_SIZE;
 	r1->num_disks = 1;
 
-	sprintf(r2->lockspace_name, "lockspace%d", ls2);
-	sprintf(r2->name, "resource%d", res2);
-	sprintf(r2->disks[0].path, "%s%d", lock_disk_base, ls2);
-	r2->disks[0].offset = (res2+1)*LEASE_SIZE;
+	sprintf(r2->lockspace_name, "lockspace%d", _s2);
+	sprintf(r2->name, "resource%d", _r2);
+	sprintf(r2->disks[0].path, "%s%d", lock_disk_base, _s2);
+	r2->disks[0].offset = (_r2+1)*LEASE_SIZE;
 	r2->num_disks = 1;
 
 	if (acquire) {
@@ -340,7 +347,7 @@ static int do_two(int pid, int fd, int ls1, int res1, int ls2, int res2, int *fu
 	}
 
 	log_debug("%d %s %d,%d %d,%d = %d",
-		  pid, acquire ? "acquire" : "release", ls1, res1, ls2, res2, rv);
+		  pid, acquire ? "acquire" : "release", _s1, _r1, _s2, _r2, rv);
 
 	save_rv(pid, rv, acquire);
 
@@ -348,24 +355,24 @@ static int do_two(int pid, int fd, int ls1, int res1, int ls2, int res2, int *fu
 	return rv;
 }
 
-static int acquire_one(int pid, int fd, int ls1, int res1, int *full)
+static int acquire_one(int pid, int fd, int s1, int r1, int *full)
 {
-	return do_one(pid, fd, ls1, res1, full, 1);
+	return do_one(pid, fd, s1, r1, full, 1);
 }
 
-static int acquire_two(int pid, int fd, int ls1, int res1, int ls2, int res2, int *full)
+static int acquire_two(int pid, int fd, int s1, int r1, int s2, int r2, int *full)
 {
-	return do_two(pid, fd, ls1, res1, ls2, res2, full, 1);
+	return do_two(pid, fd, s1, r1, s2, r2, full, 1);
 }
 
-static int release_one(int pid, int fd, int ls1, int res1)
+static int release_one(int pid, int fd, int s1, int r1)
 {
-	return do_one(pid, fd, ls1, res1, NULL, 0);
+	return do_one(pid, fd, s1, r1, NULL, 0);
 }
 
-static int release_two(int pid, int fd, int ls1, int res1, int ls2, int res2)
+static int release_two(int pid, int fd, int s1, int r1, int s2, int r2)
 {
-	return do_two(pid, fd, ls1, res1, ls2, res2, NULL, 0);
+	return do_two(pid, fd, s1, r1, s2, r2, NULL, 0);
 }
 
 static int release_all(int pid, int fd)
@@ -391,7 +398,7 @@ static void inquire_all(int pid, int fd)
 		
 	rv = sanlock_inquire(fd, -1, 0, &count, &state);
 
-	log_debug("%d inquire all = %d", pid, rv);
+	log_debug("%d inquire all = %d %d", pid, rv, count);
 
 	if (prog_stop)
 		return;
@@ -401,7 +408,7 @@ static void inquire_all(int pid, int fd)
 
 int do_rand_child(void)
 {
-	int ls1, ls2, res1, res2, state1, state2, full;
+	int s1, s2, r1, r2, m1, m2, full;
 	int fd, rv;
 	int iter = 1;
 	int pid = getpid();
@@ -417,69 +424,69 @@ int do_rand_child(void)
 	}
 
 	while (!prog_stop) {
-		ls1 = get_rand(0, ls_count-1);
-		res1 = get_rand(0, res_count-1);
-		state1 = lock_state[ls1][res1];
+		s1 = get_rand(0, ls_count-1);
+		r1 = get_rand(0, res_count-1);
+		m1 = lock_state[s1][r1];
 
-		ls2 = -1;
-		res2 = -1;
-		state2 = -1;
+		s2 = -1;
+		r2 = -1;
+		m2 = IV;
 
 		if (get_rand(1, 3) == 2) {
-			ls2 = get_rand(0, ls_count-1);
-			res2 = get_rand(0, res_count-1);
-			state2 = lock_state[ls2][res2];
+			s2 = get_rand(0, ls_count-1);
+			r2 = get_rand(0, res_count-1);
+			m2 = lock_state[s2][r2];
 
-			if (ls1 == ls2 && res1 == res2) {
-				ls2 = -1;
-				res2 = -1;
-				state2 = -1;
+			if (s1 == s2 && r1 == r2) {
+				s2 = -1;
+				r2 = -1;
+				m2 = IV;
 			}
 		}
 
 		full = 0;
 
-		if (state1 == 0 && state2 == 0) {
+		if (m1 == UN && m2 == UN) {
 			/* both picks are unlocked, lock both together */
 
-			rv = acquire_two(pid, fd, ls1, res1, ls2, res2, &full);
+			rv = acquire_two(pid, fd, s1, r1, s2, r2, &full);
 			if (!rv) {
-				lock_state[ls1][res1] = 1;
-				lock_state[ls2][res2] = 1;
+				lock_state[s1][r1] = EX;
+				lock_state[s2][r2] = EX;
 			}
-			state1 = -1;
-			state2 = -1;
+			m1 = IV;
+			m2 = IV;
 		}
-		if (state1 == 1 && state2 == 1) {
+		if (m1 == EX && m2 == EX) {
 			/* both picks are locked, unlock both together */
 
-			rv = release_two(pid, fd, ls1, res1, ls2, res2);
+			rv = release_two(pid, fd, s1, r1, s2, r2);
 			if (!rv) {
-				lock_state[ls1][res1] = 0;
-				lock_state[ls2][res2] = 0;
+				lock_state[s1][r1] = UN;
+				lock_state[s2][r2] = UN;
 			}
-			state1 = -1;
-			state2 = -1;
+			m1 = IV;
+			m2 = IV;
 		}
-		if (state1 == 0) {
-			rv = acquire_one(pid, fd, ls1, res1, &full);
+		if (m1 == UN) {
+			rv = acquire_one(pid, fd, s1, r1, &full);
 			if (!rv)
-				lock_state[ls1][res1] = 1;
+				lock_state[s1][r1] = EX;
 		}
-		if (state2 == 0) {
-			rv = acquire_one(pid, fd, ls2, res2, &full);
+		if (m2 == UN) {
+			rv = acquire_one(pid, fd, s2, r2, &full);
 			if (!rv)
-				lock_state[ls2][res2] = 1;
+				lock_state[s2][r2] = EX;
 		}
-		if (state1 == 1) {
-			rv = release_one(pid, fd, ls1, res1);
+		if (m1 == EX) {
+			rv = release_one(pid, fd, s1, r1);
 			if (!rv)
-				lock_state[ls1][res1] = 0;
+				lock_state[s1][r1] = UN;
 		}
-		if (state2 == 1) {
-			rv = release_one(pid, fd, ls2, res2);
+		if (m2 == EX) {
+			rv = release_one(pid, fd, s2, r2);
 			if (!rv)
-				lock_state[ls2][res2] = 0;
+				lock_state[s2][r2] = UN;
 		}
 		if (full) {
 			rv = release_all(pid, fd);
@@ -581,7 +588,7 @@ int do_rand(int argc, char *argv[])
 	struct sigaction act;
 	int children[MAX_PID_COUNT];
 	int run_count = 0;
-	int i, rv, pid, lsi, status;
+	int i, rv, pid, status;
 
 	if (argc < 5)
 		return -1;
