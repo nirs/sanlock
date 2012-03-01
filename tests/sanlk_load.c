@@ -40,12 +40,14 @@
 
 int prog_stop;
 int debug = 0;
+int debug_verbose = 0;
 char error_buf[4096];
 char lock_disk_base[PATH_MAX];
 int lock_state[MAX_LS_COUNT][MAX_RES_COUNT];
 int ls_count = DEFAULT_LS_COUNT;
 int res_count = DEFAULT_RES_COUNT;
 int pid_count = DEFAULT_PID_COUNT;
+int one_mode = 0;
 int our_hostid;
 int acquire_rv[MAX_RV];
 int release_rv[MAX_RV];
@@ -74,6 +76,22 @@ static void sigterm_handler(int sig)
 static int get_rand(int a, int b)
 {
 	return a + (int) (((float)(b - a + 1)) * random() / (RAND_MAX+1.0));
+}
+
+static int get_rand_sh_ex(void)
+{
+	unsigned int n;
+
+	if (one_mode == SH)
+		return SH;
+	if (one_mode == EX)
+		return EX;
+
+	n = (unsigned int)random();;
+
+	if (n % 2)
+		return SH;
+	return EX;
 }
 
 static void save_rv(int pid, int rv, int acquire)
@@ -133,6 +151,25 @@ static void dump_lock_state(int pid)
 			log_error("%d lockspace%d:resource%d", pid, i, j);
 		}
 	}
+}
+
+static void dump_inquire_state(int pid, char *state)
+{
+	char *p = state;
+	int len = strlen(state);
+	int i;
+
+	if (!len)
+		return;
+
+	for (i = 0; i < len; i++) {
+		if (state[i] == ' ') {
+			state[i] = '\0';
+			log_debug("%d %s", pid, p);
+			p = state + i + 1;
+		}
+	}
+	log_debug("%d %s", pid, p);
 }
 
 static int check_lock_state(int pid, int result, int count, char *res_state)
@@ -273,10 +310,24 @@ static int add_lockspaces(void)
 	return 0;
 }
 
-static int do_one(int pid, int fd, int _s1, int _r1, int *full, int acquire)
+static const char *mode_str(int n)
+{
+	if (n == SH)
+		return "sh";
+	if (n == EX)
+		return "ex";
+	if (n == UN)
+		return "un";
+	if (n == IV)
+		return "iv";
+	return "er";
+}
+
+static int do_one(int pid, int fd, int _s1, int _r1, int _n1, int *full)
 {
 	char buf1[sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk)];
 	struct sanlk_resource *r1;
+	int acquire = (_n1 != UN);
 	int rv;
 
 	memset(buf1, 0, sizeof(buf1));
@@ -287,6 +338,8 @@ static int do_one(int pid, int fd, int _s1, int _r1, int *full, int acquire)
 	sprintf(r1->disks[0].path, "%s%d", lock_disk_base, _s1);
 	r1->disks[0].offset = (_r1+1)*LEASE_SIZE;
 	r1->num_disks = 1;
+	if (_n1 == SH)
+		r1->flags |= SANLK_RES_SHARED;
 
 	if (acquire) {
 		rv = sanlock_acquire(fd, -1, 0, 1, &r1, NULL);
@@ -297,21 +350,25 @@ static int do_one(int pid, int fd, int _s1, int _r1, int *full, int acquire)
 		rv = sanlock_release(fd, -1, 0, 1, &r1);
 	}
 
-	log_debug("%d %s %d,%d = %d",
-		  pid, acquire ? "acquire" : "release", _s1, _r1, rv);
+	log_debug("%d %s %d,%d %s = %d",
+		  pid,
+		  acquire ? "acquire" : "release",
+		  _s1, _r1, mode_str(_n1),
+		  rv);
 
 	save_rv(pid, rv, acquire);
 
 	return rv;
 }
 
-static int do_two(int pid, int fd, int _s1, int _r1, int _s2, int _r2, int *full, int acquire)
+static int do_two(int pid, int fd, int _s1, int _r1, int _n1, int _s2, int _r2, int _n2, int *full)
 {
 	char buf1[sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk)];
 	char buf2[sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk)];
 	struct sanlk_resource *r1;
 	struct sanlk_resource *r2;
 	struct sanlk_resource **res_args;
+	int acquire = (_n1 != UN);
 	int rv;
 
 	res_args = malloc(2 * sizeof(struct sanlk_resource *));
@@ -330,12 +387,16 @@ static int do_two(int pid, int fd, int _s1, int _r1, int _s2, int _r2, int *full
 	sprintf(r1->disks[0].path, "%s%d", lock_disk_base, _s1);
 	r1->disks[0].offset = (_r1+1)*LEASE_SIZE;
 	r1->num_disks = 1;
+	if (_n1 == SH)
+		r1->flags |= SANLK_RES_SHARED;
 
 	sprintf(r2->lockspace_name, "lockspace%d", _s2);
 	sprintf(r2->name, "resource%d", _r2);
 	sprintf(r2->disks[0].path, "%s%d", lock_disk_base, _s2);
 	r2->disks[0].offset = (_r2+1)*LEASE_SIZE;
 	r2->num_disks = 1;
+	if (_n2 == SH)
+		r2->flags |= SANLK_RES_SHARED;
 
 	if (acquire) {
 		rv = sanlock_acquire(fd, -1, 0, 2, res_args, NULL);
@@ -346,8 +407,12 @@ static int do_two(int pid, int fd, int _s1, int _r1, int _s2, int _r2, int *full
 		rv = sanlock_release(fd, -1, 0, 2, res_args);
 	}
 
-	log_debug("%d %s %d,%d %d,%d = %d",
-		  pid, acquire ? "acquire" : "release", _s1, _r1, _s2, _r2, rv);
+	log_debug("%d %s %d,%d %s %d,%d %s = %d",
+		  pid,
+		  acquire ? "acquire" : "release",
+		  _s1, _r1, mode_str(_n1),
+		  _s2, _r2, mode_str(_n2),
+		  rv);
 
 	save_rv(pid, rv, acquire);
 
@@ -355,24 +420,24 @@ static int do_two(int pid, int fd, int _s1, int _r1, int _s2, int _r2, int *full
 	return rv;
 }
 
-static int acquire_one(int pid, int fd, int s1, int r1, int *full)
+static int acquire_one(int pid, int fd, int s1, int r1, int n1, int *full)
 {
-	return do_one(pid, fd, s1, r1, full, 1);
+	return do_one(pid, fd, s1, r1, n1, full);
 }
 
-static int acquire_two(int pid, int fd, int s1, int r1, int s2, int r2, int *full)
+static int acquire_two(int pid, int fd, int s1, int r1, int n1, int s2, int r2, int n2, int *full)
 {
-	return do_two(pid, fd, s1, r1, s2, r2, full, 1);
+	return do_two(pid, fd, s1, r1, n1, s2, r2, n2, full);
 }
 
 static int release_one(int pid, int fd, int s1, int r1)
 {
-	return do_one(pid, fd, s1, r1, NULL, 0);
+	return do_one(pid, fd, s1, r1, UN, NULL);
 }
 
 static int release_two(int pid, int fd, int s1, int r1, int s2, int r2)
 {
-	return do_two(pid, fd, s1, r1, s2, r2, NULL, 0);
+	return do_two(pid, fd, s1, r1, UN, s2, r2, UN, NULL);
 }
 
 static int release_all(int pid, int fd)
@@ -404,11 +469,14 @@ static void inquire_all(int pid, int fd)
 		return;
 		
 	check_lock_state(pid, rv, count, state);
+
+	if (count && debug_verbose)
+		dump_inquire_state(pid, state);
 }
 
 int do_rand_child(void)
 {
-	int s1, s2, r1, r2, m1, m2, full;
+	int s1, s2, r1, r2, m1, m2, n1, n2, full;
 	int fd, rv;
 	int iter = 1;
 	int pid = getpid();
@@ -449,15 +517,18 @@ int do_rand_child(void)
 		if (m1 == UN && m2 == UN) {
 			/* both picks are unlocked, lock both together */
 
-			rv = acquire_two(pid, fd, s1, r1, s2, r2, &full);
+			n1 = get_rand_sh_ex();
+			n2 = get_rand_sh_ex();
+
+			rv = acquire_two(pid, fd, s1, r1, n1, s2, r2, n2, &full);
 			if (!rv) {
-				lock_state[s1][r1] = EX;
-				lock_state[s2][r2] = EX;
+				lock_state[s1][r1] = n1;
+				lock_state[s2][r2] = n2;
 			}
 			m1 = IV;
 			m2 = IV;
 		}
-		if (m1 == EX && m2 == EX) {
+		if (m1 > UN && m2 > UN) {
 			/* both picks are locked, unlock both together */
 
 			rv = release_two(pid, fd, s1, r1, s2, r2);
@@ -469,21 +540,25 @@ int do_rand_child(void)
 			m2 = IV;
 		}
 		if (m1 == UN) {
-			rv = acquire_one(pid, fd, s1, r1, &full);
+			n1 = get_rand_sh_ex();
+
+			rv = acquire_one(pid, fd, s1, r1, n1, &full);
 			if (!rv)
-				lock_state[s1][r1] = EX;
+				lock_state[s1][r1] = n1;
 		}
 		if (m2 == UN) {
-			rv = acquire_one(pid, fd, s2, r2, &full);
+			n2 = get_rand_sh_ex();
+
+			rv = acquire_one(pid, fd, s2, r2, n2, &full);
 			if (!rv)
-				lock_state[s2][r2] = EX;
+				lock_state[s2][r2] = n2;
 		}
-		if (m1 == EX) {
+		if (m1 > UN) {
 			rv = release_one(pid, fd, s1, r1);
 			if (!rv)
 				lock_state[s1][r1] = UN;
 		}
-		if (m2 == EX) {
+		if (m2 > UN) {
 			rv = release_one(pid, fd, s2, r2);
 			if (!rv)
 				lock_state[s2][r2] = UN;
@@ -531,6 +606,11 @@ void get_options(int argc, char *argv[])
 			continue;
 		}
 
+		if (optchar == 'V') {
+			debug_verbose = 1;
+			continue;
+		}
+
 		if (i >= argc) {
 			log_error("option '%c' requires arg", optchar);
 			exit(EXIT_FAILURE);
@@ -562,6 +642,9 @@ void get_options(int argc, char *argv[])
 				log_error("max pid_count %d", MAX_PID_COUNT);
 				exit(-1);
 			}
+			break;
+		case 'm':
+			one_mode = atoi(optionarg);
 			break;
 		default:
 			log_error("unknown option: %c", optchar);
@@ -800,9 +883,18 @@ int main(int argc, char *argv[])
 		return 0;
 
  out:
-	printf("sanlk_load init <lock_disk_base> [<ls_count> <res_count>]\n");
+	printf("sanlk_load init <disk_base> [<ls_count> <res_count>]\n");
+	printf("  init ls_count lockspaces, each with res_count resources\n");
+	printf("  devices for lockspaces 0..N are disk_base0..disk_baseN\n");
+	printf("  e.g. /dev/lock0, /dev/lock1, ... /dev/lockN\n");
 	printf("\n");
-	printf("sanlk_load rand <lock_disk_base> -i <host_id> [-D -s <ls_count> -r <res_count> -p <pid_count>]\n");
+	printf("sanlk_load rand <disk_base> -i <host_id> [options]\n");
+	printf("  -s <num>  number of lockspaces\n");
+	printf("  -r <num>  number of resources per lockspace\n");
+	printf("  -p <num>  number of processes\n");
+	printf("  -m <num>  use one mode for all locks, 3 = SH, 5 = EX\n");
+	printf("  -D        debug output\n");
+	printf("  -V        verbose debug output\n");
 	printf("\n");
 	return -1;
 }
