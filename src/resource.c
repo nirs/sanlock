@@ -147,6 +147,8 @@ static int set_mode_block(struct task *task, struct token *token,
 	disk = &token->disks[0];
 
 	iobuf_len = disk->sector_size;
+	if (!iobuf_len)
+		return -EINVAL;
 
 	p_iobuf = &iobuf;
 
@@ -199,6 +201,8 @@ static int read_mode_block(struct task *task, struct token *token,
 	disk = &token->disks[0];
 
 	iobuf_len = disk->sector_size;
+	if (!iobuf_len)
+		return -EINVAL;
 
 	p_iobuf = &iobuf;
 
@@ -323,8 +327,7 @@ static int release_disk(struct task *task, struct token *token,
 	return rv; /* SANLK_OK */
 }
 
-static int _release_token(struct task *task, struct token *token, int opened,
-			  int nodisk)
+static int _release_token(struct task *task, struct token *token, int opened, int nodisk)
 {
 	struct resource *r = token->resource;
 	uint64_t lver;
@@ -550,6 +553,7 @@ int acquire_token(struct task *task, struct token *token)
 	if (r && (token->acquire_flags & SANLK_RES_SHARED) && (r->flags & R_SHARED)) {
 		/* multiple shared holders allowed */
 		log_token(token, "acquire_token add shared");
+		copy_disks(&token->r.disks, &r->r.disks, token->r.num_disks);
 		token->resource = r;
 		list_add(&token->list, &r->tokens);
 		pthread_mutex_unlock(&resource_mutex);
