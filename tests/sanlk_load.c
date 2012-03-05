@@ -165,7 +165,10 @@ static void dump_inquire_state(int pid, char *state)
 	for (i = 0; i < len; i++) {
 		if (state[i] == ' ') {
 			state[i] = '\0';
-			log_debug("%d %s", pid, p);
+			if (!i)
+				log_debug("%d leading space", pid);
+			else
+				log_debug("%d %s", pid, p);
 			p = state + i + 1;
 		}
 	}
@@ -227,8 +230,6 @@ static int check_lock_state(int pid, int result, int count, char *res_state)
 	if ((found_count != count) || bad_count)
 		goto fail;
 
-	if (res_state)
-		free(res_state);
 	return 0;
 
  fail:
@@ -472,6 +473,9 @@ static void inquire_all(int pid, int fd)
 
 	if (count && debug_verbose)
 		dump_inquire_state(pid, state);
+
+	if (state)
+		free(state);
 }
 
 int do_rand_child(void)

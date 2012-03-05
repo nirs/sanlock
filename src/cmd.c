@@ -654,7 +654,7 @@ static void cmd_inquire(struct task *task, struct cmd_args *ca)
 			goto done;
 		}
 
-		if (i)
+		if (cat_count)
 			strcat(state, " ");
 		strcat(state, str);
 		cat_count++;
