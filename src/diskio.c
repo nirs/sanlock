@@ -112,7 +112,7 @@ int open_disks_fd(struct sync_disk *disks, int num_disks)
 {
 	struct sync_disk *disk;
 	int num_opens = 0;
-	int d, fd, rv;
+	int d, fd, rv = -1;
 
 	for (d = 0; d < num_disks; d++) {
 		disk = &disks[d];
@@ -217,7 +217,7 @@ int open_disks(struct sync_disk *disks, int num_disks)
 {
 	struct sync_disk *disk;
 	int num_opens = 0;
-	int d, err, rv;
+	int d, err, rv = -1;
 	uint32_t ss = 0;
 
 	for (d = 0; d < num_disks; d++) {

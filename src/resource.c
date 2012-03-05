@@ -370,8 +370,10 @@ static int _release_token(struct task *task, struct token *token, int opened, in
 		goto out;
 	}
 
-	if (nodisk)
+	if (nodisk) {
+		rv = SANLK_OK;
 		goto out;
+	}
 
 	if (!opened) {
 		rv = open_disks_fd(token->disks, token->r.num_disks);

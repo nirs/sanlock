@@ -396,6 +396,7 @@ static void *lockspace_thread(void *arg_in)
 	if (rv < 0) {
 		log_erros(sp, "open_disk %s error %d", sp->host_id_disk.path, rv);
 		acquire_result = -ENODEV;
+		delta_result = -1;
 		goto set_status;
 	}
 	opened = 1;
@@ -404,12 +405,14 @@ static void *lockspace_thread(void *arg_in)
 	if (sp->align_size < 0) {
 		log_erros(sp, "direct_align error");
 		acquire_result = sp->align_size;
+		delta_result = -1;
 		goto set_status;
 	}
 
 	sp->lease_status.renewal_read_buf = malloc(sp->align_size);
 	if (!sp->lease_status.renewal_read_buf) {
 		acquire_result = -ENOMEM;
+		delta_result = -1;
 		goto set_status;
 	}
 

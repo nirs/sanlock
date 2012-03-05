@@ -1061,7 +1061,7 @@ static void cmd_init_lockspace(struct task *task, struct cmd_args *ca)
 
 static void cmd_init_resource(struct task *task, struct cmd_args *ca)
 {
-	struct token *token;
+	struct token *token = NULL;
 	struct sanlk_resource res;
 	int token_len, disks_len;
 	int j, fd, rv, result;
