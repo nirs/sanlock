@@ -452,21 +452,24 @@ exit_fail:
 
 /* release */
 PyDoc_STRVAR(pydoc_release, "\
-release(fd, lockspace, resource, disks)\n\
+release(lockspace, resource, disks [, slkfd=fd, pid=owner])\n\
 Release a resource lease for the current process.\n\
 The disks must be in the format: [(path, offset), ... ]");
 
 static PyObject *
-py_release(PyObject *self __unused, PyObject *args)
+py_release(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, sanlockfd;
+    int rv, sanlockfd = -1, pid = -1;
     const char *lockspace, *resource;
     struct sanlk_resource *res;
     PyObject *disks;
 
+    static char *kwlist[] = {"lockspace", "resource", "disks", "slkfd",
+                                "pid", NULL};
+
     /* parse python tuple */
-    if (!PyArg_ParseTuple(args, "issO!",
-        &sanlockfd, &lockspace, &resource, &PyList_Type, &disks)) {
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|ii", kwlist,
+        &lockspace, &resource, &PyList_Type, &disks, &sanlockfd, &pid)) {
         return NULL;
     }
 
@@ -481,7 +484,7 @@ py_release(PyObject *self __unused, PyObject *args)
 
     /* release sanlock resource (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_release(sanlockfd, -1, 0, 1, &res);
+    rv = sanlock_release(sanlockfd, pid, 0, 1, &res);
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
@@ -527,7 +530,8 @@ sanlock_methods[] = {
     {"rem_lockspace", py_rem_lockspace, METH_VARARGS, pydoc_rem_lockspace},
     {"acquire", (PyCFunction) py_acquire,
                 METH_VARARGS|METH_KEYWORDS, pydoc_acquire},
-    {"release", py_release, METH_VARARGS, pydoc_release},
+    {"release", (PyCFunction) py_release,
+                METH_VARARGS|METH_KEYWORDS, pydoc_release},
     {NULL, NULL, 0, NULL}
 };
 
