@@ -387,26 +387,28 @@ py_rem_lockspace(PyObject *self __unused, PyObject *args)
 
 /* acquire */
 PyDoc_STRVAR(pydoc_acquire, "\
-acquire(lockspace, resource, disks [, slkfd=fd, pid=owner])\n\
+acquire(lockspace, resource, disks [, slkfd=fd, pid=owner, shared=False])\n\
 Acquire a resource lease for the current process (using the slkfd argument\n\
 to specify the sanlock file descriptor) or for an other process (using the\n\
-pid argument).\n\
+pid argument). If shared is True the resource will be acquired in the shared\n\
+mode.\n\
 The disks must be in the format: [(path, offset), ... ]\n");
 
 static PyObject *
 py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, sanlockfd = -1, pid = -1;
+    int rv, sanlockfd = -1, pid = -1, shared = 0;
     const char *lockspace, *resource;
     struct sanlk_resource *res;
     PyObject *disks;
 
     static char *kwlist[] = {"lockspace", "resource", "disks", "slkfd",
-                                "pid", NULL};
+                                "pid", "shared", NULL};
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|ii", kwlist,
-        &lockspace, &resource, &PyList_Type, &disks, &sanlockfd, &pid)) {
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|iii", kwlist,
+        &lockspace, &resource, &PyList_Type, &disks, &sanlockfd, &pid,
+        &shared)) {
         return NULL;
     }
 
@@ -424,6 +426,11 @@ py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
     /* prepare sanlock names */
     strncpy(res->lockspace_name, lockspace, SANLK_NAME_LEN);
     strncpy(res->name, resource, SANLK_NAME_LEN);
+
+    /* prepare sanlock flags */
+    if (shared) {
+        res->flags |= SANLK_RES_SHARED;
+    }
 
     /* acquire sanlock resource (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
