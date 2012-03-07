@@ -33,7 +33,8 @@
 #include "mode_block.h"
 
 /* from cmd.c */
-void send_state_resource(int fd, struct resource *r, const char *list_name);
+void send_state_resource(int fd, struct resource *r, const char *list_name, int pid, uint32_t token_id);
+
 /* from main.c */
 int get_rand(int a, int b);
 
@@ -50,14 +51,20 @@ static pthread_cond_t resource_cond;
 void send_state_resources(int fd)
 {
 	struct resource *r;
+	struct token *token;
 
 	pthread_mutex_lock(&resource_mutex);
-	list_for_each_entry(r, &resources_held, list)
-		send_state_resource(fd, r, "resources_held");
-	list_for_each_entry(r, &resources_add, list)
-		send_state_resource(fd, r, "resources_add");
+	list_for_each_entry(r, &resources_held, list) {
+		list_for_each_entry(token, &r->tokens, list)
+			send_state_resource(fd, r, "held", token->pid, token->token_id);
+	}
+
+	list_for_each_entry(r, &resources_add, list) {
+		list_for_each_entry(token, &r->tokens, list)
+			send_state_resource(fd, r, "add", token->pid, token->token_id);
+	}
 	list_for_each_entry(r, &resources_rem, list)
-		send_state_resource(fd, r, "resources_rem");
+		send_state_resource(fd, r, "rem", r->pid, r->release_token_id);
 	pthread_mutex_unlock(&resource_mutex);
 }
 

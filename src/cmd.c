@@ -1293,17 +1293,20 @@ static int print_state_lockspace(struct space *sp, char *str, const char *list_n
 	return strlen(str) + 1;
 }
 
-static int print_state_resource(struct resource *r, char *str, const char *list_name)
+static int print_state_resource(struct resource *r, char *str, const char *list_name,
+				uint32_t token_id)
 {
 	memset(str, 0, SANLK_STATE_MAXSTR);
 
 	snprintf(str, SANLK_STATE_MAXSTR-1,
 		 "list=%s "
 		 "flags=%x "
-		 "lver=%llu",
+		 "lver=%llu "
+		 "token_id=%u",
 		 list_name,
 		 r->flags,
-		 (unsigned long long)r->leader.lver);
+		 (unsigned long long)r->leader.lver,
+		 token_id);
 
 	return strlen(str) + 1;
 }
@@ -1399,9 +1402,11 @@ static void send_state_lockspace(int fd, struct space *sp, const char *list_name
 	send(fd, &lockspace, sizeof(lockspace), MSG_NOSIGNAL);
 }
 
-void send_state_resource(int fd, struct resource *r, const char *list_name);
+void send_state_resource(int fd, struct resource *r, const char *list_name,
+			 int pid, uint32_t token_id);
 
-void send_state_resource(int fd, struct resource *r, const char *list_name)
+void send_state_resource(int fd, struct resource *r, const char *list_name,
+			 int pid, uint32_t token_id)
 {
 	struct sanlk_state st;
 	char str[SANLK_STATE_MAXSTR];
@@ -1411,11 +1416,11 @@ void send_state_resource(int fd, struct resource *r, const char *list_name)
 	memset(&st, 0, sizeof(st));
 
 	st.type = SANLK_STATE_RESOURCE;
-	st.data32 = r->pid;
+	st.data32 = pid;
 	st.data64 = r->leader.lver;
 	strncpy(st.name, r->r.name, NAME_ID_SIZE);
 
-	str_len = print_state_resource(r, str, list_name);
+	str_len = print_state_resource(r, str, list_name, token_id);
 
 	st.str_len = str_len;
 
