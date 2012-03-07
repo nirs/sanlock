@@ -518,6 +518,7 @@ EXTERN struct client *client;
 #define DEFAULT_SOCKET_MODE (S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP)
 #define DEFAULT_MIN_WORKER_THREADS 2
 #define DEFAULT_MAX_WORKER_THREADS 8
+#define DEFAULT_SH_RETRIES 8
 
 struct command_line {
 	int type;				/* COM_ */
@@ -539,6 +540,7 @@ struct command_line {
 	int num_hosts;				/* -n */
 	int max_hosts;				/* -m */
 	int res_count;
+	int sh_retries;
 	uint32_t force_mode;
 	char our_host_name[SANLK_NAME_LEN+1];
 	char *dump_path;

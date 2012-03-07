@@ -1276,6 +1276,7 @@ int paxos_lease_acquire(struct task *task,
 					  (unsigned long long)host_id_leader.owner_generation,
 					  (unsigned long long)host_id_leader.timestamp);
 			}
+			memcpy(leader_ret, &cur_leader, sizeof(struct leader_record));
 			error = SANLK_ACQUIRE_IDLIVE;
 			goto out;
 		}
@@ -1391,6 +1392,7 @@ int paxos_lease_acquire(struct task *task,
 				  (unsigned long long)tmp_leader.owner_generation,
 				  (unsigned long long)tmp_leader.timestamp);
 
+			memcpy(leader_ret, &tmp_leader, sizeof(struct leader_record));
 			error = SANLK_ACQUIRE_OWNED;
 		}
 		goto out;
@@ -1456,6 +1458,23 @@ int paxos_lease_acquire(struct task *task,
 
 	if (new_num_hosts)
 		new_leader.num_hosts = new_num_hosts;
+
+	if (new_leader.owner_id == token->host_id) {
+		/*
+		 * The LFL_SHORT_HOLD flag is just a "hint" to help
+		 * other nodes be more intelligent about retrying
+		 * due to transient failures when acquiring shared
+		 * leases.  Only modify SHORT_HOLD if we're commiting
+		 * ourself as the new owner.  If we're commiting another
+		 * host as owner, we don't know if they are acquiring
+		 * shared or not.
+		 */
+		if (flags & PAXOS_ACQUIRE_SHARED)
+			new_leader.flags |= LFL_SHORT_HOLD;
+		else
+			new_leader.flags &= ~LFL_SHORT_HOLD;
+	}
+
 	new_leader.checksum = leader_checksum(&new_leader);
 
 	error = write_new_leader(task, token, &new_leader, "paxos_acquire");
@@ -1471,6 +1490,7 @@ int paxos_lease_acquire(struct task *task,
 			  (unsigned long long)new_leader.owner_generation,
 			  (unsigned long long)new_leader.timestamp);
 
+		memcpy(leader_ret, &new_leader, sizeof(struct leader_record));
 		error = SANLK_ACQUIRE_OTHER;
 		goto out;
 	}
@@ -1590,6 +1610,7 @@ int paxos_lease_release(struct task *task,
 	leader.write_id = token->host_id;
 	leader.write_generation = token->host_generation;
 	leader.write_timestamp = monotime();
+	leader.flags &= ~LFL_SHORT_HOLD;
 	leader.checksum = leader_checksum(&leader);
 
 	error = write_new_leader(task, token, &leader, "paxos_release");

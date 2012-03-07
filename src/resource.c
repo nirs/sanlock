@@ -34,6 +34,8 @@
 
 /* from cmd.c */
 void send_state_resource(int fd, struct resource *r, const char *list_name);
+/* from main.c */
+int get_rand(int a, int b);
 
 static pthread_t resource_pt;
 static int resource_thread_stop;
@@ -292,6 +294,9 @@ static int acquire_disk(struct task *task, struct token *token,
 	if (com.quiet_fail)
 		flags |= PAXOS_ACQUIRE_QUIET_FAIL;
 
+	if (token->acquire_flags & SANLK_RES_SHARED)
+		flags |= PAXOS_ACQUIRE_SHARED;
+
 	memset(&leader_tmp, 0, sizeof(leader_tmp));
 
 	rv = paxos_lease_acquire(task, token, flags, &leader_tmp, acquire_lver,
@@ -301,11 +306,9 @@ static int acquire_disk(struct task *task, struct token *token,
 		  (unsigned long long)leader_tmp.lver,
 		  (unsigned long long)leader_tmp.timestamp);
 
-	if (rv < 0)
-		return rv;
-
 	memcpy(leader, &leader_tmp, sizeof(struct leader_record));
-	return rv; /* SANLK_OK */
+
+	return rv; /* SANLK_RV */
 }
 
 /* return < 0 on error, 1 on success */
@@ -526,7 +529,9 @@ int acquire_token(struct task *task, struct token *token)
 	struct resource *r;
 	uint64_t acquire_lver = 0;
 	uint32_t new_num_hosts = 0;
-	int rv, live_count = 0;
+	int sh_retries = 0;
+	int live_count = 0;
+	int rv;
 
 	if (token->acquire_flags & SANLK_RES_LVER)
 		acquire_lver = token->acquire_lver;
@@ -589,8 +594,29 @@ int acquire_token(struct task *task, struct token *token)
 
 	copy_disks(&r->r.disks, &token->r.disks, token->r.num_disks);
 
+ retry:
+	memset(&leader, 0, sizeof(struct leader_record));
+
 	rv = acquire_disk(task, token, acquire_lver, new_num_hosts, &leader);
 	if (rv < 0) {
+		if ((token->acquire_flags & SANLK_RES_SHARED) &&
+		    (leader.flags & LFL_SHORT_HOLD)) {
+			/*
+			 * Multiple parallel sh requests can fail because
+			 * the lease is briefly held in ex mode.  The ex
+			 * holder sets SHORT_HOLD in the leader record to
+			 * indicate that it's only held for a short time
+			 * while acquiring a shared lease.  A retry will
+			 * probably succeed.
+			 */
+			if (sh_retries++ < com.sh_retries) {
+				int us = get_rand(0, 1000000);
+				log_token(token, "acquire_token sh_retry %d %d", rv, us);
+				usleep(us);
+				goto retry;
+			}
+			rv = SANLK_ACQUIRE_SHRETRY;
+		}
 		release_token_opened(task, token);
 		return rv;
 	}

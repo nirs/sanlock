@@ -306,11 +306,12 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 
 		/* save a record of what this token_id is for later debugging */
 		log_level(space.space_id, token->token_id, NULL, LOG_WARNING,
-			  "resource %.48s:%.48s:%.256s:%llu for %d,%d,%d",
+			  "resource %.48s:%.48s:%.256s:%llu%s for %d,%d,%d",
 			  token->r.lockspace_name,
 			  token->r.name,
 			  token->r.disks[0].path,
 			  (unsigned long long)token->r.disks[0].offset,
+			  (token->acquire_flags & SANLK_RES_SHARED) ? ":SH" : "",
 			  cl_ci, cl_fd, cl_pid);
 	}
 

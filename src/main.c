@@ -1892,6 +1892,7 @@ static int do_direct(void)
 		log_tool("read_leader done %d", rv);
 		log_tool("magic 0x%0x", leader.magic);
 		log_tool("version 0x%x", leader.version);
+		log_tool("flags 0x%x", leader.flags);
 		log_tool("sector_size %u", leader.sector_size);
 		log_tool("num_hosts %llu",
 			 (unsigned long long)leader.num_hosts);
@@ -2006,6 +2007,7 @@ int main(int argc, char *argv[])
 	com.uid = DEFAULT_SOCKET_UID;
 	com.gid = DEFAULT_SOCKET_GID;
 	com.pid = -1;
+	com.sh_retries = DEFAULT_SH_RETRIES;
 
 	memset(&main_task, 0, sizeof(main_task));
 

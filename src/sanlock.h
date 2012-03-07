@@ -62,7 +62,7 @@ struct sanlk_resource {
 	uint64_t data64;   /* per-resource command-specific data */
 	uint32_t data32;   /* per-resource command-specific data */
 	uint32_t unused;
-	uint32_t flags;
+	uint32_t flags;    /* SANLK_RES_ */
 	uint32_t num_disks;
 	/* followed by num_disks sanlk_disk structs */
 	struct sanlk_disk disks[0];
