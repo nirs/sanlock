@@ -50,7 +50,7 @@
 #include "client_cmd.h"
 #include "cmd.h"
 
-#define RELEASE_VERSION "2.0"
+#define RELEASE_VERSION "2.1"
 
 struct thread_pool {
 	int num_workers;

@@ -41,7 +41,7 @@
 #define GNUC_UNUSED __attribute__((__unused__))
 #endif
 
-#define RELEASE_VERSION "2.0"
+#define RELEASE_VERSION "2.1"
 
 #define DEFAULT_TEST_INTERVAL 10
 #define DEFAULT_FIRE_TIMEOUT 60
