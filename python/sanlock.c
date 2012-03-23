@@ -198,7 +198,7 @@ py_init_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     /* prepare sanlock names */
     strncpy(ls.name, lockspace, SANLK_NAME_LEN);
-    strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN);
+    strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN - 1);
 
     /* init sanlock lockspace (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -288,7 +288,7 @@ py_add_lockspace(PyObject *self __unused, PyObject *args)
 
     /* prepare sanlock names */
     strncpy(ls.name, lockspace, SANLK_NAME_LEN);
-    strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN);
+    strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN - 1);
 
     /* add sanlock lockspace (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -328,7 +328,7 @@ py_inq_lockspace(PyObject *self __unused, PyObject *args)
 
     /* prepare sanlock names */
     strncpy(ls.name, lockspace, SANLK_NAME_LEN);
-    strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN);
+    strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN - 1);
 
     /* add sanlock lockspace (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -370,7 +370,7 @@ py_rem_lockspace(PyObject *self __unused, PyObject *args)
 
     /* prepare sanlock names */
     strncpy(ls.name, lockspace, SANLK_NAME_LEN);
-    strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN);
+    strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN - 1);
 
     /* remove sanlock lockspace (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -412,14 +412,14 @@ py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
         return NULL;
     }
 
-    /* parse and check sanlock resource */
-    if (__parse_resource(disks, &res) != 0) {
-        return NULL;
-    }
-
     /* check if any of the slkfd or pid parameters was given */
     if (sanlockfd == -1 && pid == -1) {
         __set_exception(EINVAL, "Invalid slkfd and pid values");
+        return NULL;
+    }
+
+    /* parse and check sanlock resource */
+    if (__parse_resource(disks, &res) != 0) {
         return NULL;
     }
 
