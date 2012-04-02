@@ -56,9 +56,7 @@ static int set_disk_properties(struct sync_disk *disk)
 
 	blkid_free_probe(probe);
 
-	if ((sector_size != ss_logical) ||
-	    (sector_size != ss_physical) ||
-	    (sector_size % 512)) {
+	if ((sector_size != ss_logical) || (sector_size % 512)) {
 		log_error("invalid disk sector size %u logical %u "
 			  "physical %u %s", sector_size, ss_logical,
 			  ss_physical, disk->path);
