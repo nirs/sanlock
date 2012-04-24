@@ -1,0 +1,17 @@
+# SANLOCKUSER -- the daemon should run as this user
+#
+# To run as root user instead of sanlock user
+#SANLOCKUSER="root"
+
+# SANLOCKOPTS -- set the command line options for the sanlock daemon
+# See sanlock man page for full list of command line options.
+#
+# Include "-U sanlock -G sanlock" in the option string unless
+# also changing the SANLOCKUSER above.
+#
+# To disable use of watchdog via wdmd
+#SANLOCKOPTS="-U sanlock -G sanlock -w 0"
+#
+# To disable use of watchdog via wdmd and disable high priority features
+#SANLOCKOPTS="-U sanlock -G sanlock -w 0 -h 0"
+
