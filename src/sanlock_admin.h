@@ -15,6 +15,7 @@
 
 /* rem flags */
 #define SANLK_REM_ASYNC		0x00000001
+#define SANLK_REM_UNUSED	0x00000002
 
 /*
  * add_lockspace returns:
@@ -40,9 +41,10 @@ int sanlock_inq_lockspace(struct sanlk_lockspace *ls, uint32_t flags);
  * 0: the lockspace has been removed successfully
  * -EINPROGRESS: the lockspace is already in the process of being removed
  * -ENOENT: lockspace not found
+ * -EBUSY: UNUSED was set and lockspace is being used
  *
  * The sanlock daemon will kill any pids using the lockspace when the
- * lockspace is removed.
+ * lockspace is removed (unless UNUSED is set).
  */
 
 int sanlock_rem_lockspace(struct sanlk_lockspace *ls, uint32_t flags);

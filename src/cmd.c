@@ -982,6 +982,13 @@ static void cmd_rem_lockspace(struct cmd_args *ca)
 	log_debug("cmd_rem_lockspace %d,%d %.48s flags %x",
 		  ca->ci_in, fd, lockspace.name, ca->header.cmd_flags);
 
+	if (ca->header.cmd_flags & SANLK_REM_UNUSED) {
+		if (lockspace_is_used(&lockspace)) {
+			result = -EBUSY;
+			goto reply;
+		}
+	}
+
 	rv = rem_lockspace_start(&lockspace, &space_id);
 	if (rv < 0) {
 		result = rv;

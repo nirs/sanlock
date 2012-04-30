@@ -475,6 +475,30 @@ static struct resource *find_resource(struct token *token,
 	return NULL;
 }
 
+int lockspace_is_used(struct sanlk_lockspace *ls)
+{
+	struct resource *r;
+
+	pthread_mutex_lock(&resource_mutex);
+	list_for_each_entry(r, &resources_held, list) {
+		if (!strncmp(r->r.lockspace_name, ls->name, NAME_ID_SIZE))
+			goto yes;
+	}
+	list_for_each_entry(r, &resources_add, list) {
+		if (!strncmp(r->r.lockspace_name, ls->name, NAME_ID_SIZE))
+			goto yes;
+	}
+	list_for_each_entry(r, &resources_rem, list) {
+		if (!strncmp(r->r.lockspace_name, ls->name, NAME_ID_SIZE))
+			goto yes;
+	}
+	pthread_mutex_unlock(&resource_mutex);
+	return 0;
+ yes:
+	pthread_mutex_unlock(&resource_mutex);
+	return 1;
+}
+
 static void copy_disks(void *dst, void *src, int num_disks)
 {
 	struct sync_disk *d, *s;
