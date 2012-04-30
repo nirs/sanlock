@@ -10,6 +10,12 @@
 #ifndef __SANLOCK_ADMIN_H__
 #define __SANLOCK_ADMIN_H__
 
+/* add flags */
+#define SANLK_ADD_ASYNC		0x00000001
+
+/* rem flags */
+#define SANLK_REM_ASYNC		0x00000001
+
 /*
  * add_lockspace returns:
  * 0: the lockspace has been added successfully

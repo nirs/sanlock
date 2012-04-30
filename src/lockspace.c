@@ -574,16 +574,10 @@ static void free_sp(struct space *sp)
 	free(sp);
 }
 
-/*
- * When this function returns, it needs to be safe to being processing lease
- * requests and allowing pid's to run, so we need to own our host_id, and the
- * watchdog needs to be active watching our host_id renewals.
- */
-
-int add_lockspace(struct sanlk_lockspace *ls)
+int add_lockspace_start(struct sanlk_lockspace *ls, struct space **sp_out)
 {
 	struct space *sp, *sp2;
-	int rv, result;
+	int rv;
 
 	if (!ls->name[0] || !ls->host_id || !ls->host_id_disk.path[0]) {
 		log_error("add_lockspace bad args id %llu name %zu path %zu",
@@ -670,6 +664,22 @@ int add_lockspace(struct sanlk_lockspace *ls)
 		goto fail_del;
 	}
 
+	*sp_out = sp;
+	return 0;
+
+ fail_del:
+	pthread_mutex_lock(&spaces_mutex);
+	list_del(&sp->list);
+	pthread_mutex_unlock(&spaces_mutex);
+ fail_free:
+	free_sp(sp);
+	return rv;
+}
+
+int add_lockspace_wait(struct space *sp)
+{
+	int rv, result;
+
 	while (1) {
 		pthread_mutex_lock(&sp->mutex);
 		result = sp->lease_status.acquire_last_result;
@@ -703,7 +713,6 @@ int add_lockspace(struct sanlk_lockspace *ls)
 	pthread_mutex_lock(&spaces_mutex);
 	list_del(&sp->list);
 	pthread_mutex_unlock(&spaces_mutex);
- fail_free:
 	free_sp(sp);
 	return rv;
 }
@@ -736,11 +745,11 @@ int inq_lockspace(struct sanlk_lockspace *ls)
 	return rv;
 }
 
-int rem_lockspace(struct sanlk_lockspace *ls)
+int rem_lockspace_start(struct sanlk_lockspace *ls, unsigned int *space_id)
 {
-	struct space *sp, *sp2;
+	struct space *sp;
 	unsigned int id;
-	int rv, done;
+	int rv;
 
 	pthread_mutex_lock(&spaces_mutex);
 
@@ -769,15 +778,41 @@ int rem_lockspace(struct sanlk_lockspace *ls)
 		goto out;
 	}
 
+	/*
+	 * Removal happens in a round about way:
+	 * - we set external_remove
+	 * - main_loop sees external_remove and sets space_dead, killing_pids
+	 * - main_loop sees killing_pids and all pids dead, sets thread_stop,
+	 *   and moves sp from spaces to spaces_rem
+	 * - main_loop calls free_lockspaces(0), which joins any
+	 *   lockspace_thread that is done, and then frees sp
+	 *
+	 * Once we release spaces_mutex, the sp could be freed any time,
+	 * so we can't touch it.  Use its space_id to check for completion.
+	 */
+
 	sp->external_remove = 1;
 	id = sp->space_id;
 	pthread_mutex_unlock(&spaces_mutex);
 
+	*space_id = id;
+	rv = 0;
+ out:
+	return rv;
+}
+
+/* check for matching space_id in case the lockspace is added again */
+
+int rem_lockspace_wait(struct sanlk_lockspace *ls, unsigned int space_id)
+{
+	struct space *sp;
+	int done;
+
 	while (1) {
 		pthread_mutex_lock(&spaces_mutex);
-		sp2 = _search_space(ls->name, (struct sync_disk *)&ls->host_id_disk, ls->host_id,
-			   	    &spaces, &spaces_rem, NULL);
-		if (sp2 && sp2->space_id == id)
+		sp = _search_space(ls->name, (struct sync_disk *)&ls->host_id_disk, ls->host_id,
+			   	   &spaces, &spaces_rem, NULL);
+		if (sp && (sp->space_id == space_id))
 			done = 0;
 		else
 			done = 1;
@@ -787,9 +822,7 @@ int rem_lockspace(struct sanlk_lockspace *ls)
 			break;
 		sleep(1);
 	}
-	rv = 0;
- out:
-	return rv;
+	return 0;
 }
 
 /* 

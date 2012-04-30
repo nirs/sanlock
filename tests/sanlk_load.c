@@ -277,15 +277,20 @@ static int add_lockspace(int i)
 {
 	struct sanlk_lockspace ls;
 	int rv;
+	int async = !(i % 2);
+	uint32_t flags = 0;
 
 	memset(&ls, 0, sizeof(ls));
 	sprintf(ls.host_id_disk.path, "%s%d", lock_disk_base, i);
 	sprintf(ls.name, "lockspace%d", i);
 	ls.host_id = our_hostid;
 
+	if (async)
+		flags = SANLK_ADD_ASYNC;
+
 	printf("add lockspace%d...\n", i);
 
-	rv = sanlock_add_lockspace(&ls, 0);
+	rv = sanlock_add_lockspace(&ls, flags);
 	if (rv == -EEXIST)
 		return 0;
 
@@ -295,6 +300,24 @@ static int add_lockspace(int i)
 		return -1;
 	}
 
+	if (!async)
+		goto out;
+
+	while (1) {
+		rv = sanlock_inq_lockspace(&ls, 0);
+		if (!rv)
+			goto out;
+
+		if (rv == -EINPROGRESS) {
+			sleep(2);
+			continue;
+		}
+
+		log_error("sanlock_inq_lockspace error %d", rv);
+		return -1;
+	}
+
+ out:
 	printf("add done\n");
 	return 0;
 }

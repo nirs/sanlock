@@ -19,9 +19,11 @@ int test_id_bit(int host_id, char *bitmap);
 void set_id_bit(int host_id, char *bitmap, char *c);
 int check_our_lease(struct task *task, struct space *sp, int *check_all, char *check_buf);
 void check_other_leases(struct task *task, struct space *sp, char *buf);
-int add_lockspace(struct sanlk_lockspace *ls);
+int add_lockspace_start(struct sanlk_lockspace *ls, struct space **sp_out);
+int add_lockspace_wait(struct space *sp);
 int inq_lockspace(struct sanlk_lockspace *ls);
-int rem_lockspace(struct sanlk_lockspace *ls);
+int rem_lockspace_start(struct sanlk_lockspace *ls, unsigned int *space_id);
+int rem_lockspace_wait(struct sanlk_lockspace *ls, unsigned int space_id);
 void free_lockspaces(int wait);
 
 #endif

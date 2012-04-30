@@ -35,6 +35,7 @@
 #include <uuid/uuid.h>
 
 #include "sanlock_internal.h"
+#include "sanlock_admin.h"
 #include "sanlock_sock.h"
 #include "diskio.h"
 #include "log.h"
@@ -844,6 +845,8 @@ static void cmd_examine(struct task *task GNUC_UNUSED, struct cmd_args *ca)
 static void cmd_add_lockspace(struct cmd_args *ca)
 {
 	struct sanlk_lockspace lockspace;
+	struct space *sp;
+	int async = ca->header.cmd_flags & SANLK_ADD_ASYNC;
 	int fd, rv, result;
 
 	fd = client[ca->ci_in].fd;
@@ -856,16 +859,31 @@ static void cmd_add_lockspace(struct cmd_args *ca)
 		goto reply;
 	}
 
-	log_debug("cmd_add_lockspace %d,%d %.48s:%llu:%s:%llu",
+	log_debug("cmd_add_lockspace %d,%d %.48s:%llu:%s:%llu flags %x",
 		  ca->ci_in, fd, lockspace.name,
 		  (unsigned long long)lockspace.host_id,
 		  lockspace.host_id_disk.path,
-		  (unsigned long long)lockspace.host_id_disk.offset);
+		  (unsigned long long)lockspace.host_id_disk.offset,
+		  ca->header.cmd_flags);
 
-	result = add_lockspace(&lockspace);
+	rv = add_lockspace_start(&lockspace, &sp);
+	if (rv < 0) {
+		result = rv;
+		goto reply;
+	}
+
+	if (async) {
+		result = rv;
+		log_debug("cmd_add_lockspace %d,%d async done %d", ca->ci_in, fd, result);
+		send_result(fd, &ca->header, result);
+		client_resume(ca->ci_in);
+		add_lockspace_wait(sp);
+		return;
+	}
+
+	result = add_lockspace_wait(sp);
  reply:
 	log_debug("cmd_add_lockspace %d,%d done %d", ca->ci_in, fd, result);
-
 	send_result(fd, &ca->header, result);
 	client_resume(ca->ci_in);
 }
@@ -947,7 +965,9 @@ static void cmd_inq_lockspace(struct cmd_args *ca)
 static void cmd_rem_lockspace(struct cmd_args *ca)
 {
 	struct sanlk_lockspace lockspace;
+	int async = ca->header.cmd_flags & SANLK_REM_ASYNC;
 	int fd, rv, result;
+	unsigned int space_id;
 
 	fd = client[ca->ci_in].fd;
 
@@ -959,13 +979,27 @@ static void cmd_rem_lockspace(struct cmd_args *ca)
 		goto reply;
 	}
 
-	log_debug("cmd_rem_lockspace %d,%d %.48s",
-		  ca->ci_in, fd, lockspace.name);
+	log_debug("cmd_rem_lockspace %d,%d %.48s flags %x",
+		  ca->ci_in, fd, lockspace.name, ca->header.cmd_flags);
 
-	result = rem_lockspace(&lockspace);
+	rv = rem_lockspace_start(&lockspace, &space_id);
+	if (rv < 0) {
+		result = rv;
+		goto reply;
+	}
+
+	if (async) {
+		result = rv;
+		log_debug("cmd_rem_lockspace %d,%d async done %d", ca->ci_in, fd, result);
+		send_result(fd, &ca->header, result);
+		client_resume(ca->ci_in);
+		rem_lockspace_wait(&lockspace, space_id);
+		return;
+	}
+
+	result = rem_lockspace_wait(&lockspace, space_id);
  reply:
 	log_debug("cmd_rem_lockspace %d,%d done %d", ca->ci_in, fd, result);
-
 	send_result(fd, &ca->header, result);
 	client_resume(ca->ci_in);
 }
