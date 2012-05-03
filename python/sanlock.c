@@ -267,23 +267,32 @@ exit_fail:
 
 /* add_lockspace */
 PyDoc_STRVAR(pydoc_add_lockspace, "\
-add_lockspace(lockspace, host_id, path, offset=0)\n\
-Add a lockspace, acquiring a host_id in it.");
+add_lockspace(lockspace, host_id, path, offset=0, async=False)\n\
+Add a lockspace, acquiring a host_id in it. If async is True the function\n\
+will return immediatly and the status can be checked using inq_lockspace.");
 
 static PyObject *
-py_add_lockspace(PyObject *self __unused, PyObject *args)
+py_add_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv;
+    int rv, async = 0, flags = 0;
     const char *lockspace, *path;
     struct sanlk_lockspace ls;
+
+    static char *kwlist[] = {"lockspace", "host_id", "path", "offset",
+                                "async", NULL};
 
     /* initialize lockspace structure */
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
-    if (!PyArg_ParseTuple(args, "sks|k",
-        &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset)) {
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "sks|ki", kwlist,
+        &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset, &async)) {
         return NULL;
+    }
+
+    /* prepare sanlock_add_lockspace flags */
+    if (async) {
+        flags |= SANLK_ADD_ASYNC;
     }
 
     /* prepare sanlock names */
@@ -292,7 +301,7 @@ py_add_lockspace(PyObject *self __unused, PyObject *args)
 
     /* add sanlock lockspace (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_add_lockspace(&ls, 0 );
+    rv = sanlock_add_lockspace(&ls, flags);
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
@@ -311,17 +320,19 @@ False otherwise. The special value None is returned when the daemon is\n\
 still in the process of acquiring or releasing the host_id.");
 
 static PyObject *
-py_inq_lockspace(PyObject *self __unused, PyObject *args)
+py_inq_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
     int rv;
     const char *lockspace, *path;
     struct sanlk_lockspace ls;
 
+    static char *kwlist[] = {"lockspace", "host_id", "path", "offset", NULL};
+
     /* initialize lockspace structure */
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
-    if (!PyArg_ParseTuple(args, "sks|k",
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "sks|k", kwlist,
         &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset)) {
         return NULL;
     }
@@ -332,7 +343,7 @@ py_inq_lockspace(PyObject *self __unused, PyObject *args)
 
     /* add sanlock lockspace (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_inq_lockspace(&ls, 0 );
+    rv = sanlock_inq_lockspace(&ls, 0);
     Py_END_ALLOW_THREADS
 
     if (rv == 0) {
@@ -349,22 +360,27 @@ py_inq_lockspace(PyObject *self __unused, PyObject *args)
 
 /* rem_lockspace */
 PyDoc_STRVAR(pydoc_rem_lockspace, "\
-rem_lockspace(lockspace, host_id, path, offset=0)\n\
-Remove a lockspace, releasing the acquired host_id.");
+rem_lockspace(lockspace, host_id, path, offset=0, async=False)\n\
+Remove a lockspace, releasing the acquired host_id. If async is True the\n\
+function will return immediatly and the status can be checked using\n\
+inq_lockspace.");
 
 static PyObject *
-py_rem_lockspace(PyObject *self __unused, PyObject *args)
+py_rem_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv;
+    int rv, async = 0, flags = 0;
     const char *lockspace, *path;
     struct sanlk_lockspace ls;
+
+    static char *kwlist[] = {"lockspace", "host_id", "path", "offset",
+                                "async", NULL};
 
     /* initialize lockspace structure */
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
-    if (!PyArg_ParseTuple(args, "sks|k",
-        &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset)) {
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "sks|ki", kwlist,
+        &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset, &async)) {
         return NULL;
     }
 
@@ -372,9 +388,14 @@ py_rem_lockspace(PyObject *self __unused, PyObject *args)
     strncpy(ls.name, lockspace, SANLK_NAME_LEN);
     strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN - 1);
 
+    /* prepare sanlock_rem_lockspace flags */
+    if (async) {
+        flags |= SANLK_REM_ASYNC;
+    }
+
     /* remove sanlock lockspace (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_rem_lockspace(&ls, 0);
+    rv = sanlock_rem_lockspace(&ls, flags);
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
@@ -525,9 +546,12 @@ sanlock_methods[] = {
                         METH_VARARGS|METH_KEYWORDS, pydoc_init_lockspace},
     {"init_resource", (PyCFunction) py_init_resource,
                         METH_VARARGS|METH_KEYWORDS, pydoc_init_resource},
-    {"add_lockspace", py_add_lockspace, METH_VARARGS, pydoc_add_lockspace},
-    {"inq_lockspace", py_inq_lockspace, METH_VARARGS, pydoc_inq_lockspace},
-    {"rem_lockspace", py_rem_lockspace, METH_VARARGS, pydoc_rem_lockspace},
+    {"add_lockspace", (PyCFunction) py_add_lockspace,
+                        METH_VARARGS|METH_KEYWORDS, pydoc_add_lockspace},
+    {"inq_lockspace", (PyCFunction) py_inq_lockspace,
+                        METH_VARARGS|METH_KEYWORDS, pydoc_inq_lockspace},
+    {"rem_lockspace", (PyCFunction) py_rem_lockspace,
+                        METH_VARARGS|METH_KEYWORDS, pydoc_rem_lockspace},
     {"acquire", (PyCFunction) py_acquire,
                 METH_VARARGS|METH_KEYWORDS, pydoc_acquire},
     {"release", (PyCFunction) py_release,
