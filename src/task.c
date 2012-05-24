@@ -62,15 +62,6 @@ void setup_task_timeouts(struct task *task, int io_timeout_arg)
 	task->host_dead_seconds = host_dead_seconds;
 	task->request_finish_seconds = request_finish_seconds;
 
-	/* interval between each kill count is approx 1 sec, so we
-	   spend about 10 seconds sending 10 SIGTERMs to a pid,
-	   then send SIGKILLs to it. after 60 attempts the watchdog
-	   should have fired if the kills are due to failed renewal;
-	   otherwise we just give up at that point */
-
-	task->kill_count_term = 10;
-	task->kill_count_max = 60;
-
 	/* the rest are calculated as needed in place */
 
 	/* hack to make just main thread log this info */

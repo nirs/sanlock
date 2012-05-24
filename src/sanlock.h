@@ -22,6 +22,11 @@
 
 #define SANLK_PATH_LEN		1024
 
+/* max length of kill script path and args, includes terminate \0 byte */
+
+#define SANLK_HELPER_PATH_LEN	128
+#define SANLK_HELPER_ARGS_LEN	128
+
 /* max disks in a single lease */
 
 #define SANLK_MAX_DISKS 4

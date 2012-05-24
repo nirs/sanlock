@@ -1,0 +1,87 @@
+#!/bin/bash
+
+num=$1
+cmd=$2
+dev=$3
+
+if [ "$cmd" == "init" ]; then
+
+	echo sanlock direct init -s test:0:$dev:0
+	sanlock direct init -s test:0:$dev:0
+
+	for i in `seq 1 $num`; do
+		off=`expr $i \* 1048576`
+		echo sanlock direct init -r test:r$i:$dev:$off
+		sanlock direct init -r test:r$i:$dev:$off
+	done
+
+elif [ "$cmd" == "start" ]; then
+
+	hostid=$4
+	killpath=$5
+
+	echo sanlock client add_lockspace -s test:$hostid:$dev:0
+	sanlock client add_lockspace -s test:$hostid:$dev:0
+
+	for i in `seq 1 $num`; do
+		off=`expr $i \* 1048576`
+		echo ./sanlk_client test r$i $dev $off $killpath &
+		./sanlk_client test r$i $dev $off $killpath &
+	done
+
+elif [ "$cmd" == "error" ]; then
+
+	rm -f /tmp/client-state.txt
+
+	rm -f /tmp/client-linear.txt
+	rm -f /tmp/client-error.txt
+	dmsetup table $dev > /tmp/client-linear.txt
+	sed "s/linear/error/" /tmp/client-linear.txt > /tmp/client-error.txt
+
+	dmsetup suspend $dev
+	dmsetup load $dev /tmp/client-error.txt
+	dmsetup resume $dev
+
+elif [ "$cmd" == "resume" ]; then
+
+	hostid=$4
+
+	dmsetup suspend $dev
+	dmsetup load $dev /tmp/client-linear.txt
+	dmsetup resume $dev
+
+	echo sanlock client add_lockspace -s test:$hostid:$dev:0
+	sanlock client add_lockspace -s test:$hostid:$dev:0
+
+	while read pid state; do
+		echo sanlock client acquire -p $pid -r $state
+		sanlock client acquire -p $pid -r $state
+		ret=$?
+		if [ $ret == 0 ]; then
+			kill -s SIGCONT $pid
+		else
+			kill -s SIGKILL $pid
+		fi
+	done < /tmp/client-state.txt
+
+else
+	echo ""
+	echo "clientn N init DEV"
+	echo "  sanlock direct init -s test:0:DEV:0"
+	echo "  sanlock direct init -r test:rI:DEV:OFF"
+	echo ""
+	echo "clientn N start DEV HOSTID KILLPATH"
+	echo "  sanlock client add_lockspace -s test:HOSTID:DEV:0"
+	echo "  starts N ./sanlk_client processes"
+	echo ""
+	echo "clientn N error DEV"
+	echo "  blocks i/o to DEV"
+	echo "  causes KILLPATH to run"
+	echo "  causes lockspace to be removed"
+	echo ""
+	echo "clientn N resume DEV HOSTID"
+	echo "  sanlock client add_lockspace -s test:HOSTID:DEV:0"
+	echo "  reacquires leases for sanlk_client pids paused by"
+	echo "  killpath_pause, based on inquire state saved by killpath"
+fi
+

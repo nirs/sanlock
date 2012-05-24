@@ -227,6 +227,9 @@ group id
 .BI -t " num"
 max worker threads
 
+.BI -g " sec"
+seconds for graceful recovery
+
 .BR -w " 0|1"
 use watchdog through wdmd
 
@@ -489,6 +492,31 @@ take:
 \fB1\fP (KILL_PID): kill the process holding the resource lease.  When the
 process has exited, the resource lease will be released, and can then be
 acquired by anyone.
+
+.SS Graceful recovery
+
+When a lockspace host_id cannot be renewed for a specific period of time,
+sanlock enters a recovery mode in which it attempts to forcibly release
+any resource leases in that lockspace.  If all the leases are not released
+within 60 seconds, the watchdog will fire, resetting the host.
+
+The most immediate way of releasing the resource leases in the failed
+lockspace is by sending SIGKILL to all pids holding the leases, and
+automatically releasing the resource leases as the pids exit.  After all
+pids have exited, no resource leases are held in the lockspace, the
+watchdog expiration is removed, and the host can avoid the watchdog reset.
+
+A slightly more graceful approach is to send SIGTERM to a pid before
+escalating to SIGKILL.  sanlock does this by sending SIGTERM to each pid,
+once a second, for the first N seconds, before sending SIGKILL once a
+second for the remaining M seconds (N/M can be tuned with the -g daemon
+option.)
+
+An even more graceful approach is to configure a program for sanlock to
+run that will terminate or suspend each pid, and explicitly release the
+leases it held.  sanlock will run this program for each pid.  It has N
+seconds to terminate the pid or explicitly release its leases before
+sanlock escalates to SIGKILL for the remaining M seconds.
 
 .SH SEE ALSO
 .BR wdmd (8)

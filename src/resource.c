@@ -380,6 +380,13 @@ static int _release_token(struct task *task, struct token *token, int opened, in
 		goto out;
 	}
 
+	if (token->flags & T_LS_DEAD) {
+		/* don't bother trying disk op which will probably timeout */
+		close_disks(token->disks, token->r.num_disks);
+		rv = SANLK_OK;
+		goto out;
+	}
+
 	if (nodisk) {
 		rv = SANLK_OK;
 		goto out;

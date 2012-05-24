@@ -21,6 +21,7 @@ CMD_SOURCE = \
 	delta_lease.c \
 	direct.c \
 	diskio.c \
+	helper.c \
 	lockspace.c \
 	lockfile.c \
 	log.c \

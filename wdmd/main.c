@@ -379,8 +379,10 @@ static int test_clients(void)
 			continue;
 
 		if (t >= client[i].expire) {
-			log_error("test failed pid %d renewal %llu expire %llu",
+			log_error("test failed pid %d now %llu keepalive %llu renewal %llu expire %llu",
 				  client[i].pid,
+				  (unsigned long long)t,
+				  (unsigned long long)last_keepalive,
 				  (unsigned long long)client[i].renewal,
 				  (unsigned long long)client[i].expire);
 			fail_count++;

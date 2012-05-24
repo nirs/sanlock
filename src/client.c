@@ -286,6 +286,41 @@ int sanlock_restrict(int sock, uint32_t flags)
 	return rv;
 }
 
+int sanlock_killpath(int sock, uint32_t flags, char *path, char *args)
+{
+	char path_max[SANLK_HELPER_PATH_LEN];
+	char args_max[SANLK_HELPER_ARGS_LEN];
+	int rv, datalen;
+
+	datalen = SANLK_HELPER_PATH_LEN + SANLK_HELPER_ARGS_LEN;
+
+	memset(path_max, 0, sizeof(path_max));
+	memset(args_max, 0, sizeof(args_max));
+
+	snprintf(path_max, SANLK_HELPER_PATH_LEN-1, "%s", path);
+	snprintf(args_max, SANLK_HELPER_ARGS_LEN-1, "%s", args);
+
+	rv = send_header(sock, SM_CMD_KILLPATH, flags, datalen, 0, -1);
+	if (rv < 0)
+		return rv;
+
+	rv = send(sock, path_max, SANLK_HELPER_PATH_LEN, 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	rv = send(sock, args_max, SANLK_HELPER_ARGS_LEN, 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	rv = recv_result(sock);
+ out:
+	return rv;
+}
+
 int sanlock_acquire(int sock, int pid, uint32_t flags, int res_count,
 		    struct sanlk_resource *res_args[],
 		    struct sanlk_options *opt_in)

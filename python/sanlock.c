@@ -537,6 +537,88 @@ exit_fail:
     return NULL;
 }
 
+/* killpath */
+PyDoc_STRVAR(pydoc_killpath, "\
+killpath(path, args [, slkfd=fd])\n\
+Configure the path and arguments of the executable used to fence a\n\
+process either by causing the pid to exit (kill) or putting it into\n\
+a safe state (resources released).\n\
+The arguments must be in the format: [\"arg1\", \"arg2\", ...]");
+
+static PyObject *
+py_killpath(PyObject *self __unused, PyObject *args, PyObject *keywds)
+{
+    int rv, i, j, n, num_args, sanlockfd = -1;
+    char *p, *path, kpargs[SANLK_HELPER_ARGS_LEN];
+    PyObject *argslist, *item;
+
+    static char *kwlist[] = {"path", "args", "slkfd", NULL};
+
+    /* parse python tuple */
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "sO!|i", kwlist,
+        &path, &PyList_Type, &argslist, &sanlockfd)) {
+        return NULL;
+    }
+
+    /* checking the path length */
+    if (strlen(path) + 1 > SANLK_HELPER_PATH_LEN) {
+        __set_exception(EINVAL, "Killpath path argument too long");
+        return NULL;
+    }
+
+    num_args = PyList_Size(argslist);
+    memset(kpargs, 0, SANLK_HELPER_ARGS_LEN);
+
+    /* creating the arguments string from a python list */
+    for (i = 0, n = 0; i < num_args; i++) {
+        size_t arg_len;
+
+        item = PyList_GetItem(argslist, i);
+        p = PyString_AsString(item);
+
+        if (p == NULL) {
+            __set_exception(EINVAL, "Killpath argument not a string");
+            return NULL;
+        }
+
+        /* computing the argument length considering the escape chars */
+        for (j = 0, arg_len = 0; p[j]; j++, arg_len++) {
+            if (p[j] == ' ' || p[j] == '\\') arg_len++;
+        }
+
+        /* adding 2 for the space separator ' ' and the '\0' terminator */
+        if (n + arg_len + 2 > SANLK_HELPER_ARGS_LEN) {
+            __set_exception(EINVAL, "Killpath arguments are too long");
+            return NULL;
+        }
+
+        /* adding the space separator between arguments */
+        if (n > 0) {
+            kpargs[n++] = ' ';
+        }
+
+        while (*p) {
+            if (*p == ' ' || *p == '\\') {
+                kpargs[n++] = '\\';
+            }
+
+            kpargs[n++] = *p++;
+        }
+    }
+
+    /* configure killpath (gil disabled) */
+    Py_BEGIN_ALLOW_THREADS
+    rv = sanlock_killpath(sanlockfd, 0, path, kpargs);
+    Py_END_ALLOW_THREADS
+
+    if (rv != 0) {
+        __set_exception(rv, "Killpath script not configured");
+        return NULL;
+    }
+
+    Py_RETURN_NONE;
+}
+
 /* exception_errno */
 PyDoc_STRVAR(pydoc_errno, "exception errno");
 
@@ -572,6 +654,8 @@ sanlock_methods[] = {
                 METH_VARARGS|METH_KEYWORDS, pydoc_acquire},
     {"release", (PyCFunction) py_release,
                 METH_VARARGS|METH_KEYWORDS, pydoc_release},
+    {"killpath", (PyCFunction) py_killpath,
+                METH_VARARGS|METH_KEYWORDS, pydoc_killpath},
     {NULL, NULL, 0, NULL}
 };
 

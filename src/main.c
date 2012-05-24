@@ -49,6 +49,7 @@
 #include "task.h"
 #include "client_cmd.h"
 #include "cmd.h"
+#include "helper.h"
 
 #define RELEASE_VERSION "2.3"
 
@@ -80,6 +81,89 @@ static struct random_data rand_data;
 static char rand_state[32];
 static pthread_mutex_t rand_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+static int kill_count_max = 60;
+static int kill_count_grace = DEFAULT_GRACE_SEC;
+static int helper_ci = -1;
+static int helper_pid = -1;
+static int helper_kill_fd = -1;
+static int helper_status_fd = -1;
+
+static void close_helper(void)
+{
+	close(helper_kill_fd);
+	close(helper_status_fd);
+	helper_kill_fd = -1;
+	helper_status_fd = -1;
+	pollfd[helper_ci].fd = -1;
+	pollfd[helper_ci].events = 0;
+	helper_ci = -1;
+
+	/* don't set helper_pid = -1 until we've tried waitpid */
+}
+
+/*
+ * We cannot block the main thread on this write, so the pipe is
+ * NONBLOCK, and write fails with EAGAIN when the pipe is full.
+ * With 512 msg size and 64k default pipe size, the pipe will be full
+ * if we quickly send kill messages for 128 pids.  We retry
+ * the kill once a second, so we'll retry the write again in
+ * a second.
+ *
+ * By setting the pipe size to 1MB in setup_helper, we could quickly send 2048
+ * msgs before getting EAGAIN.
+ */
+
+static void send_helper_kill(struct client *cl)
+{
+	struct helper_msg hm;
+	int rv;
+
+	/*
+	 * We come through here once a second while the pid still has
+	 * leases.  But once we've successfully sent the helper the
+	 * message, we don't need to send it again (unlike SIGTERM
+	 * which we want to resend every second.)  If the pipe is
+	 * full and we fail to send the message to the helper, then
+	 * we retry every second until it goes through.
+	 */
+
+	if (cl->flags & CL_HELPER_SENT)
+		return;
+
+	memset(&hm, 0, sizeof(hm));
+	hm.type = HELPER_MSG_RUNPATH;
+	memcpy(hm.path, cl->killpath, SANLK_HELPER_PATH_LEN);
+	memcpy(hm.args, cl->killargs, SANLK_HELPER_ARGS_LEN);
+
+	if (cl->flags & CL_KILLPATH_PID)
+		hm.pid = cl->pid;
+
+ retry:
+	rv = write(helper_kill_fd, &hm, sizeof(hm));
+	if (rv == -1 && errno == EINTR)
+		goto retry;
+
+	/* pipe is full, we'll try again in a second */
+	if (rv == -1 && errno == EAGAIN)
+		return;
+
+	/* helper exited or closed fd, quit using helper */
+	if (rv == -1 && errno == EPIPE) {
+		log_error("send_helper_kill EPIPE");
+		close_helper();
+		return;
+	}
+
+	if (rv != sizeof(hm)) {
+		/* this shouldn't happen */
+		log_error("send_helper_kill pid %d error %d %d",
+			  cl->pid, rv, errno);
+		close_helper();
+		return;
+	}
+
+	cl->flags |= CL_HELPER_SENT;
+}
 
 /* FIXME: add a mutex for client array so we don't try to expand it
    while a cmd thread is using it.  Or, with a thread pool we know
@@ -154,7 +238,10 @@ static void _client_free(int ci)
 	cl->kill_count = 0;
 	cl->kill_last = 0;
 	cl->restrict = 0;
+	cl->flags = 0;
 	memset(cl->owner_name, 0, sizeof(cl->owner_name));
+	memset(cl->killpath, 0, SANLK_HELPER_PATH_LEN);
+	memset(cl->killargs, 0, SANLK_HELPER_ARGS_LEN);
 	cl->workfn = NULL;
 	cl->deadfn = NULL;
 	memset(cl->tokens, 0, sizeof(struct token *) * SANLK_MAX_RESOURCES);
@@ -429,7 +516,7 @@ static int client_using_space(struct client *cl, struct space *sp)
 	return rv;
 }
 
-/* TODO: try killscript first if one is provided */
+#define SIG_HELPER 100 /* anything that's not SIGTERM/SIGKILL */
 
 static void kill_pids(struct space *sp)
 {
@@ -462,7 +549,7 @@ static void kill_pids(struct space *sp)
 		/* NB this cl may not be using sp, but trying to
 		   avoid the expensive client_using_space check */
 
-		if (cl->kill_count >= main_task.kill_count_max)
+		if (cl->kill_count >= kill_count_max)
 			goto unlock;
 
 		if (cl->kill_count && (now - cl->kill_last < 1))
@@ -477,11 +564,30 @@ static void kill_pids(struct space *sp)
 		fd = cl->fd;
 		pid = cl->pid;
 
-		if (cl->restrict & SANLK_RESTRICT_SIGKILL)
+
+		/*
+		 * from zero to kill_count_grace seconds, we try killing
+		 * the pid with either killpath or sigterm.  killpath if
+		 * it's configured and and we've seen a helper status recently.
+		 * (sigkill will be used in place of sigterm if restricted.)
+		 *
+		 * after kill_count_grace seconds, we'll try killing the
+		 * pid with sigkill.  (sigterm will be used in place of
+		 * sigkill if restricted.)
+		 */
+
+		if (cl->killpath[0] &&
+		    (helper_kill_fd != -1) &&
+		    (kill_count_grace > 0) &&
+		    (cl->kill_count <= kill_count_grace) &&
+		    (now - helper_last_status < (HELPER_STATUS_INTERVAL * 2)))
+			sig = SIG_HELPER;
+		else if (cl->restrict & SANLK_RESTRICT_SIGKILL)
 			sig = SIGTERM;
 		else if (cl->restrict & SANLK_RESTRICT_SIGTERM)
 			sig = SIGKILL;
-		else if (cl->kill_count <= main_task.kill_count_term)
+		else if ((kill_count_grace > 0) &&
+			 (cl->kill_count <= kill_count_grace))
 			sig = SIGTERM;
 		else
 			sig = SIGKILL;
@@ -493,7 +599,7 @@ static void kill_pids(struct space *sp)
 		if (!do_kill)
 			continue;
 
-		if (cl->kill_count == main_task.kill_count_max) {
+		if (cl->kill_count == kill_count_max) {
 			log_erros(sp, "kill %d,%d,%d sig %d count %d final attempt",
 				  ci, fd, pid, sig, cl->kill_count);
 		} else {
@@ -501,7 +607,10 @@ static void kill_pids(struct space *sp)
 				  ci, fd, pid, sig, cl->kill_count);
 		}
 
-		kill(pid, sig);
+		if (sig == SIG_HELPER)
+			send_helper_kill(cl);
+		else
+			kill(pid, sig);
 	}
 }
 
@@ -522,7 +631,7 @@ static int all_pids_dead(struct space *sp)
 		if (!client_using_space(cl, sp))
 			goto unlock;
 
-		if (cl->kill_count >= main_task.kill_count_max)
+		if (cl->kill_count >= kill_count_max)
 			stuck++;
 		else
 			check++;
@@ -898,7 +1007,9 @@ static void process_cmd_thread_registered(int ci_in, struct sm_header *h_recv)
 		goto out;
 	}
 
-	if (cl->kill_count) {
+	if (cl->kill_count && h_recv->cmd == SM_CMD_ACQUIRE) {
+		/* when pid is being killed, we want killpath to be able
+		   to inquire and release for it */
 		log_error("cmd %d %d,%d,%d kill_count %d",
 			  h_recv->cmd, ci_target, cl->fd, cl->pid, cl->kill_count);
 		result = -EBUSY;
@@ -1020,6 +1131,7 @@ static void process_connection(int ci)
 	case SM_CMD_ACQUIRE:
 	case SM_CMD_RELEASE:
 	case SM_CMD_INQUIRE:
+	case SM_CMD_KILLPATH:
 		/* the main_loop needs to ignore this connection
 		   while the thread is working on it */
 		rv = client_suspend(ci);
@@ -1248,6 +1360,129 @@ static void setup_groups(void)
 	free(pgroup);
 }
 
+/*
+ * first pipe for daemon to send requests to helper; they are not acknowledged
+ * and the daemon does not get any result back for the requests.
+ *
+ * second pipe for helper to send general status/heartbeat back to the daemon
+ * every so often to confirm it's not dead/hung.  If the helper gets stuck or
+ * killed, the daemon will not get the status and won't bother sending requests
+ * to the helper, and use SIGTERM instead
+ */
+
+static int setup_helper(void)
+{
+	int pid;
+	int pw_fd = -1; /* parent write */
+	int cr_fd = -1; /* child read */
+	int pr_fd = -1; /* parent read */
+	int cw_fd = -1; /* child write */
+	int pfd[2];
+
+	/* we can't allow the main daemon thread to block */
+	if (pipe2(pfd, O_NONBLOCK | O_CLOEXEC))
+		return -errno;
+
+	/* uncomment for rhel7 where this should be available */
+	/* fcntl(pfd[1], F_SETPIPE_SZ, 1024*1024); */
+
+	cr_fd = pfd[0];
+	pw_fd = pfd[1];
+
+	if (pipe2(pfd, O_NONBLOCK | O_CLOEXEC)) {
+		close(cr_fd);
+		close(pw_fd);
+		return -errno;
+	}
+
+	pr_fd = pfd[0];
+	cw_fd = pfd[1];
+
+	pid = fork();
+	if (pid < 0) {
+		close(cr_fd);
+		close(pw_fd);
+		close(pr_fd);
+		close(cw_fd);
+		return -errno;
+	}
+
+	if (pid) {
+		close(cr_fd);
+		close(cw_fd);
+		helper_kill_fd = pw_fd;
+		helper_status_fd = pr_fd;
+		helper_pid = pid;
+		return 0;
+	} else {
+		close(pr_fd);
+		close(pw_fd);
+		run_helper(cr_fd, cw_fd, (log_stderr_priority == LOG_DEBUG));
+		exit(0);
+	}
+}
+
+static void process_helper(int ci)
+{
+	struct helper_status hs;
+	int rv;
+
+	memset(&hs, 0, sizeof(hs));
+
+	rv = read(client[ci].fd, &hs, sizeof(hs));
+	if (!rv || rv == -EAGAIN)
+		return;
+	if (rv < 0) {
+		log_error("process_helper rv %d errno %d", rv, errno);
+		goto fail;
+	}
+	if (rv != sizeof(hs)) {
+		log_error("process_helper recv size %d", rv);
+		goto fail;
+	}
+
+	if (hs.type == HELPER_STATUS && !hs.status)
+		helper_last_status = monotime();
+
+	return;
+
+ fail:
+	close_helper();
+}
+
+static void helper_dead(int ci GNUC_UNUSED)
+{
+	int pid = helper_pid;
+	int rv, status;
+
+	close_helper();
+
+	helper_pid = -1;
+
+	rv = waitpid(pid, &status, WNOHANG);
+
+	if (rv != pid) {
+		/* should not happen */
+		log_error("helper pid %d dead wait %d", pid, rv);
+		return;
+	}
+
+	if (WIFEXITED(status)) {
+		log_error("helper pid %d exit status %d", pid,
+			  WEXITSTATUS(status));
+		return;
+	}
+
+	if (WIFSIGNALED(status)) {
+		log_error("helper pid %d term signal %d", pid,
+			  WTERMSIG(status));
+		return;
+	}
+
+	/* should not happen */
+	log_error("helper pid %d state change", pid);
+}
+
 static int do_daemon(void)
 {
 	struct sigaction act;
@@ -1263,6 +1498,8 @@ static int do_daemon(void)
 		umask(0);
 	}
 
+	setup_helper();
+
 	/* main task never does disk io, so we don't really need to set
 	 * it up, but other tasks get their use_aio value by copying
 	 * the main_task settings */
@@ -1274,6 +1511,11 @@ static int do_daemon(void)
 	rv = client_alloc();
 	if (rv < 0)
 		return rv;
+
+	helper_ci = client_add(helper_status_fd, process_helper, helper_dead);
+	if (helper_ci < 0)
+		goto out_logging;
+	strcpy(client[helper_ci].owner_name, "helper");
 
 	memset(&act, 0, sizeof(act));
 	act.sa_handler = sigterm_handler;
@@ -1433,6 +1675,7 @@ static void print_usage(void)
 	printf("  -U <uid>      user id\n");
 	printf("  -G <gid>      group id\n");
 	printf("  -t <num>      max worker threads (%d)\n", DEFAULT_MAX_WORKER_THREADS);
+	printf("  -g <sec>      seconds for graceful recovery (%d)\n", DEFAULT_GRACE_SEC);
 	printf("  -w 0|1        use watchdog through wdmd (%d)\n", DEFAULT_USE_WATCHDOG);
 	printf("  -h 0|1        use high priority features (%d)\n", DEFAULT_HIGH_PRIORITY);
 	printf("                (realtime scheduling, mlockall)\n");
@@ -1493,7 +1736,7 @@ static int read_command_line(int argc, char *argv[])
 	char *p;
 	char *arg1 = argv[1];
 	char *act;
-	int i, j, len, begin_command = 0;
+	int i, j, len, sec, begin_command = 0;
 
 	if (argc < 2 || !strcmp(arg1, "help") || !strcmp(arg1, "--help") ||
 	    !strcmp(arg1, "-h")) {
@@ -1691,7 +1934,13 @@ static int read_command_line(int argc, char *argv[])
 			com.local_host_id = atoll(optionarg);
 			break;
 		case 'g':
-			com.local_host_generation = atoll(optionarg);
+			if (com.type == COM_DAEMON) {
+				sec = atoi(optionarg);
+				if (sec <= 60 && sec >= 0)
+					kill_count_grace = sec;
+			} else {
+				com.local_host_generation = atoll(optionarg);
+			}
 			break;
 		case 'f':
 			com.force_mode = strtoul(optionarg, NULL, 0);
@@ -2061,6 +2310,7 @@ int main(int argc, char *argv[])
 
 	BUILD_BUG_ON(sizeof(struct sanlk_disk) != sizeof(struct sync_disk));
 	BUILD_BUG_ON(sizeof(struct leader_record) > LEADER_RECORD_MAX);
+	BUILD_BUG_ON(sizeof(struct helper_msg) != SANLK_HELPER_MSG_LEN);
 
 	/* initialize global variables */
 	pthread_mutex_init(&spaces_mutex, NULL);

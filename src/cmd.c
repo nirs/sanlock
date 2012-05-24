@@ -554,6 +554,34 @@ static void cmd_release(struct task *task, struct cmd_args *ca)
 
 	pid_dead = cl->pid_dead;
 	cl->cmd_active = 0;
+
+	if (!pid_dead && cl->kill_count) {
+		/*
+		 * If no tokens are left, clear all cl killing state.  The
+		 * cl no longer needs to be killed, and the pid may continue
+		 * running, even if a failed lockspace it was using is
+		 * released.  When the lockspace is re-added, the tokens
+		 * may be re-acquired for this same cl/pid.
+		 */
+
+		found = 0;
+
+		for (j = 0; j < SANLK_MAX_RESOURCES; j++) {
+			if (!cl->tokens[j])
+				continue;
+			found = 1;
+			break;
+		}
+
+		if (!found) {
+			cl->kill_count = 0;
+			cl->kill_last = 0;
+			cl->flags &= ~CL_HELPER_SENT;
+
+			log_debug("cmd_release %d,%d,%d clear kill state",
+				  cl_ci, cl_fd, cl_pid);
+		}
+	}
 	pthread_mutex_unlock(&cl->mutex);
 
 	if (pid_dead) {
@@ -1193,6 +1221,67 @@ static void cmd_init_resource(struct task *task, struct cmd_args *ca)
 	client_resume(ca->ci_in);
 }
 
+/* N.B. the api doesn't support one client setting killpath for another
+   pid/client */
+
+static void cmd_killpath(struct task *task, struct cmd_args *ca)
+{
+	struct client *cl;
+	int cl_ci = ca->ci_target;
+	int cl_fd = ca->cl_fd;
+	int cl_pid = ca->cl_pid;
+	int rv, result, pid_dead;
+
+	cl = &client[cl_ci];
+
+	log_debug("cmd_killpath %d,%d,%d flags %x",
+		  cl_ci, cl_fd, cl_pid, ca->header.cmd_flags);
+
+	rv = recv(cl_fd, cl->killpath, SANLK_HELPER_PATH_LEN, MSG_WAITALL);
+	if (rv != SANLK_HELPER_PATH_LEN) {
+		log_error("cmd_killpath %d,%d,%d recv path %d %d",
+			  cl_ci, cl_fd, cl_pid, rv, errno);
+		memset(cl->killpath, 0, SANLK_HELPER_PATH_LEN);
+		memset(cl->killargs, 0, SANLK_HELPER_ARGS_LEN);
+		result = -ENOTCONN;
+		goto done;
+	}
+
+	rv = recv(cl_fd, cl->killargs, SANLK_HELPER_ARGS_LEN, MSG_WAITALL);
+	if (rv != SANLK_HELPER_ARGS_LEN) {
+		log_error("cmd_killpath %d,%d,%d recv args %d %d",
+			  cl_ci, cl_fd, cl_pid, rv, errno);
+		memset(cl->killpath, 0, SANLK_HELPER_PATH_LEN);
+		memset(cl->killargs, 0, SANLK_HELPER_ARGS_LEN);
+		result = -ENOTCONN;
+		goto done;
+	}
+
+	cl->killpath[SANLK_HELPER_PATH_LEN - 1] = '\0';
+	cl->killargs[SANLK_HELPER_ARGS_LEN - 1] = '\0';
+
+	if (ca->header.cmd_flags & SANLK_KILLPATH_PID)
+		cl->flags |= CL_KILLPATH_PID;
+
+	result = 0;
+ done:
+	pthread_mutex_lock(&cl->mutex);
+	pid_dead = cl->pid_dead;
+	cl->cmd_active = 0;
+	pthread_mutex_unlock(&cl->mutex);
+
+	if (pid_dead) {
+		/* release tokens in case a client sets/changes its killpath
+		   after it has acquired leases */
+		release_cl_tokens(task, cl);
+		client_free(cl_ci);
+		return;
+	}
+
+	send_result(cl_fd, &ca->header, result);
+	client_resume(ca->ci_in);
+}
+
 void call_cmd_thread(struct task *task, struct cmd_args *ca)
 {
 	switch (ca->header.cmd) {
@@ -1233,6 +1322,9 @@ void call_cmd_thread(struct task *task, struct cmd_args *ca)
 	case SM_CMD_EXAMINE_RESOURCE:
 		cmd_examine(task, ca);
 		break;
+	case SM_CMD_KILLPATH:
+		cmd_killpath(task, ca);
+		break;
 	};
 }
 
@@ -1267,6 +1359,7 @@ static int print_state_daemon(char *str)
 		 "id_renewal=%d "
 		 "id_renewal_fail=%d "
 		 "id_renewal_warn=%d "
+		 "helper_last_status=%llu "
 		 "monotime=%llu",
 		 our_host_name_global,
 		 main_task.use_aio,
@@ -1274,6 +1367,7 @@ static int print_state_daemon(char *str)
 		 main_task.id_renewal_seconds,
 		 main_task.id_renewal_fail_seconds,
 		 main_task.id_renewal_warn_seconds,
+		 (unsigned long long)helper_last_status,
 		 (unsigned long long)monotime());
 
 	return strlen(str) + 1;
@@ -1287,6 +1381,7 @@ static int print_state_client(struct client *cl, int ci, char *str)
 		 "ci=%d "
 		 "fd=%d "
 		 "pid=%d "
+		 "flags=%x "
 		 "restrict=%x "
 		 "cmd_active=%d "
 		 "cmd_last=%d "
@@ -1298,6 +1393,7 @@ static int print_state_client(struct client *cl, int ci, char *str)
 		 ci,
 		 cl->fd,
 		 cl->pid,
+		 cl->flags,
 		 cl->restrict,
 		 cl->cmd_active,
 		 cl->cmd_last,
