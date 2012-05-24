@@ -531,7 +531,9 @@ struct command_line {
 	int max_worker_threads;
 	int aio_arg;
 	int io_timeout_arg;
+	char *uname;			/* -U */
 	int uid;				/* -U */
+	char *gname;			/* -G */
 	int gid;				/* -G */
 	int pid;				/* -p */
 	char sort_arg;

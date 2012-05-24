@@ -1182,6 +1182,69 @@ static void setup_host_name(void)
 		 uuid, name.nodename);
 }
 
+static void setup_groups(void)
+{
+	int rv, i, j, h;
+	int pngroups, sngroups, ngroups_max;
+	gid_t *pgroup, *sgroup;
+
+	ngroups_max = sysconf(_SC_NGROUPS_MAX);
+	if (ngroups_max < 0) {
+		log_error("cannot get the max number of groups %i", errno);
+		return;
+	}
+
+	pgroup = malloc(ngroups_max * 2 * sizeof(gid_t));
+	if (!pgroup) {
+		log_error("cannot malloc the group list %i", errno);
+		exit(EXIT_FAILURE);
+	}
+
+	pngroups = getgroups(ngroups_max, pgroup);
+	if (pngroups < 0) {
+		log_error("cannot get the process groups %i", errno);
+		goto out;
+	}
+
+	sgroup = pgroup + ngroups_max;
+	sngroups = ngroups_max;
+
+	rv = getgrouplist(com.uname, com.gid, sgroup, &sngroups);
+	if (rv < -1) {
+		log_error("cannot get the user %s groups %i", com.uname, errno);
+		goto out;
+	}
+
+	for (i = 0, j = pngroups; i < sngroups; i++) {
+		if (j >= ngroups_max) {
+			log_error("too many groups for the user %s", com.uname);
+			break;
+		}
+
+		/* check if the groups is already present in the list */
+		for (h = 0; h < j; h++) {
+			if (pgroup[h] == sgroup[i]) {
+				goto skip_gid;
+			}
+		}
+
+		pgroup[j] = sgroup[i];
+		j++;
+
+ skip_gid:
+		; /* skipping the gid because it's already present */
+	}
+
+	rv = setgroups(j, pgroup);
+	if (rv < 0) {
+		log_error("cannot set the user %s groups %i", com.uname, errno);
+		goto out;
+	}
+
+ out:
+	free(pgroup);
+}
+
 static int do_daemon(void)
 {
 	struct sigaction act;
@@ -1222,6 +1285,8 @@ static int do_daemon(void)
 	setup_logging();
 
 	setup_host_name();
+
+	setup_groups();
 
 	log_error("sanlock daemon started %s aio %d %d renew %d %d host %s time %llu",
 		  RELEASE_VERSION,
@@ -1635,9 +1700,11 @@ static int read_command_line(int argc, char *argv[])
 			parse_arg_resource(optionarg); /* com.res_args[] */
 			break;
 		case 'U':
+			com.uname = optionarg;
 			com.uid = user_to_uid(optionarg);
 			break;
 		case 'G':
+			com.gname = optionarg;
 			com.gid = group_to_gid(optionarg);
 			break;
 

@@ -39,7 +39,7 @@ start() {
 	fi
 
 	echo -n $"Starting $prog: "
-	daemon --user=$SANLOCKUSER $prog daemon $SANLOCKOPTS
+	daemon $prog daemon $SANLOCKOPTS
 	retval=$?
 	echo
 	[ $retval -eq 0 ]
