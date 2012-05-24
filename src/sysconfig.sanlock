@@ -1,8 +1,3 @@
-# SANLOCKUSER -- the daemon should run as this user
-#
-# To run as root user instead of sanlock user
-#SANLOCKUSER="root"
-
 # SANLOCKOPTS -- set the command line options for the sanlock daemon
 # See sanlock man page for full list of command line options.
 #
