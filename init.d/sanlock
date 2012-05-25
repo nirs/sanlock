@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 #
 # sanlock - SAN-based lock manager
 #
@@ -42,28 +42,39 @@ start() {
 	daemon $prog daemon $SANLOCKOPTS
 	retval=$?
 	echo
-	[ $retval -eq 0 ]
+
 	return $retval
 }
 
 stop() {
-	echo -n $"Stopping $prog: "
+	echo -n $"Sending stop signal $prog: "
 	killproc -p $lockfile $prog -TERM
 	retval=$?
 	echo
-	[ $retval -eq 0 ]
-}
 
-wait_for_stop() {
+	if [ $retval -ne 0 ]; then
+		return $retval
+	fi
+
+	echo -n $"Waiting for $prog to stop:"
+	timeout=10
 	while [ -e $lockfile ]; do
-		sleep .5
+		sleep 1
+		timeout=$((timeout - 1))
+		if [ "$timeout" -le 0 ]; then
+			failure; echo
+			return 1
+		fi
 	done
+
+	success; echo
+	return $retval
 }
 
 restart() {
-	stop
-	wait_for_stop
-	start
+	stop && start
+	retval=$?
+	return $retval
 }
 
 reload() {
