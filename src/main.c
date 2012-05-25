@@ -1210,7 +1210,7 @@ static void setup_groups(void)
 	sngroups = ngroups_max;
 
 	rv = getgrouplist(com.uname, com.gid, sgroup, &sngroups);
-	if (rv < -1) {
+	if (rv < 0) {
 		log_error("cannot get the user %s groups %i", com.uname, errno);
 		goto out;
 	}
