@@ -22,7 +22,8 @@
 . /etc/rc.d/init.d/functions
 
 prog="sanlock"
-lockfile="/var/run/$prog/$prog.pid"
+runfile="/var/run/$prog/$prog.pid"
+lockfile="/var/lock/subsys/$prog"
 exec="/usr/sbin/$prog"
 
 SANLOCKUSER="sanlock"
@@ -42,13 +43,13 @@ start() {
 	daemon $prog daemon $SANLOCKOPTS
 	retval=$?
 	echo
-
+	[ $retval -eq 0 ] && touch $lockfile
 	return $retval
 }
 
 stop() {
 	echo -n $"Sending stop signal $prog: "
-	killproc -p $lockfile $prog -TERM
+	killproc -p $runfile $prog -TERM
 	retval=$?
 	echo
 
@@ -58,7 +59,7 @@ stop() {
 
 	echo -n $"Waiting for $prog to stop:"
 	timeout=10
-	while [ -e $lockfile ]; do
+	while [ -e $runfile ]; do
 		sleep 1
 		timeout=$((timeout - 1))
 		if [ "$timeout" -le 0 ]; then
@@ -68,6 +69,7 @@ stop() {
 	done
 
 	success; echo
+	rm -f $lockfile
 	return $retval
 }
 

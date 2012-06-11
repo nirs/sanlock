@@ -22,7 +22,8 @@
 . /etc/rc.d/init.d/functions
 
 prog="wdmd"
-lockfile="/var/run/$prog/$prog.pid"
+runfile="/var/run/$prog/$prog.pid"
+lockfile="/var/lock/subsys/$prog"
 exec="/usr/sbin/$prog"
 
 WDMDGROUP="sanlock"
@@ -48,10 +49,11 @@ start() {
 
 stop() {
 	echo -n $"Stopping $prog: "
-	killproc -p $lockfile $prog -TERM
+	killproc -p $runfile $prog -TERM
 	retval=$?
 	echo
 	[ $retval -eq 0 ] && rm -f $lockfile
+	return $retval
 }
 
 restart() {
