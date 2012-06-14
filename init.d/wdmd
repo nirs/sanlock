@@ -39,6 +39,13 @@ start() {
 		[ -x /sbin/restorecon ] && restorecon /var/run/$prog
 	fi
 
+	if [ ! -c /dev/watchdog ]; then
+		echo -n $"Loading the softdog kernel module: "
+		modprobe softdog && udevadm settle
+		[ -c /dev/watchdog ] && success || failure
+		echo
+	fi
+
 	echo -n $"Starting $prog: "
 	daemon $prog $WDMDOPTS
 	retval=$?
