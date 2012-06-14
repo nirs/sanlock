@@ -1188,6 +1188,9 @@ static void setup_groups(void)
 	int pngroups, sngroups, ngroups_max;
 	gid_t *pgroup, *sgroup;
 
+	if (!com.uname || !com.gname)
+		return;
+
 	ngroups_max = sysconf(_SC_NGROUPS_MAX);
 	if (ngroups_max < 0) {
 		log_error("cannot get the max number of groups %i", errno);
