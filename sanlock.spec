@@ -1,6 +1,6 @@
 Name:           sanlock
 Version:        2.3
-Release:        2%{?dist}
+Release:        3%{?dist}
 Summary:        A shared disk lock manager
 
 Group:          System Environment/Base
@@ -9,11 +9,9 @@ URL:            https://fedorahosted.org/sanlock/
 BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 BuildRequires:  libblkid-devel libaio-devel python python-devel
 Requires:       %{name}-lib = %{version}-%{release}
+Requires(pre):  /usr/sbin/groupadd
+Requires(pre):  /usr/sbin/useradd
 Source0:        https://fedorahosted.org/releases/s/a/sanlock/%{name}-%{version}.tar.gz
-
-%if 0%{?rhel}
-ExclusiveArch: x86_64
-%endif
 
 %description
 sanlock uses disk paxos to manage leases on shared storage.
@@ -179,6 +177,9 @@ developing applications that use %{name}.
 %{_includedir}/sanlock_direct.h
 
 %changelog
+* Fri Jun 15 2012 David Teigland <teigland@redhat.com> - 2.3-3
+- Require useradd and groupadd
+
 * Mon Jun 04 2012 David Teigland <teigland@redhat.com> - 2.3-2
 - Remove exclusive arch
 
