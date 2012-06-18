@@ -155,6 +155,16 @@ struct space {
 	struct host_status host_status[DEFAULT_MAX_HOSTS];
 };
 
+/* Update lockspace_info() to copy any fields from struct space
+   to space_info */
+
+struct space_info {
+	uint32_t space_id;
+	uint64_t host_id;
+	uint64_t host_generation;
+	int killing_pids;
+};
+
 /*
  * Example of watchdog behavior when host_id renewals fail, assuming
  * that sanlock cannot successfully kill the pids it is supervising that

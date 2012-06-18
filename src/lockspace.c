@@ -92,25 +92,33 @@ struct space *find_lockspace(char *name)
 	return _search_space(name, NULL, 0, &spaces, &spaces_rem, &spaces_add);
 }
 
-int _lockspace_info(char *space_name, struct space *sp_out)
+int _lockspace_info(char *space_name, struct space_info *spi)
 {
 	struct space *sp;
 
 	list_for_each_entry(sp, &spaces, list) {
 		if (strncmp(sp->space_name, space_name, NAME_ID_SIZE))
 			continue;
-		memcpy(sp_out, sp, sizeof(struct space));
+
+		/* keep this in sync with any new fields added to
+		   struct space_info */
+
+		spi->space_id = sp->space_id;
+		spi->host_id = sp->host_id;
+		spi->host_generation = sp->host_generation;
+		spi->killing_pids = sp->killing_pids;
+
 		return 0;
 	}
 	return -1;
 }
 
-int lockspace_info(char *space_name, struct space *sp_out)
+int lockspace_info(char *space_name, struct space_info *spi)
 {
 	int rv;
 
 	pthread_mutex_lock(&spaces_mutex);
-	rv = _lockspace_info(space_name, sp_out);
+	rv = _lockspace_info(space_name, spi);
 	pthread_mutex_unlock(&spaces_mutex);
 
 	return rv;
@@ -118,14 +126,17 @@ int lockspace_info(char *space_name, struct space *sp_out)
 
 int lockspace_disk(char *space_name, struct sync_disk *disk)
 {
-	struct space space;
-	int rv;
+	struct space *sp;
+	int rv = -1;
 
 	pthread_mutex_lock(&spaces_mutex);
-	rv = _lockspace_info(space_name, &space);
-	if (!rv) {
-		memcpy(disk, &space.host_id_disk, sizeof(struct sync_disk));
+	list_for_each_entry(sp, &spaces, list) {
+		if (strncmp(sp->space_name, space_name, NAME_ID_SIZE))
+			continue;
+
+		memcpy(disk, &sp->host_id_disk, sizeof(struct sync_disk));
 		disk->fd = -1;
+		rv = 0;
 	}
 	pthread_mutex_unlock(&spaces_mutex);
 

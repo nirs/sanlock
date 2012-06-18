@@ -88,7 +88,7 @@ static int check_new_tokens_space(struct client *cl,
 				  struct token *new_tokens[],
 				  int new_tokens_count)
 {
-	struct space space;
+	struct space_info spi;
 	struct token *token;
 	int i, rv, empty_slots = 0;
 
@@ -107,9 +107,9 @@ static int check_new_tokens_space(struct client *cl,
 	for (i = 0; i < new_tokens_count; i++) {
 		token = new_tokens[i];
 
-		rv = _lockspace_info(token->r.lockspace_name, &space);
+		rv = _lockspace_info(token->r.lockspace_name, &spi);
 
-		if (!rv && !space.killing_pids && space.host_id == token->host_id)
+		if (!rv && !spi.killing_pids && spi.host_id == token->host_id)
 			continue;
 
 		return -ENOSPC;
@@ -125,7 +125,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 	struct token *new_tokens[SANLK_MAX_RESOURCES];
 	struct sanlk_resource res;
 	struct sanlk_options opt;
-	struct space space;
+	struct space_info spi;
 	char *opt_str;
 	int token_len, disks_len;
 	int fd, rv, i, j, empty_slots, lvl;
@@ -290,23 +290,23 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 
 	for (i = 0; i < new_tokens_count; i++) {
 		token = new_tokens[i];
-		rv = lockspace_info(token->r.lockspace_name, &space);
-		if (rv < 0 || space.killing_pids) {
+		rv = lockspace_info(token->r.lockspace_name, &spi);
+		if (rv < 0 || spi.killing_pids) {
 			log_errot(token, "cmd_acquire %d,%d,%d invalid lockspace "
 				  "found %d failed %d name %.48s",
-				  cl_ci, cl_fd, cl_pid, rv, space.killing_pids,
+				  cl_ci, cl_fd, cl_pid, rv, spi.killing_pids,
 				  token->r.lockspace_name);
 			result = -ENOSPC;
 			goto done;
 		}
-		token->host_id = space.host_id;
-		token->host_generation = space.host_generation;
+		token->host_id = spi.host_id;
+		token->host_generation = spi.host_generation;
 		token->pid = cl_pid;
 		if (cl->restrict & SANLK_RESTRICT_SIGKILL)
 			token->flags |= T_RESTRICT_SIGKILL;
 
 		/* save a record of what this token_id is for later debugging */
-		log_level(space.space_id, token->token_id, NULL, LOG_WARNING,
+		log_level(spi.space_id, token->token_id, NULL, LOG_WARNING,
 			  "resource %.48s:%.48s:%.256s:%llu%s for %d,%d,%d",
 			  token->r.lockspace_name,
 			  token->r.name,
