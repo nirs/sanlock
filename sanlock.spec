@@ -1,6 +1,6 @@
 Name:           sanlock
 Version:        2.3
-Release:        3%{?dist}
+Release:        4%{?dist}
 Summary:        A shared disk lock manager
 
 Group:          System Environment/Base
@@ -12,6 +12,10 @@ Requires:       %{name}-lib = %{version}-%{release}
 Requires(pre):  /usr/sbin/groupadd
 Requires(pre):  /usr/sbin/useradd
 Source0:        https://fedorahosted.org/releases/s/a/sanlock/%{name}-%{version}.tar.gz
+
+%if 0%{?fedora} >= 16
+BuildRequires:  systemd-units
+%endif
 
 %description
 sanlock uses disk paxos to manage leases on shared storage.
@@ -177,6 +181,9 @@ developing applications that use %{name}.
 %{_includedir}/sanlock_direct.h
 
 %changelog
+* Mon Jun 18 2012 David Teigland <teigland@redhat.com> - 2.3-4
+- Require systemd-units
+
 * Fri Jun 15 2012 David Teigland <teigland@redhat.com> - 2.3-3
 - Require useradd and groupadd
 
