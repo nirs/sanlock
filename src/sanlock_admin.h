@@ -17,6 +17,9 @@
 #define SANLK_REM_ASYNC		0x00000001
 #define SANLK_REM_UNUSED	0x00000002
 
+/* inq flags */
+#define SANLK_INQ_WAIT		0x00000001
+
 /*
  * add_lockspace returns:
  * 0: the lockspace has been added successfully

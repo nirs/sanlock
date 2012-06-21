@@ -891,6 +891,7 @@ static void cmd_add_lockspace(struct cmd_args *ca)
 static void cmd_inq_lockspace(struct cmd_args *ca)
 {
 	struct sanlk_lockspace lockspace;
+	int waitrs = ca->header.cmd_flags & SANLK_INQ_WAIT;
 	int fd, rv, result;
 
 	fd = client[ca->ci_in].fd;
@@ -903,13 +904,21 @@ static void cmd_inq_lockspace(struct cmd_args *ca)
 		goto reply;
 	}
 
-	log_debug("cmd_inq_lockspace %d,%d %.48s:%llu:%s:%llu",
+	log_debug("cmd_inq_lockspace %d,%d %.48s:%llu:%s:%llu flags %x",
 		  ca->ci_in, fd, lockspace.name,
 		  (unsigned long long)lockspace.host_id,
 		  lockspace.host_id_disk.path,
-		  (unsigned long long)lockspace.host_id_disk.offset);
+		  (unsigned long long)lockspace.host_id_disk.offset,
+		  ca->header.cmd_flags);
 
-	result = inq_lockspace(&lockspace);
+	while (1) {
+		result = inq_lockspace(&lockspace);
+		if ((result != -EINPROGRESS) || !(waitrs)) {
+			break;
+		}
+		sleep(1);
+	}
+
  reply:
 	log_debug("cmd_inq_lockspace %d,%d done %d", ca->ci_in, fd, result);
 

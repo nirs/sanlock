@@ -314,27 +314,36 @@ py_add_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
 /* inq_lockspace */
 PyDoc_STRVAR(pydoc_inq_lockspace, "\
-inq_lockspace(lockspace, host_id, path, offset=0)\n\
+inq_lockspace(lockspace, host_id, path, offset=0, wait=False)\n\
 Return True if the sanlock daemon currently owns the host_id in lockspace,\n\
 False otherwise. The special value None is returned when the daemon is\n\
-still in the process of acquiring or releasing the host_id.");
+still in the process of acquiring or releasing the host_id. If the wait\n\
+flag is set to True the function will block until the host_id is either\n\
+acquired or released.");
 
 static PyObject *
 py_inq_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv;
+    int rv, waitrs = 0, flags = 0;
     const char *lockspace, *path;
     struct sanlk_lockspace ls;
 
-    static char *kwlist[] = {"lockspace", "host_id", "path", "offset", NULL};
+    static char *kwlist[] = {"lockspace", "host_id", "path", "offset",
+                                "wait", NULL};
 
     /* initialize lockspace structure */
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "sks|k", kwlist,
-        &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset)) {
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "sks|ki", kwlist,
+        &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset,
+        &waitrs)) {
         return NULL;
+    }
+
+    /* prepare sanlock_inq_lockspace flags */
+    if (waitrs) {
+        flags |= SANLK_INQ_WAIT;
     }
 
     /* prepare sanlock names */
@@ -343,7 +352,7 @@ py_inq_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     /* add sanlock lockspace (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_inq_lockspace(&ls, 0);
+    rv = sanlock_inq_lockspace(&ls, flags);
     Py_END_ALLOW_THREADS
 
     if (rv == 0) {
@@ -362,7 +371,7 @@ py_inq_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 PyDoc_STRVAR(pydoc_rem_lockspace, "\
 rem_lockspace(lockspace, host_id, path, offset=0, async=False, unused=False)\n\
 Remove a lockspace, releasing the acquired host_id. If async is True the\n\
-function will return immediatly and the status can be checked using\n\
+function will return immediately and the status can be checked using\n\
 inq_lockspace. If unused is True the command will fail (EBUSY) if there is\n\
 at least one acquired resource in the lockspace (instead of automatically\n\
 release it).");
