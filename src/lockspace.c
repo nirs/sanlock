@@ -704,21 +704,42 @@ int add_lockspace_wait(struct space *sp)
 		/* the thread exits right away if acquire fails */
 		pthread_join(sp->thread, NULL);
 		rv = result;
+		log_space(sp, "add_lockspace fail lease_status %d", result);
 		goto fail_del;
 	}
 
-	/* once we move sp to spaces list, tokens can begin using it,
-	   and the main loop will begin monitoring its renewals */
+	/* Once we move sp to spaces list, tokens can begin using it,
+	   the main loop will begin monitoring its renewals, and will
+	   handle removing it. */
 
 	pthread_mutex_lock(&spaces_mutex);
 	if (sp->external_remove || external_shutdown) {
-		rv = -1;
 		pthread_mutex_unlock(&spaces_mutex);
+		log_space(sp, "add_lockspace undo remove %d shutdown %d",
+			  sp->external_remove, external_shutdown);
+
+		/* We've caught a remove/shutdown just before completing
+		   the add process.  Don't complete it, but reverse the
+		   add, leaving the sp on spaces_add while reversing.
+		   Do the same thing that main_loop would do, except we
+		   don't have to go through killing_pids and checking for
+		   all_pids_dead since this lockspace has never been on
+		   the spaces list, so it could not have been used yet. */
+
+		pthread_mutex_lock(&sp->mutex);
+		sp->thread_stop = 1;
+		unlink_watchdog_file(sp);
+		pthread_mutex_unlock(&sp->mutex);
+		pthread_join(sp->thread, NULL);
+		rv = -1;
+		log_space(sp, "add_lockspace undo complete");
 		goto fail_del;
+	} else {
+		list_move(&sp->list, &spaces);
+		log_space(sp, "add_lockspace done");
+		pthread_mutex_unlock(&spaces_mutex);
+		return 0;
 	}
-	list_move(&sp->list, &spaces);
-	pthread_mutex_unlock(&spaces_mutex);
-	return 0;
 
  fail_del:
 	pthread_mutex_lock(&spaces_mutex);
@@ -775,8 +796,12 @@ int rem_lockspace_start(struct sanlk_lockspace *ls, unsigned int *space_id)
 	sp = _search_space(ls->name, (struct sync_disk *)&ls->host_id_disk, ls->host_id,
 			   &spaces_add, NULL, NULL);
 	if (sp) {
+		/* add_lockspace will be aborted and undone and the sp will
+		   not be moved to the spaces list */
 		sp->external_remove = 1;
+		id = sp->space_id;
 		pthread_mutex_unlock(&spaces_mutex);
+		*space_id = id;
 		rv = 0;
 		goto out;
 	}
@@ -805,7 +830,6 @@ int rem_lockspace_start(struct sanlk_lockspace *ls, unsigned int *space_id)
 	sp->external_remove = 1;
 	id = sp->space_id;
 	pthread_mutex_unlock(&spaces_mutex);
-
 	*space_id = id;
 	rv = 0;
  out:
@@ -822,7 +846,7 @@ int rem_lockspace_wait(struct sanlk_lockspace *ls, unsigned int space_id)
 	while (1) {
 		pthread_mutex_lock(&spaces_mutex);
 		sp = _search_space(ls->name, (struct sync_disk *)&ls->host_id_disk, ls->host_id,
-			   	   &spaces, &spaces_rem, NULL);
+			   	   &spaces, &spaces_rem, &spaces_add);
 		if (sp && (sp->space_id == space_id))
 			done = 0;
 		else
