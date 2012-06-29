@@ -654,6 +654,10 @@ int acquire_token(struct task *task, struct token *token)
 
 	memcpy(&r->leader, &leader, sizeof(struct leader_record));
 
+	/* copy lver into token because inquire looks there for it */
+	if (!(token->acquire_flags & SANLK_RES_SHARED))
+		token->r.lver = leader.lver;
+
 	if (token->acquire_flags & SANLK_RES_SHARED) {
 		rv = set_mode_block(task, token, token->host_id,
 				    token->host_generation, MBLOCK_SHARED);
