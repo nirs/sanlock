@@ -203,7 +203,7 @@ EXTERN struct task main_task;
 /* TODO: change used, suspend, need_free, pid_dead to flags */
 
 #define CL_KILLPATH_PID 0x00000001 /* include pid as killpath arg */
-#define CL_HELPER_SENT  0x00000002
+#define CL_RUNPATH_SENT 0x00000002 /* a RUNPATH msg has been sent to helper */
 
 struct client {
 	int used;
@@ -313,7 +313,15 @@ enum {
 
 EXTERN int external_shutdown;
 EXTERN char our_host_name_global[SANLK_NAME_LEN+1];
+
+EXTERN int kill_count_max;
+EXTERN int kill_count_grace;
+EXTERN int helper_ci;
+EXTERN int helper_pid;
+EXTERN int helper_kill_fd;
+EXTERN int helper_status_fd;
 EXTERN uint64_t helper_last_status;
+EXTERN uint32_t helper_full_count;
 
 EXTERN struct list_head spaces;
 EXTERN struct list_head spaces_rem;

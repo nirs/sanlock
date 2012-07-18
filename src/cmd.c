@@ -576,7 +576,7 @@ static void cmd_release(struct task *task, struct cmd_args *ca)
 		if (!found) {
 			cl->kill_count = 0;
 			cl->kill_last = 0;
-			cl->flags &= ~CL_HELPER_SENT;
+			cl->flags &= ~CL_RUNPATH_SENT;
 
 			log_debug("cmd_release %d,%d,%d clear kill state",
 				  cl_ci, cl_fd, cl_pid);
@@ -1359,6 +1359,10 @@ static int print_state_daemon(char *str)
 		 "id_renewal=%d "
 		 "id_renewal_fail=%d "
 		 "id_renewal_warn=%d "
+		 "kill_count_grace=%d "
+		 "helper_pid=%d "
+		 "helper_kill_fd=%d "
+		 "helper_full_count=%u "
 		 "helper_last_status=%llu "
 		 "monotime=%llu",
 		 our_host_name_global,
@@ -1367,6 +1371,10 @@ static int print_state_daemon(char *str)
 		 main_task.id_renewal_seconds,
 		 main_task.id_renewal_fail_seconds,
 		 main_task.id_renewal_warn_seconds,
+		 kill_count_grace,
+		 helper_pid,
+		 helper_kill_fd,
+		 helper_full_count,
 		 (unsigned long long)helper_last_status,
 		 (unsigned long long)monotime());
 

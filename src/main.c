@@ -53,6 +53,8 @@
 
 #define RELEASE_VERSION "2.3"
 
+#define SIGRUNPATH 100 /* anything that's not SIGTERM/SIGKILL */
+
 struct thread_pool {
 	int num_workers;
 	int max_workers;
@@ -81,13 +83,6 @@ static struct random_data rand_data;
 static char rand_state[32];
 static pthread_mutex_t rand_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-static int kill_count_max = 60;
-static int kill_count_grace = DEFAULT_GRACE_SEC;
-static int helper_ci = -1;
-static int helper_pid = -1;
-static int helper_kill_fd = -1;
-static int helper_status_fd = -1;
-
 static void close_helper(void)
 {
 	close(helper_kill_fd);
@@ -113,30 +108,36 @@ static void close_helper(void)
  * msgs before getting EAGAIN.
  */
 
-static void send_helper_kill(struct client *cl)
+static void send_helper_kill(struct client *cl, int sig)
 {
 	struct helper_msg hm;
 	int rv;
 
 	/*
 	 * We come through here once a second while the pid still has
-	 * leases.  But once we've successfully sent the helper the
-	 * message, we don't need to send it again (unlike SIGTERM
-	 * which we want to resend every second.)  If the pipe is
-	 * full and we fail to send the message to the helper, then
-	 * we retry every second until it goes through.
+	 * leases.  We only send a single RUNPATH message, so after
+	 * the first RUNPATH goes through we set CL_RUNPATH_SENT to
+	 * avoid futher RUNPATH's.
 	 */
 
-	if (cl->flags & CL_HELPER_SENT)
+	if ((cl->flags & CL_RUNPATH_SENT) && (sig == SIGRUNPATH))
 		return;
 
 	memset(&hm, 0, sizeof(hm));
-	hm.type = HELPER_MSG_RUNPATH;
-	memcpy(hm.path, cl->killpath, SANLK_HELPER_PATH_LEN);
-	memcpy(hm.args, cl->killargs, SANLK_HELPER_ARGS_LEN);
 
-	if (cl->flags & CL_KILLPATH_PID)
+	if (sig == SIGRUNPATH) {
+		hm.type = HELPER_MSG_RUNPATH;
+		memcpy(hm.path, cl->killpath, SANLK_HELPER_PATH_LEN);
+		memcpy(hm.args, cl->killargs, SANLK_HELPER_ARGS_LEN);
+
+		/* only include pid if it's requested as a killpath arg */
+		if (cl->flags & CL_KILLPATH_PID)
+			hm.pid = cl->pid;
+	} else {
+		hm.type = HELPER_MSG_KILLPID;
+		hm.sig = sig;
 		hm.pid = cl->pid;
+	}
 
  retry:
 	rv = write(helper_kill_fd, &hm, sizeof(hm));
@@ -144,8 +145,12 @@ static void send_helper_kill(struct client *cl)
 		goto retry;
 
 	/* pipe is full, we'll try again in a second */
-	if (rv == -1 && errno == EAGAIN)
+	if (rv == -1 && errno == EAGAIN) {
+		helper_full_count++;
+		log_debug("send_helper_kill pid %d sig %d full_count %u",
+			  cl->pid, sig, helper_full_count);
 		return;
+	}
 
 	/* helper exited or closed fd, quit using helper */
 	if (rv == -1 && errno == EPIPE) {
@@ -162,7 +167,8 @@ static void send_helper_kill(struct client *cl)
 		return;
 	}
 
-	cl->flags |= CL_HELPER_SENT;
+	if (sig == SIGRUNPATH)
+		cl->flags |= CL_RUNPATH_SENT;
 }
 
 /* FIXME: add a mutex for client array so we don't try to expand it
@@ -453,7 +459,11 @@ void client_pid_dead(int ci)
 
 	pthread_mutex_unlock(&cl->mutex);
 
-	kill(pid, SIGKILL);
+	/* it would be nice to do this SIGKILL as a confirmation that the pid
+	   is really gone (i.e. didn't just close the fd) if we always had root
+	   permission to do it */
+
+	/* kill(pid, SIGKILL); */
 
 	if (cmd_active) {
 		log_debug("client_pid_dead %d,%d,%d defer to cmd %d",
@@ -515,8 +525,6 @@ static int client_using_space(struct client *cl, struct space *sp)
 	}
 	return rv;
 }
-
-#define SIG_HELPER 100 /* anything that's not SIGTERM/SIGKILL */
 
 static void kill_pids(struct space *sp)
 {
@@ -581,7 +589,7 @@ static void kill_pids(struct space *sp)
 		    (kill_count_grace > 0) &&
 		    (cl->kill_count <= kill_count_grace) &&
 		    (now - helper_last_status < (HELPER_STATUS_INTERVAL * 2)))
-			sig = SIG_HELPER;
+			sig = SIGRUNPATH;
 		else if (cl->restrict & SANLK_RESTRICT_SIGKILL)
 			sig = SIGTERM;
 		else if (cl->restrict & SANLK_RESTRICT_SIGTERM)
@@ -607,10 +615,7 @@ static void kill_pids(struct space *sp)
 				  ci, fd, pid, sig, cl->kill_count);
 		}
 
-		if (sig == SIG_HELPER)
-			send_helper_kill(cl);
-		else
-			kill(pid, sig);
+		send_helper_kill(cl, sig);
 	}
 }
 
@@ -1299,9 +1304,26 @@ static void setup_groups(void)
 	int rv, i, j, h;
 	int pngroups, sngroups, ngroups_max;
 	gid_t *pgroup, *sgroup;
+	struct rlimit rlim;
 
 	if (!com.uname || !com.gname)
 		return;
+
+	/* before switching to a different user/group we must configure
+	   the limits for memlock and rtprio */
+	rlim.rlim_cur = rlim.rlim_max= -1;
+
+	rv = setrlimit(RLIMIT_MEMLOCK, &rlim);
+	if (rv < 0) {
+		log_error("cannot set the limits for memlock %i", errno);
+		exit(EXIT_FAILURE);
+	}
+
+	rv = setrlimit(RLIMIT_RTPRIO, &rlim);
+	if (rv < 0) {
+		log_error("cannot set the limits for rtprio %i", errno);
+		exit(EXIT_FAILURE);
+	}
 
 	ngroups_max = sysconf(_SC_NGROUPS_MAX);
 	if (ngroups_max < 0) {
@@ -1354,6 +1376,16 @@ static void setup_groups(void)
 	if (rv < 0) {
 		log_error("cannot set the user %s groups %i", com.uname, errno);
 		goto out;
+	}
+
+	rv = setgid(com.gid);
+	if (rv < 0) {
+		log_error("cannot set group id to %i errno %i", com.gid, errno);
+	}
+
+	rv = setuid(com.uid);
+	if (rv < 0) {
+		log_error("cannot set user id to %i errno %i", com.uid, errno);
 	}
 
  out:
@@ -1523,15 +1555,15 @@ static int do_daemon(void)
 	if (rv < 0)
 		return rv;
 
-	fd = lockfile(SANLK_RUN_DIR, SANLK_LOCKFILE_NAME);
-	if (fd < 0)
-		return fd;
-
 	setup_logging();
 
 	setup_host_name();
 
 	setup_groups();
+
+	fd = lockfile(SANLK_RUN_DIR, SANLK_LOCKFILE_NAME);
+	if (fd < 0)
+		return fd;
 
 	log_error("sanlock daemon started %s aio %d %d renew %d %d host %s time %llu",
 		  RELEASE_VERSION,
@@ -2312,12 +2344,20 @@ int main(int argc, char *argv[])
 	BUILD_BUG_ON(sizeof(struct leader_record) > LEADER_RECORD_MAX);
 	BUILD_BUG_ON(sizeof(struct helper_msg) != SANLK_HELPER_MSG_LEN);
 
-	/* initialize global variables */
+	/* initialize global EXTERN variables */
+
+	kill_count_max = 60;
+	kill_count_grace = DEFAULT_GRACE_SEC;
+	helper_ci = -1;
+	helper_pid = -1;
+	helper_kill_fd = -1;
+	helper_status_fd = -1;
+	
 	pthread_mutex_init(&spaces_mutex, NULL);
 	INIT_LIST_HEAD(&spaces);
 	INIT_LIST_HEAD(&spaces_rem);
 	INIT_LIST_HEAD(&spaces_add);
-	
+
 	memset(&com, 0, sizeof(com));
 	com.use_watchdog = DEFAULT_USE_WATCHDOG;
 	com.high_priority = DEFAULT_HIGH_PRIORITY;

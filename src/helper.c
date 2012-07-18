@@ -191,8 +191,10 @@ int run_helper(int in_fd, int out_fd, int log_stderr)
 
 		if (pollfd.revents & POLLIN) {
 			rv = read_hm(in_fd, &hm);
+			if (rv)
+				continue;
 
-			if (!rv && (hm.type == HELPER_MSG_RUNPATH)) {
+			if (hm.type == HELPER_MSG_RUNPATH) {
 				pid = fork();
 				if (!pid) {
 					run_path(&hm);
@@ -206,6 +208,8 @@ int run_helper(int in_fd, int out_fd, int log_stderr)
 					  pid, fork_count, wait_count,
 					  hm.path, hm.args);
 				*/
+			} else if (hm.type == HELPER_MSG_KILLPID) {
+				kill(hm.pid, hm.sig);
 			}
 		}
 

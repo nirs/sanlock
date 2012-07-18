@@ -18,6 +18,7 @@
 #define SANLK_HELPER_MSG_LEN 512
 
 #define HELPER_MSG_RUNPATH 1
+#define HELPER_MSG_KILLPID 2
 
 struct helper_msg {
 	uint8_t type;
@@ -25,9 +26,10 @@ struct helper_msg {
 	uint16_t pad2;
 	uint32_t flags;
 	int pid;
+	int sig;
 	char path[SANLK_HELPER_PATH_LEN]; /* 128 */
 	char args[SANLK_HELPER_ARGS_LEN]; /* 128 */
-	char pad[244];
+	char pad[240];
 };
 
 #define HELPER_STATUS_INTERVAL 30
