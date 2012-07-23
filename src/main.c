@@ -51,6 +51,7 @@
 #include "client_cmd.h"
 #include "cmd.h"
 #include "helper.h"
+#include "timeouts.h"
 
 #define RELEASE_VERSION "2.4"
 
@@ -541,6 +542,7 @@ static void kill_pids(struct space *sp)
 {
 	struct client *cl;
 	uint64_t now, last_success;
+	int id_renewal_fail_seconds;
 	int ci, fd, pid, sig;
 	int do_kill, in_grace;
 
@@ -550,6 +552,8 @@ static void kill_pids(struct space *sp)
 	 */
 	if (sp->killing_pids > 1)
 		return;
+
+	id_renewal_fail_seconds = calc_id_renewal_fail_seconds(sp->io_timeout);
 
 	/*
 	 * If we happen to renew our lease after we've started killing pids,
@@ -602,7 +606,7 @@ static void kill_pids(struct space *sp)
 		 * kill_grace_seconds
 		 */
 
-		in_grace = now < (last_success + main_task.id_renewal_fail_seconds + kill_grace_seconds);
+		in_grace = now < (last_success + id_renewal_fail_seconds + kill_grace_seconds);
 
 		if ((kill_grace_seconds > 0) && in_grace && cl->killpath[0]) {
 			sig = SIGRUNPATH;
@@ -782,7 +786,7 @@ static int main_loop(void)
 
 			check_all = 0;
 
-			rv = check_our_lease(&main_task, sp, &check_all, check_buf);
+			rv = check_our_lease(sp, &check_all, check_buf);
 			if (rv)
 				sp->renew_fail = 1;
 
@@ -795,7 +799,7 @@ static int main_loop(void)
 				check_interval = RECOVERY_CHECK_INTERVAL;
 
 			} else if (check_all) {
-				check_other_leases(&main_task, sp, check_buf);
+				check_other_leases(sp, check_buf);
 			}
 		}
 		empty = list_empty(&spaces);
@@ -830,7 +834,6 @@ static void *thread_pool_worker(void *data)
 	struct cmd_args *ca;
 
 	memset(&task, 0, sizeof(struct task));
-	setup_task_timeouts(&task, main_task.io_timeout_seconds);
 	setup_task_aio(&task, main_task.use_aio, WORKER_AIO_CB_SIZE);
 	snprintf(task.name, NAME_ID_SIZE, "worker%ld", (long)data);
 
@@ -1557,7 +1560,6 @@ static int do_daemon(void)
 	 * the main_task settings */
 
 	sprintf(main_task.name, "%s", "main");
-	setup_task_timeouts(&main_task, com.io_timeout_arg);
 	setup_task_aio(&main_task, com.aio_arg, 0);
 	 
 	rv = client_alloc();
@@ -1585,11 +1587,8 @@ static int do_daemon(void)
 
 	setup_groups();
 
-	log_error("sanlock daemon started %s aio %d %d renew %d %d host %s time %llu",
-		  RELEASE_VERSION,
-		  main_task.use_aio, main_task.io_timeout_seconds,
-		  main_task.id_renewal_seconds, main_task.id_renewal_fail_seconds,
-		  our_host_name_global,
+	log_error("sanlock daemon started %s host %s time %llu",
+		  RELEASE_VERSION, our_host_name_global,
 		  (unsigned long long)time(NULL));
 
 	setup_priority();
@@ -2237,14 +2236,13 @@ static int do_direct(void)
 	int live;
 	int rv;
 
-	setup_task_timeouts(&main_task, com.io_timeout_arg);
 	setup_task_aio(&main_task, com.aio_arg, DIRECT_AIO_CB_SIZE);
 	sprintf(main_task.name, "%s", "main_direct");
 
 	switch (com.action) {
 	case ACT_DIRECT_INIT:
-		rv = direct_init(&main_task, &com.lockspace, com.res_args[0],
-				 com.max_hosts, com.num_hosts);
+		rv = direct_init(&main_task, com.io_timeout_arg, &com.lockspace,
+				 com.res_args[0], com.max_hosts, com.num_hosts);
 		log_tool("init done %d", rv);
 		break;
 
@@ -2253,7 +2251,9 @@ static int do_direct(void)
 		break;
 
 	case ACT_READ_LEADER:
-		rv = direct_read_leader(&main_task, &com.lockspace, com.res_args[0], &leader);
+		rv = direct_read_leader(&main_task, com.io_timeout_arg,
+					&com.lockspace, com.res_args[0],
+					&leader);
 		log_tool("read_leader done %d", rv);
 		log_tool("magic 0x%0x", leader.magic);
 		log_tool("version 0x%x", leader.version);
@@ -2274,6 +2274,7 @@ static int do_direct(void)
 		log_tool("timestamp %llu",
 			 (unsigned long long)leader.timestamp);
 		log_tool("checksum 0x%0x", leader.checksum);
+		log_tool("io_timeout %u", leader.io_timeout);
 		log_tool("write_id %llu",
 			 (unsigned long long)leader.write_id);
 		log_tool("write_generation %llu",
@@ -2283,37 +2284,40 @@ static int do_direct(void)
 		break;
 
 	case ACT_ACQUIRE:
-		rv = direct_acquire(&main_task, com.res_args[0], com.num_hosts,
+		rv = direct_acquire(&main_task, com.io_timeout_arg,
+				    com.res_args[0], com.num_hosts,
 				    com.local_host_id, com.local_host_generation,
 				    &leader);
 		log_tool("acquire done %d", rv);
 		break;
 
 	case ACT_RELEASE:
-		rv = direct_release(&main_task, com.res_args[0], &leader);
+		rv = direct_release(&main_task, com.io_timeout_arg,
+				    com.res_args[0], &leader);
 		log_tool("release done %d", rv);
 		break;
 
 	case ACT_ACQUIRE_ID:
 		setup_host_name();
 
-		rv = direct_acquire_id(&main_task, &com.lockspace,
-				       our_host_name_global);
+		rv = direct_acquire_id(&main_task, com.io_timeout_arg,
+				       &com.lockspace, our_host_name_global);
 		log_tool("acquire_id done %d", rv);
 		break;
 
 	case ACT_RELEASE_ID:
-		rv = direct_release_id(&main_task, &com.lockspace);
+		rv = direct_release_id(&main_task, com.io_timeout_arg, &com.lockspace);
 		log_tool("release_id done %d", rv);
 		break;
 
 	case ACT_RENEW_ID:
-		rv = direct_renew_id(&main_task, &com.lockspace);
+		rv = direct_renew_id(&main_task, com.io_timeout_arg, &com.lockspace);
 		log_tool("rewew_id done %d", rv);
 		break;
 
 	case ACT_READ_ID:
 		rv = direct_read_id(&main_task,
+				    com.io_timeout_arg,
 				    &com.lockspace,
 				    &timestamp,
 				    &owner_id,
@@ -2328,6 +2332,7 @@ static int do_direct(void)
 
 	case ACT_LIVE_ID:
 		rv = direct_live_id(&main_task,
+				    com.io_timeout_arg,
 				    &com.lockspace,
 				    &timestamp,
 				    &owner_id,

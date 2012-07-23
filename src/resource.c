@@ -30,6 +30,7 @@
 #include "lockspace.h"
 #include "resource.h"
 #include "task.h"
+#include "timeouts.h"
 #include "mode_block.h"
 #include "helper.h"
 
@@ -75,10 +76,11 @@ void send_state_resources(int fd)
    enough knowledge to say it's safely dead (unless of course we find it is
    alive while waiting) */
 
-static int host_live(struct task *task, char *lockspace_name, uint64_t host_id, uint64_t gen)
+static int host_live(char *lockspace_name, uint64_t host_id, uint64_t gen)
 {
 	struct host_status hs;
 	uint64_t now;
+	int other_io_timeout, other_host_dead_seconds;
 	int rv;
 
 	rv = host_info(lockspace_name, host_id, &hs);
@@ -110,14 +112,17 @@ static int host_live(struct task *task, char *lockspace_name, uint64_t host_id, 
 
 	now = monotime();
 
-	if (!hs.last_live && (now - hs.first_check > task->host_dead_seconds)) {
+	other_io_timeout = hs.io_timeout;
+	other_host_dead_seconds = calc_host_dead_seconds(other_io_timeout);
+
+	if (!hs.last_live && (now - hs.first_check > other_host_dead_seconds)) {
 		log_debug("host_live %llu %llu no first_check %llu",
 			  (unsigned long long)host_id, (unsigned long long)gen,
 			  (unsigned long long)hs.first_check);
 		return 0;
 	}
 
-	if (hs.last_live && (now - hs.last_live > task->host_dead_seconds)) {
+	if (hs.last_live && (now - hs.last_live > other_host_dead_seconds)) {
 		log_debug("host_live %llu %llu no last_live %llu",
 			  (unsigned long long)host_id, (unsigned long long)gen,
 			  (unsigned long long)hs.last_live);
@@ -171,7 +176,7 @@ static int set_mode_block(struct task *task, struct token *token,
 
 		offset = disk->offset + ((2 + host_id - 1) * disk->sector_size);
 
-		rv = read_iobuf(disk->fd, offset, iobuf, iobuf_len, task);
+		rv = read_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout);
 		if (rv < 0)
 			break;
 
@@ -179,7 +184,7 @@ static int set_mode_block(struct task *task, struct token *token,
 		mb->flags = flags;
 		mb->generation = gen;
 
-		rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len, task);
+		rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout);
 		if (rv < 0)
 			break;
 	}
@@ -225,7 +230,7 @@ static int read_mode_block(struct task *task, struct token *token,
 
 		offset = disk->offset + ((2 + host_id - 1) * disk->sector_size);
 
-		rv = read_iobuf(disk->fd, offset, iobuf, iobuf_len, task);
+		rv = read_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout);
 		if (rv < 0)
 			break;
 
@@ -267,7 +272,7 @@ static int clear_dead_shared(struct task *task, struct token *token,
 			return rv;
 		}
 
-		if (host_live(task, token->r.lockspace_name, host_id, max_gen)) {
+		if (host_live(token->r.lockspace_name, host_id, max_gen)) {
 			log_token(token, "clear_dead_shared host_id %llu gen %llu alive",
 				  (unsigned long long)host_id, (unsigned long long)max_gen);
 			live++;
@@ -542,6 +547,8 @@ static struct resource *new_resource(struct token *token)
 
 	memset(r, 0, r_len);
 	memcpy(&r->r, &token->r, sizeof(struct sanlk_resource));
+
+	r->io_timeout = token->io_timeout;
 
 	/* disks copied after open_disks because open_disks sets sector_size
 	   which we want copied */
@@ -966,7 +973,6 @@ static void *resource_thread(void *arg GNUC_UNUSED)
 	int pid, tt_len;
 
 	memset(&task, 0, sizeof(struct task));
-	setup_task_timeouts(&task, main_task.io_timeout_seconds);
 	setup_task_aio(&task, main_task.use_aio, RESOURCE_AIO_CB_SIZE);
 	sprintf(task.name, "%s", "resource");
 
@@ -1005,6 +1011,7 @@ static void *resource_thread(void *arg GNUC_UNUSED)
 			tt->host_id = r->host_id;
 			tt->host_generation = r->host_generation;
 			tt->token_id = r->release_token_id;
+			tt->io_timeout = r->io_timeout;
 
 			r->flags &= ~R_THREAD_RELEASE;
 			pthread_mutex_unlock(&resource_mutex);
@@ -1022,6 +1029,7 @@ static void *resource_thread(void *arg GNUC_UNUSED)
 			copy_disks(&tt->r.disks, &r->r.disks, r->r.num_disks);
 			tt->host_id = r->host_id;
 			tt->host_generation = r->host_generation;
+			tt->io_timeout = r->io_timeout;
 			pid = r->pid;
 			lver = r->leader.lver;
 

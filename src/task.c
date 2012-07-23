@@ -26,69 +26,6 @@
 #include "log.h"
 #include "task.h"
 
-void setup_task_timeouts(struct task *task, int io_timeout_arg)
-{
-	int io_timeout_seconds = io_timeout_arg;
-	int id_renewal_seconds = 2 * io_timeout_seconds;
-	int id_renewal_fail_seconds = 8 * io_timeout_seconds;
-	int id_renewal_warn_seconds = 6 * io_timeout_seconds;
-
-	/* those above are chosen by us, the rest are based on them */
-
-	int host_dead_seconds      = id_renewal_fail_seconds + WATCHDOG_FIRE_TIMEOUT;
-	int delta_large_delay      = id_renewal_seconds + (6 * io_timeout_seconds);
-	int delta_short_delay      = 2 * io_timeout_seconds;
-
-	int max = host_dead_seconds;
-	if (delta_large_delay > max)
-		max = delta_large_delay;
-
-	int delta_acquire_held_max = max + delta_short_delay + (4 * io_timeout_seconds);
-	int delta_acquire_held_min = max;
-	int delta_acquire_free_max = delta_short_delay + (3 * io_timeout_seconds);
-	int delta_acquire_free_min = delta_short_delay;
-	int delta_renew_max        = 2 * io_timeout_seconds;
-	int delta_renew_min        = 0;
-	int paxos_acquire_held_max = host_dead_seconds + (7 * io_timeout_seconds);
-	int paxos_acquire_held_min = host_dead_seconds;
-	int paxos_acquire_free_max = 6 * io_timeout_seconds;
-	int paxos_acquire_free_min = 0;
-	int request_finish_seconds = 3 * id_renewal_seconds; /* random */
-
-	task->io_timeout_seconds = io_timeout_seconds;
-	task->id_renewal_seconds = id_renewal_seconds;
-	task->id_renewal_fail_seconds = id_renewal_fail_seconds;
-	task->id_renewal_warn_seconds = id_renewal_warn_seconds;
-	task->host_dead_seconds = host_dead_seconds;
-	task->request_finish_seconds = request_finish_seconds;
-
-	/* the rest are calculated as needed in place */
-
-	/* hack to make just main thread log this info */
-	if (strcmp(task->name, "main"))
-		return;
-
-	log_debug("io_timeout_seconds %d", io_timeout_seconds);
-	log_debug("id_renewal_seconds %d", id_renewal_seconds);
-	log_debug("id_renewal_fail_seconds %d", id_renewal_fail_seconds);
-	log_debug("id_renewal_warn_seconds %d", id_renewal_warn_seconds);
-
-	log_debug("host_dead_seconds %d", host_dead_seconds);
-	log_debug("delta_large_delay %d", delta_large_delay);
-	log_debug("delta_short_delay %d", delta_short_delay);
-	log_debug("delta_acquire_held_max %d", delta_acquire_held_max);
-	log_debug("delta_acquire_held_min %d", delta_acquire_held_min);
-	log_debug("delta_acquire_free_max %d", delta_acquire_free_max);
-	log_debug("delta_acquire_free_min %d", delta_acquire_free_min);
-	log_debug("delta_renew_max %d", delta_renew_max);
-	log_debug("delta_renew_min %d", delta_renew_min);
-	log_debug("paxos_acquire_held_max %d", paxos_acquire_held_max);
-	log_debug("paxos_acquire_held_min %d", paxos_acquire_held_min);
-	log_debug("paxos_acquire_free_max %d", paxos_acquire_free_max);
-	log_debug("paxos_acquire_free_min %d", paxos_acquire_free_min);
-	log_debug("request_finish_seconds %d", request_finish_seconds);
-}
-
 void setup_task_aio(struct task *task, int use_aio, int cb_size)
 {
 	int rv;
@@ -137,7 +74,7 @@ void close_task_aio(struct task *task)
 		goto skip_aio;
 
 	memset(&ts, 0, sizeof(struct timespec));
-	ts.tv_sec = task->io_timeout_seconds;
+	ts.tv_sec = DEFAULT_IO_TIMEOUT;
 
 	last_warn = time(NULL);
 
@@ -147,7 +84,7 @@ void close_task_aio(struct task *task)
 	while (1) {
 		warn = 0;
 
-		if (time(NULL) - last_warn >= task->io_timeout_seconds) {
+		if (time(NULL) - last_warn >= DEFAULT_IO_TIMEOUT) {
 			last_warn = time(NULL);
 			warn = 1;
 		}

@@ -116,7 +116,7 @@ static int recv_result(int fd)
 	return (int)h.data;
 }
 
-static int cmd_lockspace(int cmd, struct sanlk_lockspace *ls, uint32_t flags)
+static int cmd_lockspace(int cmd, struct sanlk_lockspace *ls, uint32_t flags, uint32_t data)
 {
 	int rv, fd;
 
@@ -124,7 +124,7 @@ static int cmd_lockspace(int cmd, struct sanlk_lockspace *ls, uint32_t flags)
 	if (rv < 0)
 		return rv;
 
-	rv = send_header(fd, cmd, flags, sizeof(struct sanlk_lockspace), 0, 0);
+	rv = send_header(fd, cmd, flags, sizeof(struct sanlk_lockspace), data, 0);
 	if (rv < 0)
 		goto out;
 
@@ -142,17 +142,22 @@ static int cmd_lockspace(int cmd, struct sanlk_lockspace *ls, uint32_t flags)
 
 int sanlock_add_lockspace(struct sanlk_lockspace *ls, uint32_t flags)
 {
-	return cmd_lockspace(SM_CMD_ADD_LOCKSPACE, ls, flags);
+	return cmd_lockspace(SM_CMD_ADD_LOCKSPACE, ls, flags, 0);
+}
+
+int sanlock_add_lockspace_timeout(struct sanlk_lockspace *ls, uint32_t flags, uint32_t io_timeout)
+{
+	return cmd_lockspace(SM_CMD_ADD_LOCKSPACE, ls, flags, io_timeout);
 }
 
 int sanlock_inq_lockspace(struct sanlk_lockspace *ls, uint32_t flags)
 {
-	return cmd_lockspace(SM_CMD_INQ_LOCKSPACE, ls, flags);
+	return cmd_lockspace(SM_CMD_INQ_LOCKSPACE, ls, flags, 0);
 }
 
 int sanlock_rem_lockspace(struct sanlk_lockspace *ls, uint32_t flags)
 {
-	return cmd_lockspace(SM_CMD_REM_LOCKSPACE, ls, flags);
+	return cmd_lockspace(SM_CMD_REM_LOCKSPACE, ls, flags, 0);
 }
 
 int sanlock_align(struct sanlk_disk *disk)

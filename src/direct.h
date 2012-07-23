@@ -9,29 +9,34 @@
 #ifndef __DIRECT_H__
 #define __DIRECT_H__
 
-int direct_acquire(struct task *task,
+int direct_acquire(struct task *task, int io_timeout,
                    struct sanlk_resource *res,
                    int num_hosts,
                    uint64_t local_host_id,
                    uint64_t local_host_generation,
                    struct leader_record *leader_ret);
 
-int direct_release(struct task *task,
+int direct_release(struct task *task, int io_timeout,
                    struct sanlk_resource *res,
                    struct leader_record *leader_ret);
 
-int direct_acquire_id(struct task *task, struct sanlk_lockspace *ls,
+int direct_acquire_id(struct task *task, int io_timeout,
+		      struct sanlk_lockspace *ls,
 		      char *our_host_name);
-int direct_release_id(struct task *task, struct sanlk_lockspace *ls);
-int direct_renew_id(struct task *task, struct sanlk_lockspace *ls);
 
-int direct_read_id(struct task *task,
+int direct_release_id(struct task *task, int io_timeout,
+		      struct sanlk_lockspace *ls);
+
+int direct_renew_id(struct task *task, int io_timeout,
+		    struct sanlk_lockspace *ls);
+
+int direct_read_id(struct task *task, int io_timeout,
                    struct sanlk_lockspace *ls,
                    uint64_t *timestamp,
                    uint64_t *owner_id,
                    uint64_t *owner_generation);
 
-int direct_live_id(struct task *task,
+int direct_live_id(struct task *task, int io_timeout,
                    struct sanlk_lockspace *ls,
                    uint64_t *timestamp,
                    uint64_t *owner_id,
@@ -40,12 +45,12 @@ int direct_live_id(struct task *task,
 
 int direct_align(struct sync_disk *disk);
 
-int direct_init(struct task *task,
+int direct_init(struct task *task, int io_timeout,
                 struct sanlk_lockspace *ls,
                 struct sanlk_resource *res,
                 int max_hosts, int num_hosts);
 
-int direct_read_leader(struct task *task,
+int direct_read_leader(struct task *task, int io_timeout,
                        struct sanlk_lockspace *ls,
                        struct sanlk_resource *res,
                        struct leader_record *leader_ret);

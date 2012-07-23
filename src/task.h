@@ -9,7 +9,6 @@
 #ifndef __TASK_H__
 #define __TASK_H__
 
-void setup_task_timeouts(struct task *task, int io_timeout_arg);
 void setup_task_aio(struct task *task, int use_aio, int cb_size);
 void close_task_aio(struct task *task);
 

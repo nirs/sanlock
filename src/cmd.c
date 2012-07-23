@@ -302,6 +302,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 		token->host_id = spi.host_id;
 		token->host_generation = spi.host_generation;
 		token->pid = cl_pid;
+		token->io_timeout = spi.io_timeout;
 		if (cl->restrict & SANLK_RESTRICT_SIGKILL)
 			token->flags |= T_RESTRICT_SIGKILL;
 
@@ -728,6 +729,7 @@ static void cmd_request(struct task *task, struct cmd_args *ca)
 {
 	struct token *token;
 	struct sanlk_resource res;
+	struct space_info spi;
 	uint64_t owner_id;
 	uint32_t force_mode;
 	int token_len, disks_len;
@@ -798,6 +800,14 @@ static void cmd_request(struct task *task, struct cmd_args *ca)
 		  token->r.name,
 		  token->disks[0].path,
 		  (unsigned long long)token->r.disks[0].offset);
+
+	rv = lockspace_info(token->r.lockspace_name, &spi);
+	if (rv < 0 || spi.killing_pids) {
+		result = -ENOSPC;
+		goto reply_free;
+	}
+
+	token->io_timeout = spi.io_timeout;
 
 	error = request_token(task, token, force_mode, &owner_id);
 	if (error < 0) {
@@ -874,6 +884,7 @@ static void cmd_add_lockspace(struct cmd_args *ca)
 {
 	struct sanlk_lockspace lockspace;
 	struct space *sp;
+	uint32_t io_timeout;
 	int async = ca->header.cmd_flags & SANLK_ADD_ASYNC;
 	int fd, rv, result;
 
@@ -887,14 +898,18 @@ static void cmd_add_lockspace(struct cmd_args *ca)
 		goto reply;
 	}
 
-	log_debug("cmd_add_lockspace %d,%d %.48s:%llu:%s:%llu flags %x",
+	log_debug("cmd_add_lockspace %d,%d %.48s:%llu:%s:%llu flags %x timeout %u",
 		  ca->ci_in, fd, lockspace.name,
 		  (unsigned long long)lockspace.host_id,
 		  lockspace.host_id_disk.path,
 		  (unsigned long long)lockspace.host_id_disk.offset,
-		  ca->header.cmd_flags);
+		  ca->header.cmd_flags, ca->header.data);
 
-	rv = add_lockspace_start(&lockspace, &sp);
+	io_timeout = ca->header.data;
+	if (!io_timeout)
+		io_timeout = DEFAULT_IO_TIMEOUT;
+
+	rv = add_lockspace_start(&lockspace, io_timeout, &sp);
 	if (rv < 0) {
 		result = rv;
 		goto reply;
@@ -1128,7 +1143,7 @@ static void cmd_init_lockspace(struct task *task, struct cmd_args *ca)
 		goto reply;
 	}
 
-	result = delta_lease_init(task, &sd, lockspace.name, ca->header.data);
+	result = delta_lease_init(task, DEFAULT_IO_TIMEOUT, &sd, lockspace.name, ca->header.data);
 
 	close_disks(&sd, 1);
  reply:
@@ -1208,6 +1223,8 @@ static void cmd_init_resource(struct task *task, struct cmd_args *ca)
 		result = rv;
 		goto reply;
 	}
+
+	token->io_timeout = DEFAULT_IO_TIMEOUT;
 
 	result = paxos_lease_init(task, token, ca->header.data, ca->header.data2);
 
@@ -1355,10 +1372,6 @@ static int print_state_daemon(char *str)
 	snprintf(str, SANLK_STATE_MAXSTR-1,
 		 "our_host_name=%s "
 		 "use_aio=%d "
-		 "io_timeout=%d "
-		 "id_renewal=%d "
-		 "id_renewal_fail=%d "
-		 "id_renewal_warn=%d "
 		 "kill_grace_seconds=%d "
 		 "helper_pid=%d "
 		 "helper_kill_fd=%d "
@@ -1367,10 +1380,6 @@ static int print_state_daemon(char *str)
 		 "monotime=%llu",
 		 our_host_name_global,
 		 main_task.use_aio,
-		 main_task.io_timeout_seconds,
-		 main_task.id_renewal_seconds,
-		 main_task.id_renewal_fail_seconds,
-		 main_task.id_renewal_warn_seconds,
 		 kill_grace_seconds,
 		 helper_pid,
 		 helper_kill_fd,
@@ -1421,6 +1430,7 @@ static int print_state_lockspace(struct space *sp, char *str, const char *list_n
 	snprintf(str, SANLK_STATE_MAXSTR-1,
 		 "list=%s "
 		 "space_id=%u "
+		 "io_timeout=%d "
 		 "host_generation=%llu "
 		 "renew_fail=%d "
 		 "space_dead=%d "
@@ -1434,6 +1444,7 @@ static int print_state_lockspace(struct space *sp, char *str, const char *list_n
 		 "renewal_last_success=%llu",
 		 list_name,
 		 sp->space_id,
+		 sp->io_timeout,
 		 (unsigned long long)sp->host_generation,
 		 sp->renew_fail,
 		 sp->space_dead,
@@ -1477,13 +1488,15 @@ static int print_state_host(struct host_status *hs, char *str)
 		 "last_req=%llu "
 		 "owner_id=%llu "
 		 "owner_generation=%llu "
-		 "timestamp=%llu",
+		 "timestamp=%llu "
+		 "io_timeout=%u",
 		 (unsigned long long)hs->last_check,
 		 (unsigned long long)hs->last_live,
 		 (unsigned long long)hs->last_req,
 		 (unsigned long long)hs->owner_id,
 		 (unsigned long long)hs->owner_generation,
-		 (unsigned long long)hs->timestamp);
+		 (unsigned long long)hs->timestamp,
+		 hs->io_timeout);
 
 	return strlen(str) + 1;
 }

@@ -28,6 +28,7 @@ CMD_SOURCE = \
 	main.c \
 	paxos_lease.c \
 	task.c \
+	timeouts.c \
 	resource.c \
 	watchdog.c \
 	monotime.c \
@@ -44,6 +45,7 @@ LIB_ENTIRE_SOURCE = \
 	paxos_lease.c \
 	direct.c \
 	task.c \
+	timeouts.c \
 	direct_lib.c \
 	monotime.c
 

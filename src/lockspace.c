@@ -32,6 +32,7 @@
 #include "resource.h"
 #include "watchdog.h"
 #include "task.h"
+#include "timeouts.h"
 #include "direct.h"
 
 static uint32_t space_id_counter = 1;
@@ -104,6 +105,7 @@ int _lockspace_info(char *space_name, struct space_info *spi)
 		   struct space_info */
 
 		spi->space_id = sp->space_id;
+		spi->io_timeout = sp->io_timeout;
 		spi->host_id = sp->host_id;
 		spi->host_generation = sp->host_generation;
 		spi->killing_pids = sp->killing_pids;
@@ -220,6 +222,12 @@ int host_info(char *space_name, uint64_t host_id, struct host_status *hs_out)
 			continue;
 		memcpy(hs_out, &sp->host_status[host_id-1], sizeof(struct host_status));
 		found = 1;
+
+		if (!hs_out->io_timeout) {
+			log_erros(sp, "host_info %llu use own io_timeout %d",
+				  (unsigned long long)host_id, sp->io_timeout);
+			hs_out->io_timeout = sp->io_timeout;
+		}
 		break;
 	}
 	pthread_mutex_unlock(&spaces_mutex);
@@ -229,11 +237,12 @@ int host_info(char *space_name, uint64_t host_id, struct host_status *hs_out)
 	return 0;
 }
 
-static void create_bitmap(struct task *task, struct space *sp, char *bitmap)
+static void create_bitmap(struct space *sp, char *bitmap)
 {
 	uint64_t now;
 	int i;
 	char c;
+	int request_finish_seconds = calc_request_finish_seconds(sp->io_timeout);
 
 	now = monotime();
 
@@ -245,7 +254,7 @@ static void create_bitmap(struct task *task, struct space *sp, char *bitmap)
 		if (!sp->host_status[i].set_bit_time)
 			continue;
 
-		if (now - sp->host_status[i].set_bit_time > task->request_finish_seconds) {
+		if (now - sp->host_status[i].set_bit_time > request_finish_seconds) {
 			log_space(sp, "bitmap clear host_id %d", i+1);
 			sp->host_status[i].set_bit_time = 0;
 		} else {
@@ -256,7 +265,7 @@ static void create_bitmap(struct task *task, struct space *sp, char *bitmap)
 	pthread_mutex_unlock(&sp->mutex);
 }
 
-void check_other_leases(struct task *task, struct space *sp, char *buf)
+void check_other_leases(struct space *sp, char *buf)
 {
 	struct leader_record *leader;
 	struct sync_disk *disk;
@@ -264,6 +273,7 @@ void check_other_leases(struct task *task, struct space *sp, char *buf)
 	char *bitmap;
 	uint64_t now;
 	int i, new;
+	int request_finish_seconds = calc_request_finish_seconds(sp->io_timeout);
 
 	disk = &sp->host_id_disk;
 
@@ -288,6 +298,7 @@ void check_other_leases(struct task *task, struct space *sp, char *buf)
 		hs->owner_id = leader->owner_id;
 		hs->owner_generation = leader->owner_generation;
 		hs->timestamp = leader->timestamp;
+		hs->io_timeout = leader->io_timeout;
 		hs->last_live = now;
 
 		if (i+1 == sp->host_id)
@@ -301,7 +312,7 @@ void check_other_leases(struct task *task, struct space *sp, char *buf)
 		/* this host has made a request for us, we won't take a new
 		   request from this host for another request_finish_seconds */
 
-		if (now - hs->last_req < task->request_finish_seconds)
+		if (now - hs->last_req < request_finish_seconds)
 			continue;
 
 		log_space(sp, "request from host_id %d", i+1);
@@ -317,8 +328,9 @@ void check_other_leases(struct task *task, struct space *sp, char *buf)
  * check if our_host_id_thread has renewed within timeout
  */
 
-int check_our_lease(struct task *task, struct space *sp, int *check_all, char *check_buf)
+int check_our_lease(struct space *sp, int *check_all, char *check_buf)
 {
+	int id_renewal_fail_seconds, id_renewal_warn_seconds;
 	uint64_t last_success;
 	int corrupt_result;
 	int gap;
@@ -343,12 +355,15 @@ int check_our_lease(struct task *task, struct space *sp, int *check_all, char *c
 
 	gap = monotime() - last_success;
 
-	if (gap >= task->id_renewal_fail_seconds) {
+	id_renewal_fail_seconds = calc_id_renewal_fail_seconds(sp->io_timeout);
+	id_renewal_warn_seconds = calc_id_renewal_warn_seconds(sp->io_timeout);
+
+	if (gap >= id_renewal_fail_seconds) {
 		log_erros(sp, "check_our_lease failed %d", gap);
 		return -1;
 	}
 
-	if (gap >= task->id_renewal_warn_seconds) {
+	if (gap >= id_renewal_warn_seconds) {
 		log_erros(sp, "check_our_lease warning %d last_success %llu",
 			  gap, (unsigned long long)last_success);
 	}
@@ -390,6 +405,7 @@ static void *lockspace_thread(void *arg_in)
 	struct leader_record leader;
 	uint64_t delta_begin, last_success;
 	int rv, delta_length, renewal_interval;
+	int id_renewal_seconds, id_renewal_fail_seconds;
 	int acquire_result, delta_result, read_result;
 	int opened = 0;
 	int stop = 0;
@@ -397,9 +413,11 @@ static void *lockspace_thread(void *arg_in)
 	sp = (struct space *)arg_in;
 
 	memset(&task, 0, sizeof(struct task));
-	setup_task_timeouts(&task, main_task.io_timeout_seconds);
 	setup_task_aio(&task, main_task.use_aio, HOSTID_AIO_CB_SIZE);
 	memcpy(task.name, sp->space_name, NAME_ID_SIZE);
+
+	id_renewal_seconds = calc_id_renewal_seconds(sp->io_timeout);
+	id_renewal_fail_seconds = calc_id_renewal_fail_seconds(sp->io_timeout);
 
 	delta_begin = monotime();
 
@@ -447,7 +465,7 @@ static void *lockspace_thread(void *arg_in)
 	   before we allow any pid's to begin running */
 
 	if (delta_result == SANLK_OK) {
-		rv = create_watchdog_file(sp, last_success);
+		rv = create_watchdog_file(sp, last_success, id_renewal_fail_seconds);
 		if (rv < 0) {
 			log_erros(sp, "create_watchdog failed %d", rv);
 			acquire_result = SANLK_WD_ERROR;
@@ -483,7 +501,7 @@ static void *lockspace_thread(void *arg_in)
 		 * wait between each renewal
 		 */
 
-		if (monotime() - last_success < task.id_renewal_seconds) {
+		if (monotime() - last_success < id_renewal_seconds) {
 			sleep(1);
 			continue;
 		} else {
@@ -499,7 +517,7 @@ static void *lockspace_thread(void *arg_in)
 		 */
 
 		memset(bitmap, 0, sizeof(bitmap));
-		create_bitmap(&task, sp, bitmap);
+		create_bitmap(sp, bitmap);
 
 		delta_begin = monotime();
 
@@ -541,7 +559,7 @@ static void *lockspace_thread(void *arg_in)
 		 */
 
 		if (delta_result == SANLK_OK && !sp->thread_stop)
-			update_watchdog_file(sp, last_success);
+			update_watchdog_file(sp, last_success, id_renewal_fail_seconds);
 
 		pthread_mutex_unlock(&sp->mutex);
 
@@ -553,7 +571,7 @@ static void *lockspace_thread(void *arg_in)
 		if (delta_result != SANLK_OK) {
 			log_erros(sp, "renewal error %d delta_length %d last_success %llu",
 				  delta_result, delta_length, (unsigned long long)last_success);
-		} else if (delta_length > task.id_renewal_seconds) {
+		} else if (delta_length > id_renewal_seconds) {
 			log_erros(sp, "renewed %llu delta_length %d too long",
 				  (unsigned long long)last_success, delta_length);
 		} else if (com.debug_renew) {
@@ -585,7 +603,7 @@ static void free_sp(struct space *sp)
 	free(sp);
 }
 
-int add_lockspace_start(struct sanlk_lockspace *ls, struct space **sp_out)
+int add_lockspace_start(struct sanlk_lockspace *ls, uint32_t io_timeout, struct space **sp_out)
 {
 	struct space *sp, *sp2;
 	int rv;
@@ -607,6 +625,7 @@ int add_lockspace_start(struct sanlk_lockspace *ls, struct space **sp_out)
 	sp->host_id_disk.sector_size = 0;
 	sp->host_id_disk.fd = -1;
 	sp->host_id = ls->host_id;
+	sp->io_timeout = io_timeout;
 	pthread_mutex_init(&sp->mutex, NULL);
 
 	pthread_mutex_lock(&spaces_mutex);

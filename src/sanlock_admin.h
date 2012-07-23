@@ -27,9 +27,15 @@
  * -EINPROGRESS: the lockspace is already in the process of being added
  * (the in-progress add may or may not succeed)
  * -EAGAIN: the lockspace is being removed
+ *
+ * The _timeout version takes the io_timeout in seconds.
+ * If 0, the global setting for the daemon will be used.
  */
 
 int sanlock_add_lockspace(struct sanlk_lockspace *ls, uint32_t flags);
+
+int sanlock_add_lockspace_timeout(struct sanlk_lockspace *ls, uint32_t flags,
+				  uint32_t io_timeout);
 
 /*
  * inq_lockspace returns:

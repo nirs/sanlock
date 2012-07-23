@@ -80,6 +80,7 @@ struct token {
 	/* copied from the sp with r.lockspace_name */
 	uint64_t host_id;
 	uint64_t host_generation;
+	uint32_t io_timeout;
 
 	/* internal */
 	struct list_head list; /* resource->tokens */
@@ -104,6 +105,7 @@ struct resource {
 	struct list_head tokens;     /* only one token when ex, multiple sh */
 	uint64_t host_id;
 	uint64_t host_generation;
+	uint32_t io_timeout;
 	int pid;                     /* copied from token when ex */
 	uint32_t flags;
 	uint32_t release_token_id;   /* copy to temp token (tt) for log messages */
@@ -134,6 +136,7 @@ struct host_status {
 	uint64_t owner_generation;
 	uint64_t timestamp; /* remote monotime */
 	uint64_t set_bit_time;
+	uint16_t io_timeout;
 };
 
 struct space {
@@ -143,6 +146,7 @@ struct space {
 	uint64_t host_id;
 	uint64_t host_generation;
 	struct sync_disk host_id_disk;
+	uint32_t io_timeout;
 	int align_size;
 	int renew_fail;
 	int space_dead;
@@ -161,6 +165,7 @@ struct space {
 
 struct space_info {
 	uint32_t space_id;
+	uint32_t io_timeout;
 	uint64_t host_id;
 	uint64_t host_generation;
 	int killing_pids;
@@ -180,13 +185,6 @@ struct aicb {
 
 struct task {
 	char name[NAME_ID_SIZE+1];   /* for log messages */
-
-	int io_timeout_seconds;      /* configured */
-	int id_renewal_seconds;      /* configured */
-	int id_renewal_fail_seconds; /* configured */
-	int id_renewal_warn_seconds; /* configured */
-	int host_dead_seconds;       /* calculated */
-	int request_finish_seconds;  /* calculated */
 
 	unsigned int io_count;       /* stats */
 	unsigned int to_count;       /* stats */

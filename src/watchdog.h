@@ -9,8 +9,10 @@
 #ifndef __WATCHDOG_H__
 #define __WATCHDOG_H__
 
-void update_watchdog_file(struct space *sp, uint64_t timestamp);
-int create_watchdog_file(struct space *sp, uint64_t timestamp);
+void update_watchdog_file(struct space *sp, uint64_t timestamp,
+			  int id_renewal_fail_seconds);
+int create_watchdog_file(struct space *sp, uint64_t timestamp,
+			 int id_renewal_fail_seconds);
 void unlink_watchdog_file(struct space *sp);
 void close_watchdog_file(struct space *sp);
 

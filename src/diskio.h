@@ -21,13 +21,13 @@ int majority_disks(int num_disks, int num);
  */
 
 int write_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len,
-		struct task *task);
+		struct task *task, int ioto);
 
 int read_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len,
-	       struct task *task);
+	       struct task *task, int ioto);
 
 int read_iobuf_reap(int fd, uint64_t offset, char *iobuf, int iobuf_len,
-		    struct task *task);
+		    struct task *task, int ioto);
 
 /*
  * sector functions allocate an iobuf themselves, copy into it for read, use it
@@ -36,13 +36,16 @@ int read_iobuf_reap(int fd, uint64_t offset, char *iobuf, int iobuf_len,
 
 int write_sector(const struct sync_disk *disk, uint64_t sector_nr,
 		 const char *data, int data_len,
-		 struct task *task, const char *blktype);
+		 struct task *task, int ioto,
+		 const char *blktype);
 
 int write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 		  uint32_t sector_count, const char *data, int data_len,
-		  struct task *task, const char *blktype);
+		  struct task *task, int ioto,
+		  const char *blktype);
 
 int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 	 	 uint32_t sector_count, char *data, int data_len,
-		 struct task *task, const char *blktype);
+		 struct task *task, int ioto,
+		 const char *blktype);
 #endif

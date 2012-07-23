@@ -20,6 +20,7 @@
 #include "diskio.h"
 #include "direct.h"
 #include "task.h"
+#include "timeouts.h"
 
 void log_level(uint32_t space_id GNUC_UNUSED, uint32_t token_id GNUC_UNUSED,
 	       char *name GNUC_UNUSED,
@@ -75,12 +76,9 @@ int get_rand(int a, int b)
 	return a + (int) (((float)(b - a + 1)) * random() / (RAND_MAX+1.0));
 }
 
-static void setup_task_lib(struct task *task, int use_aio, int io_timeout_sec)
+static void setup_task_lib(struct task *task, int use_aio)
 {
 	memset(task, 0, sizeof(struct task));
-	if (!io_timeout_sec)
-		io_timeout_sec = DEFAULT_IO_TIMEOUT;
-	setup_task_timeouts(task, io_timeout_sec);
 	setup_task_aio(task, use_aio, LIB_AIO_CB_SIZE);
 	sprintf(task->name, "%s", "lib");
 }
@@ -96,9 +94,9 @@ int sanlock_direct_read_id(struct sanlk_lockspace *ls,
 	struct task task;
 	int rv;
 
-	setup_task_lib(&task, use_aio, io_timeout_sec);
+	setup_task_lib(&task, use_aio);
 
-	rv = direct_read_id(&task, ls, timestamp, owner_id, owner_generation);
+	rv = direct_read_id(&task, io_timeout_sec, ls, timestamp, owner_id, owner_generation);
 
 	close_task_aio(&task);
 
@@ -116,9 +114,9 @@ int sanlock_direct_live_id(struct sanlk_lockspace *ls,
 	struct task task;
 	int rv;
 
-	setup_task_lib(&task, use_aio, io_timeout_sec);
+	setup_task_lib(&task, use_aio);
 
-	rv = direct_live_id(&task, ls, timestamp, owner_id, owner_generation, live);
+	rv = direct_live_id(&task, io_timeout_sec, ls, timestamp, owner_id, owner_generation, live);
 
 	close_task_aio(&task);
 
@@ -132,9 +130,9 @@ int sanlock_direct_init(struct sanlk_lockspace *ls,
 	struct task task;
 	int rv;
 
-	setup_task_lib(&task, use_aio, DEFAULT_IO_TIMEOUT);
+	setup_task_lib(&task, use_aio);
 
-	rv = direct_init(&task, ls, res, max_hosts, num_hosts);
+	rv = direct_init(&task, DEFAULT_IO_TIMEOUT, ls, res, max_hosts, num_hosts);
 
 	close_task_aio(&task);
 

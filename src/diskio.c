@@ -315,7 +315,7 @@ static int do_read(int fd, uint64_t offset, char *buf, int len, struct task *tas
 	return 0;
 }
 
-static struct aicb *find_callback_slot(struct task *task)
+static struct aicb *find_callback_slot(struct task *task, int ioto)
 {
 	struct timespec ts;
 	struct io_event event;
@@ -334,7 +334,7 @@ static struct aicb *find_callback_slot(struct task *task)
 		return NULL;
 
 	memset(&ts, 0, sizeof(struct timespec));
-	ts.tv_sec = task->io_timeout_seconds;
+	ts.tv_sec = ioto;
  retry:
 	memset(&event, 0, sizeof(event));
 
@@ -346,9 +346,10 @@ static struct aicb *find_callback_slot(struct task *task)
 	if (rv == 1) {
 		struct iocb *ev_iocb = event.obj;
 		struct aicb *ev_aicb = container_of(ev_iocb, struct aicb, iocb);
+		int op = ev_iocb ? ev_iocb->aio_lio_opcode : -1;
 
-		log_taske(task, "aio collect %p:%p:%p result %ld:%ld old free",
-			  ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
+		log_taske(task, "aio collect %d %p:%p:%p result %ld:%ld old free",
+			  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 		ev_aicb->used = 0;
 		free(ev_aicb->buf);
 		ev_aicb->buf = NULL;
@@ -366,7 +367,7 @@ static struct aicb *find_callback_slot(struct task *task)
  */
 
 static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
-			struct task *task, int cmd)
+			struct task *task, int ioto, int cmd)
 {
 	struct timespec ts;
 	struct aicb *aicb;
@@ -374,9 +375,14 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 	struct io_event event;
 	int rv;
 
+	if (!ioto) {
+		log_taske(task, "aio %d zero io timeout", cmd);
+		return -EINVAL;
+	}
+
 	/* I expect this pre-emptively catches the io_submit EAGAIN case */
 
-	aicb = find_callback_slot(task);
+	aicb = find_callback_slot(task, ioto);
 	if (!aicb)
 		return -ENOENT;
 
@@ -391,8 +397,8 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 
 	rv = io_submit(task->aio_ctx, 1, &iocb);
 	if (rv < 0) {
-		log_taske(task, "aio submit %p:%p:%p rv %d fd %d cmd %d",
-			  aicb, iocb, buf, rv, fd, cmd);
+		log_taske(task, "aio submit %d %p:%p:%p rv %d fd %d",
+			  cmd, aicb, iocb, buf, rv, fd);
 		goto out;
 	}
 
@@ -403,7 +409,7 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 	aicb->buf = buf;
 
 	memset(&ts, 0, sizeof(struct timespec));
-	ts.tv_sec = task->io_timeout_seconds;
+	ts.tv_sec = ioto;
  retry:
 	memset(&event, 0, sizeof(event));
 
@@ -418,25 +424,26 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 	if (rv == 1) {
 		struct iocb *ev_iocb = event.obj;
 		struct aicb *ev_aicb = container_of(ev_iocb, struct aicb, iocb);
+		int op = ev_iocb ? ev_iocb->aio_lio_opcode : -1;
 
 		ev_aicb->used = 0;
 
 		if (ev_iocb != iocb) {
-			log_taske(task, "aio collect %p:%p:%p result %ld:%ld other free",
-				  ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
+			log_taske(task, "aio collect %d %p:%p:%p result %ld:%ld other free",
+				  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 			free(ev_aicb->buf);
 			ev_aicb->buf = NULL;
 			goto retry;
 		}
 		if ((int)event.res < 0) {
-			log_taske(task, "aio collect %p:%p:%p result %ld:%ld match res",
-				  ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
+			log_taske(task, "aio collect %d %p:%p:%p result %ld:%ld match res",
+				  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 			rv = event.res;
 			goto out;
 		}
 		if (event.res != len) {
-			log_taske(task, "aio collect %p:%p:%p result %ld:%ld match len %d",
-				  ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2, len);
+			log_taske(task, "aio collect %d %p:%p:%p result %ld:%ld match len %d",
+				  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2, len);
 			rv = -EMSGSIZE;
 			goto out;
 		}
@@ -459,8 +466,8 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 
 	task->to_count++;
 
-	log_taske(task, "aio timeout %p:%p:%p sec %d to_count %d",
-		  aicb, iocb, buf, task->io_timeout_seconds, task->to_count);
+	log_taske(task, "aio timeout %d %p:%p:%p ioto %d to_count %d",
+		  cmd, aicb, iocb, buf, ioto, task->to_count);
 
 	rv = io_cancel(task->aio_ctx, iocb, &event);
 	if (!rv) {
@@ -477,17 +484,20 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 	return rv;
 }
 
-static int do_write_aio_linux(int fd, uint64_t offset, char *buf, int len, struct task *task)
+static int do_write_aio_linux(int fd, uint64_t offset, char *buf, int len,
+			      struct task *task, int ioto)
 {
-	return do_linux_aio(fd, offset, buf, len, task, IO_CMD_PWRITE);
+	return do_linux_aio(fd, offset, buf, len, task, ioto, IO_CMD_PWRITE);
 }
 
-static int do_read_aio_linux(int fd, uint64_t offset, char *buf, int len, struct task *task)
+static int do_read_aio_linux(int fd, uint64_t offset, char *buf, int len,
+			     struct task *task, int ioto)
 {
-	return do_linux_aio(fd, offset, buf, len, task, IO_CMD_PREAD);
+	return do_linux_aio(fd, offset, buf, len, task, ioto, IO_CMD_PREAD);
 }
 
-static int do_write_aio_posix(int fd, uint64_t offset, char *buf, int len, struct task *task)
+static int do_write_aio_posix(int fd, uint64_t offset, char *buf, int len,
+			      struct task *task GNUC_UNUSED, int ioto)
 {
 	struct timespec ts;
 	struct aiocb cb;
@@ -495,7 +505,7 @@ static int do_write_aio_posix(int fd, uint64_t offset, char *buf, int len, struc
 	int rv;
 
 	memset(&ts, 0, sizeof(struct timespec));
-	ts.tv_sec = task->io_timeout_seconds;
+	ts.tv_sec = ioto;
 
 	memset(&cb, 0, sizeof(struct aiocb));
 	p_cb = &cb;
@@ -536,7 +546,8 @@ static int do_write_aio_posix(int fd, uint64_t offset, char *buf, int len, struc
 	return -1;
 }
 
-static int do_read_aio_posix(int fd, uint64_t offset, char *buf, int len, struct task *task)
+static int do_read_aio_posix(int fd, uint64_t offset, char *buf, int len,
+			     struct task *task GNUC_UNUSED, int ioto)
 {
 	struct timespec ts;
 	struct aiocb cb;
@@ -544,7 +555,7 @@ static int do_read_aio_posix(int fd, uint64_t offset, char *buf, int len, struct
 	int rv;
 
 	memset(&ts, 0, sizeof(struct timespec));
-	ts.tv_sec = task->io_timeout_seconds;
+	ts.tv_sec = ioto;
 
 	memset(&cb, 0, sizeof(struct aiocb));
 	p_cb = &cb;
@@ -586,20 +597,22 @@ static int do_read_aio_posix(int fd, uint64_t offset, char *buf, int len, struct
 
 /* write aligned io buffer */
 
-int write_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len, struct task *task)
+int write_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len,
+		struct task *task, int ioto)
 {
 	if (task && task->use_aio == 1)
-		return do_write_aio_linux(fd, offset, iobuf, iobuf_len, task);
+		return do_write_aio_linux(fd, offset, iobuf, iobuf_len, task, ioto);
 	else if (task && task->use_aio == 2)
-		return do_write_aio_posix(fd, offset, iobuf, iobuf_len, task);
+		return do_write_aio_posix(fd, offset, iobuf, iobuf_len, task, ioto);
 	else
 		return do_write(fd, offset, iobuf, iobuf_len, task);
 }
 
 static int _write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 			  uint32_t sector_count GNUC_UNUSED,
-			  const char *data, int data_len,
-			  int iobuf_len, struct task *task, const char *blktype)
+			  const char *data, int data_len, int iobuf_len,
+			  struct task *task, int ioto,
+			  const char *blktype)
 {
 	char *iobuf, **p_iobuf;
 	uint64_t offset;
@@ -623,7 +636,7 @@ static int _write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 	memset(iobuf, 0, iobuf_len);
 	memcpy(iobuf, data, data_len);
 
-	rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len, task);
+	rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len, task, ioto);
 	if (rv < 0) {
 		log_error("write_sectors %s offset %llu rv %d %s",
 			  blktype, (unsigned long long)offset, rv, disk->path);
@@ -641,7 +654,8 @@ static int _write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
    data_len must be <= sector_size */
 
 int write_sector(const struct sync_disk *disk, uint64_t sector_nr,
-		 const char *data, int data_len, struct task *task,
+		 const char *data, int data_len,
+		 struct task *task, int ioto,
 		 const char *blktype)
 {
 	int iobuf_len = disk->sector_size;
@@ -653,14 +667,15 @@ int write_sector(const struct sync_disk *disk, uint64_t sector_nr,
 	}
 
 	return _write_sectors(disk, sector_nr, 1, data, data_len,
-			      iobuf_len, task, blktype);
+			      iobuf_len, task, ioto, blktype);
 }
 
 /* write multiple complete sectors, data_len must be multiple of sector size */
 
 int write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 		  uint32_t sector_count, const char *data, int data_len,
-		  struct task *task, const char *blktype)
+		  struct task *task, int ioto,
+		  const char *blktype)
 {
 	int iobuf_len = data_len;
 
@@ -671,17 +686,18 @@ int write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 	}
 
 	return _write_sectors(disk, sector_nr, sector_count, data, data_len,
-			      iobuf_len, task, blktype);
+			      iobuf_len, task, ioto, blktype);
 }
 
 /* read aligned io buffer */
 
-int read_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len, struct task *task)
+int read_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len,
+	       struct task *task, int ioto)
 {
 	if (task && task->use_aio == 1)
-		return do_read_aio_linux(fd, offset, iobuf, iobuf_len, task);
+		return do_read_aio_linux(fd, offset, iobuf, iobuf_len, task, ioto);
 	else if (task && task->use_aio == 2)
-		return do_read_aio_posix(fd, offset, iobuf, iobuf_len, task);
+		return do_read_aio_posix(fd, offset, iobuf, iobuf_len, task, ioto);
 	else
 		return do_read(fd, offset, iobuf, iobuf_len, task);
 }
@@ -694,7 +710,8 @@ int read_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len, struct task 
 
 int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 	 	 uint32_t sector_count, char *data, int data_len,
-		 struct task *task, const char *blktype)
+		 struct task *task, int ioto,
+		 const char *blktype)
 {
 	char *iobuf, **p_iobuf;
 	uint64_t offset;
@@ -721,7 +738,7 @@ int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 
 	memset(iobuf, 0, iobuf_len);
 
-	rv = read_iobuf(disk->fd, offset, iobuf, iobuf_len, task);
+	rv = read_iobuf(disk->fd, offset, iobuf, iobuf_len, task, ioto);
 	if (!rv) {
 		memcpy(data, iobuf, data_len);
 	} else {
@@ -739,7 +756,8 @@ int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
    The aicb used in a task's last timed out read_iobuf is
    task->read_iobuf_timeout_aicb . */
 
-int read_iobuf_reap(int fd, uint64_t offset, char *iobuf, int iobuf_len, struct task *task)
+int read_iobuf_reap(int fd, uint64_t offset, char *iobuf, int iobuf_len,
+		    struct task *task, int ioto)
 {
 	struct timespec ts;
 	struct aicb *aicb;
@@ -764,7 +782,7 @@ int read_iobuf_reap(int fd, uint64_t offset, char *iobuf, int iobuf_len, struct 
 		return -EINVAL;
 
 	memset(&ts, 0, sizeof(struct timespec));
-	ts.tv_nsec = 500000000; /* half a second */
+	ts.tv_nsec = ioto;
  retry:
 	memset(&event, 0, sizeof(event));
 
@@ -779,31 +797,32 @@ int read_iobuf_reap(int fd, uint64_t offset, char *iobuf, int iobuf_len, struct 
 	if (rv == 1) {
 		struct iocb *ev_iocb = event.obj;
 		struct aicb *ev_aicb = container_of(ev_iocb, struct aicb, iocb);
+		int op = ev_iocb ? ev_iocb->aio_lio_opcode : -1;
 
 		ev_aicb->used = 0;
 
 		if (ev_iocb != iocb) {
-			log_taske(task, "aio collect %p:%p:%p result %ld:%ld other free r",
-				  ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
+			log_taske(task, "aio collect %d %p:%p:%p result %ld:%ld other free r",
+				  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 			free(ev_aicb->buf);
 			ev_aicb->buf = NULL;
 			goto retry;
 		}
 		if ((int)event.res < 0) {
-			log_taske(task, "aio collect %p:%p:%p result %ld:%ld match res r",
-				  ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
+			log_taske(task, "aio collect %d %p:%p:%p result %ld:%ld match res r",
+				  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 			rv = event.res;
 			goto out;
 		}
 		if (event.res != iobuf_len) {
-			log_taske(task, "aio collect %p:%p:%p result %ld:%ld match len %d r",
-				  ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2, iobuf_len);
+			log_taske(task, "aio collect %d %p:%p:%p result %ld:%ld match len %d r",
+				  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2, iobuf_len);
 			rv = -EMSGSIZE;
 			goto out;
 		}
 
-		log_taske(task, "aio collect %p:%p:%p result %ld:%ld match reap",
-			  ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
+		log_taske(task, "aio collect %d %p:%p:%p result %ld:%ld match reap",
+			  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 
 		rv = 0;
 		goto out;

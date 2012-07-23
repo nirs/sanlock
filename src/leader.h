@@ -59,7 +59,8 @@ struct leader_record {
 	uint64_t timestamp;
 	uint64_t unused1;
 	uint32_t checksum;
-	uint32_t unused2;
+	uint16_t unused2;
+	uint16_t io_timeout;
 	uint64_t write_id;		/* for extra info, debug */
 	uint64_t write_generation;	/* for extra info, debug */
 	uint64_t write_timestamp;	/* for extra info, debug */

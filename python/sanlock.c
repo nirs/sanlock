@@ -267,26 +267,30 @@ exit_fail:
 
 /* add_lockspace */
 PyDoc_STRVAR(pydoc_add_lockspace, "\
-add_lockspace(lockspace, host_id, path, offset=0, async=False)\n\
+add_lockspace(lockspace, host_id, path, offset=0, iotimeout=0, async=False)\n\
 Add a lockspace, acquiring a host_id in it. If async is True the function\n\
-will return immediatly and the status can be checked using inq_lockspace.");
+will return immediatly and the status can be checked using inq_lockspace.\n\
+The iotimeout option configures the io timeout for the specific lockspace,\n\
+overriding the default value (see the sanlock daemon parameter -o).");
 
 static PyObject *
 py_add_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
     int rv, async = 0, flags = 0;
+    uint32_t iotimeout = 0;
     const char *lockspace, *path;
     struct sanlk_lockspace ls;
 
     static char *kwlist[] = {"lockspace", "host_id", "path", "offset",
-                                "async", NULL};
+                                "iotimeout", "async", NULL};
 
     /* initialize lockspace structure */
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
     if (!PyArg_ParseTupleAndKeywords(args, keywds, "sks|ki", kwlist,
-        &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset, &async)) {
+        &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset, &iotimeout,
+        &async)) {
         return NULL;
     }
 
@@ -301,7 +305,7 @@ py_add_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     /* add sanlock lockspace (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_add_lockspace(&ls, flags);
+    rv = sanlock_add_lockspace_timeout(&ls, flags, iotimeout);
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {

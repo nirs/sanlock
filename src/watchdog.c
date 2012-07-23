@@ -39,20 +39,22 @@
 
 #include "../wdmd/wdmd.h"
 
-void update_watchdog_file(struct space *sp, uint64_t timestamp)
+void update_watchdog_file(struct space *sp, uint64_t timestamp,
+			  int id_renewal_fail_seconds)
 {
 	int rv;
 
 	if (!com.use_watchdog)
 		return;
 
-	rv = wdmd_test_live(sp->wd_fd, timestamp, timestamp + main_task.id_renewal_fail_seconds);
+	rv = wdmd_test_live(sp->wd_fd, timestamp, timestamp + id_renewal_fail_seconds);
 	if (rv < 0)
 		log_erros(sp, "wdmd_test_live %llu failed %d",
 			  (unsigned long long)timestamp, rv);
 }
 
-int create_watchdog_file(struct space *sp, uint64_t timestamp)
+int create_watchdog_file(struct space *sp, uint64_t timestamp,
+			 int id_renewal_fail_seconds)
 {
 	char name[WDMD_NAME_SIZE];
 	int test_interval, fire_timeout;
@@ -99,7 +101,7 @@ int create_watchdog_file(struct space *sp, uint64_t timestamp)
 		goto fail_clear;
 	}
 
-	rv = wdmd_test_live(con, timestamp, timestamp + main_task.id_renewal_fail_seconds);
+	rv = wdmd_test_live(con, timestamp, timestamp + id_renewal_fail_seconds);
 	if (rv < 0) {
 		log_erros(sp, "wdmd_test_live in create failed %d", rv);
 		goto fail_clear;
