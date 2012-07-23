@@ -32,6 +32,7 @@
 #include <sys/mman.h>
 #include <sys/mman.h>
 #include <sys/utsname.h>
+#include <sys/resource.h>
 #include <uuid/uuid.h>
 
 #define EXTERN
