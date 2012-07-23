@@ -51,7 +51,7 @@
 #include "cmd.h"
 #include "helper.h"
 
-#define RELEASE_VERSION "2.3"
+#define RELEASE_VERSION "2.4"
 
 #define SIGRUNPATH 100 /* anything that's not SIGTERM/SIGKILL */
 
