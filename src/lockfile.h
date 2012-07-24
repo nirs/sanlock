@@ -9,7 +9,7 @@
 #ifndef	__LOCKFILE_H__
 #define	__LOCKFILE_H__
 
-int lockfile(const char *dir, const char *name);
+int lockfile(const char *dir, const char *name, int uid, int gid);
 void unlink_lockfile(int fd, const char *dir, const char *name);
 
 #endif

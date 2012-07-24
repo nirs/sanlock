@@ -1558,13 +1558,13 @@ static int do_daemon(void)
 
 	setup_logging();
 
+	fd = lockfile(SANLK_RUN_DIR, SANLK_LOCKFILE_NAME, com.uid, com.gid);
+	if (fd < 0)
+		return fd;
+
 	setup_host_name();
 
 	setup_groups();
-
-	fd = lockfile(SANLK_RUN_DIR, SANLK_LOCKFILE_NAME);
-	if (fd < 0)
-		return fd;
 
 	log_error("sanlock daemon started %s aio %d %d renew %d %d host %s time %llu",
 		  RELEASE_VERSION,
