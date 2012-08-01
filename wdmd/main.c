@@ -817,7 +817,7 @@ static int lockfile(void)
 
 	sprintf(lockfile_path, "%s/wdmd.pid", WDMD_RUN_DIR);
 
-	fd = open(lockfile_path, O_CREAT|O_WRONLY|O_CLOEXEC, 0666);
+	fd = open(lockfile_path, O_CREAT|O_WRONLY|O_CLOEXEC, 0644);
 	if (fd < 0) {
 		log_error("lockfile open error %s: %s",
 			  lockfile_path, strerror(errno));
