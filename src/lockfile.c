@@ -54,7 +54,7 @@ int lockfile(const char *dir, const char *name, int uid, int gid)
 
 	snprintf(path, PATH_MAX, "%s/%s", dir, name);
 
-	fd = open(path, O_CREAT|O_WRONLY|O_CLOEXEC, 0666);
+	fd = open(path, O_CREAT|O_WRONLY|O_CLOEXEC, 0644);
 	if (fd < 0) {
 		log_error("lockfile open error %s: %s",
 			  path, strerror(errno));
