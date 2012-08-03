@@ -59,6 +59,7 @@ static int socket_gid;
 static time_t last_keepalive;
 static char lockfile_path[PATH_MAX];
 static int dev_fd;
+static int shm_fd;
 
 struct script_status {
 	int pid;
@@ -738,6 +739,41 @@ static int setup_signals(void)
 	return 0;
 }
 
+/*
+ * We're trying to detect whether the last wdmd exited uncleanly and the
+ * system has not been reset since.  In that case we don't want to start
+ * and open /dev/watchdog, because that will ping the wd which will extend
+ * the pending reset, which needs to happen on schedule.
+ *
+ * To detect this, we want to do/set something on the system that will
+ * not go away (be cleared) if we exit, but will go away if the system
+ * is reset.  If we were certain there was a tmpfs file system we could
+ * use, then we could create a file there and just refuse to start if
+ * the file exists.
+ *
+ * Until we are certain of tmpfs somewhere, create a shared mem object
+ * on the system.
+ */
+
+static int setup_shm(void)
+{
+	int rv;
+
+	rv = shm_open("/wdmd", O_RDWR|O_CREAT|O_EXCL, S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH);
+	if (rv < 0) {
+		log_error("other wdmd not cleanly stopped, shm_open error %d", errno);
+		return rv;
+	}
+	shm_fd = rv;
+	return 0;
+}
+
+static void close_shm(void)
+{
+	shm_unlink("/wdmd");
+	close(shm_fd);
+}
+
 static int test_loop(void)
 {
 	void (*workfn) (int ci);
@@ -980,7 +1016,6 @@ int main(int argc, char *argv[])
 			fprintf(stderr, "cannot fork daemon\n");
 			exit(EXIT_FAILURE);
 		}
-		umask(0);
 	}
 
 	openlog("wdmd", LOG_CONS | LOG_PID, LOG_DAEMON);
@@ -989,16 +1024,20 @@ int main(int argc, char *argv[])
 		  scripts_built ? scripts_built : "",
 		  client_built ? client_built : "",
 		  files_built ? files_built : "");
-		  
+
 	setup_priority();
 
 	rv = lockfile();
 	if (rv < 0)
 		goto out;
 
-	rv = setup_signals();
+	rv = setup_shm();
 	if (rv < 0)
 		goto out_lockfile;
+		  
+	rv = setup_signals();
+	if (rv < 0)
+		goto out_shm;
 
 	rv = setup_scripts();
 	if (rv < 0)
@@ -1025,6 +1064,8 @@ int main(int argc, char *argv[])
 	close_files();
  out_scripts:
 	close_scripts();
+ out_shm:
+	close_shm();
  out_lockfile:
 	unlink(lockfile_path);
  out:
