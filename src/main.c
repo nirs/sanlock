@@ -1528,7 +1528,6 @@ static int do_daemon(void)
 			log_tool("cannot fork daemon\n");
 			exit(EXIT_FAILURE);
 		}
-		umask(0);
 	}
 
 	setup_helper();
