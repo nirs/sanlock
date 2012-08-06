@@ -407,6 +407,38 @@ static int test_clients(void)
 				  (unsigned long long)client[i].expire,
 				  client[i].name);
 			fail_count++;
+			continue;
+		}
+
+		/*
+		 * If we can patch the kernel to avoid a close-ping,
+		 * then we can remove this early/preemptive fail/close
+		 * of the device, but instead just not pet the device
+		 * when the expiration time is reached.  Also see
+		 * close_watchdog_unclean() below.
+		 *
+		 * We do this fail/close (which generates a ping)
+		 * TEST_INTERVAL before the expire time because we want
+		 * the device to fire at most 60 seconds after the
+		 * expiration time.  That means we need the last ping
+		 * (from close) to be TEST_INTERVAL before to the
+		 * expiration time.
+		 *
+		 * If we did the close at/after the expiration time,
+		 * then the ping from the close would mean that the
+		 * device would fire between 60 and 70 seconds after the
+		 * expiration time.
+		 */
+
+		if (t >= client[i].expire - DEFAULT_TEST_INTERVAL) {
+			log_error("test warning pid %d now %llu keepalive %llu renewal %llu expire %llu",
+				  client[i].pid,
+				  (unsigned long long)t,
+				  (unsigned long long)last_keepalive,
+				  (unsigned long long)client[i].renewal,
+				  (unsigned long long)client[i].expire);
+			fail_count++;
+			continue;
 		}
 	}
 
@@ -890,7 +922,7 @@ static int test_loop(void)
 				/* If we can patch the kernel so that close
 				   does not generate a ping, then we can skip
 				   this close, and just not pet the device in
-				   this case. */
+				   this case.  Also see test_client above. */
 				close_watchdog_unclean();
 			}
 		}

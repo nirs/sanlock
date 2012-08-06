@@ -58,14 +58,17 @@
  *
  * 100: sanlock fails to renew host_id on disk -> no wdmd_test_live
  *      wdmd test_client sees now 100 < expire 120 ok -> keepalive
+ *      messages: check_our_lease warning (sanlock)
  *
  * 110: sanlock fails to renew host_id on disk -> no wdmd_test_live
- *      wdmd test_client sees now 110 < expire 120 ok -> keepalive
+ *      wdmd test_client sees now 110 < expire 120 ok -> keepalive (from dev close)
+ *      messages: watchdog closed unclean (wdmd), test warning (wdmd)
  *
  * 120: sanlock fails to renew host_id on disk -> no wdmd_test_live
- *      sanlock enters recovery mode and starts killing pids
+ *      sanlock enters recovery mode and starts killing pids because we have reached
+ *      now (120) is id_renewal_fail_seconds (80) after last renewal (40)
  *      wdmd test_client sees now 120 >= expire 120 fail -> no keepalive
- *      wdmd starts logging error messages every 10 sec
+ *      messages: check_our_lease failed (sanlock), test failed (wdmd)
  *
  *      . /dev/watchdog will fire at last keepalive + watchdog_fire_timeout =
  *        T110 + 60 = T170
