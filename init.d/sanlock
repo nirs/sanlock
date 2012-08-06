@@ -48,7 +48,9 @@ start() {
 }
 
 stop() {
-	echo -n $"Sending stop signal $prog: "
+	PID=$(pidofproc -p $runfile $prog)
+
+	echo -n $"Sending stop signal $prog ($PID): "
 	killproc -p $runfile $prog -TERM
 	retval=$?
 	echo
@@ -57,9 +59,10 @@ stop() {
 		return $retval
 	fi
 
-	echo -n $"Waiting for $prog to stop:"
+	echo -n $"Waiting for $prog ($PID) to stop:"
+
 	timeout=10
-	while [ -e $runfile ]; do
+	while checkpid $PID; do
 		sleep 1
 		timeout=$((timeout - 1))
 		if [ "$timeout" -le 0 ]; then
@@ -74,9 +77,8 @@ stop() {
 }
 
 restart() {
-	stop && start
-	retval=$?
-	return $retval
+	rh_status_q && stop
+	start
 }
 
 reload() {
@@ -122,4 +124,3 @@ case "$1" in
 		exit 2
 esac
 exit $?
-
