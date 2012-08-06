@@ -58,7 +58,7 @@ static int daemon_debug;
 static int socket_gid;
 static time_t last_keepalive;
 static char lockfile_path[PATH_MAX];
-static int dev_fd;
+static int dev_fd = -1;
 static int shm_fd;
 
 struct script_status {
@@ -657,9 +657,45 @@ static int test_scripts(void) { return 0; }
 #endif /* TEST_SCRIPTS */
 
 
+static int open_dev(void)
+{
+	int fd;
+
+	if (dev_fd != -1) {
+		log_error("/dev/watchdog already open fd %d", dev_fd);
+		return -1;
+	}
+
+	fd = open("/dev/watchdog", O_WRONLY | O_CLOEXEC);
+	if (fd < 0) {
+		log_error("no /dev/watchdog, load a watchdog driver");
+		return fd;
+	}
+
+	dev_fd = fd;
+	return 0;
+}
+
+static void close_watchdog_unclean(void)
+{
+	if (dev_fd == -1) {
+		log_debug("close_watchdog_unclean already closed");
+		return;
+	}
+
+	log_error("/dev/watchdog closed unclean");
+	close(dev_fd);
+	dev_fd = -1;
+}
+
 static void close_watchdog(void)
 {
 	int rv;
+
+	if (dev_fd == -1) {
+		log_error("close_watchdog already closed");
+		return;
+	}
 
 	rv = write(dev_fd, "V", 1);
 	if (rv < 0)
@@ -668,17 +704,16 @@ static void close_watchdog(void)
 		log_error("/dev/watchdog disarmed");
 
 	close(dev_fd);
+	dev_fd = -1;
 }
 
 static int setup_watchdog(void)
 {
 	int rv, timeout;
 
-	dev_fd = open("/dev/watchdog", O_WRONLY | O_CLOEXEC);
-	if (dev_fd < 0) {
-		log_error("no /dev/watchdog, load a watchdog driver");
-		return dev_fd;
-	}
+	rv = open_dev();
+	if (rv < 0)
+		return -1;
 
 	timeout = 0;
 
@@ -844,8 +879,20 @@ static int test_loop(void)
 			fail_count += test_scripts();
 			fail_count += test_clients();
 
-			if (!fail_count)
-				pet_watchdog();
+			if (!fail_count) {
+				if (dev_fd == -1) {
+					log_error("/dev/watchdog reopen");
+					open_dev();
+				} else {
+					pet_watchdog();
+				}
+			} else {
+				/* If we can patch the kernel so that close
+				   does not generate a ping, then we can skip
+				   this close, and just not pet the device in
+				   this case. */
+				close_watchdog_unclean();
+			}
 		}
 
 		sleep_seconds = test_time + test_interval - monotime();
