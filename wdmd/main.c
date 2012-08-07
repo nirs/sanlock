@@ -182,6 +182,9 @@ static void client_pid_dead(int ci)
 
 		close(client[ci].fd);
 
+		/* refcount automatically dropped if a client with
+		   no expiration is closed */
+
 		client[ci].used = 0;
 		memset(&client[ci], 0, sizeof(struct client));
 
@@ -189,16 +192,32 @@ static void client_pid_dead(int ci)
 		pollfd[ci].fd = -1;
 		pollfd[ci].events = 0;
 	} else {
-		/* test_clients() needs to continue watching this ci so
-		   it can expire */
+		/*
+		 * Leave used and expire set so that test_clients will continue
+		 * monitoring this client and expire if necessary.
+		 *
+		 * Leave refcount set so that the daemon will not cleanly shut
+		 * down if it gets a sigterm.
+		 *
+		 * This case of a client con with an expire time being closed
+		 * is a fatal condition; there's no way to clear or extend the
+		 * expire time and no way to cleanly shut down the daemon.
+		 * This should never happen.
+		 *
+		 * (We don't enforce that a client with an expire time also has refcount
+		 * set, but I can't think of case where setting expire but not refcount
+		 * would be useful.)
+		 */
 
-		log_debug("client_pid_dead ci %d expire %llu", ci,
-			  (unsigned long long)client[ci].expire);
+		log_error("client dead ci %d fd %d pid %d renewal %llu expire %llu %s",
+			  ci, client[ci].fd, client[ci].pid,
+			  (unsigned long long)client[ci].renewal,
+			  (unsigned long long)client[ci].expire,
+			  client[ci].name);
 
 		close(client[ci].fd);
 
 		client[ci].pid_dead = 1;
-		client[ci].refcount = 0;
 
 		client[ci].fd = -1;
 		pollfd[ci].fd = -1;
@@ -380,12 +399,13 @@ static int test_clients(void)
 			continue;
 
 		if (t >= client[i].expire) {
-			log_error("test failed pid %d now %llu keepalive %llu renewal %llu expire %llu",
-				  client[i].pid,
+			log_error("test failed ci %d pid %d now %llu keepalive %llu renewal %llu expire %llu %s",
+				  i, client[i].pid,
 				  (unsigned long long)t,
 				  (unsigned long long)last_keepalive,
 				  (unsigned long long)client[i].renewal,
-				  (unsigned long long)client[i].expire);
+				  (unsigned long long)client[i].expire,
+				  client[i].name);
 			fail_count++;
 		}
 	}

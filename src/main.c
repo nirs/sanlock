@@ -109,7 +109,7 @@ static void close_helper(void)
  * msgs before getting EAGAIN.
  */
 
-static void send_helper_kill(struct client *cl, int sig)
+static void send_helper_kill(struct space *sp, struct client *cl, int sig)
 {
 	struct helper_msg hm;
 	int rv;
@@ -140,6 +140,8 @@ static void send_helper_kill(struct client *cl, int sig)
 		hm.pid = cl->pid;
 	}
 
+	log_erros(sp, "kill %d sig %d count %d", cl->pid, sig, cl->kill_count);
+
  retry:
 	rv = write(helper_kill_fd, &hm, sizeof(hm));
 	if (rv == -1 && errno == EINTR)
@@ -148,21 +150,21 @@ static void send_helper_kill(struct client *cl, int sig)
 	/* pipe is full, we'll try again in a second */
 	if (rv == -1 && errno == EAGAIN) {
 		helper_full_count++;
-		log_debug("send_helper_kill pid %d sig %d full_count %u",
+		log_space(sp, "send_helper_kill pid %d sig %d full_count %u",
 			  cl->pid, sig, helper_full_count);
 		return;
 	}
 
 	/* helper exited or closed fd, quit using helper */
 	if (rv == -1 && errno == EPIPE) {
-		log_error("send_helper_kill EPIPE");
+		log_erros(sp, "send_helper_kill EPIPE");
 		close_helper();
 		return;
 	}
 
 	if (rv != sizeof(hm)) {
 		/* this shouldn't happen */
-		log_error("send_helper_kill pid %d error %d %d",
+		log_erros(sp, "send_helper_kill pid %d error %d %d",
 			  cl->pid, rv, errno);
 		close_helper();
 		return;
@@ -445,6 +447,9 @@ void client_pid_dead(int ci)
 	log_debug("client_pid_dead %d,%d,%d cmd_active %d suspend %d",
 		  ci, cl->fd, cl->pid, cl->cmd_active, cl->suspend);
 
+	if (cl->kill_count)
+		log_error("dead %d ci %d count %d", cl->pid, ci, cl->kill_count);
+
 	cmd_active = cl->cmd_active;
 	pid = cl->pid;
 	cl->pid = -1;
@@ -608,15 +613,7 @@ static void kill_pids(struct space *sp)
 		if (!do_kill)
 			continue;
 
-		if (cl->kill_count == kill_count_max) {
-			log_erros(sp, "kill %d,%d,%d sig %d count %d final attempt",
-				  ci, fd, pid, sig, cl->kill_count);
-		} else {
-			log_space(sp, "kill %d,%d,%d sig %d count %d",
-				  ci, fd, pid, sig, cl->kill_count);
-		}
-
-		send_helper_kill(cl, sig);
+		send_helper_kill(sp, cl, sig);
 	}
 }
 
@@ -654,7 +651,11 @@ static int all_pids_dead(struct space *sp)
 	if (stuck || check)
 		return 0;
 
-	log_space(sp, "used by no pids");
+	if (sp->renew_fail)
+		log_erros(sp, "all pids clear");
+	else
+		log_space(sp, "all pids clear");
+
 	return 1;
 }
 
@@ -765,6 +766,8 @@ static int main_loop(void)
 			check_all = 0;
 
 			rv = check_our_lease(&main_task, sp, &check_all, check_buf);
+			if (rv)
+				sp->renew_fail = 1;
 
 			if (rv || sp->external_remove || (external_shutdown > 1)) {
 				log_space(sp, "set killing_pids check %d remove %d",
@@ -1578,10 +1581,6 @@ static int do_daemon(void)
 	if (rv < 0)
 		goto out_logging;
 
-	rv = setup_watchdog();
-	if (rv < 0)
-		goto out_threads;
-
 	rv = setup_listener();
 	if (rv < 0)
 		goto out_threads;
@@ -1593,8 +1592,6 @@ static int do_daemon(void)
 	main_loop();
 
 	close_token_manager();
-
-	close_watchdog();
 
  out_threads:
 	thread_pool_free();

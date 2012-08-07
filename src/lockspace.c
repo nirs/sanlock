@@ -450,7 +450,7 @@ static void *lockspace_thread(void *arg_in)
 		rv = create_watchdog_file(sp, last_success);
 		if (rv < 0) {
 			log_erros(sp, "create_watchdog failed %d", rv);
-			acquire_result = SANLK_ERROR;
+			acquire_result = SANLK_WD_ERROR;
 		}
 	}
 
@@ -704,7 +704,7 @@ int add_lockspace_wait(struct space *sp)
 		/* the thread exits right away if acquire fails */
 		pthread_join(sp->thread, NULL);
 		rv = result;
-		log_space(sp, "add_lockspace fail lease_status %d", result);
+		log_erros(sp, "add_lockspace fail result %d", result);
 		goto fail_del;
 	}
 

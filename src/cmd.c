@@ -1422,6 +1422,7 @@ static int print_state_lockspace(struct space *sp, char *str, const char *list_n
 		 "list=%s "
 		 "space_id=%u "
 		 "host_generation=%llu "
+		 "renew_fail=%d "
 		 "space_dead=%d "
 		 "killing_pids=%d "
 		 "corrupt_result=%d "
@@ -1434,6 +1435,7 @@ static int print_state_lockspace(struct space *sp, char *str, const char *list_n
 		 list_name,
 		 sp->space_id,
 		 (unsigned long long)sp->host_generation,
+		 sp->renew_fail,
 		 sp->space_dead,
 		 sp->killing_pids,
 		 sp->lease_status.corrupt_result,

@@ -144,6 +144,7 @@ struct space {
 	uint64_t host_generation;
 	struct sync_disk host_id_disk;
 	int align_size;
+	int renew_fail;
 	int space_dead;
 	int killing_pids;
 	int external_remove;
