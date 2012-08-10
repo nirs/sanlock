@@ -44,6 +44,7 @@
 #define RELEASE_VERSION "2.4"
 
 #define DEFAULT_TEST_INTERVAL 10
+#define RECOVER_TEST_INTERVAL 1
 #define DEFAULT_FIRE_TIMEOUT 60
 #define DEFAULT_HIGH_PRIORITY 1
 
@@ -57,6 +58,7 @@ static int daemon_quit;
 static int daemon_debug;
 static int socket_gid;
 static time_t last_keepalive;
+static time_t last_closeunclean;
 static char lockfile_path[PATH_MAX];
 static int dev_fd = -1;
 static int shm_fd;
@@ -70,7 +72,8 @@ struct script_status {
    is not very sophisticated, but it's simple.  If we wait up to 2 seconds
    for each script to exit, and have 5 scripts, that's up to 10 seconds we
    spend in test_scripts, and it's simplest if the max time in test_scripts
-   does not excede the test_interval (10). */
+   does not excede the test_interval (10).  FIXME: this is not entirely
+   true since the test_interval was changed to 1 after a failure. */
 
 #define SCRIPT_WAIT_SECONDS 2
 #define MAX_SCRIPTS 4
@@ -387,6 +390,7 @@ static int setup_clients(void)
 static int test_clients(void)
 {
 	uint64_t t;
+	time_t last_ping;
 	int fail_count = 0;
 	int i;
 
@@ -398,14 +402,20 @@ static int test_clients(void)
 		if (!client[i].expire)
 			continue;
 
+		if (last_keepalive > last_closeunclean)
+			last_ping = last_keepalive;
+		else
+			last_ping = last_closeunclean;
+
 		if (t >= client[i].expire) {
-			log_error("test failed ci %d pid %d now %llu keepalive %llu renewal %llu expire %llu %s",
-				  i, client[i].pid,
+			log_error("test failed rem %d now %llu ping %llu close %llu renewal %llu expire %llu client %d %s",
+				  DEFAULT_FIRE_TIMEOUT - (int)(t - last_ping),
 				  (unsigned long long)t,
 				  (unsigned long long)last_keepalive,
+				  (unsigned long long)last_closeunclean,
 				  (unsigned long long)client[i].renewal,
 				  (unsigned long long)client[i].expire,
-				  client[i].name);
+				  client[i].pid, client[i].name);
 			fail_count++;
 			continue;
 		}
@@ -431,12 +441,13 @@ static int test_clients(void)
 		 */
 
 		if (t >= client[i].expire - DEFAULT_TEST_INTERVAL) {
-			log_error("test warning pid %d now %llu keepalive %llu renewal %llu expire %llu",
-				  client[i].pid,
+			log_error("test warning now %llu ping %llu close %llu renewal %llu expire %llu client %d %s",
 				  (unsigned long long)t,
 				  (unsigned long long)last_keepalive,
+				  (unsigned long long)last_closeunclean,
 				  (unsigned long long)client[i].renewal,
-				  (unsigned long long)client[i].expire);
+				  (unsigned long long)client[i].expire,
+				  client[i].pid, client[i].name);
 			fail_count++;
 			continue;
 		}
@@ -718,6 +729,8 @@ static void close_watchdog_unclean(void)
 	log_error("/dev/watchdog closed unclean");
 	close(dev_fd);
 	dev_fd = -1;
+
+	last_closeunclean = monotime();
 }
 
 static void close_watchdog(void)
@@ -913,23 +926,30 @@ static int test_loop(void)
 
 			if (!fail_count) {
 				if (dev_fd == -1) {
-					log_error("/dev/watchdog reopen");
 					open_dev();
+					pet_watchdog();
+					log_error("/dev/watchdog reopen");
 				} else {
 					pet_watchdog();
 				}
+
+				test_interval = DEFAULT_TEST_INTERVAL;
 			} else {
 				/* If we can patch the kernel so that close
 				   does not generate a ping, then we can skip
 				   this close, and just not pet the device in
 				   this case.  Also see test_client above. */
 				close_watchdog_unclean();
+
+				test_interval = RECOVER_TEST_INTERVAL;
 			}
 		}
 
 		sleep_seconds = test_time + test_interval - monotime();
-		poll_timeout = (sleep_seconds > 0) ? sleep_seconds * 1000 : 1;
-		log_debug("sleep_seconds %d", sleep_seconds);
+		poll_timeout = (sleep_seconds > 0) ? sleep_seconds * 1000 : 500;
+
+		log_debug("test_interval %d sleep_seconds %d poll_timeout %d",
+			  test_interval, sleep_seconds, poll_timeout);
 	}
 
 	return 0;

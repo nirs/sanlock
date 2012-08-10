@@ -60,12 +60,16 @@ int main(int argc, char *argv[])
 		return -1;
 	}
 
+	if (!strcmp(path, "none"))
+		goto acquire;
+
 	rv = sanlock_killpath(sock, SANLK_KILLPATH_PID, path, args);
 	if (rv < 0) {
 		fprintf(stderr, "killpath error %d\n", rv);
 		return -1;
 	}
 
+ acquire:
 	rv = sanlock_acquire(sock, -1, 0, 1, &res, NULL);
 	if (rv < 0) {
 		fprintf(stderr, "acquire error %d\n", rv);
