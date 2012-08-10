@@ -316,7 +316,7 @@ EXTERN int external_shutdown;
 EXTERN char our_host_name_global[SANLK_NAME_LEN+1];
 
 EXTERN int kill_count_max;
-EXTERN int kill_count_grace;
+EXTERN int kill_grace_seconds;
 EXTERN int helper_ci;
 EXTERN int helper_pid;
 EXTERN int helper_kill_fd;

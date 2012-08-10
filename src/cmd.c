@@ -1359,7 +1359,7 @@ static int print_state_daemon(char *str)
 		 "id_renewal=%d "
 		 "id_renewal_fail=%d "
 		 "id_renewal_warn=%d "
-		 "kill_count_grace=%d "
+		 "kill_grace_seconds=%d "
 		 "helper_pid=%d "
 		 "helper_kill_fd=%d "
 		 "helper_full_count=%u "
@@ -1371,7 +1371,7 @@ static int print_state_daemon(char *str)
 		 main_task.id_renewal_seconds,
 		 main_task.id_renewal_fail_seconds,
 		 main_task.id_renewal_warn_seconds,
-		 kill_count_grace,
+		 kill_grace_seconds,
 		 helper_pid,
 		 helper_kill_fd,
 		 helper_full_count,

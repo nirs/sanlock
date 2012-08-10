@@ -124,6 +124,11 @@ static void send_helper_kill(struct space *sp, struct client *cl, int sig)
 	if ((cl->flags & CL_RUNPATH_SENT) && (sig == SIGRUNPATH))
 		return;
 
+	if (helper_kill_fd == -1) {
+		log_error("send_helper_kill pid %d no fd", cl->pid);
+		return;
+	}
+
 	memset(&hm, 0, sizeof(hm));
 
 	if (sig == SIGRUNPATH) {
@@ -535,9 +540,9 @@ static int client_using_space(struct client *cl, struct space *sp)
 static void kill_pids(struct space *sp)
 {
 	struct client *cl;
-	uint64_t now;
+	uint64_t now, last_success;
 	int ci, fd, pid, sig;
-	int do_kill;
+	int do_kill, in_grace;
 
 	/*
 	 * all remaining pids using sp are stuck, we've made max attempts to
@@ -545,6 +550,17 @@ static void kill_pids(struct space *sp)
 	 */
 	if (sp->killing_pids > 1)
 		return;
+
+	/*
+	 * If we happen to renew our lease after we've started killing pids,
+	 * the period we allow for graceful shutdown will be extended. This
+	 * is an incidental effect, although it may be nice. The previous
+	 * behavior would still be ok, where we only ever allow up to
+	 * kill_grace_seconds for graceful shutdown before moving to sigkill.
+	 */
+	pthread_mutex_lock(&sp->mutex);
+	last_success = sp->lease_status.renewal_last_success;
+	pthread_mutex_unlock(&sp->mutex);
 
 	now = monotime();
 
@@ -578,32 +594,33 @@ static void kill_pids(struct space *sp)
 		fd = cl->fd;
 		pid = cl->pid;
 
-
 		/*
-		 * from zero to kill_count_grace seconds, we try killing
-		 * the pid with either killpath or sigterm.  killpath if
-		 * it's configured and and we've seen a helper status recently.
-		 * (sigkill will be used in place of sigterm if restricted.)
-		 *
-		 * after kill_count_grace seconds, we'll try killing the
-		 * pid with sigkill.  (sigterm will be used in place of
-		 * sigkill if restricted.)
+		 * the transition from using killpath/sigterm to sigkill
+		 * is when now >=
+		 * last successful lease renewal +
+		 * id_renewal_fail_seconds +
+		 * kill_grace_seconds
 		 */
 
-		if (cl->killpath[0] &&
-		    (helper_kill_fd != -1) &&
-		    (kill_count_grace > 0) &&
-		    (cl->kill_count <= kill_count_grace) &&
-		    (now - helper_last_status < (HELPER_STATUS_INTERVAL * 2)))
+		in_grace = now < (last_success + main_task.id_renewal_fail_seconds + kill_grace_seconds);
+
+		if ((kill_grace_seconds > 0) && in_grace && cl->killpath[0]) {
 			sig = SIGRUNPATH;
-		else if (cl->restrict & SANLK_RESTRICT_SIGKILL)
+		} else if (in_grace) {
 			sig = SIGTERM;
-		else if (cl->restrict & SANLK_RESTRICT_SIGTERM)
+		} else {
 			sig = SIGKILL;
-		else if ((kill_count_grace > 0) &&
-			 (cl->kill_count <= kill_count_grace))
+		}
+
+		/*
+		 * sigterm will be used in place of sigkill if restricted
+		 * sigkill will be used in place of sigterm if restricted
+		 */
+
+		if ((sig == SIGKILL) && (cl->restrict & SANLK_RESTRICT_SIGKILL))
 			sig = SIGTERM;
-		else
+
+		if ((sig == SIGTERM) && (cl->restrict & SANLK_RESTRICT_SIGTERM))
 			sig = SIGKILL;
 
 		do_kill = 1;
@@ -1966,7 +1983,7 @@ static int read_command_line(int argc, char *argv[])
 			if (com.type == COM_DAEMON) {
 				sec = atoi(optionarg);
 				if (sec <= 60 && sec >= 0)
-					kill_count_grace = sec;
+					kill_grace_seconds = sec;
 			} else {
 				com.local_host_generation = atoll(optionarg);
 			}
@@ -2343,8 +2360,8 @@ int main(int argc, char *argv[])
 
 	/* initialize global EXTERN variables */
 
-	kill_count_max = 60;
-	kill_count_grace = DEFAULT_GRACE_SEC;
+	kill_count_max = 100;
+	kill_grace_seconds = DEFAULT_GRACE_SEC;
 	helper_ci = -1;
 	helper_pid = -1;
 	helper_kill_fd = -1;

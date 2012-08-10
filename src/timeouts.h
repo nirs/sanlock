@@ -226,7 +226,7 @@
  *
  * Working backward from the earlier watchdog firing at T170, leaving 10 seconds
  * for SIGKILL to succeed, we need to begin SIGKILL at T160.  This means we
- * have from T120 to T160 to allow graceful kill to complete.  So, kill_count_grace
+ * have from T120 to T160 to allow graceful kill to complete.  So, kill_grace_seconds
  * should be set to 40 by default (T120 to T160).
  *
  * T40: last successful disk renewal
@@ -234,11 +234,6 @@
  * T160 - T169: SIGKILL once per second (10 sec)
  * T170 - T179: watchdog fires sometime (SIGKILL continues)
  * T180: other hosts acquire our leases
- *
- * The interval between each kill count/attempt is approx 1 sec,
- * so kill_count/kill_count_grace/kill_count_max serve as both
- * the number/count of attempts and the number of seconds spent
- * using that kind of termination.
  */
 
  
