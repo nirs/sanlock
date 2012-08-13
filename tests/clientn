@@ -29,23 +29,85 @@ elif [ "$cmd" == "start" ]; then
 		./sanlk_client test r$i $dev $off $killpath &
 	done
 
-elif [ "$cmd" == "error" ]; then
+elif [ "$cmd" == "delay" ]; then
 
+	sec=$3
+
+	pid=`cat /var/run/sanlock/sanlock.pid`
+
+	echo sync with daemon renewals
+	kill -s SIGSTOP $pid
+	sleep 20
+	kill -s SIGCONT $pid
+	sleep 1
+
+	echo sigstop sanlock pid $pid
+	kill -s SIGSTOP $pid
+
+	echo sleep $sec
+	sleep $sec
+
+	echo sigcont sanlock pid $pid
+	kill -s SIGCONT $pid
+
+elif [ "$cmd" == "iodelay" ]; then
+
+	sec=$4
+
+	pid=`cat /var/run/sanlock/sanlock.pid`
+
+	echo sync with daemon renewals
+	kill -s SIGSTOP $pid
+	sleep 20
+	kill -s SIGCONT $pid
+	sleep 2
+
+	echo save linear
 	rm -f /tmp/client-state.txt
-
 	rm -f /tmp/client-linear.txt
 	rm -f /tmp/client-error.txt
 	dmsetup table $dev > /tmp/client-linear.txt
 	sed "s/linear/error/" /tmp/client-linear.txt > /tmp/client-error.txt
 
+	echo load error
 	dmsetup suspend $dev
 	dmsetup load $dev /tmp/client-error.txt
+	dmsetup resume $dev
+
+	echo sleep $sec
+	sleep $sec
+
+	echo load linear
+	dmsetup suspend $dev
+	dmsetup load $dev /tmp/client-linear.txt
+	dmsetup resume $dev
+
+elif [ "$cmd" == "error" ]; then
+
+	echo save linear
+	rm -f /tmp/client-state.txt
+	rm -f /tmp/client-linear.txt
+	rm -f /tmp/client-error.txt
+	dmsetup table $dev > /tmp/client-linear.txt
+	sed "s/linear/error/" /tmp/client-linear.txt > /tmp/client-error.txt
+
+	echo load error
+	dmsetup suspend $dev
+	dmsetup load $dev /tmp/client-error.txt
+	dmsetup resume $dev
+
+elif [ "$cmd" == "linear" ]; then
+
+	echo load linear
+	dmsetup suspend $dev
+	dmsetup load $dev /tmp/client-linear.txt
 	dmsetup resume $dev
 
 elif [ "$cmd" == "resume" ]; then
 
 	hostid=$4
 
+	echo load linear
 	dmsetup suspend $dev
 	dmsetup load $dev /tmp/client-linear.txt
 	dmsetup resume $dev
@@ -73,6 +135,19 @@ else
 	echo "clientn N start DEV HOSTID KILLPATH"
 	echo "  sanlock client add_lockspace -s test:HOSTID:DEV:0"
 	echo "  starts N ./sanlk_client processes"
+	echo ""
+	echo "clientn N delay SEC"
+	echo "  sigstop sanlock daemon"
+	echo "  sleep SEC"
+	echo "  sigcont sanlock daemon"
+	echo ""
+	echo "clientn N iodelay DEV SEC"
+	echo "  block i/o to DEV"
+	echo "  sleep SEC"
+	echo "  unblock i/o to DEV"
+	echo ""
+	echo "clientn N linear DEV"
+	echo "  unblock i/o to DEV"
 	echo ""
 	echo "clientn N error DEV"
 	echo "  blocks i/o to DEV"
