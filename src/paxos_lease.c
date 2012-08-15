@@ -1156,6 +1156,22 @@ int paxos_lease_acquire(struct task *task,
 	}
 
 	/*
+	 * We were the last host to hold this lease, but in a previous
+	 * lockspace generation in which we didn't cleanly release the
+	 * paxos lease.
+	 */
+
+	if (cur_leader.owner_id == token->host_id &&
+	    cur_leader.owner_generation < token->host_generation) {
+		log_token(token, "paxos_acquire past owner id %llu gen %llu %llu",
+			  (unsigned long long)token->host_id,
+			  (unsigned long long)token->host_generation,
+			  (unsigned long long)cur_leader.owner_generation);
+		copy_cur_leader = 1;
+		goto run;
+	}
+
+	/*
 	 * Check if current owner is alive based on its host_id renewals.
 	 * If the current owner has been dead long enough we can assume that
 	 * its watchdog has triggered and we can go for the paxos lease.
