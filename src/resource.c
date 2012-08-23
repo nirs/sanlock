@@ -31,6 +31,7 @@
 #include "resource.h"
 #include "task.h"
 #include "mode_block.h"
+#include "helper.h"
 
 /* from cmd.c */
 void send_state_resource(int fd, struct resource *r, const char *list_name, int pid, uint32_t token_id);
@@ -812,9 +813,10 @@ static int examine_token(struct task *task, struct token *token,
 
 static void do_req_kill_pid(struct token *tt, int pid)
 {
+	struct helper_msg hm;
 	struct resource *r;
 	uint32_t flags;
-	int found = 0;
+	int rv, found = 0;
 
 	pthread_mutex_lock(&resource_mutex);
 	r = find_resource(tt, &resources_held);
@@ -833,16 +835,29 @@ static void do_req_kill_pid(struct token *tt, int pid)
 	log_debug("do_req_kill_pid %d flags %x %.48s:%.48s",
 		  pid, flags, tt->r.lockspace_name, tt->r.name);
 
-	/* TODO: share code with kill_pids() to gradually
-	 * escalate from killscript, SIGTERM, SIGKILL */
+	if (helper_kill_fd == -1) {
+		log_error("do_req_kill_pid %d no helper fd", pid);
+		return;
+	}
 
-	kill(pid, SIGTERM);
+	/* TODO: handle kill via runpath? or select signal? escalate? */
+
+	memset(&hm, 0, sizeof(hm));
+	hm.type = HELPER_MSG_KILLPID;
+	hm.pid = pid;
+	hm.sig = SIGKILL;
 
 	if (flags & R_RESTRICT_SIGKILL)
-		return;
+		hm.sig = SIGTERM;
 
-	sleep(1);
-	kill(pid, SIGKILL);
+ retry:
+	rv = write(helper_kill_fd, &hm, sizeof(hm));
+	if (rv == -1 && errno == EINTR)
+		goto retry;
+
+	if (rv == -1)
+		log_error("do_req_kill_pid %d helper write error %d",
+			  pid, errno);
 }
 
 int set_resource_examine(char *space_name, char *res_name)
