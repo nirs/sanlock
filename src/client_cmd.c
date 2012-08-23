@@ -416,7 +416,7 @@ int sanlock_status(int debug, char sort_arg)
 	return rv;
 }
 
-int sanlock_host_status(int debug, char *lockspace_name)
+static int lockspace_host_status(int debug, char *lockspace_name)
 {
 	struct sm_header h;
 	struct sanlk_state st;
@@ -472,6 +472,77 @@ int sanlock_host_status(int debug, char *lockspace_name)
  out:
 	close(fd);
 	return rv;
+}
+
+int sanlock_host_status(int debug, char *lockspace_name)
+{
+	struct sm_header h;
+	struct sanlk_state state;
+	char maxstr[SANLK_STATE_MAXSTR];
+	char maxbin[SANLK_STATE_MAXSTR];
+	struct sanlk_state *st;
+	char *str, *bin;
+	struct sanlk_lockspace *ls;
+	int fd, rv, i;
+
+	if (lockspace_name && lockspace_name[0])
+		return lockspace_host_status(debug, lockspace_name);
+
+	fd = send_command(SM_CMD_STATUS, SANLK_STATE_LOCKSPACE);
+	if (fd < 0)
+		return fd;
+
+	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	if (rv < 0) {
+		rv = -errno;
+		close(fd);
+		return rv;
+	}
+	if (rv != sizeof(h)) {
+		close(fd);
+		return -1;
+	}
+
+	st = &state;
+	str = maxstr;
+	bin = maxbin;
+
+	while (1) {
+		memset(&state, 0, sizeof(state));
+		memset(maxstr, 0, sizeof(maxstr));
+		memset(maxbin, 0, sizeof(maxbin));
+
+		rv = recv(fd, st, sizeof(struct sanlk_state), MSG_WAITALL);
+		if (!rv)
+			break;
+		if (rv != sizeof(struct sanlk_state))
+			break;
+
+		if (st->str_len) {
+			rv = recv(fd, str, st->str_len, MSG_WAITALL);
+			if (rv != st->str_len)
+				break;
+		}
+
+		recv_bin(fd, st, bin);
+
+		if (st->type != SANLK_STATE_LOCKSPACE)
+			continue;
+
+		ls = (struct sanlk_lockspace *)bin;
+
+		sort_bufs[sort_count++] = strdup(ls->name);
+	}
+
+	close(fd);
+
+	for (i = 0; i < sort_count; i++) {
+		printf("lockspace %s\n", sort_bufs[i]);
+		lockspace_host_status(debug, sort_bufs[i]);
+		free(sort_bufs[i]);
+	}
+
+	return 0;
 }
 
 int sanlock_log_dump(int max_size)
