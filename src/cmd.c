@@ -1644,7 +1644,7 @@ static void cmd_status(int fd, struct sm_header *h_recv, int client_maxi)
 	pthread_mutex_lock(&spaces_mutex);
 	list_for_each_entry(sp, &spaces, list)
 		send_state_lockspace(fd, sp, "spaces");
-	list_for_each_entry(sp, &spaces_rem, list)
+	list_for_each_entry(sp, &spaces_add, list)
 		send_state_lockspace(fd, sp, "spaces_rem");
 	list_for_each_entry(sp, &spaces_rem, list)
 		send_state_lockspace(fd, sp, "spaces_add");
