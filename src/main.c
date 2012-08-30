@@ -1867,6 +1867,8 @@ static int read_command_line(int argc, char *argv[])
 			com.action = ACT_DIRECT_INIT;
 		else if (!strcmp(act, "dump"))
 			com.action = ACT_DUMP;
+		else if (!strcmp(act, "next_free"))
+			com.action = ACT_NEXT_FREE;
 		else if (!strcmp(act, "read_leader"))
 			com.action = ACT_READ_LEADER;
 		else if (!strcmp(act, "acquire"))
@@ -1891,8 +1893,8 @@ static int read_command_line(int argc, char *argv[])
 	};
 
 
-	/* the only action that has an option without dash-letter prefix */
-	if (com.action == ACT_DUMP) {
+	/* actions that have an option without dash-letter prefix */
+	if (com.action == ACT_DUMP || com.action == ACT_NEXT_FREE) {
 		if (argc < 4)
 			exit(EXIT_FAILURE);
 		optionarg = argv[i++];
@@ -2248,6 +2250,10 @@ static int do_direct(void)
 
 	case ACT_DUMP:
 		rv = direct_dump(&main_task, com.dump_path, com.force_mode);
+		break;
+
+	case ACT_NEXT_FREE:
+		rv = direct_next_free(&main_task, com.dump_path);
 		break;
 
 	case ACT_READ_LEADER:

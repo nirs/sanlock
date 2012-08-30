@@ -585,3 +585,69 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 	return rv;
 }
 
+int direct_next_free(struct task *task, char *path)
+{
+	char *data;
+	char *colon, *off_str;
+	struct leader_record *lr;
+	struct sync_disk sd;
+	uint64_t sector_nr;
+	int sector_count, datalen, align_size;
+	int rv;
+
+	memset(&sd, 0, sizeof(struct sync_disk));
+
+	colon = strstr(path, ":");
+	if (colon) {
+		off_str = colon + 1;
+		*colon = '\0';
+		sd.offset = atoll(off_str);
+	}
+
+	strncpy(sd.path, path, SANLK_PATH_LEN);
+	sd.fd = -1;
+
+	rv = open_disk(&sd);
+	if (rv < 0)
+		return -ENODEV;
+
+	rv = direct_align(&sd);
+	if (rv < 0)
+		goto out_close;
+
+	align_size = rv;
+	datalen = sd.sector_size;
+	sector_count = align_size / sd.sector_size;
+
+	data = malloc(datalen);
+	if (!data) {
+		rv = -ENOMEM;
+		goto out_close;
+	}
+
+	sector_nr = 0;
+	rv = -ENOSPC;
+
+	while (1) {
+		memset(data, 0, sd.sector_size);
+
+		rv = read_sectors(&sd, sector_nr, 1, data, datalen,
+				  task, DEFAULT_IO_TIMEOUT, "next_free");
+
+		lr = (struct leader_record *)data;
+
+		if (lr->magic != DELTA_DISK_MAGIC && lr->magic != PAXOS_DISK_MAGIC) {
+			printf("%llu\n", (unsigned long long)(sector_nr * sd.sector_size));
+			rv = 0;
+			goto out_free;
+		}
+
+		sector_nr += sector_count;
+	}
+ out_free:
+	free(data);
+ out_close:
+	close_disks(&sd, 1);
+	return rv;
+}
+

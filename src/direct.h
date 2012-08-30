@@ -57,4 +57,6 @@ int direct_read_leader(struct task *task, int io_timeout,
 
 int direct_dump(struct task *task, char *dump_path, int force_mode);
 
+int direct_next_free(struct task *task, char *path);
+
 #endif
