@@ -818,7 +818,7 @@ static int examine_token(struct task *task, struct token *token,
 	return rv;
 }
 
-static void do_req_kill_pid(struct token *tt, int pid)
+static void do_request(struct token *tt, int pid, uint32_t force_mode)
 {
 	struct helper_msg hm;
 	struct resource *r;
@@ -834,28 +834,47 @@ static void do_req_kill_pid(struct token *tt, int pid)
 	pthread_mutex_unlock(&resource_mutex);
 
 	if (!found) {
-		log_error("req pid %d %.48s:%.48s not found",
+		log_error("do_request pid %d %.48s:%.48s not found",
 			   pid, tt->r.lockspace_name, tt->r.name);
 		return;
 	}
 
-	log_debug("do_req_kill_pid %d flags %x %.48s:%.48s",
+	log_debug("do_request %d flags %x %.48s:%.48s",
 		  pid, flags, tt->r.lockspace_name, tt->r.name);
 
 	if (helper_kill_fd == -1) {
-		log_error("do_req_kill_pid %d no helper fd", pid);
+		log_error("do_request %d no helper fd", pid);
 		return;
 	}
 
-	/* TODO: handle kill via runpath? or select signal? escalate? */
-
 	memset(&hm, 0, sizeof(hm));
-	hm.type = HELPER_MSG_KILLPID;
-	hm.pid = pid;
-	hm.sig = SIGKILL;
 
-	if (flags & R_RESTRICT_SIGKILL)
-		hm.sig = SIGTERM;
+	if (force_mode == SANLK_REQ_KILL_PID) {
+		hm.type = HELPER_MSG_KILLPID;
+		hm.pid = pid;
+		hm.sig = (flags & R_RESTRICT_SIGKILL) ? SIGTERM : SIGKILL;
+	} else if (force_mode == SANLK_REQ_SIGUSR1) {
+		hm.type = HELPER_MSG_KILLPID;
+		hm.pid = pid;
+		hm.sig = SIGUSR1;
+	} else {
+		log_error("do_request %d unknown force_mode %d",
+			  pid, force_mode);
+		return;
+	}
+#if 0
+	/* TODO: this is difficult because we can't dig into the clients
+	   array to get the killpath/killargs; the clients array is not
+	   locked and can only be accessed by the main thread. */
+
+	else if (force_mode == SANLK_REQ_KILLPATH) {
+		hm.type = HELPER_MSG_RUNPATH;
+		memcpy(hm.path, cl->killpath, SANLK_HELPER_PATH_LEN);
+		memcpy(hm.args, cl->killargs, SANLK_HELPER_ARGS_LEN);
+		if (cl->flags & CL_KILLPATH_PID)
+			hm.pid = pid;
+	}
+#endif
 
  retry:
 	rv = write(helper_kill_fd, &hm, sizeof(hm));
@@ -863,7 +882,7 @@ static void do_req_kill_pid(struct token *tt, int pid)
 		goto retry;
 
 	if (rv == -1)
-		log_error("do_req_kill_pid %d helper write error %d",
+		log_error("do_request %d helper write error %d",
 			  pid, errno);
 }
 
@@ -957,8 +976,8 @@ static void resource_thread_examine(struct task *task, struct token *tt, int pid
 		return;
 	}
 
-	if (req.force_mode == SANLK_REQ_KILL_PID) {
-		do_req_kill_pid(tt, pid);
+	if (req.force_mode) {
+		do_request(tt, pid, req.force_mode);
 	} else {
 		log_error("req force_mode %u unknown", req.force_mode);
 	}

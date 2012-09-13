@@ -31,8 +31,15 @@
 /* release flags */
 #define SANLK_REL_ALL		0x00000001
 
-/* request flags */
+/*
+ * request force_mode
+ * SANLK_REQ_KILL_PID: send SIGKILL to pid holding the resource, or
+ *                     SIGTERM if SIGKILL is restricted
+ * SANLK_REQ_SIGUSR1:  send SIGUSR1 to pid holding the resource
+ */
+
 #define SANLK_REQ_KILL_PID	0x00000001
+#define SANLK_REQ_SIGUSR1	0x00000002
 
 int sanlock_register(void);
 
