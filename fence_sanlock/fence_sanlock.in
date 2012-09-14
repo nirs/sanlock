@@ -1,0 +1,269 @@
+#!/bin/bash
+
+# Copyright 2012 Red Hat, Inc.
+#
+# This copyrighted material is made available to anyone wishing to use,
+# modify, copy, or redistribute it subject to the terms and conditions
+# of the GNU General Public License v2 or (at your option) any later version.
+
+# cluster.conf
+#
+# <clusternode name="n1" nodeid="1">
+#   <fence>
+#   <method name="1">
+#   <device name="wd" host_id="1"/>
+#   </method>
+#   </fence>
+#   <unfence>
+#   <device name="wd" host_id="1" action="on"/>
+#   </unfence>
+# </clusternode>
+#
+# <clusternode name="n2" nodeid="2">
+#   <fence>
+#   <method name="1">
+#   <device name="wd" host_id="2"/>
+#   </method>
+#   </fence>
+#   <unfence>
+#   <device name="wd" host_id="2" action="on"/>
+#   </unfence>
+# </clusternode>
+#
+# <fencedevice name="wd" agent="fence_sanlock" device="/dev/fence_sanlock/leases"/>
+
+# setup (one time only):
+# fence_sanlock sanlock_init $device
+#
+# startup:
+# service wdmd start
+# service sanlock start
+# service cman start
+# - fence_node -U -> fence_sanlock -o on -> fence_sanlockd
+
+max_hosts=128
+opts=
+node=
+action=
+device=
+host_id=
+offset=
+
+help() {
+	echo "Usage:"
+	echo ""
+	echo "fence_sanlock [options]"
+	echo ""
+	echo "Options:"
+	echo "  -n <node>     Name of node to operate on"
+	echo "  -o <action>   Action: off (default), on, or status"
+	echo "                (sanlock specific actions: sanlock_init)"
+	echo "  -d <path>     sanlock shared storage for leases"
+	echo "  -i <num>      sanlock host_id of node to operate on"
+	echo "  -h            Print this help, then exit"
+	echo "  -V            Print program version information, then exit"
+	echo ""
+	echo "stdin options:"
+	echo "  action=<action>"
+	echo "  device=<path>"
+	echo "  host_id=<num>"
+}
+
+cli_options() {
+	while [ "$1" != "--" ]; do
+		case $1 in
+		-n)
+			node=$2
+			shift
+		;;
+		-o)
+			action=$2
+			shift
+		;;
+		-d)
+			device=$2
+			shift
+		;;
+		-i)
+			host_id=$2
+			shift
+		;;
+		-h)
+			help
+			exit 0
+		;;
+		-V)
+			echo "fence_sanlock version @VERSION@"
+			exit 0
+		;;
+		esac
+		shift
+	done
+}
+
+stdin_options() {
+	while read line
+	do
+		key="$(echo $line | cut --delimiter== --fields=1)"
+		val="$(echo $line | cut --delimiter== --fields=2)"
+
+		if [ "$key" == "action" ]; then
+			action=$val
+		elif [ "$key" == "device" ]; then
+			device=$val
+		elif [ "$key" == "host_id" ]; then
+			host_id=$val
+		fi
+	done
+}
+
+if [ $# -eq 0 ]; then
+	stdin_options
+else
+	opts=$(getopt n:o:d:i:hV $@)
+	if [ "$?" != 0 ]; then
+		help
+		exit 1
+	fi
+	cli_options $opts
+fi
+
+if [[ "$device" == "" ]]; then
+	echo "device arg required"
+	exit 1
+fi
+
+if [[ "$action" == "" ]]; then
+	echo "action arg required"
+	exit 1
+fi
+
+
+if [[ "$action" == "on" ]]; then
+
+	if [[ "$host_id" == "" ]]; then
+		echo "host_id arg required"
+		exit 1
+	fi
+
+	if [[ $host_id -eq 0 ]] || [[ $host_id -gt $max_hosts ]]; then
+		echo "host_id must be between 1 and $max_hosts"
+		return 1
+	fi
+
+	offset=`expr $host_id \* 1048576`
+
+	# verify device has been initialized
+
+	magic=`sanlock direct read_leader -r fence:h$host_id:$device:$offset 2>&1 | grep magic | awk '{print $NF}'`
+	if [[ $? -ne 0 ]]; then
+		echo "device not available or uninitialized"
+		return 1
+	fi
+
+	if [[ "$magic" != "0x6152010" ]]; then
+		echo "device bad magic $magic"
+		return 1
+	fi
+
+	/usr/sbin/fence_sanlockd -d $device -i $host_id
+
+	# wait for fence_sanlockd to acquire the local lease;
+	# it can take minutes, and we can't allow fence_tool join
+	# until this is complete
+
+	# FIXME: tune the 180 value
+
+	for i in `seq 1 180`; do
+		sanlock client status | grep fence:h$host_id:$device:$offset 2>&1 > /dev/null
+
+		# FIXME: check that r is really done being acquired?
+		# just appearing in output may not be enough
+
+		if [[ $? -eq 0 ]]; then
+			break
+		fi
+		sleep 1
+	done
+
+	exit 0
+fi
+
+if [[ "$action" == "off" ]]; then
+
+	if [[ "$host_id" == "" ]]; then
+		echo "host_id arg required"
+		exit 1
+	fi
+
+	pid=`pidof fence_sanlockd`
+
+	offset=`expr $host_id \* 1048576`
+
+	leader=`sanlock direct read_leader -r fence:h$host_id:$device:$offset 2>&1`
+
+	owner_id=`echo "$leader" | grep owner_id | awk '{print $NF}'`
+	owner_gen=`echo "$leader" | grep owner_gen | awk '{print $NF}'`
+	ver=`echo "$leader" | grep lver | awk '{print $NF}'`
+
+	# owner_id should equal host_id
+
+	sanlock client request -r fence:h$host_id:$device:$offset:`expr $ver + 1` -f 2
+
+	while :
+	do
+		sanlock client acquire -r fence:h$host_id:$device:$offset -p $pid
+		if [[ $? -eq 0 ]]; then
+			# fence success
+			sanlock client release -r fence:h$host_id:$device:$offset -p $pid
+			exit 0
+		fi
+
+		sleep 5
+
+		# FIXME: there probably some errors here where we should just fail
+
+		# FIXME: we should probably reread the leader, and if it's been
+		# reacquired cleanly by the host, I think we can quit with success
+	done
+
+	exit 1
+fi
+
+if [[ "$action" == "status" ]]; then
+
+	leader=`sanlock direct read_leader -r fence:h$host_id:$device:$offset 2>&1`
+
+	if [[ $? -ne 0 ]]; then
+		echo "device not available or uninitialized"
+		exit 1
+	fi
+
+	timestamp=`echo "$leader" | grep timestamp | awk '{print $NF}'`
+
+	if [[ $timestamp -eq 0 ]]; then
+		# lease is released, so host is "off"
+		exit 2
+	fi
+
+	# lease is held, so host is "on"
+	exit 0
+fi
+
+if [[ "$action" == "sanlock_init" ]]; then
+
+	# initialize lease device
+
+	sanlock direct init -s fence:0:$device:0
+
+	for host_id in `seq 1 $max_hosts`; do
+		offset=`expr $host_id \* 1048576`
+		sanlock direct init -r fence:h$host_id:$device:$offset
+	done
+
+	exit 0
+fi
+
+echo "Unknown action: $action"
+exit 1
+
