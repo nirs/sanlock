@@ -102,19 +102,22 @@ cli_options() {
 }
 
 stdin_options() {
-	while read line
-	do
-		key="$(echo $line | cut --delimiter== --fields=1)"
-		val="$(echo $line | cut --delimiter== --fields=2)"
-
-		if [ "$key" == "action" ]; then
-			action=$val
-		elif [ "$key" == "device" ]; then
-			device=$val
-		elif [ "$key" == "host_id" ]; then
-			host_id=$val
-		fi
+	oldIFS="$IFS"
+	export IFS="="
+	while read key val; do
+		case "$key" in
+			action)
+				action=$val
+			;;
+			device)
+				device=$val
+			;;
+			host_id)
+				host_id=$val
+			;;
+		esac
 	done
+	export IFS="$oldIFS"
 }
 
 if [ $# -eq 0 ]; then
@@ -128,96 +131,100 @@ else
 	cli_options $opts
 fi
 
-if [[ "$device" == "" ]]; then
-	echo "device arg required"
-	exit 1
-fi
+# FIXME: add metadata
+metadata() {
+	return 0
+}
 
-if [[ "$action" == "" ]]; then
-	echo "action arg required"
-	exit 1
-fi
-
-
-if [[ "$action" == "on" ]]; then
-
-	if [[ "$host_id" == "" ]]; then
-		echo "host_id arg required"
-		exit 1
-	fi
-
-	if [[ $host_id -eq 0 ]] || [[ $host_id -gt $max_hosts ]]; then
-		echo "host_id must be between 1 and $max_hosts"
-		return 1
-	fi
-
-	offset=`expr $host_id \* 1048576`
-
+verify_device() {
 	# verify device has been initialized
 
-	magic=`sanlock direct read_leader -r fence:h$host_id:$device:$offset 2>&1 | grep magic | awk '{print $NF}'`
-	if [[ $? -ne 0 ]]; then
-		echo "device not available or uninitialized"
+	leader=$(sanlock direct read_leader -r fence:h$host_id:$device:$offset 2>&1)
+	[ "$?" != 0 ] && {
+		echo "Unable to read $device information"
 		return 1
-	fi
-
-	if [[ "$magic" != "0x6152010" ]]; then
-		echo "device bad magic $magic"
+	}
+	magic="$(echo "$leader" | grep magic | awk '{print $NF}')"
+	[ -z "$magic" ] && {
+		echo "Unable to determine $device sanlock magic"
 		return 1
-	fi
+	}
+	[ "$magic" != "0x6152010" ] && {
+		echo "Error: $device magic does not match sanlock magic"
+		return 1
+	}
+	return 0
+}
 
-	/usr/sbin/fence_sanlockd -d $device -i $host_id
+action_on() {
+	verify_device || return 1
+
+	pid="$(pidof fence_sanlockd)"
+	[ -n "$pid" ] && {
+		kill $pid
+		sleep 2
+	}
+
+	daemonerr="$(fence_sanlockd -d $device -i $host_id 2>&1)"
+	[ "$?" != 0 ] && {
+		echo "Unable to execute fence_sanlockd. Error:"
+		echo "$daemonerr"
+		return 1
+	}
 
 	# wait for fence_sanlockd to acquire the local lease;
 	# it can take minutes, and we can't allow fence_tool join
 	# until this is complete
 
-	# FIXME: tune the 180 value
-
-	for i in `seq 1 180`; do
-		sanlock client status | grep fence:h$host_id:$device:$offset 2>&1 > /dev/null
-
+	while ! sanlock client status | grep -q fence:h$host_id:$device:$offset; do 
 		# FIXME: check that r is really done being acquired?
 		# just appearing in output may not be enough
 
-		if [[ $? -eq 0 ]]; then
-			break
-		fi
 		sleep 1
 	done
 
 	exit 0
-fi
+}
 
-if [[ "$action" == "off" ]]; then
+action_off() {
+	verify_device || return 1
 
-	if [[ "$host_id" == "" ]]; then
-		echo "host_id arg required"
-		exit 1
-	fi
-
-	pid=`pidof fence_sanlockd`
-
-	offset=`expr $host_id \* 1048576`
-
-	leader=`sanlock direct read_leader -r fence:h$host_id:$device:$offset 2>&1`
-
-	owner_id=`echo "$leader" | grep owner_id | awk '{print $NF}'`
-	owner_gen=`echo "$leader" | grep owner_gen | awk '{print $NF}'`
-	ver=`echo "$leader" | grep lver | awk '{print $NF}'`
+	owner_id="$(echo "$leader" | grep owner_id | awk '{print $NF}')"
+	owner_gen="$(echo "$leader" | grep owner_gen | awk '{print $NF}')"
+	ver="$(echo "$leader" | grep lver | awk '{print $NF}')"
 
 	# owner_id should equal host_id
+	[ "$owner_id" != "$host_id" ] && {
+		echo "Error: owner_id $owner_id does not match host_id $host_id"
+		return 1
+	}
 
-	sanlock client request -r fence:h$host_id:$device:$offset:`expr $ver + 1` -f 2
+	sanlock client request -r fence:h$host_id:$device:$offset:$((ver + 1)) -f 2 > /dev/null 2>&1
+	[ "$?" != 0 ] && {
+		echo "Unable to send sanlock client request"
+		return 1
+	}
 
+	pid="$(pidof fence_sanlockd)"
+	[ -z "$pid" ] && {
+		echo "Unable to determine fence_sanlockd pin"
+		return 1
+	}
+
+	# FIXME: should this loop have a retry limit?
 	while :
 	do
 		sanlock client acquire -r fence:h$host_id:$device:$offset -p $pid
-		if [[ $? -eq 0 ]]; then
+		[ "$?" = 0 ] && {
 			# fence success
 			sanlock client release -r fence:h$host_id:$device:$offset -p $pid
-			exit 0
-		fi
+			[ "$?" != 0 ] && {
+				# FIXME: what should we do here?
+				echo "Unable to release lock?"
+				#return 1
+			}
+			break;
+		}
 
 		sleep 5
 
@@ -227,43 +234,94 @@ if [[ "$action" == "off" ]]; then
 		# reacquired cleanly by the host, I think we can quit with success
 	done
 
-	exit 1
-fi
+	return 0
+}
 
-if [[ "$action" == "status" ]]; then
+action_status() {
+	verify_device || return 1
 
-	leader=`sanlock direct read_leader -r fence:h$host_id:$device:$offset 2>&1`
+	timestamp="$(echo "$leader" | grep timestamp | awk '{print $NF}')"
 
-	if [[ $? -ne 0 ]]; then
-		echo "device not available or uninitialized"
+	[ -z "$timestamp" ] && {
+		echo "Unable to determine timestamp"
 		exit 1
-	fi
+	}
 
-	timestamp=`echo "$leader" | grep timestamp | awk '{print $NF}'`
-
-	if [[ $timestamp -eq 0 ]]; then
-		# lease is released, so host is "off"
+	# lease is released, so host is "off"
+	[ "$timestamp" = 0 ] && {
+		echo "Status: OFF"
 		exit 2
-	fi
+	}
 
 	# lease is held, so host is "on"
+	echo "Status: ON"
 	exit 0
-fi
+}
 
-if [[ "$action" == "sanlock_init" ]]; then
-
+sanlock_init() {
 	# initialize lease device
+	echo -n "Initializing lease device $device: "
+	sanlock direct init -s fence:0:$device:0 \
+		> /dev/null 2>/dev/null || \
+		{ echo "error $?" && return 1; }
+	echo "ok"
 
-	sanlock direct init -s fence:0:$device:0
-
-	for host_id in `seq 1 $max_hosts`; do
-		offset=`expr $host_id \* 1048576`
-		sanlock direct init -r fence:h$host_id:$device:$offset
+	echo -n "Initializing host leases: "
+	for host_id in $(seq 1 $max_hosts); do
+		offset=$((host_id * 1048576))
+		sanlock direct init -r fence:h$host_id:$device:$offset \
+			> /dev/null 2>/dev/null || \
+			{ echo "error $? for host $host_id" && return 1; }
 	done
+	echo "ok"
 
-	exit 0
-fi
+	return 0
+}
 
-echo "Unknown action: $action"
-exit 1
+[ -z "$action" ] && action=off
 
+# check actions and options compatibility
+# all actions beside metadata needs device
+[ "$action" != "metadata" ] && {
+	[ -z "$device" ] && {
+		echo "device argument required"
+		exit 1
+	}
+	# all actions beside sanlock_init needs host_id
+	[ "$action" != "sanlock_init" ] && [ -z "$host_id" ] && {
+		echo "host_id argument required"
+		exit 1
+	}
+}
+
+# verify host_id parameter
+[ -n "$host_id" ] && {
+	if [ "$host_id" -lt 1 ] || [ "$host_id" -gt "$max_hosts" ]; then
+		echo "host_id must be between 1 and $max_hosts"
+		exit 1
+	fi
+	offset=$((host_id * 1048576))
+}
+
+case "$action" in
+	metadata)
+		metadata
+	;;
+	sanlock_init)
+		sanlock_init
+	;;
+	on)
+		action_on
+	;;
+	off)
+		action_off
+	;;
+	status)
+		action_status
+	;;
+	*)
+		echo $"Unknown action: $action"
+		exit 1
+	;;
+esac
+exit $?
