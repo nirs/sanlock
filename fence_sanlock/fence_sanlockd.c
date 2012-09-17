@@ -305,7 +305,7 @@ int main(int argc, char *argv[])
 			cont = 0;
 			break;
 		default:
-			fprintf(stderr, "unknown option %c", optchar);
+			fprintf(stderr, "unknown option %c\n", optchar);
 			exit(1);
 		};
 	}
