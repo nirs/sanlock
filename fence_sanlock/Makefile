@@ -42,3 +42,15 @@ $(TARGET2): $(SOURCE2)
 clean:
 	rm -f *.o *.so *.so.* $(TARGET1) $(TARGET2)
 
+INSTALL=$(shell which install)
+
+DESTDIR=
+BINDIR=/usr/sbin
+LIBDIR=/usr/lib64
+HEADIR=/usr/include
+MANDIR=/usr/share/man
+
+.PHONY: install
+install: all
+	$(INSTALL) -d $(DESTDIR)/$(BINDIR)
+	$(INSTALL) -c -m 755 $(TARGET1) $(TARGET2) $(DESTDIR)/$(BINDIR)
