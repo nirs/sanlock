@@ -159,17 +159,13 @@ verify_device() {
 action_on() {
 	verify_device || return 1
 
-	pid="$(pidof fence_sanlockd)"
-	[ -n "$pid" ] && {
-		kill $pid
-		sleep 2
-	}
-
-	daemonerr="$(fence_sanlockd -d $device -i $host_id 2>&1)"
-	[ "$?" != 0 ] && {
-		echo "Unable to execute fence_sanlockd. Error:"
-		echo "$daemonerr"
-		return 1
+	[ -z "$(pidof fence_sanlockd)" ] && {
+		daemonerr="$(fence_sanlockd -d $device -i $host_id 2>&1)"
+		[ "$?" != 0 ] && {
+			echo "Unable to execute fence_sanlockd. Error:"
+			echo "$daemonerr"
+			return 1
+		}
 	}
 
 	# wait for fence_sanlockd to acquire the local lease;
