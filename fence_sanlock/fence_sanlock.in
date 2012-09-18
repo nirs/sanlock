@@ -43,7 +43,6 @@
 
 max_hosts=128
 opts=
-node=
 action=
 device=
 host_id=
@@ -55,8 +54,7 @@ help() {
 	echo "fence_sanlock [options]"
 	echo ""
 	echo "Options:"
-	echo "  -n <node>     Name of node to operate on"
-	echo "  -o <action>   Action: off (default), on, or status"
+	echo "  -o <action>   Action: off (default), on, status or metadata"
 	echo "                (sanlock specific actions: sanlock_init)"
 	echo "  -d <path>     sanlock shared storage for leases"
 	echo "  -i <num>      sanlock host_id of node to operate on"
@@ -72,10 +70,6 @@ help() {
 cli_options() {
 	while [ "$1" != "--" ]; do
 		case $1 in
-		-n)
-			node=$2
-			shift
-		;;
 		-o)
 			action=$2
 			shift
@@ -131,8 +125,41 @@ else
 	cli_options $opts
 fi
 
-# FIXME: add metadata
+# FIXME: Dave to review descriptions
 metadata() {
+cat << EOF
+<?xml version="1.0" ?>
+<resource-agent name="fence_sanlock" shortdesc="Fence agent for sanlock shared storage" >
+<longdesc>
+fence_sanlock is ... add long description here.
+</longdesc>
+<vendor-url>http://www.redhat.com/</vendor-url>
+<parameters>
+	<parameter name="action" unique="0" required="1">
+		<getopt mixed="-o &lt;action&gt;" />
+		<content type="string" default="off" />
+		<shortdesc lang="en">Fencing Action</shortdesc>
+	</parameter>
+	<parameter name="device" unique="0" required="1">
+		<getopt mixed="-d &lt;action&gt;" />
+		<content type="string" />
+		<shortdesc lang="en">Path to sanlock shared storage device</shortdesc>
+	</parameter>
+	<parameter name="host_id" unique="0" required="1">
+		<getopt mixed="-i &lt;action&gt;" />
+		<content type="string" />
+		<shortdesc lang="en">Path to sanlock shared storage device</shortdesc>
+	</parameter>
+</parameters>
+<actions>
+	<action name="on" />
+	<action name="off" />
+	<action name="status" />
+	<action name="metadata" />
+	<action name="sanlock_init" />
+</actions>
+</resource-agent>
+EOF
 	return 0
 }
 
