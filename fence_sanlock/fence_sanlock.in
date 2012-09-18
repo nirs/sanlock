@@ -30,10 +30,10 @@
 #   </unfence>
 # </clusternode>
 #
-# <fencedevice name="wd" agent="fence_sanlock" device="/dev/fence_sanlock/leases"/>
+# <fencedevice name="wd" agent="fence_sanlock" path="/dev/fence_sanlock/leases"/>
 
 # setup (one time only):
-# fence_sanlock sanlock_init $device
+# fence_sanlock -o sanlock_init -p $path
 #
 # startup:
 # service wdmd start
@@ -44,7 +44,7 @@
 max_hosts=128
 opts=
 action=
-device=
+path=
 host_id=
 offset=
 
@@ -56,14 +56,14 @@ help() {
 	echo "Options:"
 	echo "  -o <action>   Action: off (default), on, status or metadata"
 	echo "                (sanlock specific actions: sanlock_init)"
-	echo "  -d <path>     sanlock shared storage for leases"
+	echo "  -p <path>     sanlock shared storage for leases"
 	echo "  -i <num>      sanlock host_id of node to operate on"
 	echo "  -h            Print this help, then exit"
 	echo "  -V            Print program version information, then exit"
 	echo ""
 	echo "stdin options:"
 	echo "  action=<action>"
-	echo "  device=<path>"
+	echo "  path=<path>"
 	echo "  host_id=<num>"
 }
 
@@ -74,8 +74,8 @@ cli_options() {
 			action=$2
 			shift
 		;;
-		-d)
-			device=$2
+		-p)
+			path=$2
 			shift
 		;;
 		-i)
@@ -103,8 +103,8 @@ stdin_options() {
 			action)
 				action=$val
 			;;
-			device)
-				device=$val
+			path)
+				path=$val
 			;;
 			host_id)
 				host_id=$val
@@ -117,7 +117,7 @@ stdin_options() {
 if [ $# -eq 0 ]; then
 	stdin_options
 else
-	opts=$(getopt n:o:d:i:hV $@)
+	opts=$(getopt n:o:p:i:hV $@)
 	if [ "$?" != 0 ]; then
 		help
 		exit 1
@@ -125,13 +125,15 @@ else
 	cli_options $opts
 fi
 
-# FIXME: Dave to review descriptions
 metadata() {
 cat << EOF
 <?xml version="1.0" ?>
-<resource-agent name="fence_sanlock" shortdesc="Fence agent for sanlock shared storage" >
+<resource-agent name="fence_sanlock" shortdesc="Fence agent for watchdog and shared storage">
 <longdesc>
-fence_sanlock is ... add long description here.
+fence_sanlock is an i/o fencing agent that uses the watchdog device to
+reset nodes.  Shared storage (block or file) is used by sanlock to ensure
+that fenced nodes are reset, and to notify partitioned nodes that they
+need to be reset.
 </longdesc>
 <vendor-url>http://www.redhat.com/</vendor-url>
 <parameters>
@@ -140,15 +142,15 @@ fence_sanlock is ... add long description here.
 		<content type="string" default="off" />
 		<shortdesc lang="en">Fencing Action</shortdesc>
 	</parameter>
-	<parameter name="device" unique="0" required="1">
-		<getopt mixed="-d &lt;action&gt;" />
+	<parameter name="path" unique="0" required="1">
+		<getopt mixed="-p &lt;action&gt;" />
 		<content type="string" />
-		<shortdesc lang="en">Path to sanlock shared storage device</shortdesc>
+		<shortdesc lang="en">Path to sanlock shared storage</shortdesc>
 	</parameter>
 	<parameter name="host_id" unique="0" required="1">
 		<getopt mixed="-i &lt;action&gt;" />
 		<content type="string" />
-		<shortdesc lang="en">Path to sanlock shared storage device</shortdesc>
+		<shortdesc lang="en">Host id for sanlock (1-128)</shortdesc>
 	</parameter>
 </parameters>
 <actions>
@@ -163,31 +165,31 @@ EOF
 	return 0
 }
 
-verify_device() {
-	# verify device has been initialized
+verify_path() {
+	# verify storage has been initialized
 
-	leader=$(sanlock direct read_leader -r fence:h$host_id:$device:$offset 2>&1)
+	leader=$(sanlock direct read_leader -r fence:h$host_id:$path:$offset 2>&1)
 	[ "$?" != 0 ] && {
-		echo "Unable to read $device information"
+		echo "Unable to read $path"
 		return 1
 	}
 	magic="$(echo "$leader" | grep magic | awk '{print $NF}')"
 	[ -z "$magic" ] && {
-		echo "Unable to determine $device sanlock magic"
+		echo "Unable to determine $path sanlock magic"
 		return 1
 	}
 	[ "$magic" != "0x6152010" ] && {
-		echo "Error: $device magic does not match sanlock magic"
+		echo "Error: $path magic $magic does not match sanlock magic 0x6152010"
 		return 1
 	}
 	return 0
 }
 
 action_on() {
-	verify_device || return 1
+	verify_path || return 1
 
 	[ -z "$(pidof fence_sanlockd)" ] && {
-		daemonerr="$(fence_sanlockd -d $device -i $host_id 2>&1)"
+		daemonerr="$(fence_sanlockd -p $path -i $host_id 2>&1)"
 		[ "$?" != 0 ] && {
 			echo "Unable to execute fence_sanlockd. Error:"
 			echo "$daemonerr"
@@ -199,7 +201,7 @@ action_on() {
 	# it can take minutes, and we can't allow fence_tool join
 	# until this is complete
 
-	while ! sanlock client status | grep -q fence:h$host_id:$device:$offset; do 
+	while ! sanlock client status | grep -q fence:h$host_id:$path:$offset; do 
 		# FIXME: check that r is really done being acquired?
 		# just appearing in output may not be enough
 
@@ -210,60 +212,97 @@ action_on() {
 }
 
 action_off() {
-	verify_device || return 1
+	verify_path || return 1
 
 	owner_id="$(echo "$leader" | grep owner_id | awk '{print $NF}')"
 	owner_gen="$(echo "$leader" | grep owner_gen | awk '{print $NF}')"
 	ver="$(echo "$leader" | grep lver | awk '{print $NF}')"
+	timestamp="$(echo "$leader" | grep ^timestamp | awk '{print $NF}')"
 
-	# owner_id should equal host_id
-	[ "$owner_id" != "$host_id" ] && {
-		echo "Error: owner_id $owner_id does not match host_id $host_id"
+	[ -z "$timestamp" ] && {
+		echo "Unable to determine timestamp"
 		return 1
 	}
 
-	sanlock client request -r fence:h$host_id:$device:$offset:$((ver + 1)) -f 2 > /dev/null 2>&1
-	[ "$?" != 0 ] && {
-		echo "Unable to send sanlock client request"
+	# lease is released, so host is off
+	[ "$timestamp" = 0 ] && {
+		return 0
+	}
+
+	# owner_id should equal host_id
+	[ "$owner_id" != "$host_id" ] && {
+		echo "victim lease $host_id owned by $owner_id:$owner_gen"
 		return 1
 	}
 
 	pid="$(pidof fence_sanlockd)"
 	[ -z "$pid" ] && {
-		echo "Unable to determine fence_sanlockd pin"
+		echo "Unable to determine fence_sanlockd pid"
 		return 1
 	}
+
+	loop=0
 
 	# FIXME: should this loop have a retry limit?
 	while :
 	do
-		sanlock client acquire -r fence:h$host_id:$device:$offset -p $pid
+		loop=$(($loop+1))
+
+		sanlock client acquire -r fence:h$host_id:$path:$offset -p $pid
 		[ "$?" = 0 ] && {
 			# fence success
-			sanlock client release -r fence:h$host_id:$device:$offset -p $pid
+			sanlock client release -r fence:h$host_id:$path:$offset -p $pid
 			[ "$?" != 0 ] && {
-				# FIXME: what should we do here?
-				echo "Unable to release lock?"
-				#return 1
+				echo "release $host_id error $?"
 			}
-			break;
+			return 0
 		}
 
-		sleep 5
+		if [ "$loop" = 1 ]; then
 
-		# FIXME: there probably some errors here where we should just fail
+			# acquire probably failed because the victim is
+			# still alive and renewing its lease, (we could
+			# verify that by checking the error code, but the
+			# error codes are currently messed up due to
+			# negation).  use a request on the victim's lease
+			# to tell it that it's being fenced and needs to
+			# reset.  the -f 2 causes SIGUSR1 to be sent to
+			# fence_sanlockd on the victim.
 
-		# FIXME: we should probably reread the leader, and if it's been
-		# reacquired cleanly by the host, I think we can quit with success
+			sanlock client request -r fence:h$host_id:$path:$offset:$((ver + 1)) -f 2 > /dev/null 2>&1
+			[ "$?" != 0 ] && {
+				echo "request $host_id error $?"
+			}
+		fi
+
+		sleep 10
+
+		# Reread the leader; if the victim's lease has been
+		# reacquired cleanly by the victim host (same host_id, new
+		# generation), we can quit with success
+
+		leader=$(sanlock direct read_leader -r fence:h$host_id:$path:$offset 2>&1)
+		tmp_id="$(echo "$leader" | grep owner_id | awk '{print $NF}')"
+		tmp_gen="$(echo "$leader" | grep owner_gen | awk '{print $NF}')"
+
+		if [ "$owner_id" -eq "$tmp_id" ] && [ "$owner_gen" -lt "$tmp_gen" ]; then
+			echo "victim $owner_id:$owner_gen reacquired lease gen $tmp_gen"
+			return 0
+		fi
+
+		if [ "$owner_id" -ne "$tmp_id" ]; then
+			echo "victim $owner_id:$owner_gen acquired by $tmp_id:$tmp_gen"
+			return 1
+		fi
 	done
 
 	return 0
 }
 
 action_status() {
-	verify_device || return 1
+	verify_path || return 1
 
-	timestamp="$(echo "$leader" | grep timestamp | awk '{print $NF}')"
+	timestamp="$(echo "$leader" | grep ^timestamp | awk '{print $NF}')"
 
 	[ -z "$timestamp" ] && {
 		echo "Unable to determine timestamp"
@@ -282,17 +321,17 @@ action_status() {
 }
 
 sanlock_init() {
-	# initialize lease device
-	echo -n "Initializing lease device $device: "
-	sanlock direct init -s fence:0:$device:0 \
+	# initialize lease path
+	echo -n "Initializing fence sanlock lockspace on $path: "
+	sanlock direct init -s fence:0:$path:0 \
 		> /dev/null 2>/dev/null || \
 		{ echo "error $?" && return 1; }
 	echo "ok"
 
-	echo -n "Initializing host leases: "
+	echo -n "Initializing $max_hosts sanlock host leases on $path: "
 	for host_id in $(seq 1 $max_hosts); do
 		offset=$((host_id * 1048576))
-		sanlock direct init -r fence:h$host_id:$device:$offset \
+		sanlock direct init -r fence:h$host_id:$path:$offset \
 			> /dev/null 2>/dev/null || \
 			{ echo "error $? for host $host_id" && return 1; }
 	done
@@ -304,10 +343,10 @@ sanlock_init() {
 [ -z "$action" ] && action=off
 
 # check actions and options compatibility
-# all actions beside metadata needs device
+# all actions beside metadata needs storage 
 [ "$action" != "metadata" ] && {
-	[ -z "$device" ] && {
-		echo "device argument required"
+	[ -z "$path" ] && {
+		echo "storage path argument required"
 		exit 1
 	}
 	# all actions beside sanlock_init needs host_id

@@ -42,7 +42,7 @@
  * start before cman and stop after cman.  In future
  * we could have the init script start the daemon,
  * but that would also require a new config scheme
- * since we wouldn't be getting the device and host_id
+ * since we wouldn't be getting the path and host_id
  * from cluster.conf via fence_node.
  *
  * simplest would be to have cman init just send us
@@ -64,7 +64,7 @@ static int shutdown;
 static int we_are_victim;
 static int daemon_debug;
 static int our_host_id;
-static char device[PATH_MAX];
+static char path[PATH_MAX];
 static struct sanlk_lockspace ls;
 static struct sanlk_resource *r;
 static char rdbuf[sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk)];
@@ -260,11 +260,11 @@ static int setup_signals(void)
 static void print_usage(void)
 {
 	printf("Usage:\n");
-	printf("fence_sanlockd -d <device> -i <host_id>\n");
+	printf("fence_sanlockd -p <path> -i <host_id>\n");
 	printf("\n");
 	printf("Options:\n");
 	printf("  -D           Enable debugging to stderr and don't fork\n");
-	printf("  -d <path>    Path to shared storage with sanlock leases\n");
+	printf("  -p <path>    Path to shared storage with sanlock leases\n");
 	printf("  -i <host_id> Local sanlock host_id\n");
 	printf("  -h           Print this help, then exit\n");
 	printf("  -V           Print program version information, then exit\n");
@@ -282,14 +282,14 @@ int main(int argc, char *argv[])
 	int sock, con, rv, i;
 
 	while (cont) {
-		optchar = getopt(argc, argv, "Dd:i:hV");
+		optchar = getopt(argc, argv, "Dp:i:hV");
 
 		switch (optchar) {
 		case 'D':
 			daemon_debug = 1;
 			break;
-		case 'd':
-			strcpy(device, optarg);
+		case 'p':
+			strcpy(path, optarg);
 			break;
 		case 'i':
 			our_host_id = atoi(optarg);
@@ -316,9 +316,9 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	if (!device[0]) {
+	if (!path[0]) {
 		daemon_debug = 1;
-		log_error("device arg required");
+		log_error("path arg required");
 		exit(1);
 	}
 
@@ -370,7 +370,7 @@ int main(int argc, char *argv[])
 	}
 
 	memset(&ls, 0, sizeof(ls));
-	sprintf(ls.host_id_disk.path, "%s", device);
+	sprintf(ls.host_id_disk.path, "%s", path);
 	strcpy(ls.name, "fence");
 	ls.host_id = our_host_id;
 
@@ -388,7 +388,7 @@ int main(int argc, char *argv[])
 	r = (struct sanlk_resource *)&rdbuf;
 	strcpy(r->lockspace_name, "fence");
 	sprintf(r->name, "h%d", our_host_id);
-	sprintf(r->disks[0].path, "%s", device);
+	sprintf(r->disks[0].path, "%s", path);
 	r->disks[0].offset = our_host_id * 1048576;
 	r->num_disks = 1;
 
