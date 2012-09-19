@@ -165,14 +165,28 @@ EOF
 	return 0
 }
 
-verify_path() {
-	# verify storage has been initialized
-
+get_leader_info() {
 	leader=$(sanlock direct read_leader -r fence:h$host_id:$path:$offset 2>&1)
 	[ "$?" != 0 ] && {
 		echo "Unable to read $path"
 		return 1
 	}
+
+	timestamp="$(echo "$leader" | grep ^timestamp | awk '{print $NF}')"
+
+	[ -z "$timestamp" ] && {
+		echo "Unable to determine timestamp"
+		return 1
+	}
+
+	return 0
+}
+
+verify_path() {
+	# verify storage has been initialized
+
+	get_leader_info || return 1	
+
 	magic="$(echo "$leader" | grep magic | awk '{print $NF}')"
 	[ -z "$magic" ] && {
 		echo "Unable to determine $path sanlock magic"
@@ -182,6 +196,7 @@ verify_path() {
 		echo "Error: $path magic $magic does not match sanlock magic 0x6152010"
 		return 1
 	}
+
 	return 0
 }
 
@@ -205,12 +220,11 @@ action_on() {
 
 		# make sure sanlockd is alive while bootstrap
 		# is in progress
-		clientstatus="$(sanlock client status)"
+		clientstatus="$(sanlock client status 2>&1)"
 		[ "$?" != 0 ] && {
 			echo "Error communicating with sanlockd"
 			return 1
 		}
-
 
 		# make sure fence_sanlockd is alive while bootstrap
 		# is in progress
@@ -236,12 +250,6 @@ action_off() {
 	owner_id="$(echo "$leader" | grep owner_id | awk '{print $NF}')"
 	owner_gen="$(echo "$leader" | grep owner_gen | awk '{print $NF}')"
 	ver="$(echo "$leader" | grep lver | awk '{print $NF}')"
-	timestamp="$(echo "$leader" | grep ^timestamp | awk '{print $NF}')"
-
-	[ -z "$timestamp" ] && {
-		echo "Unable to determine timestamp"
-		return 1
-	}
 
 	# lease is released, so host is off
 	[ "$timestamp" = 0 ] && {
@@ -267,10 +275,10 @@ action_off() {
 	do
 		loop=$(($loop+1))
 
-		sanlock client acquire -r fence:h$host_id:$path:$offset -p $pid
+		sanlock client acquire -r fence:h$host_id:$path:$offset -p $pid > /dev/null 2>&1
 		[ "$?" = 0 ] && {
 			# fence success
-			sanlock client release -r fence:h$host_id:$path:$offset -p $pid
+			sanlock client release -r fence:h$host_id:$path:$offset -p $pid > /dev/null 2>&1
 			[ "$?" != 0 ] && {
 				echo "release $host_id error $?"
 			}
@@ -300,7 +308,8 @@ action_off() {
 		# reacquired cleanly by the victim host (same host_id, new
 		# generation), we can quit with success
 
-		leader=$(sanlock direct read_leader -r fence:h$host_id:$path:$offset 2>&1)
+		get_leader_info || return 1
+
 		tmp_id="$(echo "$leader" | grep owner_id | awk '{print $NF}')"
 		tmp_gen="$(echo "$leader" | grep owner_gen | awk '{print $NF}')"
 
@@ -320,13 +329,6 @@ action_off() {
 
 action_status() {
 	verify_path || return 1
-
-	timestamp="$(echo "$leader" | grep ^timestamp | awk '{print $NF}')"
-
-	[ -z "$timestamp" ] && {
-		echo "Unable to determine timestamp"
-		exit 1
-	}
 
 	# lease is released, so host is "off"
 	[ "$timestamp" = 0 ] && {
