@@ -200,10 +200,29 @@ action_on() {
 	# wait for fence_sanlockd to acquire the local lease;
 	# it can take minutes, and we can't allow fence_tool join
 	# until this is complete
+	initdone=""
+	while [ -z "$initdone" ]; do
 
-	while ! sanlock client status | grep -q fence:h$host_id:$path:$offset; do 
+		# make sure sanlockd is alive while bootstrap
+		# is in progress
+		clientstatus="$(sanlock client status)"
+		[ "$?" != 0 ] && {
+			echo "Error communicating with sanlockd"
+			return 1
+		}
+
+
+		# make sure fence_sanlockd is alive while bootstrap
+		# is in progress
+		[ -z "$(pidof fence_sanlockd)" ] && {
+			echo "fence_sanlockd is not running"
+			return 1
+		}
+
 		# FIXME: check that r is really done being acquired?
 		# just appearing in output may not be enough
+
+		echo "$clientstatus" | grep -q fence:h$host_id:$path:$offset && initdone="yes"
 
 		sleep 1
 	done
