@@ -14,7 +14,7 @@ detmermine whether each KEEPALIVE is done.  Every test interval (10
 seconds), the daemon tests each source.  If any test fails, the KEEPALIVE
 is not done.  In a standard configuration, the watchdog timer will reset
 the system if no KEEPALIVE is done for 60 seconds ("fire timeout").  This
-means that if single test fails 5-6 times in row, the watchdog will fire
+means that if a single test fails 5-6 times in row, the watchdog will fire
 and reset the system.  With multiple test sources, fewer separate failures
 back to back can also cause a reset, e.g.
 
@@ -45,7 +45,8 @@ guaranteed to fire, regardless of whether other sources on the system have
 passed or failed.  A spurious reset due to the combined effects of
 multiple failing tests as shown above, is an accepted side effect.
 
-wdmd will exit if a watchdog driver is not loaded.
+The wdmd init script will load the softdog module if no other watchdog
+module has been loaded.
 
 wdmd cannot be used on the system with any other program that needs to
 open /dev/watchdog, e.g. watchdog(8).
@@ -57,18 +58,49 @@ regular messages to wdmd to update an expiry time for their connection.
 Every test interval, wdmd will check if the expiry time for a connection
 has been reached.  If so, the test for that client fails.
 
-(Other test sources such as scripts executed each test interval may be
-added in the future.)
+.SS Test Source: scripts
+
+wdmd will run scripts from a designated directory every test interval.
+If a script exits with 0, the test is considered a success, otherwise
+a failure.  If a script does not exit by the end of the test interval,
+it is considered a failure.
 
 .SH OPTIONS
 .TP
-.B \-D
-Enable debugging to stderr and don't fork.
+.B \-\-version, \-V
+  Print version.
 
 .TP
-.BI \-H " num"
-Enable (1) or disable (0) high priority features such as realtime
-scheduling priority and mlockall.
-.br
-Default 1.
+.B \-\-help, \-h
+  Print usage.
+
+.TP
+.B \-\-dump, \-d
+  Print debug information from the daemon.
+
+.TP
+.B \-D
+  Enable debugging to stderr and don't fork.
+
+.TP
+.BI \-H " 0|1"
+  Enable (1) or disable (0) high priority features such as realtime
+  scheduling priority and mlockall.
+
+.TP
+.BI \-G " name"
+  Group ownership for the socket.
+
+.TP
+.BI \-S " 0|1"
+  Enable (1) or disable (0) script tests.
+
+.TP
+.BI \-s " path"
+  Path to scripts dir.
+
+.TP
+.BI \-k " num"
+  Kill unfinished scripts after num seconds.
+
 

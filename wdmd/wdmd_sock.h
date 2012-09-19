@@ -19,6 +19,7 @@ enum {
 	CMD_REFCOUNT_CLEAR,
 	CMD_TEST_LIVE,
 	CMD_STATUS,
+	CMD_DUMP_DEBUG,
 };
 
 struct wdmd_header {

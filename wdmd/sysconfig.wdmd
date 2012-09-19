@@ -1,0 +1,8 @@
+# WDMDOPTS -- set the command line options for the wdmd daemon
+# See wdmd man page for full list of command line options.
+#
+# Include "-G sanlock" in the option string.
+#
+# To enable use of test scripts
+#WDMDOPTS="-G sanlock -S 1"
+

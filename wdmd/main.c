@@ -1,5 +1,5 @@
 /*
- * Copyright 2011 Red Hat, Inc.
+ * Copyright 2011-2012 Red Hat, Inc.
  *
  * This copyrighted material is made available to anyone wishing to use,
  * modify, copy, or redistribute it subject to the terms and conditions
@@ -63,21 +63,24 @@ static char lockfile_path[PATH_MAX];
 static int dev_fd = -1;
 static int shm_fd;
 
+static int allow_scripts;
+static int kill_script_sec;
+static char *scripts_dir = (char *)"/etc/wdmd.d";
+
 struct script_status {
+	uint64_t start;
 	int pid;
-	char path[PATH_MAX];
+	int last_result;
+	unsigned int run_count;
+	unsigned int fail_count;
+	unsigned int good_count;
+	unsigned int kill_count;
+	unsigned int long_count;
+	char name[PATH_MAX];
 };
 
-/* The relationship between SCRIPT_WAIT_SECONDS/MAX_SCRIPTS/test_interval
-   is not very sophisticated, but it's simple.  If we wait up to 2 seconds
-   for each script to exit, and have 5 scripts, that's up to 10 seconds we
-   spend in test_scripts, and it's simplest if the max time in test_scripts
-   does not excede the test_interval (10).  FIXME: this is not entirely
-   true since the test_interval was changed to 1 after a failure. */
-
-#define SCRIPT_WAIT_SECONDS 2
-#define MAX_SCRIPTS 4
-struct script_status scripts[MAX_SCRIPTS];
+#define MAX_SCRIPTS 8
+static struct script_status scripts[MAX_SCRIPTS];
 
 struct client {
 	int used;
@@ -97,7 +100,6 @@ static int client_maxi;
 static int client_size = 0;
 static struct client *client = NULL;
 static struct pollfd *pollfd = NULL;
-const char *client_built = " client";
 
 
 #define log_debug(fmt, args...) \
@@ -111,6 +113,14 @@ do { \
 	log_debug(fmt, ##args); \
 	syslog(LOG_ERR, fmt, ##args); \
 } while (0)
+
+#define log_script(i) \
+	log_error("script %.64s last_result %d start %llu run %u fail %u good %u kill %u long %u", \
+		  scripts[i].name, scripts[i].last_result, \
+		  (unsigned long long)scripts[i].start, \
+		  scripts[i].run_count, scripts[i].fail_count, \
+		  scripts[i].good_count, scripts[i].kill_count, \
+		  scripts[i].long_count);
 
 
 static uint64_t monotime(void)
@@ -240,6 +250,81 @@ static int get_peer_pid(int fd, int *pid)
 	return 0;
 }
 
+#define DEBUG_SIZE (1024 * 1024)
+#define LINE_SIZE 256
+
+char debug_buf[DEBUG_SIZE];
+
+static void dump_debug(int fd)
+{
+	char line[LINE_SIZE];
+	uint64_t now;
+	int line_len;
+	int debug_len = 0;
+	int i;
+
+	memset(debug_buf, 0, DEBUG_SIZE);
+
+	now = monotime();
+
+	memset(line, 0, sizeof(line));
+	snprintf(line, 255, "wdmd %d socket_gid %d high_priority %d now %llu last_keepalive %llu last_closeunclean %llu allow_scripts %d kill_script_sec %d\n",
+		 getpid(), socket_gid, high_priority,
+		 (unsigned long long)now,
+		 (unsigned long long)last_keepalive,
+		 (unsigned long long)last_closeunclean,
+		 allow_scripts, kill_script_sec);
+
+	line_len = strlen(line);
+	strncat(debug_buf, line, LINE_SIZE);
+	debug_len += line_len;
+
+	for (i = 0; i < MAX_SCRIPTS; i++) {
+		if (!scripts[i].name[0])
+			continue;
+		memset(line, 0, sizeof(line));
+		snprintf(line, 255, "script %d name %.64s pid %d now %llu start %llu last_result %d run %u fail %u good %u kill %u long %u\n",
+			 i, scripts[i].name, scripts[i].pid,
+			 (unsigned long long)now,
+			 (unsigned long long)scripts[i].start,
+			 scripts[i].last_result,
+			 scripts[i].run_count,
+			 scripts[i].fail_count,
+			 scripts[i].good_count,
+			 scripts[i].kill_count,
+			 scripts[i].long_count);
+
+		line_len = strlen(line);
+
+		if (debug_len + line_len >= DEBUG_SIZE - 1)
+			goto out;
+
+		strncat(debug_buf, line, LINE_SIZE);
+		debug_len += line_len;
+	}
+
+	for (i = 0; i < client_size; i++) {
+		if (!client[i].used)
+			continue;
+		memset(line, 0, sizeof(line));
+		snprintf(line, 255, "client %d name %.64s pid %d fd %d dead %d ref %d now %llu renewal %llu expire %llu\n",
+			 i, client[i].name, client[i].pid, client[i].fd, client[i].pid_dead, client[i].refcount,
+			 (unsigned long long)now,
+			 (unsigned long long)client[i].renewal,
+			 (unsigned long long)client[i].expire);
+
+		line_len = strlen(line);
+
+		if (debug_len + line_len >= DEBUG_SIZE - 1)
+			goto out;
+
+		strncat(debug_buf, line, LINE_SIZE);
+		debug_len += line_len;
+	}
+ out:
+	send(fd, debug_buf, debug_len, MSG_NOSIGNAL);
+}
+
 static void process_connection(int ci)
 {
 	struct wdmd_header h;
@@ -298,6 +383,11 @@ static void process_connection(int ci)
 		h_ret.fire_timeout = fire_timeout;
 		h_ret.last_keepalive = last_keepalive;
 		send(client[ci].fd, &h_ret, sizeof(h_ret), MSG_NOSIGNAL);
+		break;
+
+	case CMD_DUMP_DEBUG:
+		strncpy(client[ci].name, "dump", WDMD_NAME_SIZE);
+		dump_debug(client[ci].fd);
 		break;
 	};
 
@@ -384,6 +474,7 @@ static int setup_clients(void)
 		return rv;
 
 	ci = client_add(fd, process_listener, client_pid_dead);
+	strncpy(client[ci].name, "listen", WDMD_NAME_SIZE);
 	return 0;
 }
 
@@ -546,159 +637,286 @@ static int test_files(void)
 
 #else
 
-const char *files_built = NULL;
 static void close_files(void) { }
 static int setup_files(void) { return 0; }
 static int test_files(void) { return 0; }
 
 #endif /* TEST_FILES */
 
-
-#ifdef TEST_SCRIPTS
-#define SCRIPTS_DIR "/etc/wdmd/test_scripts"
-static DIR *scripts_dir;
-const char *scripts_built = " scripts";
-
-static void close_scripts(void)
+static int find_script(char *name)
 {
-	closedir(scripts_dir);
+	int i;
+
+	for (i = 0; i < MAX_SCRIPTS; i++) {
+		if (!strncmp(scripts[i].name, name, PATH_MAX))
+			return i;
+	}
+	return -1;
 }
 
-static int setup_scripts(void)
+static int add_script(char *name)
 {
-	mode_t old_umask;
+	int i;
+
+	for (i = 0; i < MAX_SCRIPTS; i++) {
+		if (scripts[i].name[0])
+			continue;
+
+		log_debug("add_script %d %s", i, name);
+		strncpy(scripts[i].name, name, PATH_MAX);
+		return i;
+	}
+	log_debug("script %s no space", name);
+	return -1;
+}
+
+static int check_path(char *path)
+{
+	struct stat st;
 	int rv;
 
-	old_umask = umask(0022);
-	rv = mkdir(SCRIPTS_DIR, 0777);
-	if (rv < 0 && errno != EEXIST)
-		goto out;
+	rv = stat(path, &st);
 
-	scripts_dir = opendir(SCRIPTS_DIR);
-	if (!scripts_dir)
-		rv = -errno;
-	else
-		rv = 0;
- out:
-	umask(old_umask);
-	return rv;
+	if (rv < 0)
+		return -errno;
+
+	if (!(S_ISREG(st.st_mode)))
+		return -1;
+
+	if (!(st.st_mode & S_IXUSR))
+		return -1;
+
+	return 0;
 }
 
-static int run_script(char *name, int i)
+static int run_script(int i)
 {
-	int pid;
+	char path[PATH_MAX];
+	int pid, rv;
 
-	if (i >= MAX_SCRIPTS) {
-		log_error("max scripts %d, ignore %s", MAX_SCRIPTS, name);
-		return -1;
-	}
+	memset(path, 0, sizeof(path));
+	snprintf(path, PATH_MAX-1, "%s/%s", scripts_dir, scripts[i].name);
 
-	snprintf(scripts[i].path, PATH_MAX-1, "%s/%s", SCRIPTS_DIR, name);
+	rv = check_path(path);
+	if (rv < 0)
+		return rv;
 
 	pid = fork();
 	if (pid < 0)
 		return -errno;
 
 	if (pid) {
-		log_debug("run_script %d %s", pid, name);
-		scripts[i].pid = pid;
-		return 0;
+		log_debug("script %s pid %d", scripts[i].name, pid);
+		return pid;
 	} else {
-		execlp(scripts[i].path, scripts[i].path, NULL);
+		execlp(path, path, NULL);
 		exit(EXIT_FAILURE);
 	}
 }
 
-static int check_script(int i)
+static void close_scripts(void)
 {
-	time_t begin;
-	int status;
-	int rv;
+}
 
-	if (!scripts[i].pid)
+static int setup_scripts(void)
+{
+	char path[PATH_MAX];
+	struct dirent **namelist;
+	int i, s, rv, de_count;
+
+	if (!allow_scripts)
 		return 0;
 
-	begin = monotime();
+	de_count = scandir(scripts_dir, &namelist, 0, alphasort);
+	if (de_count < 0)
+		return 0;
 
-	while (1) {
-		rv = waitpid(scripts[i].pid, &status, WNOHANG);
+	for (i = 0; i < de_count; i++) {
+		if (namelist[i]->d_name[0] == '.')
+			goto next;
 
+		memset(path, 0, sizeof(path));
+		snprintf(path, PATH_MAX-1, "%s/%s", scripts_dir, namelist[i]->d_name);
+
+		rv = check_path(path);
 		if (rv < 0) {
-			goto out;
-
-		} else if (!rv) {
-			/* pid still running */
-			if (monotime() - begin >= SCRIPT_WAIT_SECONDS) {
-				rv = -ETIMEDOUT;
-				goto out;
-			}
-			sleep(1);
-
-		} else if (WIFEXITED(status)) {
-			/* pid exited */
-			if (!WEXITSTATUS(status))
-				rv = 0;
-			else
-				rv = -1;
-			goto out;
-
-		} else {
-			/* pid state changed but still running */
-			if (monotime() - begin >= 2) {
-				rv = -ETIMEDOUT;
-				goto out;
-			}
-			sleep(1);
+			log_debug("script %s ignore %d", namelist[i]->d_name, rv);
+			goto next;
 		}
-	}
- out:
-	log_debug("check_script %d rv %d begin %llu",
-		  scripts[i].pid, rv, (unsigned long long)begin);
 
-	scripts[i].pid = 0;
-	return rv;
+		s = find_script(namelist[i]->d_name);
+		if (s < 0)
+			add_script(namelist[i]->d_name);
+ next:
+		free(namelist[i]);
+	}
+	free(namelist);
+
+	return 0;
 }
 
 static int test_scripts(void)
 {
-	struct dirent *de;
-	int fail_count = 0;
-	int run_count = 0;
-	int i, rv;
+	int i, rv, pid, result, running, fail_count, status;
+	uint64_t begin, now;
 
-	memset(scripts, 0, sizeof(scripts));
+	if (!allow_scripts)
+		return 0;
 
-	rewinddir(scripts_dir);
+	fail_count = 0;
 
-	while ((de = readdir(scripts_dir))) {
-		if (de->d_name[0] == '.')
+	begin = monotime();
+
+	for (i = 0; i < MAX_SCRIPTS; i++) {
+		if (!scripts[i].name[0])
 			continue;
 
-		rv = run_script(de->d_name, run_count);
-		if (!rv)
-			run_count++;
-	}
+		/* pid didn't exit in previous cycle */
+		if (scripts[i].pid)
+			continue;
 
-	for (i = 0; i < run_count; i++) {
-		rv = check_script(i);
-		if (rv < 0) {
-			log_error("test failed script %s", scripts[i].path);
-			fail_count++;
+		/*
+		 * after a script reports success, don't call it again before
+		 * the normal test interval; this is needed because the test
+		 * interval becomes shorter when failures occur
+		 */
+
+		if (!scripts[i].last_result &&
+		    ((begin - scripts[i].start) < (DEFAULT_TEST_INTERVAL - 1)))
+			continue;
+
+		pid = run_script(i);
+
+		if (pid <= 0) {
+			log_error("script %s removed %d", scripts[i].name, pid);
+			memset(&scripts[i], 0, sizeof(struct script_status));
+		} else {
+			scripts[i].pid = pid;
+			scripts[i].start = begin;
+			scripts[i].run_count++;
 		}
 	}
 
+	/* wait up to DEFAULT_TEST_INTERVAL-1 for the pids to finish */
+
+	while (1) {
+		running = 0;
+
+		for (i = 0; i < MAX_SCRIPTS; i++) {
+			if (!scripts[i].name[0])
+				continue;
+
+			if (!scripts[i].pid)
+				continue;
+
+			rv = waitpid(scripts[i].pid, &status, WNOHANG);
+
+			if (rv < 0) {
+				/* shouldn't happen */
+				log_error("script %s pid %d waitpid error %d %d",
+					  scripts[i].name, scripts[i].pid, rv, errno);
+				log_script(i);
+				running++;
+
+			} else if (!rv) {
+				/* pid still running, has not changed state */
+				running++;
+
+			} else if (rv == scripts[i].pid) {
+				/* pid state has changed */
+
+				if (WIFEXITED(status)) {
+					/* pid exited with an exit code */
+					result = WEXITSTATUS(status);
+
+					if (result) {
+						log_error("script %s pid %d exit status %d",
+							  scripts[i].name, scripts[i].pid,
+							  result);
+
+						scripts[i].fail_count++;
+						scripts[i].last_result = result;
+						scripts[i].pid = 0;
+						fail_count++;
+
+						log_script(i);
+					} else {
+						scripts[i].good_count++;
+						scripts[i].last_result = 0;
+						scripts[i].pid = 0;
+					}
+
+				} else if (WIFSIGNALED(status)) {
+					/* pid terminated due to a signal */
+
+					log_error("script %s pid %d term signal %d",
+						  scripts[i].name, scripts[i].pid,
+						  WTERMSIG(status));
+
+					scripts[i].kill_count++;
+					scripts[i].last_result = EINTR;
+					scripts[i].pid = 0;
+					fail_count++;
+
+					log_script(i);
+				} else {
+					/* pid state changed but still running */
+					running++;
+				}
+
+			} else {
+				/* shouldn't happen */
+				log_error("script %s pid %d waitpid rv %d",
+					  scripts[i].name, scripts[i].pid, rv);
+				log_script(i);
+
+				running++;
+			}
+
+			/* option to kill script after it's run for kill_script_sec */
+
+			if (scripts[i].pid && kill_script_sec &&
+			    (monotime() - scripts[i].start >= kill_script_sec)) {
+				kill(scripts[i].pid, SIGKILL);
+			}
+		}
+
+		if (!running)
+			break;
+
+		if (monotime() - begin >= DEFAULT_TEST_INTERVAL - 1)
+			break;
+
+		sleep(1);
+	}
+
+	if (!running)
+		goto out;
+
+	/* any pids that have not exited count as a failed for this cycle */
+
+	now = monotime();
+
+	for (i = 0; i < MAX_SCRIPTS; i++) {
+		if (!scripts[i].name[0])
+			continue;
+
+		if (!scripts[i].pid)
+			continue;
+
+		scripts[i].long_count++;
+		fail_count++;
+
+		log_error("script %s pid %d start %llu now %llu taking too long",
+			  scripts[i].name, scripts[i].pid,
+			  (unsigned long long)scripts[i].start,
+			  (unsigned long long)now);
+		log_script(i);
+	}
+
+ out:
 	return fail_count;
 }
-
-#else
-
-const char *scripts_built = NULL;
-static void close_scripts(void) { }
-static int setup_scripts(void) { return 0; }
-static int test_scripts(void) { return 0; }
-
-#endif /* TEST_SCRIPTS */
-
 
 static int open_dev(void)
 {
@@ -817,15 +1035,20 @@ static void process_signals(int ci)
 		if (!active_clients())
 			daemon_quit = 1;
 	}
+
+	if (fdsi.ssi_signo == SIGHUP) {
+		setup_scripts();
+	}
 }
 
 static int setup_signals(void)
 {
 	sigset_t mask;
-	int fd, rv;
+	int fd, rv, ci;
 
 	sigemptyset(&mask);
 	sigaddset(&mask, SIGTERM);
+	sigaddset(&mask, SIGHUP);
 
 	rv = sigprocmask(SIG_BLOCK, &mask, NULL);
 	if (rv < 0)
@@ -835,7 +1058,8 @@ static int setup_signals(void)
 	if (fd < 0)
 		return -errno;
 
-	client_add(fd, process_signals, client_pid_dead);
+	ci = client_add(fd, process_signals, client_pid_dead);
+	strncpy(client[ci].name, "signal", WDMD_NAME_SIZE);
 	return 0;
 }
 
@@ -1055,25 +1279,61 @@ static int group_to_gid(char *arg)
 	return gr->gr_gid;
 }
 
+static void print_debug_and_exit(void)
+{
+	struct sockaddr_un addr;
+	struct wdmd_header h;
+	int rv, s;
+
+	s = socket(AF_LOCAL, SOCK_STREAM, 0);
+	if (s < 0)
+		exit(1);
+
+	rv = wdmd_socket_address(&addr);
+	if (rv < 0)
+		exit(1);
+
+	rv = connect(s, (struct sockaddr *) &addr, sizeof(struct sockaddr_un));
+	if (rv < 0)
+		exit(1);
+
+	memset(&h, 0, sizeof(h));
+	h.cmd = CMD_DUMP_DEBUG;
+
+	rv = send(s, (void *)&h, sizeof(struct wdmd_header), 0);
+	if (rv < 0)
+		exit(1);
+
+	rv = recv(s, &debug_buf, DEBUG_SIZE, 0);
+	if (rv < 0)
+		exit(1);
+
+	write(STDOUT_FILENO, debug_buf, strlen(debug_buf));
+
+	exit(0);
+}
+
 static void print_usage_and_exit(int status)
 {
 	printf("Usage:\n");
 	printf("wdmd [options]\n\n");
 	printf("--version, -V         print version\n");
 	printf("--help, -h            print usage\n");
+	printf("--dump, -d            print debug from daemon\n");
 	printf("-D                    debug: no fork and print all logging to stderr\n");
-	printf("-H <num>              use high priority features (1 yes, 0 no, default %d)\n",
+	printf("-H 0|1                use high priority features (1 yes, 0 no, default %d)\n",
 				      DEFAULT_HIGH_PRIORITY);
-	printf("-G <groupname>        group ownership for the socket\n");
+	printf("-G <name>             group ownership for the socket\n");
+	printf("-S 0|1                allow script tests (default %d)\n", allow_scripts);
+	printf("-s <path>             path to scripts dir (default %s)\n", scripts_dir);
+	printf("-k <num>              kill unfinished scripts after num seconds (default %d)\n",
+				      kill_script_sec);
 	exit(status);
 }
 
 static void print_version_and_exit(void)
 {
-	printf("wdmd version %s tests_built%s%s%s\n", RELEASE_VERSION,
-	       scripts_built ? scripts_built : "",
-	       client_built ? client_built : "",
-	       files_built ? files_built : "");
+	printf("wdmd version %s\n", RELEASE_VERSION);
 	exit(0);
 }
 
@@ -1089,24 +1349,18 @@ int main(int argc, char *argv[])
 {
 	int rv;
 
-	/*
-	 * TODO:
-	 * -c <num> enable test clients (1 yes, 0 no, default ...)
-	 * -s <num> enable test scripts (1 yes, 0 no, default ...)
-	 * -f <num> enable test files (1 yes, 0 no, default ...)
-	 */
-
 	while (1) {
 	    int c;
 	    int option_index = 0;
 
 	    static struct option long_options[] = {
 	        {"help",    no_argument, 0,  'h' },
+	        {"dump",    no_argument, 0,  'd' },
 	        {"version", no_argument, 0,  'V' },
 	        {0,         0,           0,  0 }
 	    };
 
-	    c = getopt_long(argc, argv, "hVDH:G:",
+	    c = getopt_long(argc, argv, "hdVDH:G:S:s:k:",
 	                    long_options, &option_index);
 	    if (c == -1)
 	         break;
@@ -1115,6 +1369,9 @@ int main(int argc, char *argv[])
 	        case 'h':
                     print_usage_and_exit(0);
 	            break;
+		case 'd':
+		    print_debug_and_exit();
+		    break;
 	        case 'V':
                     print_version_and_exit();
 	            break;
@@ -1127,6 +1384,15 @@ int main(int argc, char *argv[])
 	        case 'H':
 	            high_priority = atoi(optarg);
 	            break;
+		case 'S':
+		    allow_scripts = atoi(optarg);
+		    break;
+		case 's':
+		    scripts_dir = strdup(optarg);
+		    break;
+		case 'k':
+		    kill_script_sec = atoi(optarg);
+		    break;
 	    }
 	}
 
@@ -1139,10 +1405,7 @@ int main(int argc, char *argv[])
 
 	openlog("wdmd", LOG_CONS | LOG_PID, LOG_DAEMON);
 
-	log_error("wdmd started tests_built%s%s%s\n",
-		  scripts_built ? scripts_built : "",
-		  client_built ? client_built : "",
-		  files_built ? files_built : "");
+	log_error("wdmd started allow_scripts %d", allow_scripts);
 
 	setup_priority();
 
