@@ -165,35 +165,24 @@ EOF
 	return 0
 }
 
-get_leader_info() {
-	leader=$(sanlock direct read_leader -r fence:h$host_id:$path:$offset 2>&1)
-	[ "$?" != 0 ] && {
-		echo "Unable to read $path"
-		return 1
-	}
-
-	timestamp="$(echo "$leader" | grep ^timestamp | awk '{print $NF}')"
-
-	[ -z "$timestamp" ] && {
-		echo "Unable to determine timestamp"
-		return 1
-	}
-
-	return 0
-}
-
-verify_path() {
+read_leader() {
 	# verify storage has been initialized
 
-	get_leader_info || return 1	
-
-	magic="$(echo "$leader" | grep magic | awk '{print $NF}')"
-	[ -z "$magic" ] && {
-		echo "Unable to determine $path sanlock magic"
+	leader=$(sanlock direct read_leader -r fence:h$host_id:$path:$offset 2>&1)
+	[ "$?" != 0 ] && {
+		echo "Error: unable to read $path"
 		return 1
 	}
+
+	magic="$(echo "$leader" | grep magic | awk '{print $NF}')"
+
+	[ -z "$magic" ] && {
+		echo "Error: no sanlock magic number at $path:$offset"
+		return 1
+	}
+
 	[ "$magic" != "0x6152010" ] && {
-		echo "Error: $path magic $magic does not match sanlock magic 0x6152010"
+		echo "Error: invalid sanlock magic number $magic at $path:$offset"
 		return 1
 	}
 
@@ -201,7 +190,7 @@ verify_path() {
 }
 
 action_on() {
-	verify_path || return 1
+	read_leader || return 1
 
 	[ -z "$(pidof fence_sanlockd)" ] && {
 		daemonerr="$(fence_sanlockd -p $path -i $host_id 2>&1)"
@@ -245,11 +234,12 @@ action_on() {
 }
 
 action_off() {
-	verify_path || return 1
+	read_leader || return 1
 
 	owner_id="$(echo "$leader" | grep owner_id | awk '{print $NF}')"
 	owner_gen="$(echo "$leader" | grep owner_gen | awk '{print $NF}')"
 	ver="$(echo "$leader" | grep lver | awk '{print $NF}')"
+	timestamp="$(echo "$leader" | grep ^timestamp | awk '{print $NF}')"
 
 	# lease is released, so host is off
 	[ "$timestamp" = 0 ] && {
@@ -308,7 +298,7 @@ action_off() {
 		# reacquired cleanly by the victim host (same host_id, new
 		# generation), we can quit with success
 
-		get_leader_info || return 1
+		read_leader || return 1
 
 		tmp_id="$(echo "$leader" | grep owner_id | awk '{print $NF}')"
 		tmp_gen="$(echo "$leader" | grep owner_gen | awk '{print $NF}')"
@@ -328,7 +318,9 @@ action_off() {
 }
 
 action_status() {
-	verify_path || return 1
+	read_leader || return 1
+
+	timestamp="$(echo "$leader" | grep ^timestamp | awk '{print $NF}')"
 
 	# lease is released, so host is "off"
 	[ "$timestamp" = 0 ] && {
@@ -351,7 +343,7 @@ sanlock_init() {
 
 	echo -n "Initializing $max_hosts sanlock host leases on $path: "
 	for host_id in $(seq 1 $max_hosts); do
-		offset=$((host_id * 1048576))
+		offset=$((host_id * $align))
 		sanlock direct init -r fence:h$host_id:$path:$offset \
 			> /dev/null 2>/dev/null || \
 			{ echo "error $? for host $host_id" && return 1; }
@@ -365,16 +357,22 @@ sanlock_init() {
 
 # check actions and options compatibility
 # all actions beside metadata needs storage 
+
 [ "$action" != "metadata" ] && {
 	[ -z "$path" ] && {
 		echo "storage path argument required"
 		exit 1
 	}
+
 	# all actions beside sanlock_init needs host_id
 	[ "$action" != "sanlock_init" ] && [ -z "$host_id" ] && {
 		echo "host_id argument required"
 		exit 1
 	}
+
+	# FIXME: add direct align command to sanlock
+	# align="&(sanlock direct align $path)"
+	align=1048576
 }
 
 # verify host_id parameter
@@ -383,7 +381,7 @@ sanlock_init() {
 		echo "host_id must be between 1 and $max_hosts"
 		exit 1
 	fi
-	offset=$((host_id * 1048576))
+	offset=$((host_id * $align))
 }
 
 case "$action" in

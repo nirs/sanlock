@@ -28,11 +28,11 @@
 #include "sanlock.h"
 #include "sanlock_admin.h"
 #include "sanlock_resource.h"
+#include "sanlock_direct.h"
 #include "wdmd.h"
 
 /*
  * TODO:
- * handle 4k disk blocks using sanlock_align()
  * variable i/o timeouts?
  *
  * shutdown: how/when does SIGTERM happen?
@@ -67,6 +67,7 @@ static int our_host_id;
 static char path[PATH_MAX];
 static struct sanlk_lockspace ls;
 static struct sanlk_resource *r;
+static struct sanlk_disk disk;
 static char rdbuf[sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk)];
 static char lockfile_path[PATH_MAX];
 
@@ -280,6 +281,7 @@ int main(int argc, char *argv[])
 	int cont = 1;
 	int optchar;
 	int sock, con, rv, i;
+	int align;
 
 	while (cont) {
 		optchar = getopt(argc, argv, "Dp:i:hV");
@@ -369,6 +371,15 @@ int main(int argc, char *argv[])
 		goto out_refcount;
 	}
 
+	memset(&disk, 0, sizeof(disk));
+	sprintf(disk.path, "%s", path);
+
+	align = sanlock_direct_align(&disk);
+	if (align < 0) {
+		log_error("direct_align error %d", align);
+		goto out_refcount;
+	}
+
 	memset(&ls, 0, sizeof(ls));
 	sprintf(ls.host_id_disk.path, "%s", path);
 	strcpy(ls.name, "fence");
@@ -389,7 +400,7 @@ int main(int argc, char *argv[])
 	strcpy(r->lockspace_name, "fence");
 	sprintf(r->name, "h%d", our_host_id);
 	sprintf(r->disks[0].path, "%s", path);
-	r->disks[0].offset = our_host_id * 1048576;
+	r->disks[0].offset = our_host_id * align;
 	r->num_disks = 1;
 
 	log_debug("acquire begin");
