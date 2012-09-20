@@ -32,24 +32,7 @@
 #include "wdmd.h"
 
 /*
- * TODO:
- * variable i/o timeouts?
- *
- * shutdown: how/when does SIGTERM happen?
- * We could have our own init script which does nothing
- * in start (since we're started by cman/fence_node),
- * but sends SIGTERM in stop.  Our init script would
- * start before cman and stop after cman.  In future
- * we could have the init script start the daemon,
- * but that would also require a new config scheme
- * since we wouldn't be getting the path and host_id
- * from cluster.conf via fence_node.
- *
- * simplest would be to have cman init just send us
- * SIGTERM after fenced is done, but that's a
- * dependency on / assumption of the cman environment
- * which we like to avoid; fence agents are ideally
- * independent of environment.
+ * TODO: shutdown checks
  */
 
 #define MAX_HOSTS 128 /* keep in sync with fence_sanlock definition */
@@ -60,8 +43,9 @@
 #define RUN_DIR "/var/run/fence_sanlockd"
 
 static char *prog_name = (char *)"fence_sanlockd";
-static int shutdown;
+
 static int we_are_victim;
+static int shutdown;
 static int daemon_debug;
 static int our_host_id;
 static char path[PATH_MAX];
@@ -70,6 +54,13 @@ static struct sanlk_resource *r;
 static struct sanlk_disk disk;
 static char rdbuf[sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk)];
 static char lockfile_path[PATH_MAX];
+static char fifo_path[PATH_MAX];
+static char fifo_line[PATH_MAX];
+static char key1[PATH_MAX];
+static char key2[PATH_MAX];
+static char val1[PATH_MAX];
+static char val2[PATH_MAX];
+
 
 struct client {
 	int used;
@@ -173,7 +164,7 @@ static int lockfile(void)
 	}
 	umask(old_umask);
 
-	sprintf(lockfile_path, "%s/prog_name.pid", RUN_DIR);
+	sprintf(lockfile_path, "%s/%s.pid", RUN_DIR, prog_name);
 
 	fd = open(lockfile_path, O_CREAT|O_WRONLY|O_CLOEXEC, 0644);
 	if (fd < 0) {
@@ -258,17 +249,110 @@ static int setup_signals(void)
 	return 0;
 }
 
+static int wait_options(void)
+{
+	int fd, rv;
+
+	snprintf(fifo_path, PATH_MAX-1, "%s/%s.fifo", RUN_DIR, prog_name);
+
+	rv = mkfifo(fifo_path, (S_IRUSR | S_IWUSR));
+	if (rv && errno != EEXIST) {
+		log_error("wait_options mkfifo error %d %s", errno, fifo_path);
+		return -1;
+	}
+
+	fd = open(fifo_path, O_RDONLY|O_CLOEXEC);
+	if (fd < 0) {
+		log_error("wait_options open error %d %s", errno, fifo_path);
+		rv = fd;
+		goto out_unlink;
+	}
+
+	memset(fifo_line, 0, sizeof(fifo_line));
+
+	rv = read(fd, fifo_line, sizeof(fifo_line));
+	if (rv < 0) {
+		log_error("wait_options read error %d", errno);
+		goto out;
+	}
+
+	rv = sscanf(fifo_line, "%s %s %s %s", key1, val1, key2, val2);
+	if (rv != 4) {
+		log_error("wait_options scan error %d", rv);
+		rv = -1;
+		goto out;
+	}
+
+	if (strcmp(key1, "-p") || strcmp(key2, "-i")) {
+		log_error("wait_options args error");
+		rv = -1;
+		goto out;
+	}
+
+	strncpy(path, val1, PATH_MAX-1);
+	our_host_id = atoi(val2);
+
+	if (!our_host_id || our_host_id > MAX_HOSTS) {
+		log_error("wait_options invalid host_id");
+		rv = -1;
+		goto out;
+	}
+
+	if (!path[0]) {
+		log_error("wait_options invalid path");
+		rv = -1;
+		goto out;
+	}
+
+	log_debug("wait_options -p %s -i %d", path, our_host_id);
+	rv = 0;
+ out:
+	close(fd);
+ out_unlink:
+	unlink(fifo_path);
+	return rv;
+}
+
+static int send_options(void)
+{
+	int fd, rv;
+
+	snprintf(fifo_path, PATH_MAX-1, "%s/%s.fifo", RUN_DIR, prog_name);
+
+	fd = open(fifo_path, O_WRONLY|O_CLOEXEC);
+	if (fd < 0) {
+		fprintf(stderr, "open error %d %s\n", errno, fifo_path);
+		return -1;
+	}
+
+	memset(fifo_line, 0, sizeof(fifo_line));
+
+	snprintf(fifo_line, PATH_MAX-1, "-p %s -i %d", path, our_host_id);
+
+	rv = write(fd, fifo_line, sizeof(fifo_line));
+	if (rv < 0) {
+		fprintf(stderr, "write error %d %s\n", errno, fifo_path);
+	} else {
+		rv = 0;
+	}
+
+	close(fd);
+	return rv;
+}
+
 static void print_usage(void)
 {
 	printf("Usage:\n");
-	printf("fence_sanlockd -p <path> -i <host_id>\n");
+	printf("fence_sanlockd [options]\n");
 	printf("\n");
 	printf("Options:\n");
-	printf("  -D           Enable debugging to stderr and don't fork\n");
-	printf("  -p <path>    Path to shared storage with sanlock leases\n");
-	printf("  -i <host_id> Local sanlock host_id\n");
-	printf("  -h           Print this help, then exit\n");
-	printf("  -V           Print program version information, then exit\n");
+	printf("  -D            Enable debugging to stderr and don't fork\n");
+	printf("  -p <path>     Path to shared storage with sanlock leases\n");
+	printf("  -i <host_id>  Local sanlock host_id (1-%d)\n", MAX_HOSTS);
+	printf("  -w            Wait for fence_sanlockd -s to send options (p,i)\n");
+	printf("  -s            Send options (p,i) to waiting fence_sanlockd -w\n");
+	printf("  -h            Print this help, then exit\n");
+	printf("  -V            Print program version information, then exit\n");
 }
 
 int main(int argc, char *argv[])
@@ -278,13 +362,14 @@ int main(int argc, char *argv[])
 	uint64_t live_time, now;
 	int poll_timeout;
 	int sleep_seconds;
+	int send_opts = 0, wait_opts = 0;
 	int cont = 1;
 	int optchar;
 	int sock, con, rv, i;
 	int align;
 
 	while (cont) {
-		optchar = getopt(argc, argv, "Dp:i:hV");
+		optchar = getopt(argc, argv, "Dp:i:hVws");
 
 		switch (optchar) {
 		case 'D':
@@ -295,6 +380,17 @@ int main(int argc, char *argv[])
 			break;
 		case 'i':
 			our_host_id = atoi(optarg);
+			if (our_host_id > MAX_HOSTS) {
+				fprintf(stderr, "invalid host_id %d, use 1-%d\n",
+					our_host_id, MAX_HOSTS);
+				exit(1);
+			}
+			break;
+		case 'w':
+			wait_opts = 1;
+			break;
+		case 's':
+			send_opts = 1;
 			break;
 		case 'h':
 			print_usage();
@@ -312,16 +408,19 @@ int main(int argc, char *argv[])
 		};
 	}
 
-	if (!our_host_id || our_host_id > MAX_HOSTS) {
-		daemon_debug = 1;
-		log_error("-i %d invalid, our_host_id must be between 1 and %d", our_host_id, MAX_HOSTS);
+	if (wait_opts && send_opts) {
+		fprintf(stderr, "-w and -s options cannot be used together\n");
 		exit(1);
 	}
 
-	if (!path[0]) {
-		daemon_debug = 1;
-		log_error("path arg required");
+	if (!wait_opts && (!our_host_id || !path[0])) {
+		fprintf(stderr, "-i and -p options required\n");
 		exit(1);
+	}
+
+	if (send_opts) {
+		rv = send_options();
+		return rv;
 	}
 
 	if (!daemon_debug) {
@@ -340,6 +439,12 @@ int main(int argc, char *argv[])
 	rv = setup_signals();
 	if (rv < 0)
 		goto out_lockfile;
+
+	if (wait_opts) {
+		rv = wait_options();
+		if (rv < 0)
+			goto out_lockfile;
+	}
 
 	con = wdmd_connect();
 	if (con < 0) {
@@ -455,27 +560,26 @@ int main(int argc, char *argv[])
 		if (shutdown) {
 			/*
 			 * FIXME: how to be sure that it's safe for us to shut
-			 * down?  If service cman stop sends us SIGTERM only
-			 * after cleanly stopping dlm and fenced, then it is
-			 * safe to just shut down here.
+			 * down?  i.e. nothing is running that needs fencing?
 			 *
-			 * If we want to handle the case of something else
-			 * sending us a spurious SIGTERM when we still need to
-			 * be running, then it's more difficult.
+			 * There are at least two distinct problems:
 			 *
-			 * There's no perfect solution, since what we're
-			 * protecting with fencing is not precisely defined.
-			 * Generally it's dlm/gfs/rgmanager via fenced, so we
-			 * could check that fenced is not running or no dlm
-			 * lockspaces exist (like fence_tool leave does).  But
-			 * these make assumptions about the cluster environment
-			 * which we don't like to do in fence agents as much as
-			 * possible.  But in some other unknown environment,
-			 * I'm don't know what we'd check to verify it's safe
-			 * to shut down in that environment anyway.
+			 * 1. stopping when dlm/gfs instances exist in the
+			 *    kernel, but no userland cluster processes exist,
+			 *    i.e. they have exited uncleanly, and the node
+			 *    currently needs fencing.
 			 *
-			 * So, for now, just assume SIGTERM was sent
-			 * appropriately and shut down.
+			 * 2. stopping when dlm_controld is running, but no
+			 *    lockspaces currently exist.  Point 1 would pass,
+			 *    but dlm_controld assumes fencing is enabled, and
+			 *    would allow a new lockspace to be created, without
+			 *    fencing protection if we are not running.
+			 *
+			 * For now, have the init script check that:
+			 * - /sys/kernel/config/dlm/cluster/ is empty
+			 *   (dlm_controld is not running)
+			 * - /sys/kernel/dlm/ is empty
+			 *   (lockspaces do not exist in the kernel)
 			 */
 			log_error("shutdown");
 			rv = wdmd_test_live(con, 0, 0);

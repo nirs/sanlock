@@ -170,19 +170,19 @@ read_leader() {
 
 	leader=$(sanlock direct read_leader -r fence:h$host_id:$path:$offset 2>&1)
 	[ "$?" != 0 ] && {
-		echo "Error: unable to read $path"
+		echo "storage error: unable to read $path"
 		return 1
 	}
 
 	magic="$(echo "$leader" | grep magic | awk '{print $NF}')"
 
 	[ -z "$magic" ] && {
-		echo "Error: no sanlock magic number at $path:$offset"
+		echo "storage error: no sanlock magic number at $path:$offset"
 		return 1
 	}
 
 	[ "$magic" != "0x6152010" ] && {
-		echo "Error: invalid sanlock magic number $magic at $path:$offset"
+		echo "storage error: invalid sanlock magic number $magic at $path:$offset"
 		return 1
 	}
 
@@ -193,12 +193,16 @@ action_on() {
 	read_leader || return 1
 
 	[ -z "$(pidof fence_sanlockd)" ] && {
-		daemonerr="$(fence_sanlockd -p $path -i $host_id 2>&1)"
-		[ "$?" != 0 ] && {
-			echo "Unable to execute fence_sanlockd. Error:"
-			echo "$daemonerr"
-			return 1
-		}
+		echo "fence_sanlockd is not running"
+		return 1
+	}
+
+	# send p,i options to fence_sanlockd which is waiting for them
+
+	errmsg="$(fence_sanlockd -s -p $path -i $host_id 2>&1)"
+	[ "$?" != 0 ] && {
+		echo "fence_sanlockd -s error: $errmsg"
+		return 1
 	}
 
 	# wait for fence_sanlockd to acquire the local lease;
@@ -207,18 +211,16 @@ action_on() {
 	initdone=""
 	while [ -z "$initdone" ]; do
 
-		# make sure sanlockd is alive while bootstrap
-		# is in progress
+		# make sure sanlockd is alive 
 		clientstatus="$(sanlock client status 2>&1)"
 		[ "$?" != 0 ] && {
-			echo "Error communicating with sanlockd"
+			echo "sanlock client status error $?"
 			return 1
 		}
 
-		# make sure fence_sanlockd is alive while bootstrap
-		# is in progress
+		# make sure fence_sanlockd is alive
 		[ -z "$(pidof fence_sanlockd)" ] && {
-			echo "fence_sanlockd is not running"
+			echo "fence_sanlockd stopped running"
 			return 1
 		}
 

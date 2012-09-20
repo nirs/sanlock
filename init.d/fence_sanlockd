@@ -1,0 +1,183 @@
+#!/bin/bash
+#
+# fence_sanlockd - daemon for fence_sanlock agent
+#
+# chkconfig: 2345 20 80
+# description: starts and stops fence_sanlockd
+#
+
+
+### BEGIN INIT INFO
+# Provides: fence_sanlockd
+# Required-Start: $time $syslog
+# Required-Stop: $syslog
+# Should-Start:
+# Should-Stop:
+# Default-Start: 2 3 4 5
+# Default-Stop: 0 1 6
+# Short-Description: starts and stops fence_sanlockd
+# Description: starts and stops fence_sanlockd
+### END INIT INFO
+
+. /etc/rc.d/init.d/functions
+
+prog="fence_sanlockd"
+runfile="/var/run/$prog/$prog.pid"
+fifofile="/var/run/$prog/$prog.fifo"
+lockfile="/var/lock/subsys/$prog"
+exec="/usr/sbin/$prog"
+
+FENCESANLOCKDOPTS="-w"
+
+[ -f /etc/sysconfig/$prog ] && . /etc/sysconfig/$prog
+
+start() {
+	[ -x $exec ] || exit 5
+
+	# start wdmd and sanlock daemons if they aren't running
+
+	pid=$(pidof wdmd 2>/dev/null)
+	if [ $? -ne 0 ]; then
+		/etc/rc.d/init.d/wdmd start
+	else
+		echo "wdmd is running"
+	fi
+
+	pid=$(pidof sanlock 2>/dev/null)
+	if [ $? -ne 0 ]; then
+		/etc/rc.d/init.d/sanlock start
+	else
+		echo "sanlock is running"
+	fi
+
+	if [ ! -d /var/run/$prog ]; then
+		install -d -m 775 /var/run/$prog
+		[ -x /sbin/restorecon ] && restorecon /var/run/$prog
+	fi
+
+	echo -n $"Starting $prog: "
+	daemon $prog $FENCESANLOCKDOPTS
+	retval=$?
+	echo
+	[ $retval -eq 0 ] && touch $lockfile
+	return $retval
+}
+
+stop() {
+	# Ideally, we'd like a general way to check if anything
+	# needs fencing to continue running, but without that,
+	# check what we know, which is that dlm requires it.
+
+	if [ -d /sys/kernel/dlm/ ]; then
+		count="$(/bin/ls -A /sys/kernel/dlm/ | wc -l)"
+		if [ $count -ne 0 ]; then
+			echo -n "cannot stop while dlm lockspaces exist"
+			failure; echo
+			return 1
+		fi
+	fi
+
+	if [ -d /sys/kernel/config/dlm/cluster ]; then
+		# this dir exists while dlm_controld is running
+		echo -n "cannot stop while dlm is running"
+		failure; echo
+		return 1
+	fi
+
+	PID=$(pidofproc -p $runfile $prog)
+
+	echo -n $"Sending stop signal $prog ($PID): "
+	killproc -p $runfile $prog -TERM
+	retval=$?
+	echo
+
+	if [ $retval -ne 0 ]; then
+		return $retval
+	fi
+
+	# fence_sanlockd won't see the SIGTERM if it's
+	# still waiting for config from the fifo, so
+	# send invalid config to the fifo to make it fail.
+
+	if [ -p $fifofile ]; then
+		echo "" > $fifofile
+	fi
+
+	echo -n $"Waiting for $prog ($PID) to stop:"
+
+	timeout=10
+	while checkpid $PID; do
+		sleep 1
+		timeout=$((timeout - 1))
+		if [ "$timeout" -le 0 ]; then
+			failure; echo
+			return 1
+		fi
+	done
+
+	success; echo
+	rm -f $lockfile
+
+	# stop wdmd and sanlock daemons if they are running
+
+	pid=$(pidof sanlock 2>/dev/null)
+	if [ $? -eq 0 ]; then
+		/etc/rc.d/init.d/sanlock stop
+	fi
+
+	pid=$(pidof wdmd 2>/dev/null)
+	if [ $? -eq 0 ]; then
+		/etc/rc.d/init.d/wdmd stop
+	fi
+
+	return $retval
+}
+
+restart() {
+	rh_status_q && stop
+	start
+}
+
+reload() {
+	restart
+}
+
+rh_status() {
+	status $prog
+}
+
+rh_status_q() {
+	rh_status >/dev/null 2>&1
+}
+
+case "$1" in
+	start)
+		rh_status_q && exit 0
+		$1
+		;;
+	stop)
+		rh_status_q || exit 0
+		$1
+		;;
+	restart)
+		$1
+		;;
+	reload)
+		rh_status_q || exit 7
+		$1
+		;;
+	force-reload)
+		force_reload
+		;;
+	status)
+		rh_status
+		;;
+	condrestart|try-restart)
+		rh_status_q || exit 0
+		restart
+		;;
+	*)
+		echo $"Usage $0 {start|stop|status|restart|condrestart|try-restart|reload|force-reload}"
+		exit 2
+esac
+exit $?
