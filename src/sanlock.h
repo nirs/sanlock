@@ -18,7 +18,8 @@
 
 #define SANLK_NAME_LEN		48   
 
-/* max disk path length, includes terminating \0 byte */
+/* max disk path length, includes terminating \0 byte, and escape chars,
+   i.e. the strlen with esc chars inserted must still be less than 1024. */
 
 #define SANLK_PATH_LEN		1024
 

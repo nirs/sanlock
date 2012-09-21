@@ -73,14 +73,22 @@ static void status_client(struct sanlk_state *st, char *str, int debug)
 		print_debug(str, st->str_len);
 }
 
+/* TODO: when path strings are exported, through status or inquire, we
+   should export into a malloced buffer the size of the standard chars
+   plus extra esc chars. */
+
 static void status_lockspace(struct sanlk_state *st, char *str, char *bin, int debug)
 {
 	struct sanlk_lockspace *ls = (struct sanlk_lockspace *)bin;
+	char path[SANLK_PATH_LEN + 1];
+
+	memset(path, 0, sizeof(path));
+	sanlock_path_export(path, ls->host_id_disk.path, sizeof(path));
 
 	printf("s %.48s:%llu:%s:%llu\n",
 	       ls->name,
 	       (unsigned long long)ls->host_id,
-	       ls->host_id_disk.path,
+	       path,
 	       (unsigned long long)ls->host_id_disk.offset);
 
 	if (st->str_len && debug)
@@ -91,6 +99,7 @@ static void status_resource(struct sanlk_state *st, char *str, char *bin, int de
 {
 	struct sanlk_resource *res = (struct sanlk_resource *)bin;
 	struct sanlk_disk *disk;
+	char path[SANLK_PATH_LEN + 1];
 	int i;
 
 	printf("r %.48s:%.48s", res->lockspace_name, res->name);
@@ -98,8 +107,10 @@ static void status_resource(struct sanlk_state *st, char *str, char *bin, int de
 	for (i = 0; i < res->num_disks; i++) {
 		disk = (struct sanlk_disk *)(bin + sizeof(struct sanlk_resource) + i * sizeof(struct sanlk_disk));
 
-		printf(":%s:%llu",
-		       disk->path, (unsigned long long)disk->offset);
+		memset(path, 0, sizeof(path));
+		sanlock_path_export(path, disk->path, sizeof(path));
+
+		printf(":%s:%llu", path, (unsigned long long)disk->offset);
 	}
 
 	if (res->flags & SANLK_RES_SHARED)
