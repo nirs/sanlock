@@ -238,28 +238,56 @@ int sanlock_init(struct sanlk_lockspace *ls,
 
 /* src has colons unescaped, dst should have them escaped with backslash */
 
-static void copy_path_out(char *dst, char *src)
+size_t sanlock_path_export(char *dst, const char *src, size_t dstlen)
 {
-	int i, j = 0;
+	size_t j = 0, escaped = 0;
+	const char *p = src;
 
-	for (i = 0; i < strlen(src); i++) {
-		if (src[i] == ':')
-			dst[j++] = '\\';
-		dst[j++] = src[i];
+	while (j < dstlen) {
+		if (*p == ':' || *p == '\\') {
+			if (!escaped) {
+				dst[j] = '\\', escaped = 1;
+				goto next_loop;
+			}
+
+			escaped = 0;
+		}
+
+		dst[j] = *p;
+
+		if (*p == '\0') return j; /* success */
+		p++;
+
+ next_loop:
+		j++;
 	}
+
+	return 0;
 }
 
 /* src has colons escaped with backslash, dst should have backslash removed */ 
 
-static void copy_path_in(char *dst, char *src)
+size_t sanlock_path_import(char *dst, const char *src, size_t dstlen)
 {
-	int i, j = 0;
+	size_t j = 0;
+	const char *p = src;
 
-	for (i = 0; i < strlen(src); i++) {
-		if (src[i] == '\\')
-			continue;
-		dst[j++] = src[i];
+	while (j < dstlen) {
+		if (*p == '\\')
+			goto next_loop;
+
+		dst[j] = *p;
+
+		if (*p == '\0')
+			return j;
+
+		j++;
+
+ next_loop:
+		p++;
 	}
+
+	return 0;
 }
 
 int sanlock_register(void)
@@ -636,7 +664,7 @@ int sanlock_res_to_str(struct sanlk_resource *res, char **str_ret)
 
 	for (d = 0; d < res->num_disks; d++) {
 		memset(path, 0, sizeof(path));
-		copy_path_out(path, res->disks[d].path);
+		sanlock_path_export(path, res->disks[d].path, sizeof(path));
 
 		ret = snprintf(str + pos, len - pos, ":%s:%llu", path,
 			       (unsigned long long)res->disks[d].offset);
@@ -946,7 +974,7 @@ int sanlock_str_to_lockspace(char *str, struct sanlk_lockspace *ls)
 	if (host_id)
 		ls->host_id = atoll(host_id);
 	if (path)
-		copy_path_in(ls->host_id_disk.path, path);
+		sanlock_path_import(ls->host_id_disk.path, path, sizeof(ls->host_id_disk.path));
 	if (offset)
 		ls->host_id_disk.offset = atoll(offset);
 

@@ -91,5 +91,7 @@ struct sanlk_lockspace {
 	struct sanlk_disk host_id_disk;
 };
 
-#endif
+size_t sanlock_path_export(char *dst, const char *src, size_t dstlen);
+size_t sanlock_path_import(char *dst, const char *src, size_t dstlen);
 
+#endif
