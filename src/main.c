@@ -53,7 +53,7 @@
 #include "helper.h"
 #include "timeouts.h"
 
-#define RELEASE_VERSION "2.4"
+#define RELEASE_VERSION "2.5"
 
 #define SIGRUNPATH 100 /* anything that's not SIGTERM/SIGKILL */
 
