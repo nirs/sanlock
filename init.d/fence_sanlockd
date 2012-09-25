@@ -36,24 +36,15 @@ start() {
 
 	# start wdmd and sanlock daemons if they aren't running
 
-	pid=$(pidof wdmd 2>/dev/null)
-	if [ $? -ne 0 ]; then
-		/etc/rc.d/init.d/wdmd start
-	else
-		echo "wdmd is running"
-	fi
+	service wdmd status > /dev/null 2>&1 || service wdmd start
 
-	pid=$(pidof sanlock 2>/dev/null)
-	if [ $? -ne 0 ]; then
-		/etc/rc.d/init.d/sanlock start
-	else
-		echo "sanlock is running"
-	fi
+	service sanlock status > /dev/null 2>&1 || service sanlock start
 
-	if [ ! -d /var/run/$prog ]; then
-		install -d -m 775 /var/run/$prog
-		[ -x /sbin/restorecon ] && restorecon /var/run/$prog
-	fi
+	[ ! -d /var/run/$prog ] && install -d -m 775 /var/run/$prog
+
+	[ -n "$(which restorecon)" ] && \
+		[ -x "$(which restorecon)" ] && \
+		restorecon /var/run/$prog
 
 	echo -n $"Starting $prog: "
 	daemon $prog $FENCESANLOCKDOPTS
@@ -69,7 +60,7 @@ stop() {
 	# check what we know, which is that dlm requires it.
 
 	if [ -d /sys/kernel/dlm/ ]; then
-		count="$(/bin/ls -A /sys/kernel/dlm/ | wc -l)"
+		count="$(ls -A /sys/kernel/dlm/ | wc -l)"
 		if [ $count -ne 0 ]; then
 			echo -n "cannot stop while dlm lockspaces exist"
 			failure; echo
@@ -120,15 +111,9 @@ stop() {
 
 	# stop wdmd and sanlock daemons if they are running
 
-	pid=$(pidof sanlock 2>/dev/null)
-	if [ $? -eq 0 ]; then
-		/etc/rc.d/init.d/sanlock stop
-	fi
+	service sanlock status > /dev/null 2>&1 && service sanlock stop
 
-	pid=$(pidof wdmd 2>/dev/null)
-	if [ $? -eq 0 ]; then
-		/etc/rc.d/init.d/wdmd stop
-	fi
+	service wdmd status > /dev/null 2>&1 && service wdmd stop
 
 	return $retval
 }
