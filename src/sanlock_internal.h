@@ -239,6 +239,7 @@ EXTERN struct client *client;
 #define DEFAULT_GRACE_SEC 40
 #define DEFAULT_USE_WATCHDOG 1
 #define DEFAULT_HIGH_PRIORITY 1
+#define DEFAULT_MLOCK_LEVEL 1 /* 1=CURRENT, 2=CURRENT|FUTURE */
 #define DEFAULT_SOCKET_UID 0
 #define DEFAULT_SOCKET_GID 0
 #define DEFAULT_SOCKET_MODE (S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP)
@@ -254,6 +255,7 @@ struct command_line {
 	int quiet_fail;
 	int use_watchdog;
 	int high_priority;
+	int mlock_level;
 	int max_worker_threads;
 	int aio_arg;
 	int io_timeout_arg;

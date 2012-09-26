@@ -1249,15 +1249,20 @@ static void sigterm_handler(int sig GNUC_UNUSED)
 static void setup_priority(void)
 {
 	struct sched_param sched_param;
-	int rv;
+	int rv = 0;
+
+	if (com.mlock_level == 1)
+		rv = mlockall(MCL_CURRENT);
+	else if (com.mlock_level == 2)
+		rv = mlockall(MCL_CURRENT | MCL_FUTURE);
+
+	if (rv < 0) {
+		log_error("mlockall %d failed: %s",
+			  com.mlock_level, strerror(errno));
+	}
 
 	if (!com.high_priority)
 		return;
-
-	rv = mlockall(MCL_CURRENT | MCL_FUTURE);
-	if (rv < 0) {
-		log_error("mlockall failed: %s", strerror(errno));
-	}
 
 	rv = sched_get_priority_max(SCHED_RR);
 	if (rv < 0) {
@@ -1956,6 +1961,9 @@ static int read_command_line(int argc, char *argv[])
 		case 'h':
 			com.high_priority = atoi(optionarg);
 			break;
+		case 'l':
+			com.mlock_level = atoi(optionarg);
+			break;
 		case 'o':
 			if (com.action == ACT_STATUS) {
 				com.sort_arg = *optionarg;
@@ -2386,6 +2394,7 @@ int main(int argc, char *argv[])
 	memset(&com, 0, sizeof(com));
 	com.use_watchdog = DEFAULT_USE_WATCHDOG;
 	com.high_priority = DEFAULT_HIGH_PRIORITY;
+	com.mlock_level = DEFAULT_MLOCK_LEVEL;
 	com.max_worker_threads = DEFAULT_MAX_WORKER_THREADS;
 	com.io_timeout_arg = DEFAULT_IO_TIMEOUT;
 	com.aio_arg = DEFAULT_USE_AIO;
