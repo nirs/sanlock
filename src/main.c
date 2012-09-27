@@ -1242,7 +1242,9 @@ static int setup_listener(void)
 	return -1;
 }
 
-static void sigterm_handler(int sig GNUC_UNUSED)
+static void sigterm_handler(int sig GNUC_UNUSED,
+			    siginfo_t *info GNUC_UNUSED,
+			    void *ctx GNUC_UNUSED)
 {
 	external_shutdown = 1;
 }
@@ -1438,6 +1440,25 @@ static void setup_groups(void)
 	free(pgroup);
 }
 
+static void setup_signals(void)
+{
+	struct sigaction act;
+	int rv, i, sig_list[] = { SIGHUP, SIGINT, SIGTERM, 0 };
+
+	memset(&act, 0, sizeof(act));
+
+	act.sa_flags = SA_SIGINFO;
+	act.sa_sigaction = sigterm_handler;
+
+	for (i = 0; sig_list[i] != 0; i++) {
+		rv = sigaction(sig_list[i], &act, NULL);
+		if (rv < 0) {
+			log_error("cannot set the signal handler for: %i", sig_list[i]);
+			exit(EXIT_FAILURE);
+		}
+	}
+}
+
 /*
  * first pipe for daemon to send requests to helper; they are not acknowledged
  * and the daemon does not get any result back for the requests.
@@ -1563,7 +1584,6 @@ static void helper_dead(int ci GNUC_UNUSED)
 
 static int do_daemon(void)
 {
-	struct sigaction act;
 	int fd, rv;
 
 	/* TODO: copy comprehensive daemonization method from libvirtd */
@@ -1594,12 +1614,7 @@ static int do_daemon(void)
 		goto out_logging;
 	strcpy(client[helper_ci].owner_name, "helper");
 
-	memset(&act, 0, sizeof(act));
-	act.sa_handler = sigterm_handler;
-	rv = sigaction(SIGTERM, &act, NULL);
-	if (rv < 0)
-		return rv;
-
+	setup_signals();
 	setup_logging();
 
 	fd = lockfile(SANLK_RUN_DIR, SANLK_LOCKFILE_NAME, com.uid, com.gid);
