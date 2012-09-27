@@ -24,6 +24,7 @@
 #include <pwd.h>
 #include <grp.h>
 #include <sys/types.h>
+#include <sys/prctl.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
@@ -1328,19 +1329,10 @@ static void setup_host_name(void)
 		 uuid, name.nodename);
 }
 
-static void setup_groups(void)
+static void setup_limits(void)
 {
-	int rv, i, j, h;
-	int pngroups, sngroups, ngroups_max;
-	gid_t *pgroup, *sgroup;
-	struct rlimit rlim;
-
-	if (!com.uname || !com.gname)
-		return;
-
-	/* before switching to a different user/group we must configure
-	   the limits for memlock and rtprio */
-	rlim.rlim_cur = rlim.rlim_max= -1;
+	int rv;
+	struct rlimit rlim = { .rlim_cur = -1, .rlim_max= -1 };
 
 	rv = setrlimit(RLIMIT_MEMLOCK, &rlim);
 	if (rv < 0) {
@@ -1353,6 +1345,22 @@ static void setup_groups(void)
 		log_error("cannot set the limits for rtprio %i", errno);
 		exit(EXIT_FAILURE);
 	}
+
+	rv = setrlimit(RLIMIT_CORE, &rlim);
+	if (rv < 0) {
+		log_error("cannot set the limits for core dumps %i", errno);
+		exit(EXIT_FAILURE);
+	}
+}
+
+static void setup_groups(void)
+{
+	int rv, i, j, h;
+	int pngroups, sngroups, ngroups_max;
+	gid_t *pgroup, *sgroup;
+
+	if (!com.uname || !com.gname)
+		return;
 
 	ngroups_max = sysconf(_SC_NGROUPS_MAX);
 	if (ngroups_max < 0) {
@@ -1415,6 +1423,15 @@ static void setup_groups(void)
 	rv = setuid(com.uid);
 	if (rv < 0) {
 		log_error("cannot set user id to %i errno %i", com.uid, errno);
+	}
+
+	/* When a program is owned by a user (group) other than the real user
+	 * (group) ID of the process, the PR_SET_DUMPABLE option gets cleared.
+	 * See RLIMIT_CORE in setup_limits and man 5 core.
+	 */
+	rv = prctl(PR_SET_DUMPABLE, 1, 0, 0, 0);
+	if (rv < 0) {
+		log_error("cannot set dumpable process errno %i", errno);
 	}
 
  out:
@@ -1558,6 +1575,7 @@ static int do_daemon(void)
 		}
 	}
 
+	setup_limits();
 	setup_helper();
 
 	/* main task never does disk io, so we don't really need to set
