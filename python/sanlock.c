@@ -288,7 +288,7 @@ py_add_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "sks|ki", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "sks|kIi", kwlist,
         &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset, &iotimeout,
         &async)) {
         return NULL;
