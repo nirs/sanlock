@@ -1,0 +1,39 @@
+.TH FENCE_SANLOCKD 8 2012-09-26
+
+.SH NAME
+fence_sanlockd \- daemon for fence_sanlock agent
+
+.SH SYNOPSIS
+.B fence_sanlockd
+[OPTIONS]
+
+.SH DESCRIPTION
+The fence_sanlockd daemon is used by the fence_sanlock agent.
+See
+.BR fence_sanlock (8),
+for full description.
+
+.SH OPTIONS
+
+.B \-D
+   Enable debugging to stderr and don't fork.
+
+.BI \-p " path"
+    Path to shared storage with sanlock leases.
+
+.BI \-i " host_id"
+    Local sanlock host_id (1-128).
+
+.B \-w
+   Wait for fence_sanlockd -s to send options (p,i).
+
+.B \-s
+   Send options (p,i) to waiting fence_sanlockd -w.
+
+.SH SEE ALSO
+.BR fence_sanlock (8),
+.BR sanlock (8),
+.BR wdmd (8),
+.BR fence_node (8),
+.BR fenced (8)
+

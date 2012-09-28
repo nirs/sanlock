@@ -53,4 +53,7 @@ MANDIR=/usr/share/man
 .PHONY: install
 install: all
 	$(INSTALL) -d $(DESTDIR)/$(BINDIR)
+	$(INSTALL) -d $(DESTDIR)/$(MANDIR)/man8
 	$(INSTALL) -c -m 755 $(TARGET1) $(TARGET2) $(DESTDIR)/$(BINDIR)
+	$(INSTALL) -m 644 fence_sanlock.8 $(DESTDIR)/$(MANDIR)/man8/
+	$(INSTALL) -m 644 fence_sanlockd.8 $(DESTDIR)/$(MANDIR)/man8/
