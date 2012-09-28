@@ -1625,9 +1625,8 @@ static int do_daemon(void)
 
 	setup_groups();
 
-	log_error("sanlock daemon started %s host %s time %llu",
-		  RELEASE_VERSION, our_host_name_global,
-		  (unsigned long long)time(NULL));
+	log_level(0, 0, NULL, LOG_WARNING, "sanlock daemon started %s host %s",
+		  RELEASE_VERSION, our_host_name_global);
 
 	setup_priority();
 

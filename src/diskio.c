@@ -348,7 +348,7 @@ static struct aicb *find_callback_slot(struct task *task, int ioto)
 		struct aicb *ev_aicb = container_of(ev_iocb, struct aicb, iocb);
 		int op = ev_iocb ? ev_iocb->aio_lio_opcode : -1;
 
-		log_taske(task, "aio collect %d %p:%p:%p result %ld:%ld old free",
+		log_taskw(task, "aio collect %d %p:%p:%p result %ld:%ld old free",
 			  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 		ev_aicb->used = 0;
 		free(ev_aicb->buf);
@@ -429,20 +429,20 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 		ev_aicb->used = 0;
 
 		if (ev_iocb != iocb) {
-			log_taske(task, "aio collect %d %p:%p:%p result %ld:%ld other free",
+			log_taskw(task, "aio collect %d %p:%p:%p result %ld:%ld other free",
 				  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 			free(ev_aicb->buf);
 			ev_aicb->buf = NULL;
 			goto retry;
 		}
 		if ((int)event.res < 0) {
-			log_taske(task, "aio collect %d %p:%p:%p result %ld:%ld match res",
+			log_taskw(task, "aio collect %d %p:%p:%p result %ld:%ld match res",
 				  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 			rv = event.res;
 			goto out;
 		}
 		if (event.res != len) {
-			log_taske(task, "aio collect %d %p:%p:%p result %ld:%ld match len %d",
+			log_taskw(task, "aio collect %d %p:%p:%p result %ld:%ld match len %d",
 				  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2, len);
 			rv = -EMSGSIZE;
 			goto out;
@@ -466,7 +466,7 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 
 	task->to_count++;
 
-	log_taske(task, "aio timeout %d %p:%p:%p ioto %d to_count %d",
+	log_taskw(task, "aio timeout %d %p:%p:%p ioto %d to_count %d",
 		  cmd, aicb, iocb, buf, ioto, task->to_count);
 
 	rv = io_cancel(task->aio_ctx, iocb, &event);
@@ -802,26 +802,26 @@ int read_iobuf_reap(int fd, uint64_t offset, char *iobuf, int iobuf_len,
 		ev_aicb->used = 0;
 
 		if (ev_iocb != iocb) {
-			log_taske(task, "aio collect %d %p:%p:%p result %ld:%ld other free r",
+			log_taskw(task, "aio collect %d %p:%p:%p result %ld:%ld other free r",
 				  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 			free(ev_aicb->buf);
 			ev_aicb->buf = NULL;
 			goto retry;
 		}
 		if ((int)event.res < 0) {
-			log_taske(task, "aio collect %d %p:%p:%p result %ld:%ld match res r",
+			log_taskw(task, "aio collect %d %p:%p:%p result %ld:%ld match res r",
 				  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 			rv = event.res;
 			goto out;
 		}
 		if (event.res != iobuf_len) {
-			log_taske(task, "aio collect %d %p:%p:%p result %ld:%ld match len %d r",
+			log_taskw(task, "aio collect %d %p:%p:%p result %ld:%ld match len %d r",
 				  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2, iobuf_len);
 			rv = -EMSGSIZE;
 			goto out;
 		}
 
-		log_taske(task, "aio collect %d %p:%p:%p result %ld:%ld match reap",
+		log_taskw(task, "aio collect %d %p:%p:%p result %ld:%ld match reap",
 			  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 
 		rv = 0;

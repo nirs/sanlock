@@ -9,6 +9,21 @@
 #ifndef __LOG_H__
 #define __LOG_H__
 
+/*
+ * Log levels are used mainly to indicate where the message
+ * should be recorded:
+ *
+ * log_error()          write to /var/log/messages and /var/log/sanlock.log
+ * log_level(WARNING)   write to /var/log/sanlock.log
+ * log_debug()          write to incore buffer, not to file
+ *
+ * Anything in /var/log/messages should not happen and should be reported.
+ * So anything we want to visible and reported should be LOG_ERR.
+ *
+ * If we want to log something to assist in debugging, but not be reported,
+ * it should be LOG_WARNING (goes only to sanlock.log)
+ */
+
 void log_level(uint32_t space_id, uint32_t token_id, char *name_in, int level, const char *fmt, ...)
 	__attribute__((format(printf, 5, 6)));
 
@@ -27,6 +42,7 @@ void copy_log_dump(char *buf, int *len);
 #define log_errst(space, token, fmt, args...) log_level(space->space_id, token->token_id, NULL, LOG_ERR, fmt, ##args)
 
 #define log_taske(task, fmt, args...)         log_level(0, 0, task->name, LOG_ERR, fmt, ##args)
+#define log_taskw(task, fmt, args...)         log_level(0, 0, task->name, LOG_WARNING, fmt, ##args)
 #define log_taskd(task, fmt, args...)         log_level(0, 0, task->name, LOG_DEBUG, fmt, ##args)
 
 /* use log_tool for tool actions (non-daemon), and for daemon until
