@@ -77,8 +77,11 @@ stop() {
 
 	PID=$(pidofproc -p $runfile $prog)
 
+	# We have to use SIGHUP to mean stop because sanlock
+	# uses SIGTERM to mean that the lockspace failed.
+
 	echo -n $"Sending stop signal $prog ($PID): "
-	killproc -p $runfile $prog -TERM
+	killproc -p $runfile $prog -HUP
 	retval=$?
 	echo
 
@@ -86,7 +89,7 @@ stop() {
 		return $retval
 	fi
 
-	# fence_sanlockd won't see the SIGTERM if it's
+	# fence_sanlockd won't see the SIGHUP if it's
 	# still waiting for config from the fifo, so
 	# send invalid config to the fifo to make it fail.
 

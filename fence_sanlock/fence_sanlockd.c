@@ -31,10 +31,6 @@
 #include "sanlock_direct.h"
 #include "wdmd.h"
 
-/*
- * TODO: shutdown checks
- */
-
 #define MAX_HOSTS 128 /* keep in sync with fence_sanlock definition */
 
 #define LIVE_INTERVAL 5
@@ -45,7 +41,8 @@
 static char *prog_name = (char *)"fence_sanlockd";
 
 static int we_are_victim;
-static int shutdown;
+static int init_shutdown;
+static int lockspace_recovery;
 static int daemon_debug;
 static int our_host_id;
 static char path[PATH_MAX];
@@ -219,8 +216,12 @@ static void process_signals(int ci)
 		return;
 	}
 
+	if (fdsi.ssi_signo == SIGHUP) {
+		init_shutdown = 1;
+	}
+
 	if (fdsi.ssi_signo == SIGTERM) {
-		shutdown = 1;
+		lockspace_recovery = 1;
 	}
 
 	if (fdsi.ssi_signo == SIGUSR1) {
@@ -235,6 +236,7 @@ static int setup_signals(void)
 
 	sigemptyset(&mask);
 	sigaddset(&mask, SIGTERM);
+	sigaddset(&mask, SIGHUP);
 	sigaddset(&mask, SIGUSR1);
 
 	rv = sigprocmask(SIG_BLOCK, &mask, NULL);
@@ -557,7 +559,7 @@ int main(int argc, char *argv[])
 
 		now = monotime();
 
-		if (shutdown) {
+		if (init_shutdown) {
 			/*
 			 * FIXME: how to be sure that it's safe for us to shut
 			 * down?  i.e. nothing is running that needs fencing?
@@ -580,11 +582,24 @@ int main(int argc, char *argv[])
 			 *   (dlm_controld is not running)
 			 * - /sys/kernel/dlm/ is empty
 			 *   (lockspaces do not exist in the kernel)
+			 *
+			 * The init script has to use SIGHUP to stop us instead
+			 * of SIGTERM because the sanlock daemon uses SIGTERM to
+			 * tell us that the lockspace has failed.
 			 */
 			log_error("shutdown");
 			rv = wdmd_test_live(con, 0, 0);
 			if (rv < 0)
 				log_error("wdmd_test_live 0 error %d", rv);
+			break;
+
+		} else if (lockspace_recovery) {
+			/*
+			 * The sanlock daemon sends SIGTERM when the lockspace
+			 * host_id cannot be renewed for a while and it enters
+			 * recovery.
+			 */ 
+			log_error("sanlock renewals failed, our watchdog will fire");
 			break;
 
 		} else if (we_are_victim) {
@@ -646,7 +661,7 @@ int main(int argc, char *argv[])
 				log_error("wdmd_test_live error %d", rv);
 		}
 
-		if (we_are_victim) {
+		if (we_are_victim || lockspace_recovery) {
 			poll_timeout = 10000;
 		} else {
 			sleep_seconds = live_time + LIVE_INTERVAL - monotime();
