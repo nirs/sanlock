@@ -234,7 +234,10 @@ seconds for graceful recovery
 use watchdog through wdmd
 
 .BR -h " 0|1"
-use high priority features (realtime scheduling, mlockall)
+use high priority (RR) scheduling
+
+.BR -l " num"
+use mlockall (0 none, 1 current, 2 current and future)
 
 .BR \-a " 0|1"
 use async i/o
@@ -252,10 +255,10 @@ Print processes, lockspaces, and resources being manged by the sanlock
 daemon.  Add -D to show extra internal daemon status for debugging.
 Add -o p to show resources by pid, or -o s to show resources by lockspace.
 
-.BR "sanlock client host_status -s" " LOCKSPACE"
+.B sanlock client host_status
 
 Print state of host_id delta leases read during the last renewal.
-Only lockspace_name is used from the LOCKSPACE argument.
+State of all lockspaces is shown (use -s to select one).
 Add -D to show extra internal daemon status for debugging.
 
 .B sanlock client log_dump
@@ -491,7 +494,10 @@ take:
 
 \fB1\fP (KILL_PID): kill the process holding the resource lease.  When the
 process has exited, the resource lease will be released, and can then be
-acquired by anyone.
+acquired by anyone.  The kill signal is SIGKILL (or SIGTERM if SIGKILL
+is restricted.)
+
+\fB2\fP (SIGUSR1): send SIGUSR1 to the process holding the resource lease.
 
 .SS Graceful recovery
 

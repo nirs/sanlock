@@ -1759,8 +1759,8 @@ static void print_usage(void)
 	printf("  -t <num>      max worker threads (%d)\n", DEFAULT_MAX_WORKER_THREADS);
 	printf("  -g <sec>      seconds for graceful recovery (%d)\n", DEFAULT_GRACE_SEC);
 	printf("  -w 0|1        use watchdog through wdmd (%d)\n", DEFAULT_USE_WATCHDOG);
-	printf("  -h 0|1        use high priority features (%d)\n", DEFAULT_HIGH_PRIORITY);
-	printf("                (realtime scheduling, mlockall)\n");
+	printf("  -h 0|1        use high priority (RR) scheduling (%d)\n", DEFAULT_HIGH_PRIORITY);
+	printf("  -l <num>      use mlockall (0 none, 1 current, 2 current and future) (2)\n");
 	printf("  -a 0|1        use async io (%d)\n", DEFAULT_USE_AIO);
 	printf("  -o 0|1        io timeout in seconds (%d)\n", DEFAULT_IO_TIMEOUT);
 	printf("\n");
