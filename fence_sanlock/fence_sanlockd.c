@@ -20,6 +20,7 @@
 #include <poll.h>
 #include <signal.h>
 #include <syslog.h>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -36,16 +37,18 @@
 #define LIVE_INTERVAL 5
 #define EXPIRE_INTERVAL 20
 
-#define RUN_DIR "/var/run/fence_sanlockd"
+#define DAEMON_RUN_DIR "/var/run/fence_sanlockd"
+#define AGENT_RUN_DIR "/var/run/fence_sanlock"
 
 static char *prog_name = (char *)"fence_sanlockd";
 
 static int we_are_victim;
+static int we_are_fencing;
 static int init_shutdown;
 static int lockspace_recovery;
 static int daemon_debug;
 static int our_host_id;
-static char path[PATH_MAX];
+static char lease_path[PATH_MAX];
 static struct sanlk_lockspace ls;
 static struct sanlk_resource *r;
 static struct sanlk_disk disk;
@@ -154,14 +157,14 @@ static int lockfile(void)
 	int fd, rv;
 
 	old_umask = umask(0022);
-	rv = mkdir(RUN_DIR, 0775);
+	rv = mkdir(DAEMON_RUN_DIR, 0775);
 	if (rv < 0 && errno != EEXIST) {
 		umask(old_umask);
 		return rv;
 	}
 	umask(old_umask);
 
-	sprintf(lockfile_path, "%s/%s.pid", RUN_DIR, prog_name);
+	sprintf(lockfile_path, "%s/%s.pid", DAEMON_RUN_DIR, prog_name);
 
 	fd = open(lockfile_path, O_CREAT|O_WRONLY|O_CLOEXEC, 0644);
 	if (fd < 0) {
@@ -216,6 +219,8 @@ static void process_signals(int ci)
 		return;
 	}
 
+	log_debug("signal %d from pid %d", fdsi.ssi_signo, fdsi.ssi_pid);
+
 	if (fdsi.ssi_signo == SIGHUP) {
 		init_shutdown = 1;
 	}
@@ -226,6 +231,10 @@ static void process_signals(int ci)
 
 	if (fdsi.ssi_signo == SIGUSR1) {
 		we_are_victim = 1;
+	}
+
+	if (fdsi.ssi_signo == SIGUSR2) {
+		we_are_fencing = 1;
 	}
 }
 
@@ -238,6 +247,7 @@ static int setup_signals(void)
 	sigaddset(&mask, SIGTERM);
 	sigaddset(&mask, SIGHUP);
 	sigaddset(&mask, SIGUSR1);
+	sigaddset(&mask, SIGUSR2);
 
 	rv = sigprocmask(SIG_BLOCK, &mask, NULL);
 	if (rv < 0)
@@ -255,7 +265,7 @@ static int wait_options(void)
 {
 	int fd, rv;
 
-	snprintf(fifo_path, PATH_MAX-1, "%s/%s.fifo", RUN_DIR, prog_name);
+	snprintf(fifo_path, PATH_MAX-1, "%s/%s.fifo", DAEMON_RUN_DIR, prog_name);
 
 	rv = mkfifo(fifo_path, (S_IRUSR | S_IWUSR));
 	if (rv && errno != EEXIST) {
@@ -291,7 +301,7 @@ static int wait_options(void)
 		goto out;
 	}
 
-	strncpy(path, val1, PATH_MAX-1);
+	strncpy(lease_path, val1, PATH_MAX-1);
 	our_host_id = atoi(val2);
 
 	if (!our_host_id || our_host_id > MAX_HOSTS) {
@@ -300,13 +310,13 @@ static int wait_options(void)
 		goto out;
 	}
 
-	if (!path[0]) {
+	if (!lease_path[0]) {
 		log_error("wait_options invalid path");
 		rv = -1;
 		goto out;
 	}
 
-	log_debug("wait_options -p %s -i %d", path, our_host_id);
+	log_debug("wait_options -p %s -i %d", lease_path, our_host_id);
 	rv = 0;
  out:
 	close(fd);
@@ -319,7 +329,7 @@ static int send_options(void)
 {
 	int fd, rv;
 
-	snprintf(fifo_path, PATH_MAX-1, "%s/%s.fifo", RUN_DIR, prog_name);
+	snprintf(fifo_path, PATH_MAX-1, "%s/%s.fifo", DAEMON_RUN_DIR, prog_name);
 
 	fd = open(fifo_path, O_WRONLY|O_CLOEXEC);
 	if (fd < 0) {
@@ -329,7 +339,7 @@ static int send_options(void)
 
 	memset(fifo_line, 0, sizeof(fifo_line));
 
-	snprintf(fifo_line, PATH_MAX-1, "-p %s -i %d", path, our_host_id);
+	snprintf(fifo_line, PATH_MAX-1, "-p %s -i %d", lease_path, our_host_id);
 
 	rv = write(fd, fifo_line, sizeof(fifo_line));
 	if (rv < 0) {
@@ -340,6 +350,107 @@ static int send_options(void)
 
 	close(fd);
 	return rv;
+}
+
+/*
+ * A running fence_sanlock agent has a pid file we can read.
+ * We use this to check what host_id it's fencing, so we can
+ * see if we are the low host_id in a two_node fencing duel.
+ * We also check /proc/<pid> to verify that the agent is
+ * still running (that the pid file isn't stale from the
+ * agent being killed).
+ */
+
+static int check_fence_agent(int *victim_host_id)
+{
+	DIR *d;
+	FILE *file;
+	struct dirent *de;
+	char path[PATH_MAX];
+	char rest[512];
+	char name[512];
+	int agent_pid, victim_id, rv;
+	int error = -ENOENT;
+
+	d = opendir(AGENT_RUN_DIR);
+	if (!d)
+		return -1;
+
+	while ((de = readdir(d))) {
+		if (de->d_name[0] == '.')
+			continue;
+
+		if (strncmp(de->d_name, "fence_sanlock.pid.", strlen("fence_sanlock.pid.")))
+			continue;
+
+		agent_pid = 0;
+		victim_id = 0;
+		memset(rest, 0, sizeof(rest));
+		memset(name, 0, sizeof(name));
+
+		log_debug("read %s", de->d_name);
+
+		/*
+		 * read /var/run/fence_sanlock/fence_sanlock.pid.<pid>
+		 * to get the pid of fence_sanlock and the victim's host_id
+		 *
+		 * read /proc/pid/comm to check that the pid from that file
+		 * is still running and hasn't been killed
+		 *
+		 * if both of these checks are successful, then return 0
+		 * with the victim host id
+		 *
+		 * if any fails, continue to check for another pid file
+		 */
+
+		memset(path, 0, sizeof(path));
+		snprintf(path, PATH_MAX-1, "%s/%s", AGENT_RUN_DIR, de->d_name);
+
+		file = fopen(path, "r");
+		if (!file) {
+			log_debug("open error %d %s", errno, path);
+			continue;
+		}
+
+		rv = fscanf(file, "%d host_id %d %[^\n]s\n", &agent_pid, &victim_id, rest);
+		fclose(file);
+
+		log_debug("agent_pid %d victim %d %s", agent_pid, victim_id, rest);
+
+		if (rv != 3 || !agent_pid || !victim_id) {
+			log_debug("%s scan file error %d", de->d_name, rv);
+			continue;
+		}
+
+		memset(path, 0, sizeof(path));
+		snprintf(path, PATH_MAX-1, "/proc/%d/comm", agent_pid);
+
+		file = fopen(path, "r");
+		if (!file) {
+			log_debug("%s open proc error %d %s", de->d_name, errno, path);
+			continue;
+		}
+
+		rv = fscanf(file, "%s", name);
+		fclose(file);
+
+		if (rv != 1 || strncmp(name, "fence_sanlock", strlen("fence_sanlock"))) {
+			log_debug("%s scan proc error %d %s", de->d_name, rv, name);
+			continue;
+		}
+
+		/*
+		 * we found a running fence_sanlock process,
+		 * return the host_id that it's fencing
+		 */
+
+		*victim_host_id = victim_id;
+		error = 0;
+		break;
+	}
+	closedir(d);
+
+	return error;
 }
 
 static void print_usage(void)
@@ -369,6 +480,7 @@ int main(int argc, char *argv[])
 	int optchar;
 	int sock, con, rv, i;
 	int align;
+	int victim_host_id;
 
 	while (cont) {
 		optchar = getopt(argc, argv, "Dp:i:hVws");
@@ -378,7 +490,7 @@ int main(int argc, char *argv[])
 			daemon_debug = 1;
 			break;
 		case 'p':
-			strcpy(path, optarg);
+			strcpy(lease_path, optarg);
 			break;
 		case 'i':
 			our_host_id = atoi(optarg);
@@ -415,7 +527,7 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 
-	if (!wait_opts && (!our_host_id || !path[0])) {
+	if (!wait_opts && (!our_host_id || !lease_path[0])) {
 		fprintf(stderr, "-i and -p options required\n");
 		exit(1);
 	}
@@ -479,7 +591,7 @@ int main(int argc, char *argv[])
 	}
 
 	memset(&disk, 0, sizeof(disk));
-	sprintf(disk.path, "%s", path);
+	sprintf(disk.path, "%s", lease_path);
 
 	align = sanlock_direct_align(&disk);
 	if (align < 0) {
@@ -488,7 +600,7 @@ int main(int argc, char *argv[])
 	}
 
 	memset(&ls, 0, sizeof(ls));
-	sprintf(ls.host_id_disk.path, "%s", path);
+	sprintf(ls.host_id_disk.path, "%s", lease_path);
 	strcpy(ls.name, "fence");
 	ls.host_id = our_host_id;
 
@@ -506,7 +618,7 @@ int main(int argc, char *argv[])
 	r = (struct sanlk_resource *)&rdbuf;
 	strcpy(r->lockspace_name, "fence");
 	sprintf(r->name, "h%d", our_host_id);
-	sprintf(r->disks[0].path, "%s", path);
+	sprintf(r->disks[0].path, "%s", lease_path);
 	r->disks[0].offset = our_host_id * align;
 	r->num_disks = 1;
 
@@ -593,16 +705,80 @@ int main(int argc, char *argv[])
 				log_error("wdmd_test_live 0 error %d", rv);
 			break;
 
-		} else if (lockspace_recovery) {
+		}
+
+		if (lockspace_recovery) {
 			/*
 			 * The sanlock daemon sends SIGTERM when the lockspace
 			 * host_id cannot be renewed for a while and it enters
 			 * recovery.
 			 */ 
-			log_error("sanlock renewals failed, our watchdog will fire");
-			break;
 
-		} else if (we_are_victim) {
+			log_error("sanlock renewals failed, our watchdog will fire");
+		}
+
+		if (we_are_victim && we_are_fencing) {
+			/*
+			 * Automatically resolve two_node fencing duel.
+			 *
+			 * Two nodes are fencing each other, which happens
+			 * in a two_node cluster where each can has quorum
+			 * by itself.  We pick the low host_id to survive.
+			 *
+			 * (Might we get another SIGUSR1 callback due to
+			 * the request not being cleared right away?  Would
+			 * that matter here?)
+			 *
+			 * Note that a global victim_host_id doesn't work
+			 * if more than one fence_sanlock is run concurrently,
+			 * i.e. we're fencing more than one host at a time.
+			 * But, this doesn't matter because this case is
+			 * only concerned about two_node fencing duels where
+			 * we can only be fencing one other node.
+			 */
+
+			rv = check_fence_agent(&victim_host_id);
+
+			if (!rv) {
+				if (our_host_id < victim_host_id) {
+					log_error("fence duel winner, our_host_id %d other %d",
+						  our_host_id, victim_host_id);
+					we_are_victim = 0;
+					we_are_fencing = 0;
+				} else {
+					log_error("fence duel loser, our_host_id %d other %d",
+						  our_host_id, victim_host_id);
+					we_are_fencing = 0;
+				}
+			} else {
+				log_error("fence duel ignore, agent %d", rv);
+				we_are_fencing = 0;
+			}
+		}
+
+		if (!we_are_victim && we_are_fencing) {
+			/*
+			 * We can start fencing someone before we notice that
+			 * we are also being fenced in a duel.  So, don't clear
+			 * we_are_fencing until fence_sanlock is finished and
+			 * removes fence_sanlock.log
+			 *
+			 * We do this for all fencing, but it's only really
+			 * needed for two_node fencing duels where we need
+			 * to be aware of when we are fencing.
+			 */
+
+			rv = check_fence_agent(&victim_host_id);
+			if (rv < 0) {
+				log_debug("fence agent not found %d", rv);
+				we_are_fencing = 0;
+				victim_host_id = 0;
+			} else {
+				log_debug("fence agent running host_id %d", victim_host_id);
+			}
+		}
+
+		if (we_are_victim) {
 			/*
 			 * The sanlock daemon has seen someone request our
 			 * lease, which happens when they run fence_sanlock
@@ -624,9 +800,12 @@ int main(int argc, char *argv[])
 			 * kernel due to failure (cluster partition) that caused
 			 * our fencing, and couldn't be forcibly cleaned up.
 			 */
-			log_error("we are being fenced, our watchdog will fire");
 
-		} else if (now - live_time >= LIVE_INTERVAL) {
+			log_error("we are being fenced, our watchdog will fire");
+		}
+
+		if (!we_are_victim && !lockspace_recovery &&
+		    (now - live_time >= LIVE_INTERVAL)) {
 			/*
 			 * How to pick the expire_time.  From the perspective
 			 * of fence_sanlockd the expire_time isn't really
@@ -661,7 +840,7 @@ int main(int argc, char *argv[])
 				log_error("wdmd_test_live error %d", rv);
 		}
 
-		if (we_are_victim || lockspace_recovery) {
+		if (we_are_victim || lockspace_recovery || we_are_fencing) {
 			poll_timeout = 10000;
 		} else {
 			sleep_seconds = live_time + LIVE_INTERVAL - monotime();
@@ -672,7 +851,7 @@ int main(int argc, char *argv[])
  out_release:
 	sanlock_release(sock, -1, 0, 1, &r);
  out_lockspace:
-	sanlock_rem_lockspace(&ls, 0);
+	sanlock_rem_lockspace(&ls, SANLK_REM_ASYNC);
  out_refcount:
 	wdmd_refcount_clear(con);
  out_lockfile:

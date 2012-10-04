@@ -32,15 +32,7 @@
 #
 # <fencedevice name="wd" agent="fence_sanlock" path="/dev/fence_sanlock/leases"/>
 
-# setup (one time only):
-# fence_sanlock -o sanlock_init -p $path
-#
-# startup:
-# service wdmd start
-# service sanlock start
-# service cman start
-# - fence_node -U -> fence_sanlock -o on -> fence_sanlockd
-
+prog=fence_sanlock
 max_hosts=128
 opts=
 action=
@@ -51,7 +43,7 @@ offset=
 help() {
 	echo "Usage:"
 	echo ""
-	echo "fence_sanlock [options]"
+	echo "$prog [options]"
 	echo ""
 	echo "Options:"
 	echo "  -o <action>   Action: off (default), on, status or metadata"
@@ -87,7 +79,7 @@ cli_options() {
 			exit 0
 		;;
 		-V)
-			echo "fence_sanlock version @VERSION@"
+			echo "$prog version @VERSION@"
 			exit 0
 		;;
 		esac
@@ -170,19 +162,19 @@ read_leader() {
 
 	leader=$(sanlock direct read_leader -r fence:h$host_id:$path:$offset 2>&1)
 	[ "$?" != 0 ] && {
-		echo "storage error: unable to read $path"
+		logger -t $prog "$action: storage error: unable to read $path"
 		return 1
 	}
 
 	magic="$(echo "$leader" | grep magic | awk '{print $NF}')"
 
 	[ -z "$magic" ] && {
-		echo "storage error: no sanlock magic number at $path:$offset"
+		logger -t $prog "$action: storage error: no sanlock magic number at $path:$offset"
 		return 1
 	}
 
 	[ "$magic" != "0x6152010" ] && {
-		echo "storage error: invalid sanlock magic number $magic at $path:$offset"
+		logger -t $prog "$action: storage error: invalid sanlock magic number $magic at $path:$offset"
 		return 1
 	}
 
@@ -193,7 +185,7 @@ action_on() {
 	read_leader || return 1
 
 	[ -z "$(pidof fence_sanlockd)" ] && {
-		echo "fence_sanlockd is not running"
+		logger -t $prog "on fence_sanlockd is not running"
 		return 1
 	}
 
@@ -201,7 +193,7 @@ action_on() {
 
 	errmsg="$(fence_sanlockd -s -p $path -i $host_id 2>&1)"
 	[ "$?" != 0 ] && {
-		echo "fence_sanlockd -s error: $errmsg"
+		logger -t $prog "on fence_sanlockd -s error: $errmsg"
 		return 1
 	}
 
@@ -214,13 +206,13 @@ action_on() {
 		# make sure sanlockd is alive 
 		clientstatus="$(sanlock client status 2>&1)"
 		[ "$?" != 0 ] && {
-			echo "sanlock client status error $?"
+			logger -t $prog "on sanlock client status error $?"
 			return 1
 		}
 
 		# make sure fence_sanlockd is alive
 		[ -z "$(pidof fence_sanlockd)" ] && {
-			echo "fence_sanlockd stopped running"
+			logger -t $prog "on fence_sanlockd stopped running"
 			return 1
 		}
 
@@ -250,15 +242,25 @@ action_off() {
 
 	# owner_id should equal host_id
 	[ "$owner_id" != "$host_id" ] && {
-		echo "victim lease $host_id owned by $owner_id:$owner_gen"
+		logger -t $prog "victim lease $host_id owned by $owner_id:$owner_gen"
 		return 1
 	}
 
 	pid="$(pidof fence_sanlockd)"
 	[ -z "$pid" ] && {
-		echo "Unable to determine fence_sanlockd pid"
+		logger -t $prog "Unable to determine fence_sanlockd pid"
 		return 1
 	}
+
+	# pid file should be unique for each instance so multiple
+	# fence_sanlock's can run in parallel.  fence_sanlockd may read
+	# this file to see which host_id we are fencing.
+
+	pidfile=/var/run/$prog/$prog.pid.$$
+
+	echo "$$ host_id $host_id gen $owner_gen ver $ver timestamp $timestamp" > $pidfile
+
+	logger -t $prog "$$ host_id $host_id gen $owner_gen ver $ver timestamp $timestamp"
 
 	loop=0
 
@@ -267,13 +269,21 @@ action_off() {
 	do
 		loop=$(($loop+1))
 
+		tmp_pid="$(pidof fence_sanlockd)"
+		[ -z "$tmp_pid" ] && {
+			logger -t $prog "fence_sanlockd not running"
+			unlink $pidfile
+			return 1
+		}
+
 		sanlock client acquire -r fence:h$host_id:$path:$offset -p $pid > /dev/null 2>&1
 		[ "$?" = 0 ] && {
 			# fence success
 			sanlock client release -r fence:h$host_id:$path:$offset -p $pid > /dev/null 2>&1
 			[ "$?" != 0 ] && {
-				echo "release $host_id error $?"
+				logger -t $prog "release $host_id error $?"
 			}
+			unlink $pidfile
 			return 0
 		}
 
@@ -288,9 +298,20 @@ action_off() {
 			# reset.  the -f 2 causes SIGUSR1 to be sent to
 			# fence_sanlockd on the victim.
 
+			# We send SIGUSR2 to our own fence_sanlockd to
+			# tell it that we are fencing someone else.  If
+			# fence_sanlockd gets both SIGUSR1 indicating that
+			# someone is fencing it, and it gets SIGUSR2
+			# indicating that it is fencing someone, it knows
+			# that it's the special situation of two nodes
+			# fencing each other in a two node cluster.  In
+			# this case, the low host_id can choose to survive.
+
+			kill -s SIGUSR2 $pid
+
 			sanlock client request -r fence:h$host_id:$path:$offset:$((ver + 1)) -f 2 > /dev/null 2>&1
 			[ "$?" != 0 ] && {
-				echo "request $host_id error $?"
+				loggger -t $prog "request $host_id error $?"
 			}
 		fi
 
@@ -300,22 +321,30 @@ action_off() {
 		# reacquired cleanly by the victim host (same host_id, new
 		# generation), we can quit with success
 
-		read_leader || return 1
+		read_leader
+
+		[ "$?" != 0 ] && {
+			unlink $pidfile
+			return 1
+		}
 
 		tmp_id="$(echo "$leader" | grep owner_id | awk '{print $NF}')"
 		tmp_gen="$(echo "$leader" | grep owner_gen | awk '{print $NF}')"
 
 		if [ "$owner_id" -eq "$tmp_id" ] && [ "$owner_gen" -lt "$tmp_gen" ]; then
-			echo "victim $owner_id:$owner_gen reacquired lease gen $tmp_gen"
+			logger -t $prog "victim $owner_id:$owner_gen reacquired lease gen $tmp_gen"
+			unlink $pidfile
 			return 0
 		fi
 
 		if [ "$owner_id" -ne "$tmp_id" ]; then
-			echo "victim $owner_id:$owner_gen acquired by $tmp_id:$tmp_gen"
+			logger -t $prog "victim $owner_id:$owner_gen acquired by $tmp_id:$tmp_gen"
+			unlink $pidfile
 			return 1
 		fi
 	done
 
+	unlink $pidfile
 	return 0
 }
 
