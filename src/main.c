@@ -2177,9 +2177,16 @@ static int do_client(void)
 		break;
 
 	case ACT_ADD_LOCKSPACE:
-		log_tool("add_lockspace");
-		rv = sanlock_add_lockspace(&com.lockspace, 0);
-		log_tool("add_lockspace done %d", rv);
+		if (com.io_timeout_arg != DEFAULT_IO_TIMEOUT) {
+			log_tool("add_lockspace_timeout %d", com.io_timeout_arg);
+			rv = sanlock_add_lockspace_timeout(&com.lockspace, 0,
+							   com.io_timeout_arg);
+			log_tool("add_lockspace_timeout done %d", rv);
+		} else {
+			log_tool("add_lockspace");
+			rv = sanlock_add_lockspace(&com.lockspace, 0);
+			log_tool("add_lockspace done %d", rv);
+		}
 		break;
 
 	case ACT_INQ_LOCKSPACE:
