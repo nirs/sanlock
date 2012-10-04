@@ -396,13 +396,22 @@ void client_recv_all(int ci, struct sm_header *h_recv, int pos)
 {
 	char trash[64];
 	int rem = h_recv->length - sizeof(struct sm_header) - pos;
-	int rv, error = 0, total = 0;
+	int rv, error = 0, total = 0, retries = 0;
 
 	if (!rem)
 		return;
 
 	while (1) {
 		rv = recv(client[ci].fd, trash, sizeof(trash), MSG_DONTWAIT);
+
+		if (rv == -1 && errno == EAGAIN) {
+			usleep(1000);
+			if (retries < 20) {
+				retries++;
+				continue;
+			}
+		}
+
 		if (rv == -1)
 			error = errno;
 		if (rv <= 0)
@@ -413,8 +422,8 @@ void client_recv_all(int ci, struct sm_header *h_recv, int pos)
 			break;
 	}
 
-	log_debug("recv_all %d,%d,%d pos %d rv %d error %d rem %d total %d",
-		  ci, client[ci].fd, client[ci].pid, pos, rv, error, rem, total);
+	log_debug("recv_all %d,%d,%d pos %d rv %d error %d retries %d rem %d total %d",
+		  ci, client[ci].fd, client[ci].pid, pos, rv, error, retries, rem, total);
 }
 
 void send_result(int fd, struct sm_header *h_recv, int result);
@@ -998,6 +1007,8 @@ static void process_cmd_thread_registered(int ci_in, struct sm_header *h_recv)
 			break;
 		}
 		if (ci_target < 0) {
+			log_error("cmd %d target pid %d not found",
+				  h_recv->cmd, h_recv->data2);
 			result = -ESRCH;
 			goto fail;
 		}
