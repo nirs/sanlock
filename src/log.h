@@ -50,7 +50,7 @@ void copy_log_dump(char *buf, int *len);
 
 #define log_tool(fmt, args...) \
 do { \
-	fprintf(stderr, fmt "\n", ##args); \
+	printf(fmt "\n", ##args); \
 } while (0)
 
 #endif
