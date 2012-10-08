@@ -41,8 +41,6 @@
 #define GNUC_UNUSED __attribute__((__unused__))
 #endif
 
-#define RELEASE_VERSION "2.5"
-
 #define DEFAULT_TEST_INTERVAL 10
 #define RECOVER_TEST_INTERVAL 1
 #define DEFAULT_FIRE_TIMEOUT 60
@@ -1333,7 +1331,7 @@ static void print_usage_and_exit(int status)
 
 static void print_version_and_exit(void)
 {
-	printf("wdmd version %s\n", RELEASE_VERSION);
+	printf("wdmd version %s\n", VERSION);
 	exit(0);
 }
 

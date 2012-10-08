@@ -42,6 +42,9 @@ CFLAGS += -D_GNU_SOURCE -g \
 	-fdiagnostics-show-option \
 	-fPIE -DPIE
 
+VER=$(shell cat ../VERSION)
+CFLAGS += -DVERSION=\"$(VER)\"
+
 CMD_LDFLAGS += -Wl,-z,now -Wl,-z,relro -pie
 CMD_LDADD += -lwdmd -lrt
 

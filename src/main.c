@@ -54,8 +54,6 @@
 #include "helper.h"
 #include "timeouts.h"
 
-#define RELEASE_VERSION "2.5"
-
 #define SIGRUNPATH 100 /* anything that's not SIGTERM/SIGKILL */
 
 struct thread_pool {
@@ -1637,7 +1635,7 @@ static int do_daemon(void)
 	setup_groups();
 
 	log_level(0, 0, NULL, LOG_WARNING, "sanlock daemon started %s host %s",
-		  RELEASE_VERSION, our_host_name_global);
+		  VERSION, our_host_name_global);
 
 	setup_priority();
 
@@ -1840,7 +1838,7 @@ static int read_command_line(int argc, char *argv[])
 	if (!strcmp(arg1, "version") || !strcmp(arg1, "--version") ||
 	    !strcmp(arg1, "-V")) {
 		printf("%s %s (built %s %s)\n",
-		       argv[0], RELEASE_VERSION, __DATE__, __TIME__);
+		       argv[0], VERSION, __DATE__, __TIME__);
 		exit(EXIT_SUCCESS);
 	}
 
