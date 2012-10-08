@@ -253,7 +253,7 @@ static void _client_free(int ci)
 	cl->need_free = 0;
 	cl->kill_count = 0;
 	cl->kill_last = 0;
-	cl->restrict = 0;
+	cl->restricted = 0;
 	cl->flags = 0;
 	memset(cl->owner_name, 0, sizeof(cl->owner_name));
 	memset(cl->killpath, 0, SANLK_HELPER_PATH_LEN);
@@ -631,10 +631,10 @@ static void kill_pids(struct space *sp)
 		 * sigkill will be used in place of sigterm if restricted
 		 */
 
-		if ((sig == SIGKILL) && (cl->restrict & SANLK_RESTRICT_SIGKILL))
+		if ((sig == SIGKILL) && (cl->restricted & SANLK_RESTRICT_SIGKILL))
 			sig = SIGTERM;
 
-		if ((sig == SIGTERM) && (cl->restrict & SANLK_RESTRICT_SIGTERM))
+		if ((sig == SIGTERM) && (cl->restricted & SANLK_RESTRICT_SIGTERM))
 			sig = SIGKILL;
 
 		do_kill = 1;
@@ -1138,7 +1138,7 @@ static void process_connection(int ci)
 			  ci, rv, h.magic, SM_MAGIC);
 		goto dead;
 	}
-	if (client[ci].restrict & SANLK_RESTRICT_ALL) {
+	if (client[ci].restricted & SANLK_RESTRICT_ALL) {
 		log_error("ci %d fd %d pid %d cmd %d restrict all",
 			  ci, client[ci].fd, client[ci].pid, h.cmd);
 		goto dead;

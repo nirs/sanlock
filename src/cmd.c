@@ -303,7 +303,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 		token->host_generation = spi.host_generation;
 		token->pid = cl_pid;
 		token->io_timeout = spi.io_timeout;
-		if (cl->restrict & SANLK_RESTRICT_SIGKILL)
+		if (cl->restricted & SANLK_RESTRICT_SIGKILL)
 			token->flags |= T_RESTRICT_SIGKILL;
 
 		/* save a record of what this token_id is for later debugging */
@@ -1399,7 +1399,7 @@ static int print_state_client(struct client *cl, int ci, char *str)
 		 "fd=%d "
 		 "pid=%d "
 		 "flags=%x "
-		 "restrict=%x "
+		 "restricted=%x "
 		 "cmd_active=%d "
 		 "cmd_last=%d "
 		 "pid_dead=%d "
@@ -1411,7 +1411,7 @@ static int print_state_client(struct client *cl, int ci, char *str)
 		 cl->fd,
 		 cl->pid,
 		 cl->flags,
-		 cl->restrict,
+		 cl->restricted,
 		 cl->cmd_active,
 		 cl->cmd_last,
 		 cl->pid_dead,
@@ -1749,7 +1749,7 @@ static void cmd_restrict(int ci, int fd, struct sm_header *h_recv)
 	log_debug("cmd_restrict ci %d fd %d pid %d flags %x",
 		  ci, fd, client[ci].pid, h_recv->cmd_flags);
 
-	client[ci].restrict = h_recv->cmd_flags;
+	client[ci].restricted = h_recv->cmd_flags;
 
 	send_result(fd, h_recv, 0);
 }

@@ -67,7 +67,7 @@ struct sync_disk {
  * 'struct resource' keeps track of resources globally, resources list
  */
 
-#define T_RESTRICT_SIGKILL	0x00000001 /* inherited from client->restrict */
+#define T_RESTRICT_SIGKILL	0x00000001 /* inherited from client->restricted */
 #define T_LS_DEAD		0x00000002 /* don't bother trying to release if ls is dead */
 
 struct token {
@@ -215,7 +215,7 @@ struct client {
 	int need_free;
 	int kill_count;
 	uint32_t flags;
-	uint32_t restrict;
+	uint32_t restricted;
 	uint64_t kill_last;
 	char owner_name[SANLK_NAME_LEN+1];
 	char killpath[SANLK_HELPER_PATH_LEN];
