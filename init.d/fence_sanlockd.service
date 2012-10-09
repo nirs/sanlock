@@ -1,0 +1,12 @@
+Description=daemon for fence_sanlock agent
+After=syslog.target wdmd.service sanlock.service
+Before=corosync.service
+
+[Service]
+Type=forking
+ExecStart=/lib/systemd/systemd-fence_sanlockd start
+ExecStop=/lib/systemd/systemd-fence_sanlockd stop
+
+[Install]
+WantedBy=multi-user.target
+
