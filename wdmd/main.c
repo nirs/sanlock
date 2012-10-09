@@ -1403,7 +1403,8 @@ int main(int argc, char *argv[])
 
 	openlog("wdmd", LOG_CONS | LOG_PID, LOG_DAEMON);
 
-	log_error("wdmd started allow_scripts %d", allow_scripts);
+	log_error("wdmd started S%d H%d G%d", allow_scripts, high_priority,
+		  socket_gid);
 
 	setup_priority();
 
