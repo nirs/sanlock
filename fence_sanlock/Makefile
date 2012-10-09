@@ -24,14 +24,14 @@ CFLAGS += -D_GNU_SOURCE -g \
 	-fdiagnostics-show-option
 
 VER=$(shell cat ../VERSION)
-CFLAGS += -DVERSION=\"$(VER)\"
+CFLAGS += -DVERSION=\"$(VER)\" -I../src -I../wdmd
 
 LDFLAGS = -lrt -laio -lblkid -lsanlock -lwdmd
 
 all: $(TARGET1) $(TARGET2)
 
 $(TARGET1): $(SOURCE1)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(SOURCE1) -o $@ -L. -L../src
+	$(CC) $(CFLAGS) $(LDFLAGS) $(SOURCE1) -o $@ -L. -L../src -L../wdmd
 
 $(TARGET2): $(SOURCE2)
 	cat $(SOURCE2) | sed \
