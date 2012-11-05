@@ -1,3 +1,4 @@
+[Unit]
 Description=daemon for fence_sanlock agent
 After=syslog.target wdmd.service sanlock.service
 Before=corosync.service
