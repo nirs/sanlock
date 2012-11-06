@@ -1185,7 +1185,7 @@ static int lockfile(void)
 	int fd, rv;
 
 	old_umask = umask(0022);
-	rv = mkdir(WDMD_RUN_DIR, 0777);
+	rv = mkdir(WDMD_RUN_DIR, 0775);
 	if (rv < 0 && errno != EEXIST) {
 		umask(old_umask);
 		return rv;
