@@ -44,36 +44,16 @@ static struct space *_search_space(char *name,
 				   struct list_head *head2,
 				   struct list_head *head3)
 {
+	int i;
 	struct space *sp;
+	struct list_head *heads[] = {head1, head2, head3};
 
-	if (head1) {
-		list_for_each_entry(sp, head1, list) {
-			if (name && strncmp(sp->space_name, name, NAME_ID_SIZE))
-				continue;
-			if (disk && strncmp(sp->host_id_disk.path, disk->path, SANLK_PATH_LEN))
-				continue;
-			if (disk && sp->host_id_disk.offset != disk->offset)
-				continue;
-			if (host_id && sp->host_id != host_id)
-				continue;
-			return sp;
+	for (i = 0; i < 3; i++) {
+		if (!heads[i]) {
+			continue;
 		}
-	}
-	if (head2) {
-		list_for_each_entry(sp, head2, list) {
-			if (name && strncmp(sp->space_name, name, NAME_ID_SIZE))
-				continue;
-			if (disk && strncmp(sp->host_id_disk.path, disk->path, SANLK_PATH_LEN))
-				continue;
-			if (disk && sp->host_id_disk.offset != disk->offset)
-				continue;
-			if (host_id && sp->host_id != host_id)
-				continue;
-			return sp;
-		}
-	}
-	if (head3) {
-		list_for_each_entry(sp, head3, list) {
+
+		list_for_each_entry(sp, heads[i], list) {
 			if (name && strncmp(sp->space_name, name, NAME_ID_SIZE))
 				continue;
 			if (disk && strncmp(sp->host_id_disk.path, disk->path, SANLK_PATH_LEN))
