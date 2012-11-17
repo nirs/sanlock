@@ -25,6 +25,7 @@ CFLAGS += -D_GNU_SOURCE -g \
 	-Wredundant-decls \
 	-Wno-sign-compare \
 	-Wp,-D_FORTIFY_SOURCE=2 \
+	-O2 \
 	-fexceptions \
 	-fasynchronous-unwind-tables \
 	-fdiagnostics-show-option

@@ -330,7 +330,7 @@ int sanlock_status(int debug, char sort_arg)
 	char maxstr[SANLK_STATE_MAXSTR];
 	char maxbin[SANLK_STATE_MAXSTR];
 	struct sanlk_state *st;
-	char *buf, *str, *bin;
+	char *buf = NULL, *str, *bin;
 	int fd, rv, len;
 	int sort_p = 0, sort_s = 0;
 
@@ -358,12 +358,12 @@ int sanlock_status(int debug, char sort_arg)
 	bin = maxbin;
 
 	while (1) {
-		if (sort_p || sort_s) {
+		if (sort_s || sort_p) {
 			len = sizeof(struct sanlk_state) + SANLK_STATE_MAXSTR*4;
-			buf = malloc(len);
+			buf = calloc(len, sizeof(char));
 			if (!buf)
 				return -ENOMEM;
-			memset(buf, 0, len);
+
 			st = (struct sanlk_state *)buf;
 			str = buf + sizeof(struct sanlk_state);
 			bin = buf + sizeof(struct sanlk_state) + SANLK_STATE_MAXSTR;
@@ -387,8 +387,8 @@ int sanlock_status(int debug, char sort_arg)
 
 		recv_bin(fd, st, bin);
 
-		if (sort_p || sort_s) {
-			if (sort_count == MAX_SORT_ENTRIES) {
+		if (sort_s || sort_p) {
+			if ((sort_count == MAX_SORT_ENTRIES) || (!buf)) {
 				printf("cannot sort over %d\n", MAX_SORT_ENTRIES);
 				goto out;
 			}

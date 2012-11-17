@@ -520,7 +520,7 @@ void client_pid_dead(int ci)
    lock both spaces_mutex and cl->mutex when adding new tokens to the client.
    (It needs to check that the lockspace for the new tokens hasn't failed
    while the tokens were being acquired.)
-   
+
    In kill_pids and all_pids_dead could we check cl->pid <= 0 without
    taking cl->mutex, since client_pid_dead in the main thread is the
    only place that changes that?  */
@@ -551,7 +551,7 @@ static void kill_pids(struct space *sp)
 	struct client *cl;
 	uint64_t now, last_success;
 	int id_renewal_fail_seconds;
-	int ci, fd, pid, sig;
+	int ci, sig;
 	int do_kill, in_grace;
 
 	/*
@@ -602,9 +602,6 @@ static void kill_pids(struct space *sp)
 
 		cl->kill_last = now;
 		cl->kill_count++;
-
-		fd = cl->fd;
-		pid = cl->pid;
 
 		/*
 		 * the transition from using killpath/sigterm to sigkill
@@ -1613,7 +1610,7 @@ static int do_daemon(void)
 
 	sprintf(main_task.name, "%s", "main");
 	setup_task_aio(&main_task, com.aio_arg, 0);
-	 
+
 	rv = client_alloc();
 	if (rv < 0)
 		return rv;
@@ -1641,7 +1638,7 @@ static int do_daemon(void)
 
 	rv = thread_pool_create(DEFAULT_MIN_WORKER_THREADS, com.max_worker_threads);
 	if (rv < 0)
-		goto out_logging;
+		goto out_lockfile;
 
 	rv = setup_listener();
 	if (rv < 0)
@@ -1657,9 +1654,10 @@ static int do_daemon(void)
 
  out_threads:
 	thread_pool_free();
+ out_lockfile:
+	unlink_lockfile(fd, SANLK_RUN_DIR, SANLK_LOCKFILE_NAME);
  out_logging:
 	close_logging();
-	unlink_lockfile(fd, SANLK_RUN_DIR, SANLK_LOCKFILE_NAME);
 	return rv;
 }
 
@@ -1733,7 +1731,7 @@ static int parse_arg_resource(char *arg)
 	return 0;
 }
 
-/* 
+/*
  * daemon: acquires leases for the local host_id, associates them with a local
  * pid, and releases them when the associated pid exits.
  *
@@ -2433,7 +2431,7 @@ int main(int argc, char *argv[])
 	helper_pid = -1;
 	helper_kill_fd = -1;
 	helper_status_fd = -1;
-	
+
 	pthread_mutex_init(&spaces_mutex, NULL);
 	INIT_LIST_HEAD(&spaces);
 	INIT_LIST_HEAD(&spaces_rem);

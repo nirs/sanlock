@@ -269,7 +269,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 	int sector_size = token->disks[0].sector_size;
 	int sector_count;
 	int iobuf_len;
-	int d, q, rv;
+	int d, q, rv = 0;
 	int q_max = -1;
 	int error;
 
@@ -917,7 +917,7 @@ static int _lease_read_num(struct task *task,
 	int *leader_reps;
 	int num_disks = token->r.num_disks;
 	int leaders_len, leader_reps_len;
-	int i, d, rv, found, num_reads, q_one, tmp_q = -1;
+	int i, d, rv = 0, found, num_reads, q_one, tmp_q = -1;
 
 	leaders_len = num_disks * sizeof(struct leader_record);
 	leader_reps_len = num_disks * sizeof(int);

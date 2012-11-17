@@ -121,7 +121,8 @@ void test_sanlock_path_import(void)
                  "sanlock_path_import destination is different");
 }
 
-int main(int argc, char *argv[])
+int main(int argc __attribute__ ((unused)),
+         char *argv[] __attribute__ ((unused)))
 {
     test_sanlock_path_export();
     test_sanlock_path_import();

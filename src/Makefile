@@ -53,7 +53,15 @@ LIB_CLIENT_SOURCE = \
 	client.c \
 	sanlock_sock.c
 
-CFLAGS += -D_GNU_SOURCE -g \
+OPTIMIZE_FLAG = -O2 -Wp,-D_FORTIFY_SOURCE=2
+ifeq ($(DEBUG), 1)
+   OPTIMIZE_FLAG = -O0
+   CFLAGS += -g
+endif
+
+
+
+CFLAGS += -D_GNU_SOURCE \
 	-Wall \
 	-Wformat \
 	-Wformat-security \
@@ -68,10 +76,11 @@ CFLAGS += -D_GNU_SOURCE -g \
 	-Winline \
 	-Wredundant-decls \
 	-Wno-sign-compare \
-	-Wp,-D_FORTIFY_SOURCE=2 \
 	-fexceptions \
 	-fasynchronous-unwind-tables \
-	-fdiagnostics-show-option
+	-fdiagnostics-show-option \
+	$(OPTIMIZE_FLAG) \
+	$(NULL)
 
 VER=$(shell cat ../VERSION)
 CFLAGS += -DVERSION=\"$(VER)\"

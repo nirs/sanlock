@@ -403,7 +403,7 @@ static void *lockspace_thread(void *arg_in)
 	struct task task;
 	struct space *sp;
 	struct leader_record leader;
-	uint64_t delta_begin, last_success;
+	uint64_t delta_begin, last_success = 0;
 	int rv, delta_length, renewal_interval;
 	int id_renewal_seconds, id_renewal_fail_seconds;
 	int acquire_result, delta_result, read_result;
@@ -879,7 +879,7 @@ int rem_lockspace_wait(struct sanlk_lockspace *ls, unsigned int space_id)
 	return 0;
 }
 
-/* 
+/*
  * we call stop_host_id() when all pids are gone and we're in a safe state, so
  * it's safe to unlink the watchdog right away here.  We want to sp the unlink
  * as soon as it's safe, so we can reduce the chance we get killed by the

@@ -42,13 +42,16 @@ static int connect_socket(int *sock_fd)
 	int rv, s;
 	struct sockaddr_un addr;
 
+	*sock_fd = -1;
 	s = socket(AF_LOCAL, SOCK_STREAM, 0);
 	if (s < 0)
 		return -errno;
 
 	rv = sanlock_socket_address(&addr);
-	if (rv < 0)
+	if (rv < 0) {
+		close(s);
 		return rv;
+	}
 
 	rv = connect(s, (struct sockaddr *) &addr, sizeof(struct sockaddr_un));
 	if (rv < 0) {
@@ -265,7 +268,7 @@ size_t sanlock_path_export(char *dst, const char *src, size_t dstlen)
 	return 0;
 }
 
-/* src has colons escaped with backslash, dst should have backslash removed */ 
+/* src has colons escaped with backslash, dst should have backslash removed */
 
 size_t sanlock_path_import(char *dst, const char *src, size_t dstlen)
 {
