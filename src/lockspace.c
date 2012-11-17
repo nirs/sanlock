@@ -37,7 +37,7 @@
 
 static uint32_t space_id_counter = 1;
 
-static struct space *_search_space(char *name,
+static struct space *_search_space(const char *name,
 				   struct sync_disk *disk,
 				   uint64_t host_id,
 				   struct list_head *head1,
@@ -68,12 +68,12 @@ static struct space *_search_space(char *name,
 	return NULL;
 }
 
-struct space *find_lockspace(char *name)
+struct space *find_lockspace(const char *name)
 {
 	return _search_space(name, NULL, 0, &spaces, &spaces_rem, &spaces_add);
 }
 
-int _lockspace_info(char *space_name, struct space_info *spi)
+int _lockspace_info(const char *space_name, struct space_info *spi)
 {
 	struct space *sp;
 
@@ -95,7 +95,7 @@ int _lockspace_info(char *space_name, struct space_info *spi)
 	return -1;
 }
 
-int lockspace_info(char *space_name, struct space_info *spi)
+int lockspace_info(const char *space_name, struct space_info *spi)
 {
 	int rv;
 

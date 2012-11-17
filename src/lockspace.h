@@ -9,9 +9,9 @@
 #ifndef __HOST_ID_H__
 #define __HOST_ID__H__
 
-struct space *find_lockspace(char *name);
-int _lockspace_info(char *space_name, struct space_info *spi);
-int lockspace_info(char *space_name, struct space_info *spi);
+struct space *find_lockspace(const char *name);
+int _lockspace_info(const char *space_name, struct space_info *spi);
+int lockspace_info(const char *space_name, struct space_info *spi);
 int lockspace_disk(char *space_name, struct sync_disk *disk);
 int host_info(char *space_name, uint64_t host_id, struct host_status *hs_out);
 int host_status_set_bit(char *space_name, uint64_t host_id);
