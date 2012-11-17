@@ -1,0 +1,14 @@
+*.swp
+*.co
+.vimdir
+cscope.*
+src/libsanlock.so*
+src/libsanlock_client.so*
+src/sanlock
+python/build/
+python/usr/
+tests/devcount
+tests/killpath
+tests/sanlk_client
+tests/sanlk_load
+tests/sanlk_path
