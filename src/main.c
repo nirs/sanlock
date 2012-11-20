@@ -1617,15 +1617,17 @@ static int do_daemon(void)
 
 	helper_ci = client_add(helper_status_fd, process_helper, helper_dead);
 	if (helper_ci < 0)
-		goto out_logging;
+		return rv;
 	strcpy(client[helper_ci].owner_name, "helper");
 
 	setup_signals();
 	setup_logging();
 
 	fd = lockfile(SANLK_RUN_DIR, SANLK_LOCKFILE_NAME, com.uid, com.gid);
-	if (fd < 0)
+	if (fd < 0) {
+		close_logging();
 		return fd;
+	}
 
 	setup_host_name();
 
@@ -1638,7 +1640,7 @@ static int do_daemon(void)
 
 	rv = thread_pool_create(DEFAULT_MIN_WORKER_THREADS, com.max_worker_threads);
 	if (rv < 0)
-		goto out_lockfile;
+		goto out;
 
 	rv = setup_listener();
 	if (rv < 0)
@@ -1654,10 +1656,10 @@ static int do_daemon(void)
 
  out_threads:
 	thread_pool_free();
- out_lockfile:
-	unlink_lockfile(fd, SANLK_RUN_DIR, SANLK_LOCKFILE_NAME);
- out_logging:
+ out:
+	/* order reversed from setup so lockfile is last */
 	close_logging();
+	unlink_lockfile(fd, SANLK_RUN_DIR, SANLK_LOCKFILE_NAME);
 	return rv;
 }
 
