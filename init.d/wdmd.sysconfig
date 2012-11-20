@@ -5,4 +5,7 @@
 #
 # To enable use of test scripts
 #WDMDOPTS="-G sanlock -S 1"
+#
+# To select a specific watchdog device
+#WDMDOPTS="-G sanlock -w /dev/watchdog1"
 
