@@ -1029,7 +1029,8 @@ static void process_signals(int ci)
 		return;
 	}
 
-	if (fdsi.ssi_signo == SIGTERM) {
+	if ((fdsi.ssi_signo == SIGTERM) ||
+			(fdsi.ssi_signo == SIGINT)) {
 		if (!active_clients())
 			daemon_quit = 1;
 	}
@@ -1046,6 +1047,7 @@ static int setup_signals(void)
 
 	sigemptyset(&mask);
 	sigaddset(&mask, SIGTERM);
+	sigaddset(&mask, SIGINT);
 	sigaddset(&mask, SIGHUP);
 
 	rv = sigprocmask(SIG_BLOCK, &mask, NULL);
