@@ -70,10 +70,87 @@ int sanlock_align(struct sanlk_disk *disk);
  * Use max_hosts = 0 for default value.
  * Use num_hosts = 0 for default value.
  * Provide either lockspace or resource, not both
+ *
+ * (Old api, see write_lockspace/resource)
  */
 
 int sanlock_init(struct sanlk_lockspace *ls,
 		 struct sanlk_resource *res,
 		 int max_hosts, int num_hosts);
+
+/*
+ * write a lockspace to disk
+ *
+ * the sanlock daemon writes max_hosts lockspace leader records to disk
+ *
+ * the lockspace will support up to max_hosts using the lockspace at once
+ *
+ * use max_hosts = 0 for default value
+ *
+ * the first host_id (1) (the first record at offset) is the last
+ * leader record written, so read_lockspace of host_id 1 will fail
+ * until the entire write_lockspace is complete.
+ */
+
+int sanlock_write_lockspace(struct sanlk_lockspace *ls, int max_hosts,
+			    uint32_t flags, uint32_t io_timeout);
+
+/*
+ * read one host's lockspace record from disk
+ *
+ * the sanlock daemon reads one lockspace leader record from disk
+ *
+ * the minimum input is path and offset
+ *
+ * if name is specified and does not match the leader record name,
+ * SANLK_LEADER_LOCKSPACE is returned
+ *
+ * if name is not specified, it is filled it with the value from disk
+ *
+ * if host_id is zero, host_id 1 is used (the first record at offset)
+ *
+ * if there is no delta lease magic number found at the host_id location,
+ * SANLK_LEADER_MAGIC is returned
+ *
+ * on success, zero is returned and
+ * io_timeout and the entire sanlk_lockspace struct are written to
+ */
+
+int sanlock_read_lockspace(struct sanlk_lockspace *ls,
+			   uint32_t flags, uint32_t *io_timeout);
+
+/*
+ * format a resource lease area on disk
+ *
+ * the sanlock daemon writes a resource lease area to disk
+ *
+ * use max_hosts = 0 for default value
+ * use num_hosts = 0 for default value
+ */
+
+int sanlock_write_resource(struct sanlk_resource *res,
+			   int max_hosts, int num_hosts, uint32_t flags);
+
+/*
+ * read a resource lease from disk
+ *
+ * the sanlock daemon reads the lease's leader record from disk
+ *
+ * the minimum input is one disk with path and offset
+ *
+ * if lockspace name is specified and does not match the leader record
+ * lockspace name, SANLK_LEADER_LOCKSPACE is returned
+ *
+ * if resource name is specified and does not match the leader record
+ * resource name, SANLK_LEADER_RESOURCE is returned
+ *
+ * if there is no paxos lease magic number found in the leader record,
+ * SANLK_LEADER_MAGIC is returned
+ *
+ * on success, zero is returned and
+ * the entire sanlk_resource struct is written to (res->disks is not changed)
+ */
+
+int sanlock_read_resource(struct sanlk_resource *res, uint32_t flags);
 
 #endif

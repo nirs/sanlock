@@ -148,6 +148,43 @@ static int verify_leader(struct sync_disk *disk,
 	return result;
 }
 
+
+/* read the lockspace name and io_timeout given the disk location */
+
+int delta_read_lockspace(struct task *task,
+			 struct sync_disk *disk,
+			 uint64_t host_id,
+			 struct sanlk_lockspace *ls,
+			 int io_timeout,
+			 int *io_timeout_ret)
+{
+	struct leader_record leader;
+	char *space_name;
+	int rv, error;
+
+	/* host_id N is block offset N-1 */
+
+	memset(&leader, 0, sizeof(struct leader_record));
+
+	rv = read_sectors(disk, host_id - 1, 1, (char *)&leader, sizeof(struct leader_record),
+			  task, io_timeout, "read_lockspace");
+	if (rv < 0)
+		return rv;
+
+	if (!ls->name[0])
+		space_name = leader.space_name;
+
+	error = verify_leader(disk, space_name, host_id, &leader, "read_lockspace");
+
+	if (error == SANLK_OK) {
+		memcpy(ls->name, leader.space_name, SANLK_NAME_LEN);
+		ls->host_id = host_id;
+		*io_timeout_ret = leader.io_timeout;
+	}
+
+	return error;
+}
+
 int delta_lease_leader_read(struct task *task, int io_timeout,
 			    struct sync_disk *disk,
 			    char *space_name,
@@ -618,6 +655,9 @@ int delta_lease_init(struct task *task,
 	if (!max_hosts)
 		max_hosts = DEFAULT_MAX_HOSTS;
 
+	if (!io_timeout)
+		io_timeout = DEFAULT_IO_TIMEOUT;
+
 	align_size = direct_align(disk);
 	if (align_size < 0)
 		return align_size;
@@ -647,16 +687,27 @@ int delta_lease_init(struct task *task,
 		leader->io_timeout = io_timeout;
 		strncpy(leader->space_name, space_name, NAME_ID_SIZE);
 		leader->checksum = leader_checksum(leader);
+
+		/* make the first record invalid so we can do a single atomic
+		   write below to commit the whole thing */
+		if (!i)
+			leader->magic = 0;
 	}
 
 	rv = write_iobuf(disk->fd, disk->offset, iobuf, iobuf_len, task, io_timeout);
+	if (rv < 0)
+		goto out;
 
+	/* commit the whole lockspace by making the first record valid */
+
+	leader = (struct leader_record *)iobuf;
+	leader->magic = DELTA_DISK_MAGIC;
+
+	rv = write_iobuf(disk->fd, disk->offset, iobuf, disk->sector_size, task, io_timeout);
+ out:
 	if (rv != SANLK_AIO_TIMEOUT)
 		free(iobuf);
 
-	if (rv < 0)
-		return rv;
-
-	return 0;
+	return rv;
 }
 

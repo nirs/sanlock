@@ -48,4 +48,11 @@ int delta_lease_init(struct task *task,
 		     char *space_name,
 		     int max_hosts);
 
+int delta_read_lockspace(struct task *task,
+			struct sync_disk *disk,
+			uint64_t host_id,
+			struct sanlk_lockspace *ls,
+			int io_timeout,
+			int *io_timeout_ret);
+
 #endif

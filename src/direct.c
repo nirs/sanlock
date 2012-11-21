@@ -91,6 +91,9 @@ static int do_paxos_action(int action, struct task *task, int io_timeout,
 	int disks_len, token_len;
 	int j, rv = 0;
 
+	if (!io_timeout)
+		io_timeout = DEFAULT_IO_TIMEOUT;
+
 	disks_len = res->num_disks * sizeof(struct sync_disk);
 	token_len = sizeof(struct token) + disks_len;
 
@@ -198,6 +201,9 @@ static int do_delta_action(int action,
 	int read_result, rv;
 
 	memset(bitmap, 0, sizeof(bitmap));
+
+	if (!io_timeout)
+		io_timeout = DEFAULT_IO_TIMEOUT;
 
 	/* for log_space in delta functions */
 	memset(&space, 0, sizeof(space));
@@ -392,36 +398,31 @@ int direct_align(struct sync_disk *disk)
 		return -EINVAL;
 }
 
-/*
- * sanlock direct init [-s LOCKSPACE] [-r RESOURCE]
- *
- * Note: host_id not used for init, whatever is given in LOCKSPACE
- * is ignored
- */
-
-int direct_init(struct task *task,
-		int io_timeout,
-		struct sanlk_lockspace *ls,
-		struct sanlk_resource *res,
-		int max_hosts, int num_hosts)
+/* io_timeout is written to leader record and used for the write call itself */
+int direct_write_lockspace(struct task *task, struct sanlk_lockspace *ls,
+			   int max_hosts, uint32_t io_timeout)
 {
-	int rv = -1;
+	if (!ls)
+		return -1;
 
-	if (ls && ls->host_id_disk.path[0]) {
-		rv = do_delta_action(ACT_DIRECT_INIT, task, io_timeout, ls, max_hosts, NULL, NULL);
+	return do_delta_action(ACT_DIRECT_INIT, task, io_timeout, ls,
+			       max_hosts, NULL, NULL);
+}
 
-	} else if (res) {
-		if (!res->num_disks)
-			return -ENODEV;
+int direct_write_resource(struct task *task, struct sanlk_resource *res,
+			  int max_hosts, int num_hosts)
+{
+	if (!res)
+		return -1;
 
-		if (!res->disks[0].path[0])
-			return -ENODEV;
+	if (!res->num_disks)
+		return -ENODEV;
 
-		rv = do_paxos_action(ACT_DIRECT_INIT, task, io_timeout, res,
-				     max_hosts, num_hosts, 0, 0, NULL);
-	}
+	if (!res->disks[0].path[0])
+		return -ENODEV;
 
-	return rv;
+	return do_paxos_action(ACT_DIRECT_INIT, task, 0, res,
+			       max_hosts, num_hosts, 0, 0, NULL);
 }
 
 int direct_read_leader(struct task *task,

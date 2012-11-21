@@ -187,56 +187,212 @@ int sanlock_align(struct sanlk_disk *disk)
 	return rv;
 }
 
-int sanlock_init(struct sanlk_lockspace *ls,
-		 struct sanlk_resource *res,
-		 int max_hosts, int num_hosts)
+int sanlock_read_lockspace(struct sanlk_lockspace *ls, uint32_t flags, uint32_t *io_timeout)
 {
-	int rv, fd, cmd, datalen;
+	struct sm_header h;
+	int rv, fd;
 
-	if (!ls && !res)
+	if (!ls || !ls->host_id_disk.path[0])
 		return -EINVAL;
 
 	rv = connect_socket(&fd);
 	if (rv < 0)
 		return rv;
 
-	if (ls && ls->host_id_disk.path[0]) {
-		cmd = SM_CMD_INIT_LOCKSPACE;
-		datalen = sizeof(struct sanlk_lockspace);
-	} else {
-		cmd = SM_CMD_INIT_RESOURCE;
-		datalen = sizeof(struct sanlk_resource) +
-			  sizeof(struct sanlk_disk) * res->num_disks;
-	}
-
-	rv = send_header(fd, cmd, 0, datalen, max_hosts, num_hosts);
+	rv = send_header(fd, SM_CMD_READ_LOCKSPACE, flags,
+			 sizeof(struct sanlk_lockspace),
+			 0, 0);
 	if (rv < 0)
 		goto out;
 
-	if (ls) {
-		rv = send(fd, ls, sizeof(struct sanlk_lockspace), 0);
-		if (rv < 0) {
-			rv = -errno;
-			goto out;
-		}
-	} else {
-		rv = send(fd, res, sizeof(struct sanlk_resource), 0);
-		if (rv < 0) {
-			rv = -errno;
-			goto out;
-		}
+	rv = send(fd, ls, sizeof(struct sanlk_lockspace), 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
 
-		rv = send(fd, res->disks, sizeof(struct sanlk_disk) * res->num_disks, 0);
-		if (rv < 0) {
-			rv = -errno;
-			goto out;
-		}
+	/* receive result, io_timeout and ls struct */
+
+	memset(&h, 0, sizeof(struct sm_header));
+
+	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	if (rv != sizeof(h)) {
+		rv = -1;
+		goto out;
+	}
+
+	rv = (int)h.data;
+	if (rv < 0)
+		goto out;
+
+	rv = recv(fd, ls, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	if (rv != sizeof(struct sanlk_lockspace)) {
+		rv = -1;
+		goto out;
+	}
+
+	*io_timeout = h.data2;
+	rv = (int)h.data;
+ out:
+	close(fd);
+	return rv;
+}
+
+int sanlock_read_resource(struct sanlk_resource *res, uint32_t flags)
+{
+	struct sm_header h;
+	int rv, fd;
+
+	if (!res || !res->num_disks || res->num_disks > SANLK_MAX_DISKS ||
+	    !res->disks[0].path[0])
+		return -EINVAL;
+
+	rv = connect_socket(&fd);
+	if (rv < 0)
+		return rv;
+
+	rv = send_header(fd, SM_CMD_READ_RESOURCE, flags,
+			 sizeof(struct sanlk_resource) +
+			 sizeof(struct sanlk_disk) * res->num_disks,
+			 0, 0);
+	if (rv < 0)
+		goto out;
+
+	rv = send(fd, res, sizeof(struct sanlk_resource), 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	rv = send(fd, res->disks, sizeof(struct sanlk_disk) * res->num_disks, 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	/* receive result and res struct */
+
+	memset(&h, 0, sizeof(struct sm_header));
+
+	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	if (rv != sizeof(h)) {
+		rv = -1;
+		goto out;
+	}
+
+	rv = (int)h.data;
+	if (rv < 0)
+		goto out;
+
+	rv = recv(fd, res, sizeof(struct sanlk_resource), MSG_WAITALL);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	if (rv != sizeof(struct sanlk_resource)) {
+		rv = -1;
+		goto out;
+	}
+
+	rv = (int)h.data;
+ out:
+	close(fd);
+	return rv;
+}
+
+int sanlock_write_lockspace(struct sanlk_lockspace *ls, int max_hosts,
+			    uint32_t flags, uint32_t io_timeout)
+{
+	int rv, fd;
+
+	if (!ls || !ls->host_id_disk.path[0])
+		return -EINVAL;
+
+	rv = connect_socket(&fd);
+	if (rv < 0)
+		return rv;
+
+	rv = send_header(fd, SM_CMD_WRITE_LOCKSPACE, flags,
+			 sizeof(struct sanlk_lockspace),
+			 max_hosts, io_timeout);
+	if (rv < 0)
+		goto out;
+
+	rv = send(fd, ls, sizeof(struct sanlk_lockspace), 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
 	}
 
 	rv = recv_result(fd);
  out:
 	close(fd);
 	return rv;
+}
+
+int sanlock_write_resource(struct sanlk_resource *res,
+			   int max_hosts, int num_hosts, uint32_t flags)
+{
+	int rv, fd;
+
+	if (!res || !res->num_disks || res->num_disks > SANLK_MAX_DISKS ||
+	    !res->disks[0].path[0])
+		return -EINVAL;
+
+	rv = connect_socket(&fd);
+	if (rv < 0)
+		return rv;
+
+	rv = send_header(fd, SM_CMD_WRITE_RESOURCE, flags,
+			 sizeof(struct sanlk_resource) +
+			 sizeof(struct sanlk_disk) * res->num_disks,
+			 max_hosts, num_hosts);
+	if (rv < 0)
+		goto out;
+
+	rv = send(fd, res, sizeof(struct sanlk_resource), 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	rv = send(fd, res->disks, sizeof(struct sanlk_disk) * res->num_disks, 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	rv = recv_result(fd);
+ out:
+	close(fd);
+	return rv;
+}
+
+/* old api */
+int sanlock_init(struct sanlk_lockspace *ls,
+		 struct sanlk_resource *res,
+		 int max_hosts, int num_hosts)
+{
+	if (ls)
+		return sanlock_write_lockspace(ls, max_hosts, 0, 0);
+	else
+		return sanlock_write_resource(res, max_hosts, num_hosts, 0);
 }
 
 /* src has colons unescaped, dst should have them escaped with backslash */

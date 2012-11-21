@@ -1157,8 +1157,10 @@ static void process_connection(int ci)
 	case SM_CMD_EXAMINE_RESOURCE:
 	case SM_CMD_EXAMINE_LOCKSPACE:
 	case SM_CMD_ALIGN:
-	case SM_CMD_INIT_LOCKSPACE:
-	case SM_CMD_INIT_RESOURCE:
+	case SM_CMD_WRITE_LOCKSPACE:
+	case SM_CMD_WRITE_RESOURCE:
+	case SM_CMD_READ_LOCKSPACE:
+	case SM_CMD_READ_RESOURCE:
 		rv = client_suspend(ci);
 		if (rv < 0)
 			return;
@@ -1779,6 +1781,7 @@ static void print_usage(void)
 	printf("sanlock client log_dump\n");
 	printf("sanlock client shutdown [-f 0|1]\n");
 	printf("sanlock client init -s LOCKSPACE | -r RESOURCE\n");
+	printf("sanlock client read -s LOCKSPACE | -r RESOURCE\n");
 	printf("sanlock client align -s LOCKSPACE\n");
 	printf("sanlock client add_lockspace -s LOCKSPACE\n");
 	printf("sanlock client inq_lockspace -s LOCKSPACE\n");
@@ -1902,6 +1905,10 @@ static int read_command_line(int argc, char *argv[])
 			com.action = ACT_CLIENT_ALIGN;
 		else if (!strcmp(act, "init"))
 			com.action = ACT_CLIENT_INIT;
+		else if (!strcmp(act, "write"))
+			com.action = ACT_CLIENT_INIT;
+		else if (!strcmp(act, "read"))
+			com.action = ACT_CLIENT_READ;
 		else {
 			log_tool("client action \"%s\" is unknown", act);
 			exit(EXIT_FAILURE);
@@ -2117,6 +2124,8 @@ static int do_client(void)
 	struct sanlk_resource **res_args = NULL;
 	struct sanlk_resource *res;
 	char *res_state = NULL;
+	char *res_str = NULL;
+	uint32_t io_timeout = 0;
 	int i, fd, rv = 0;
 
 	if (com.action == ACT_COMMAND || com.action == ACT_ACQUIRE) {
@@ -2271,12 +2280,43 @@ static int do_client(void)
 	case ACT_CLIENT_INIT:
 		log_tool("init");
 		if (com.lockspace.host_id_disk.path[0])
-			rv = sanlock_init(&com.lockspace, NULL,
-					  com.max_hosts, com.num_hosts);
+			rv = sanlock_write_lockspace(&com.lockspace,
+						     com.max_hosts, 0,
+						     com.io_timeout_arg);
 		else
-			rv = sanlock_init(NULL, com.res_args[0],
-					  com.max_hosts, com.num_hosts);
+			rv = sanlock_write_resource(com.res_args[0],
+						    com.max_hosts,
+						    com.num_hosts, 0);
 		log_tool("init done %d", rv);
+		break;
+
+	case ACT_CLIENT_READ:
+		if (com.lockspace.host_id_disk.path[0])
+			rv = sanlock_read_lockspace(&com.lockspace, 0, &io_timeout);
+		else
+			rv = sanlock_read_resource(com.res_args[0], 0);
+
+		if (rv < 0) {
+			log_tool("read error %d", rv);
+			break;
+		}
+
+		if (com.lockspace.host_id_disk.path[0]) {
+			log_tool("s %.48s:%llu:%s:%llu",
+				 com.lockspace.name,
+				 (unsigned long long)com.lockspace.host_id,
+				 com.lockspace.host_id_disk.path,
+				 (unsigned long long)com.lockspace.host_id_disk.offset);
+			log_tool("io_timeout %u", io_timeout);
+		} else {
+			rv = sanlock_res_to_str(com.res_args[0], &res_str);
+			if (rv < 0) {
+				log_tool("res_to_str error %d", rv);
+				break;
+			}
+			log_tool("r %s", res_str);
+			free(res_str);
+		}
 		break;
 
 	default:
@@ -2299,8 +2339,12 @@ static int do_direct(void)
 
 	switch (com.action) {
 	case ACT_DIRECT_INIT:
-		rv = direct_init(&main_task, com.io_timeout_arg, &com.lockspace,
-				 com.res_args[0], com.max_hosts, com.num_hosts);
+		if (com.lockspace.host_id_disk.path[0])
+			rv = direct_write_lockspace(&main_task, &com.lockspace,
+						    com.max_hosts, com.io_timeout_arg);
+		else
+			rv = direct_write_resource(&main_task, com.res_args[0],
+						   com.max_hosts, com.num_hosts);
 		log_tool("init done %d", rv);
 		break;
 

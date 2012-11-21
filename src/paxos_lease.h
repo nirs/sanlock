@@ -42,4 +42,8 @@ int paxos_lease_request_read(struct task *task, struct token *token,
 int paxos_lease_request_write(struct task *task, struct token *token,
                               struct request_record *rr);
 
+int paxos_read_resource(struct task *task,
+			struct token *token,
+			struct sanlk_resource *res);
+
 #endif

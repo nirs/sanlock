@@ -1106,25 +1106,33 @@ static void cmd_align(struct task *task GNUC_UNUSED, struct cmd_args *ca)
 	client_resume(ca->ci_in);
 }
 
-static void cmd_init_lockspace(struct task *task, struct cmd_args *ca)
+static void cmd_read_lockspace(struct task *task, struct cmd_args *ca)
 {
+	struct sm_header h;
 	struct sanlk_lockspace lockspace;
 	struct sync_disk sd;
+	uint64_t host_id;
+	int io_timeout = 0;
 	int fd, rv, result;
 
 	fd = client[ca->ci_in].fd;
 
 	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_lockspace)) {
-		log_error("cmd_init_lockspace %d,%d recv %d %d",
+		log_error("cmd_read_lockspace %d,%d recv %d %d",
 			   ca->ci_in, fd, rv, errno);
 		result = -ENOTCONN;
 		goto reply;
 	}
 
-	log_debug("cmd_init_lockspace %d,%d %.48s:%llu:%s:%llu",
-		  ca->ci_in, fd, lockspace.name,
-		  (unsigned long long)lockspace.host_id,
+	if (!lockspace.host_id)
+		host_id = 1;
+	else
+		host_id = lockspace.host_id;
+
+	log_debug("cmd_read_lockspace %d,%d %llu %s:%llu",
+		  ca->ci_in, fd,
+		  (unsigned long long)host_id,
 		  lockspace.host_id_disk.path,
 		  (unsigned long long)lockspace.host_id_disk.offset);
 
@@ -1143,20 +1151,30 @@ static void cmd_init_lockspace(struct task *task, struct cmd_args *ca)
 		goto reply;
 	}
 
-	result = delta_lease_init(task, DEFAULT_IO_TIMEOUT, &sd, lockspace.name, ca->header.data);
+	/* sets ls->name and io_timeout */
+	result = delta_read_lockspace(task, &sd, host_id, &lockspace,
+				      DEFAULT_IO_TIMEOUT, &io_timeout);
+	if (result == SANLK_OK)
+		result = 0;
 
 	close_disks(&sd, 1);
  reply:
-	log_debug("cmd_init_lockspace %d,%d done %d", ca->ci_in, fd, result);
+	log_debug("cmd_read_lockspace %d,%d done %d", ca->ci_in, fd, result);
 
-	send_result(fd, &ca->header, result);
+	memcpy(&h, &ca->header, sizeof(struct sm_header));
+	h.data = result;
+	h.data2 = io_timeout;
+	h.length = sizeof(h) + sizeof(lockspace);
+	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
+	send(fd, &lockspace, sizeof(lockspace), MSG_NOSIGNAL);
 	client_resume(ca->ci_in);
 }
 
-static void cmd_init_resource(struct task *task, struct cmd_args *ca)
+static void cmd_read_resource(struct task *task, struct cmd_args *ca)
 {
-	struct token *token = NULL;
+	struct sm_header h;
 	struct sanlk_resource res;
+	struct token *token = NULL;
 	int token_len, disks_len;
 	int j, fd, rv, result;
 
@@ -1166,7 +1184,7 @@ static void cmd_init_resource(struct task *task, struct cmd_args *ca)
 
 	rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_resource)) {
-		log_error("cmd_init_resource %d,%d recv %d %d",
+		log_error("cmd_read_resource %d,%d recv %d %d",
 			   ca->ci_in, fd, rv, errno);
 		result = -ENOTCONN;
 		goto reply;
@@ -1211,7 +1229,149 @@ static void cmd_init_resource(struct task *task, struct cmd_args *ca)
 		token->disks[j].fd = -1;
 	}
 
-	log_debug("cmd_init_resource %d,%d %.48s:%.48s:%.256s:%llu",
+	log_debug("cmd_read_resource %d,%d %.256s:%llu",
+		  ca->ci_in, fd,
+		  token->disks[0].path,
+		  (unsigned long long)token->r.disks[0].offset);
+
+	rv = open_disks(token->disks, token->r.num_disks);
+	if (rv < 0) {
+		result = rv;
+		goto reply;
+	}
+
+	token->io_timeout = DEFAULT_IO_TIMEOUT;
+
+	/* sets res.lockspace_name, res.name, res.lver */
+	result = paxos_read_resource(task, token, &res);
+	if (result == SANLK_OK)
+		result = 0;
+
+	close_disks(token->disks, token->r.num_disks);
+ reply:
+	if (token)
+		free(token);
+	log_debug("cmd_read_resource %d,%d done %d", ca->ci_in, fd, result);
+
+	memcpy(&h, &ca->header, sizeof(struct sm_header));
+	h.data = result;
+	h.data2 = 0;
+	h.length = sizeof(h) + sizeof(res);
+	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
+	send(fd, &res, sizeof(res), MSG_NOSIGNAL);
+	client_resume(ca->ci_in);
+}
+
+static void cmd_write_lockspace(struct task *task, struct cmd_args *ca)
+{
+	struct sanlk_lockspace lockspace;
+	struct sync_disk sd;
+	int fd, rv, result;
+	int io_timeout = DEFAULT_IO_TIMEOUT;
+
+	fd = client[ca->ci_in].fd;
+
+	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+	if (rv != sizeof(struct sanlk_lockspace)) {
+		log_error("cmd_write_lockspace %d,%d recv %d %d",
+			   ca->ci_in, fd, rv, errno);
+		result = -ENOTCONN;
+		goto reply;
+	}
+
+	log_debug("cmd_write_lockspace %d,%d %.48s:%llu:%s:%llu",
+		  ca->ci_in, fd, lockspace.name,
+		  (unsigned long long)lockspace.host_id,
+		  lockspace.host_id_disk.path,
+		  (unsigned long long)lockspace.host_id_disk.offset);
+
+	if (!lockspace.host_id_disk.path[0]) {
+		result = -ENODEV;
+		goto reply;
+	}
+
+	memset(&sd, 0, sizeof(struct sync_disk));
+	memcpy(&sd, &lockspace.host_id_disk, sizeof(struct sanlk_disk));
+	sd.fd = -1;
+
+	rv = open_disk(&sd);
+	if (rv < 0) {
+		result = -ENODEV;
+		goto reply;
+	}
+
+	if (ca->header.data2)
+		io_timeout = ca->header.data2;
+
+	result = delta_lease_init(task, io_timeout, &sd, lockspace.name, ca->header.data);
+
+	close_disks(&sd, 1);
+ reply:
+	log_debug("cmd_write_lockspace %d,%d done %d", ca->ci_in, fd, result);
+
+	send_result(fd, &ca->header, result);
+	client_resume(ca->ci_in);
+}
+
+static void cmd_write_resource(struct task *task, struct cmd_args *ca)
+{
+	struct token *token = NULL;
+	struct sanlk_resource res;
+	int token_len, disks_len;
+	int j, fd, rv, result;
+
+	fd = client[ca->ci_in].fd;
+
+	/* receiving and setting up token copied from cmd_acquire */
+
+	rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
+	if (rv != sizeof(struct sanlk_resource)) {
+		log_error("cmd_write_resource %d,%d recv %d %d",
+			   ca->ci_in, fd, rv, errno);
+		result = -ENOTCONN;
+		goto reply;
+	}
+
+	if (!res.num_disks || res.num_disks > SANLK_MAX_DISKS) {
+		result = -ERANGE;
+		goto reply;
+	}
+
+	disks_len = res.num_disks * sizeof(struct sync_disk);
+	token_len = sizeof(struct token) + disks_len;
+
+	token = malloc(token_len);
+	if (!token) {
+		result = -ENOMEM;
+		goto reply;
+	}
+	memset(token, 0, token_len);
+	token->disks = (struct sync_disk *)&token->r.disks[0]; /* shorthand */
+	token->r.num_disks = res.num_disks;
+	memcpy(token->r.lockspace_name, res.lockspace_name, SANLK_NAME_LEN);
+	memcpy(token->r.name, res.name, SANLK_NAME_LEN);
+
+	/*
+	 * receive sanlk_disk's / sync_disk's
+	 *
+	 * WARNING: as a shortcut, this requires that sync_disk and
+	 * sanlk_disk match; this is the reason for the pad fields
+	 * in sanlk_disk (TODO: let these differ?)
+	 */
+
+	rv = recv(fd, token->disks, disks_len, MSG_WAITALL);
+	if (rv != disks_len) {
+		result = -ENOTCONN;
+		goto reply;
+	}
+
+	/* zero out pad1 and pad2, see WARNING above */
+	for (j = 0; j < token->r.num_disks; j++) {
+		token->disks[j].sector_size = 0;
+		token->disks[j].fd = -1;
+	}
+
+	log_debug("cmd_write_resource %d,%d %.48s:%.48s:%.256s:%llu",
 		  ca->ci_in, fd,
 		  token->r.lockspace_name,
 		  token->r.name,
@@ -1232,7 +1392,7 @@ static void cmd_init_resource(struct task *task, struct cmd_args *ca)
  reply:
 	if (token)
 		free(token);
-	log_debug("cmd_init_resource %d,%d done %d", ca->ci_in, fd, result);
+	log_debug("cmd_write_resource %d,%d done %d", ca->ci_in, fd, result);
 
 	send_result(fd, &ca->header, result);
 	client_resume(ca->ci_in);
@@ -1329,11 +1489,17 @@ void call_cmd_thread(struct task *task, struct cmd_args *ca)
 	case SM_CMD_ALIGN:
 		cmd_align(task, ca);
 		break;
-	case SM_CMD_INIT_LOCKSPACE:
-		cmd_init_lockspace(task, ca);
+	case SM_CMD_WRITE_LOCKSPACE:
+		cmd_write_lockspace(task, ca);
 		break;
-	case SM_CMD_INIT_RESOURCE:
-		cmd_init_resource(task, ca);
+	case SM_CMD_WRITE_RESOURCE:
+		cmd_write_resource(task, ca);
+		break;
+	case SM_CMD_READ_LOCKSPACE:
+		cmd_read_lockspace(task, ca);
+		break;
+	case SM_CMD_READ_RESOURCE:
+		cmd_read_resource(task, ca);
 		break;
 	case SM_CMD_EXAMINE_LOCKSPACE:
 	case SM_CMD_EXAMINE_RESOURCE:

@@ -692,6 +692,38 @@ static int leaders_match(struct leader_record *a, struct leader_record *b)
 	return 0;
 }
 
+/* read the lockspace name and resource name given the disk location */
+
+int paxos_read_resource(struct task *task,
+			struct token *token,
+			struct sanlk_resource *res)
+{
+	struct leader_record leader;
+	int rv;
+
+	memset(&leader, 0, sizeof(struct leader_record));
+
+	rv = read_leader(task, token, &token->disks[0], &leader);
+	if (rv < 0)
+		return rv;
+
+	if (!res->lockspace_name[0])
+		memcpy(token->r.lockspace_name, leader.space_name, NAME_ID_SIZE);
+
+	if (!res->name[0])
+		memcpy(token->r.name, leader.resource_name, NAME_ID_SIZE);
+
+	rv = verify_leader(token, &token->disks[0], &leader, "read_resource");
+
+	if (rv == SANLK_OK) {
+		memcpy(res->lockspace_name, leader.space_name, NAME_ID_SIZE);
+		memcpy(res->name, leader.resource_name, NAME_ID_SIZE);
+		res->lver = leader.lver;
+	}
+
+	return rv;
+}
+
 static int _leader_read_one(struct task *task,
 			    struct token *token,
 			    struct leader_record *leader_ret,

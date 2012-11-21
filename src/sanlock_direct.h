@@ -32,11 +32,29 @@ int sanlock_direct_live_id(struct sanlk_lockspace *ls,
  * Use max_hosts = 0 for default value.
  * Use num_hosts = 0 for default value.
  * Provide either lockspace or resource, not both
+ *
+ * (Old api, see write_lockspace/resource)
  */
 
 int sanlock_direct_init(struct sanlk_lockspace *ls,
                         struct sanlk_resource *res,
                         int max_hosts, int num_hosts, int use_aio);
+
+/*
+ * write a lockspace to disk
+ * (also see sanlock_write_lockspace)
+ */
+
+int sanlock_direct_write_lockspace(struct sanlk_lockspace *ls, int max_hosts,
+				   uint32_t flags, uint32_t io_timeout);
+
+/*
+ * format a resource lease area on disk
+ * (also see sanlock_write_resource)
+ */
+
+int sanlock_direct_write_resource(struct sanlk_resource *res,
+				  int max_hosts, int num_hosts, uint32_t flags);
 
 /*
  * Returns the alignment in bytes required by sanlock_direct_init()

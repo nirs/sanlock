@@ -384,7 +384,7 @@ static void *lockspace_thread(void *arg_in)
 	struct space *sp;
 	struct leader_record leader;
 	uint64_t delta_begin, last_success = 0;
-	int rv, delta_length, renewal_interval;
+	int rv, delta_length, renewal_interval = 0;
 	int id_renewal_seconds, id_renewal_fail_seconds;
 	int acquire_result, delta_result, read_result;
 	int opened = 0;
