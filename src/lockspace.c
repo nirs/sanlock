@@ -24,6 +24,7 @@
 #include <sys/un.h>
 
 #include "sanlock_internal.h"
+#include "sanlock_admin.h"
 #include "sanlock_sock.h"
 #include "diskio.h"
 #include "log.h"
@@ -857,6 +858,52 @@ int rem_lockspace_wait(struct sanlk_lockspace *ls, unsigned int space_id)
 		sleep(1);
 	}
 	return 0;
+}
+
+int get_lockspaces(char *buf, int *len, int *count, int maxlen)
+{
+	struct sanlk_lockspace *ls;
+	struct space *sp;
+	struct list_head *heads[] = {&spaces, &spaces_rem, &spaces_add};
+	int i, rv, sp_count = 0;
+
+	rv = 0;
+	*len = 0;
+	*count = 0;
+	ls = (struct sanlk_lockspace *)buf;
+
+	pthread_mutex_lock(&spaces_mutex);
+	for (i = 0; i < 3; i++) {
+		list_for_each_entry(sp, heads[i], list) {
+			sp_count++;
+
+			if (*len + sizeof(struct sanlk_lockspace) > maxlen) {
+				rv = -ENOSPC;
+				continue;
+			}
+
+			memcpy(ls->name, sp->space_name, NAME_ID_SIZE);
+			memcpy(&ls->host_id_disk, &sp->host_id_disk, sizeof(struct sync_disk));
+			ls->host_id_disk.pad1 = 0;
+			ls->host_id_disk.pad2 = 0;
+			ls->host_id = sp->host_id;
+			ls->flags = 0;
+
+			if (i == 1)
+				ls->flags |= SANLK_LSF_REM;
+			else if (i == 2)
+				ls->flags |= SANLK_LSF_ADD;
+
+			*len += sizeof(struct sanlk_lockspace);
+
+			ls++;
+		}
+	}
+	pthread_mutex_unlock(&spaces_mutex);
+
+	*count = sp_count;
+
+	return rv;
 }
 
 /*

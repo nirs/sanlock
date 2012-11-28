@@ -248,7 +248,7 @@ use async i/o
 
 .B sanlock client status
 
-Print processes, lockspaces, and resources being manged by the sanlock
+Print processes, lockspaces, and resources being managed by the sanlock
 daemon.  Add -D to show extra internal daemon status for debugging.
 Add -o p to show resources by pid, or -o s to show resources by lockspace.
 
@@ -257,6 +257,12 @@ Add -o p to show resources by pid, or -o s to show resources by lockspace.
 Print state of host_id delta leases read during the last renewal.
 State of all lockspaces is shown (use -s to select one).
 Add -D to show extra internal daemon status for debugging.
+
+.B sanlock client gets
+
+Print lockspaces being managed by the sanlock daemon.  The LOCKSPACE
+string will be followed by ADD or REM if the lockspace is currently being
+added or removed.
 
 .B sanlock client log_dump
 

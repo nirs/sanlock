@@ -312,6 +312,7 @@ enum {
 	ACT_CLIENT_READ,
 	ACT_CLIENT_ALIGN,
 	ACT_EXAMINE,
+	ACT_GETS,
 };
 
 EXTERN int external_shutdown;

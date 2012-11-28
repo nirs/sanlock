@@ -1896,18 +1896,32 @@ static void cmd_host_status(int fd, struct sm_header *h_recv)
 		free(status);
 }
 
-static char send_log_dump[LOG_DUMP_SIZE];
+static char send_data_buf[LOG_DUMP_SIZE];
 
 static void cmd_log_dump(int fd, struct sm_header *h_recv)
 {
 	int len;
 
-	copy_log_dump(send_log_dump, &len);
+	copy_log_dump(send_data_buf, &len);
 
 	h_recv->data = len;
 
 	send(fd, h_recv, sizeof(struct sm_header), MSG_NOSIGNAL);
-	send(fd, send_log_dump, len, MSG_NOSIGNAL);
+	send(fd, send_data_buf, len, MSG_NOSIGNAL);
+}
+
+static void cmd_get_lockspaces(int fd, struct sm_header *h_recv)
+{
+	int count, len, rv;
+
+	rv = get_lockspaces(send_data_buf, &len, &count, LOG_DUMP_SIZE);
+
+	h_recv->length = sizeof(struct sm_header) + len;
+	h_recv->data = rv;
+	h_recv->data2 = count;
+
+	send(fd, h_recv, sizeof(struct sm_header), MSG_NOSIGNAL);
+	send(fd, send_data_buf, len, MSG_NOSIGNAL);
 }
 
 static void cmd_restrict(int ci, int fd, struct sm_header *h_recv)
@@ -1981,6 +1995,10 @@ void call_cmd_daemon(int ci, struct sm_header *h_recv, int client_maxi)
 	case SM_CMD_LOG_DUMP:
 		strcpy(client[ci].owner_name, "log_dump");
 		cmd_log_dump(fd, h_recv);
+		break;
+	case SM_CMD_GET_LOCKSPACES:
+		strcpy(client[ci].owner_name, "get_lockspaces");
+		cmd_get_lockspaces(fd, h_recv);
 		break;
 	};
 

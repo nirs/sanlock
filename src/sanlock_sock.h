@@ -39,6 +39,7 @@ enum {
 	SM_CMD_WRITE_RESOURCE    = 19,
 	SM_CMD_READ_LOCKSPACE    = 20,
 	SM_CMD_READ_RESOURCE     = 21,
+	SM_CMD_GET_LOCKSPACES    = 22,
 };
 
 struct sm_header {

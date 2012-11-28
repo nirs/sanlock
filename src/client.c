@@ -163,6 +163,71 @@ int sanlock_rem_lockspace(struct sanlk_lockspace *ls, uint32_t flags)
 	return cmd_lockspace(SM_CMD_REM_LOCKSPACE, ls, flags, 0);
 }
 
+int sanlock_get_lockspaces(struct sanlk_lockspace *lss, int lss_size,
+			   int *lss_count, uint32_t flags)
+{
+	struct sanlk_lockspace *ls;
+	struct sm_header h;
+	int rv, fd, i, ret, recv_count;
+
+	rv = connect_socket(&fd);
+	if (rv < 0)
+		return rv;
+
+	rv = send_header(fd, SM_CMD_GET_LOCKSPACES, flags, 0, 0, 0);
+	if (rv < 0)
+		goto out;
+
+	/* receive result and ls structs */
+
+	memset(&h, 0, sizeof(struct sm_header));
+
+	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	if (rv != sizeof(h)) {
+		rv = -1;
+		goto out;
+	}
+
+	/* -ENOSPC means that the daemon's send buffer ran out of space */
+
+	rv = (int)h.data;
+	if (rv < 0 && rv != -ENOSPC)
+		goto out;
+
+	*lss_count = h.data2;
+	recv_count = h.data2;
+
+	if (recv_count * sizeof(struct sanlk_lockspace) > lss_size) {
+		recv_count = lss_size / sizeof(struct sanlk_lockspace);
+		rv = -ENOBUFS;
+	}
+
+	ls = lss;
+
+	for (i = 0; i < recv_count; i++) {
+		ret = recv(fd, ls, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+		if (ret < 0) {
+			rv = -errno;
+			goto out;
+		}
+
+		if (ret != sizeof(struct sanlk_lockspace)) {
+			rv = -1;
+			goto out;
+		}
+
+		ls++;
+	}
+ out:
+	close(fd);
+	return rv;
+}
+
 int sanlock_align(struct sanlk_disk *disk)
 {
 	int rv, fd;

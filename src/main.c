@@ -54,6 +54,8 @@
 #include "helper.h"
 #include "timeouts.h"
 
+#define ONEMB 1048576
+
 #define SIGRUNPATH 100 /* anything that's not SIGTERM/SIGKILL */
 
 struct thread_pool {
@@ -1148,6 +1150,7 @@ static void process_connection(int ci)
 	case SM_CMD_STATUS:
 	case SM_CMD_HOST_STATUS:
 	case SM_CMD_LOG_DUMP:
+	case SM_CMD_GET_LOCKSPACES:
 		call_cmd_daemon(ci, &h, client_maxi);
 		break;
 	case SM_CMD_ADD_LOCKSPACE:
@@ -1777,6 +1780,7 @@ static void print_usage(void)
 	printf("\n");
 	printf("sanlock client <action> [options]\n");
 	printf("sanlock client status [-D] [-o p|s]\n");
+	printf("sanlock client gets\n");
 	printf("sanlock client host_status -s LOCKSPACE [-D]\n");
 	printf("sanlock client log_dump\n");
 	printf("sanlock client shutdown [-f 0|1]\n");
@@ -1879,6 +1883,8 @@ static int read_command_line(int argc, char *argv[])
 			com.action = ACT_STATUS;
 		else if (!strcmp(act, "host_status"))
 			com.action = ACT_HOST_STATUS;
+		else if (!strcmp(act, "gets"))
+			com.action = ACT_GETS;
 		else if (!strcmp(act, "log_dump"))
 			com.action = ACT_LOG_DUMP;
 		else if (!strcmp(act, "shutdown"))
@@ -2119,14 +2125,33 @@ static int read_command_line(int argc, char *argv[])
 	return 0;
 }
 
+/* only used by do_client */
+static char *lsf_to_str(uint32_t flags)
+{
+	static char lsf_str[16];
+
+	memset(lsf_str, 0, 16);
+
+	if (flags & SANLK_LSF_ADD)
+		strcat(lsf_str, "ADD ");
+
+	if (flags & SANLK_LSF_REM)
+		strcat(lsf_str, "REM ");
+
+	return lsf_str;
+}
+
 static int do_client(void)
 {
 	struct sanlk_resource **res_args = NULL;
 	struct sanlk_resource *res;
+	struct sanlk_lockspace *ls;
 	char *res_state = NULL;
 	char *res_str = NULL;
+	char *buf;
 	uint32_t io_timeout = 0;
-	int i, fd, rv = 0;
+	int i, fd, count;
+	int rv = 0;
 
 	if (com.action == ACT_COMMAND || com.action == ACT_ACQUIRE) {
 		if (com.num_hosts) {
@@ -2145,6 +2170,35 @@ static int do_client(void)
 
 	case ACT_HOST_STATUS:
 		rv = sanlock_host_status(com.debug, com.lockspace.name);
+		break;
+
+	case ACT_GETS:
+		buf = malloc(ONEMB);
+		if (!buf)
+			break;
+		memset(buf, 0, ONEMB);
+		ls = (struct sanlk_lockspace *)buf;
+
+		rv = sanlock_get_lockspaces(ls, ONEMB, &count, 0);
+		if (rv < 0)
+			log_tool("gets error %d", rv);
+
+		if (rv < 0 && rv != -ENOBUFS && rv != -ENOSPC) {
+			free(buf);
+			break;
+		}
+
+		for (i = 0; i < count; i++) {
+			log_tool("s %.48s:%llu:%s:%llu %s",
+				 ls->name,
+				 (unsigned long long)ls->host_id,
+				 ls->host_id_disk.path,
+				 (unsigned long long)ls->host_id_disk.offset,
+				 !ls->flags ? "" : lsf_to_str(ls->flags));
+			ls++;
+		}
+
+		free(buf);
 		break;
 
 	case ACT_LOG_DUMP:
