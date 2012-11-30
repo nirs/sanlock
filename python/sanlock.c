@@ -310,6 +310,151 @@ py_write_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     Py_RETURN_NONE;
 }
 
+/* read_lockspace */
+PyDoc_STRVAR(pydoc_read_lockspace, "\
+read_lockspace(path, offset=0) -> dict\n\
+Read the lockspace information from a device at a specific offset.");
+
+static PyObject *
+py_read_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
+{
+    int rv;
+    uint32_t io_timeout = 0;
+    const char *path;
+    struct sanlk_lockspace ls;
+    PyObject *ls_info = NULL, *ls_entry = NULL;
+
+    static char *kwlist[] = {"path", "offset", NULL};
+
+    /* initialize lockspace structure */
+    memset(&ls, 0, sizeof(struct sanlk_lockspace));
+
+    /* parse python tuple */
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "s|k", kwlist,
+        &path, &ls.host_id_disk.offset)) {
+        return NULL;
+    }
+
+    /* prepare sanlock names */
+    strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN - 1);
+
+    /* read sanlock lockspace (gil disabled) */
+    Py_BEGIN_ALLOW_THREADS
+    rv = sanlock_read_lockspace(&ls, 0, &io_timeout);
+    Py_END_ALLOW_THREADS
+
+    if (rv != 0) {
+        __set_exception(rv, "Sanlock lockspace read failure");
+        return NULL;
+    }
+
+    /* prepare the dictionary holding the information */
+    if ((ls_info = PyDict_New()) == NULL)
+        goto exit_fail;
+
+    /* fill the dictionary information: lockspace */
+    if ((ls_entry = PyString_FromString(ls.name)) == NULL)
+        goto exit_fail;
+    rv = PyDict_SetItemString(ls_info, "lockspace", ls_entry);
+    Py_DECREF(ls_entry);
+    if (rv != 0)
+        goto exit_fail;
+
+    /* fill the dictionary information: iotimeout */
+    if ((ls_entry = PyInt_FromLong(io_timeout)) == NULL)
+        goto exit_fail;
+    Py_DECREF(ls_entry);
+    rv = PyDict_SetItemString(ls_info, "iotimeout", ls_entry);
+    if (rv != 0)
+        goto exit_fail;
+
+    /* success */
+    return ls_info;
+
+    /* failure */
+exit_fail:
+    Py_XDECREF(ls_info);
+    return NULL;
+}
+
+/* read_resource */
+PyDoc_STRVAR(pydoc_read_resource, "\
+read_resource(path, offset=0) -> dict\n\
+Read the resource information from a device at a specific offset.");
+
+static PyObject *
+py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
+{
+    int rv, rs_len;
+    const char *path;
+    struct sanlk_resource *rs;
+    PyObject *rs_info = NULL, *rs_entry = NULL;
+
+    static char *kwlist[] = {"path", "offset", NULL};
+
+    /* allocate the needed memory for the resource and one disk */
+    rs_len = sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk);
+    rs = malloc(rs_len);
+
+    if (rs == NULL) {
+        PyErr_NoMemory();
+        return NULL;
+    }
+
+    /* initialize resource and disk structures */
+    memset(rs, 0, rs_len);
+    rs->num_disks = 1;
+
+    /* parse python tuple */
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "s|k", kwlist,
+        &path, &(rs->disks[0].offset))) {
+        goto exit_fail;
+    }
+
+    /* prepare the resource disk path */
+    strncpy(rs->disks[0].path, path, SANLK_PATH_LEN - 1);
+
+    /* read sanlock resource (gil disabled) */
+    Py_BEGIN_ALLOW_THREADS
+    rv = sanlock_read_resource(rs, 0);
+    Py_END_ALLOW_THREADS
+
+    if (rv != 0) {
+        __set_exception(rv, "Sanlock resource read failure");
+        goto exit_fail;
+    }
+
+    /* prepare the dictionary holding the information */
+    if ((rs_info = PyDict_New()) == NULL)
+        goto exit_fail;
+
+    /* fill the dictionary information: lockspace */
+    if ((rs_entry = PyString_FromString(rs->lockspace_name)) == NULL)
+        goto exit_fail;
+    rv = PyDict_SetItemString(rs_info, "lockspace", rs_entry);
+    Py_DECREF(rs_entry);
+    if (rv != 0)
+        goto exit_fail;
+
+    /* fill the dictionary information: resource */
+    if ((rs_entry = PyString_FromString(rs->name)) == NULL)
+        goto exit_fail;
+    rv = PyDict_SetItemString(rs_info, "resource", rs_entry);
+    Py_DECREF(rs_entry);
+    if (rv != 0)
+        goto exit_fail;
+
+    /* success */
+    free(rs);
+    return rs_info;
+
+    /* failure */
+exit_fail:
+    free(rs);
+    Py_XDECREF(rs_info);
+    return NULL;
+}
+
 /* write_resource */
 PyDoc_STRVAR(pydoc_write_resource, "\
 write_resource(lockspace, resource, disks, max_hosts=0, num_hosts=0)\n\
@@ -748,6 +893,10 @@ sanlock_methods[] = {
                         METH_VARARGS|METH_KEYWORDS, pydoc_write_lockspace},
     {"write_resource", (PyCFunction) py_write_resource,
                         METH_VARARGS|METH_KEYWORDS, pydoc_write_resource},
+    {"read_lockspace", (PyCFunction) py_read_lockspace,
+                        METH_VARARGS|METH_KEYWORDS, pydoc_read_lockspace},
+    {"read_resource", (PyCFunction) py_read_resource,
+                        METH_VARARGS|METH_KEYWORDS, pydoc_read_resource},
     {"add_lockspace", (PyCFunction) py_add_lockspace,
                         METH_VARARGS|METH_KEYWORDS, pydoc_add_lockspace},
     {"inq_lockspace", (PyCFunction) py_inq_lockspace,
