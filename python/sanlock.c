@@ -183,7 +183,7 @@ py_init_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     const char *lockspace, *path;
     struct sanlk_lockspace ls;
 
-    static char *kwlist[] = {"lockspace", "path", "offest",
+    static char *kwlist[] = {"lockspace", "path", "offset",
                                 "max_hosts", "num_hosts", "use_aio", NULL};
 
     /* initialize lockspace structure */
