@@ -174,6 +174,7 @@ py_get_alignment(PyObject *self __unused, PyObject *args)
 PyDoc_STRVAR(pydoc_init_lockspace, "\
 init_lockspace(lockspace, path, offset=0, max_hosts=0, num_hosts=0, \
 use_aio=True)\n\
+*DEPRECATED* use write_lockspace instead.\n\
 Initialize a device to be used as sanlock lockspace.");
 
 static PyObject *
@@ -217,6 +218,7 @@ py_init_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 PyDoc_STRVAR(pydoc_init_resource, "\
 init_resource(lockspace, resource, disks, max_hosts=0, num_hosts=0, \
 use_aio=True)\n\
+*DEPRECATED* use write_resource instead.\n\
 Initialize a device to be used as sanlock resource.\n\
 The disks must be in the format: [(path, offset), ... ]");
 
@@ -262,6 +264,100 @@ py_init_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
 exit_fail:
     free(res);
+    return NULL;
+}
+
+/* write_lockspace */
+PyDoc_STRVAR(pydoc_write_lockspace, "\
+write_lockspace(lockspace, path, offset=0, max_hosts=0, iotimeout=0)\n\
+Initialize or update a device to be used as sanlock lockspace.");
+
+static PyObject *
+py_write_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
+{
+    int rv, max_hosts = 0;
+    uint32_t io_timeout = 0;
+    const char *lockspace, *path;
+    struct sanlk_lockspace ls;
+
+    static char *kwlist[] = {"lockspace", "path", "offset", "max_hosts",
+                                "iotimeout", NULL};
+
+    /* initialize lockspace structure */
+    memset(&ls, 0, sizeof(struct sanlk_lockspace));
+
+    /* parse python tuple */
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ss|kiiI", kwlist,
+        &lockspace, &path, &ls.host_id_disk.offset, &max_hosts,
+        &io_timeout)) {
+        return NULL;
+    }
+
+    /* prepare sanlock names */
+    strncpy(ls.name, lockspace, SANLK_NAME_LEN);
+    strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN - 1);
+
+    /* write sanlock lockspace (gil disabled) */
+    Py_BEGIN_ALLOW_THREADS
+    rv = sanlock_write_lockspace(&ls, max_hosts, 0, io_timeout);
+    Py_END_ALLOW_THREADS
+
+    if (rv != 0) {
+        __set_exception(rv, "Sanlock lockspace write failure");
+        return NULL;
+    }
+
+    Py_RETURN_NONE;
+}
+
+/* write_resource */
+PyDoc_STRVAR(pydoc_write_resource, "\
+write_resource(lockspace, resource, disks, max_hosts=0, num_hosts=0)\n\
+Initialize a device to be used as sanlock resource.\n\
+The disks must be in the format: [(path, offset), ... ]");
+
+static PyObject *
+py_write_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
+{
+    int rv, max_hosts = 0, num_hosts = 0;
+    const char *lockspace, *resource;
+    struct sanlk_resource *rs;
+    PyObject *disks;
+
+    static char *kwlist[] = {"lockspace", "resource", "disks", "max_hosts",
+                                "num_hosts", NULL};
+
+    /* parse python tuple */
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|iii",
+        kwlist, &lockspace, &resource, &PyList_Type, &disks, &max_hosts,
+        &num_hosts)) {
+        return NULL;
+    }
+
+    /* parse and check sanlock resource */
+    if (__parse_resource(disks, &rs) != 0) {
+        return NULL;
+    }
+
+    /* prepare sanlock names */
+    strncpy(rs->lockspace_name, lockspace, SANLK_NAME_LEN);
+    strncpy(rs->name, resource, SANLK_NAME_LEN);
+
+    /* init sanlock resource (gil disabled) */
+    Py_BEGIN_ALLOW_THREADS
+    rv = sanlock_write_resource(rs, max_hosts, num_hosts, 0);
+    Py_END_ALLOW_THREADS
+
+    if (rv != 0) {
+        __set_exception(rv, "Sanlock resource write failure");
+        goto exit_fail;
+    }
+
+    free(rs);
+    Py_RETURN_NONE;
+
+exit_fail:
+    free(rs);
     return NULL;
 }
 
@@ -648,6 +744,10 @@ sanlock_methods[] = {
                         METH_VARARGS|METH_KEYWORDS, pydoc_init_lockspace},
     {"init_resource", (PyCFunction) py_init_resource,
                         METH_VARARGS|METH_KEYWORDS, pydoc_init_resource},
+    {"write_lockspace", (PyCFunction) py_write_lockspace,
+                        METH_VARARGS|METH_KEYWORDS, pydoc_write_lockspace},
+    {"write_resource", (PyCFunction) py_write_resource,
+                        METH_VARARGS|METH_KEYWORDS, pydoc_write_resource},
     {"add_lockspace", (PyCFunction) py_add_lockspace,
                         METH_VARARGS|METH_KEYWORDS, pydoc_add_lockspace},
     {"inq_lockspace", (PyCFunction) py_inq_lockspace,
