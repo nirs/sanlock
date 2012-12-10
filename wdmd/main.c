@@ -63,8 +63,8 @@ static int shm_fd;
 
 static int allow_scripts;
 static int kill_script_sec;
-static char *scripts_dir = (char *)"/etc/wdmd.d";
-static char *watchdog_path = "/dev/watchdog";
+static const char *scripts_dir = "/etc/wdmd.d";
+static const char *watchdog_path = "/dev/watchdog";
 
 struct script_status {
 	uint64_t start;
@@ -1309,7 +1309,7 @@ static void print_debug_and_exit(void)
 	if (rv < 0)
 		exit(1);
 
-	write(STDOUT_FILENO, debug_buf, strlen(debug_buf));
+	rv = write(STDOUT_FILENO, debug_buf, strlen(debug_buf));
 
 	exit(0);
 }

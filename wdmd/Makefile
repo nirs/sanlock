@@ -21,7 +21,7 @@ LIB_SOURCE = client.c wdmd_sock.c
 
 TEST_SOURCE = wdmd_client.c
 
-CFLAGS += -D_GNU_SOURCE -g \
+CFLAGS += -D_GNU_SOURCE -g -O2 \
 	-Wall \
 	-Wformat \
 	-Wformat-security \
