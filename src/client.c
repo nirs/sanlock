@@ -207,6 +207,9 @@ int sanlock_get_lockspaces(struct sanlk_lockspace *lss, int lss_size,
 		rv = -ENOBUFS;
 	}
 
+	if (!lss)
+		goto out;
+
 	ls = lss;
 
 	for (i = 0; i < recv_count; i++) {
