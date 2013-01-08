@@ -2145,10 +2145,9 @@ static int do_client(void)
 {
 	struct sanlk_resource **res_args = NULL;
 	struct sanlk_resource *res;
-	struct sanlk_lockspace *ls;
+	struct sanlk_lockspace *lss, *ls;
 	char *res_state = NULL;
 	char *res_str = NULL;
-	char *buf;
 	uint32_t io_timeout = 0;
 	int i, fd, count;
 	int rv = 0;
@@ -2173,20 +2172,22 @@ static int do_client(void)
 		break;
 
 	case ACT_GETS:
-		buf = malloc(ONEMB);
-		if (!buf)
-			break;
-		memset(buf, 0, ONEMB);
-		ls = (struct sanlk_lockspace *)buf;
+		lss = NULL;
 
-		rv = sanlock_get_lockspaces(ls, ONEMB, &count, 0);
+		rv = sanlock_get_lockspaces(&lss, &count, 0);
 		if (rv < 0)
 			log_tool("gets error %d", rv);
 
-		if (rv < 0 && rv != -ENOBUFS && rv != -ENOSPC) {
-			free(buf);
+		if (rv < 0 && rv != -ENOSPC) {
+			if (lss)
+				free(lss);
 			break;
 		}
+
+		if (!lss)
+			break;
+
+		ls = lss;
 
 		for (i = 0; i < count; i++) {
 			log_tool("s %.48s:%llu:%s:%llu %s",
@@ -2198,7 +2199,7 @@ static int do_client(void)
 			ls++;
 		}
 
-		free(buf);
+		free(lss);
 		break;
 
 	case ACT_LOG_DUMP:

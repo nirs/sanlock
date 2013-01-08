@@ -163,10 +163,10 @@ int sanlock_rem_lockspace(struct sanlk_lockspace *ls, uint32_t flags)
 	return cmd_lockspace(SM_CMD_REM_LOCKSPACE, ls, flags, 0);
 }
 
-int sanlock_get_lockspaces(struct sanlk_lockspace *lss, int lss_size,
-			   int *lss_count, uint32_t flags)
+int sanlock_get_lockspaces(struct sanlk_lockspace **lss, int *lss_count,
+			   uint32_t flags)
 {
-	struct sanlk_lockspace *ls;
+	struct sanlk_lockspace *lsbuf, *ls;
 	struct sm_header h;
 	int rv, fd, i, ret, recv_count;
 
@@ -202,30 +202,33 @@ int sanlock_get_lockspaces(struct sanlk_lockspace *lss, int lss_size,
 	*lss_count = h.data2;
 	recv_count = h.data2;
 
-	if (recv_count * sizeof(struct sanlk_lockspace) > lss_size) {
-		recv_count = lss_size / sizeof(struct sanlk_lockspace);
-		rv = -ENOBUFS;
-	}
-
 	if (!lss)
 		goto out;
 
-	ls = lss;
+	lsbuf = malloc(recv_count * sizeof(struct sanlk_lockspace));
+	if (!lsbuf)
+		goto out;
+
+	ls = lsbuf;
 
 	for (i = 0; i < recv_count; i++) {
 		ret = recv(fd, ls, sizeof(struct sanlk_lockspace), MSG_WAITALL);
 		if (ret < 0) {
 			rv = -errno;
+			free(lsbuf);
 			goto out;
 		}
 
 		if (ret != sizeof(struct sanlk_lockspace)) {
 			rv = -1;
+			free(lsbuf);
 			goto out;
 		}
 
 		ls++;
 	}
+
+	*lss = lsbuf;
  out:
 	close(fd);
 	return rv;

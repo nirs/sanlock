@@ -67,14 +67,12 @@ int sanlock_rem_lockspace(struct sanlk_lockspace *ls, uint32_t flags);
  * 0: all lockspaces copied out, lss_count set to number
  * -ENOSPC: sanlock internal buffer ran out of space
  * (lss_count set to number that would have been copied)
- * -ENOBUFS: lss_size too small
- * (lss_count set to number that would have been copied)
  *
  *  sanlk_lockspace.flags set to SANLK_LSF_
  */
 
-int sanlock_get_lockspaces(struct sanlk_lockspace *lss, int lss_size,
-			   int *lss_count, uint32_t flags);
+int sanlock_get_lockspaces(struct sanlk_lockspace **lss, int *lss_count,
+			   uint32_t flags);
 
 /*
  * Returns the alignment in bytes required by sanlock_init()
