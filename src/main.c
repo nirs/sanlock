@@ -615,7 +615,9 @@ static void kill_pids(struct space *sp)
 
 		in_grace = now < (last_success + id_renewal_fail_seconds + kill_grace_seconds);
 
-		if ((kill_grace_seconds > 0) && in_grace && cl->killpath[0]) {
+		if (sp->external_remove || (external_shutdown > 1)) {
+			sig = SIGKILL;
+		} else if ((kill_grace_seconds > 0) && in_grace && cl->killpath[0]) {
 			sig = SIGRUNPATH;
 		} else if (in_grace) {
 			sig = SIGTERM;
