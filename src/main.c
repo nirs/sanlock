@@ -1766,7 +1766,7 @@ static void print_usage(void)
 	printf("  -D            no fork and print all logging to stderr\n");
 	printf("  -Q 0|1        quiet error messages for common lock contention (0)\n");
 	printf("  -R 0|1        renewal debugging, log debug info about renewals (0)\n");
-	printf("  -L <pri>      write logging at priority level and up to logfile (3 LOG_ERR))\n");
+	printf("  -L <pri>      write logging at priority level and up to logfile (3 LOG_ERR)\n");
 	printf("                (use -1 for none)\n");
 	printf("  -S <pri>      write logging at priority level and up to syslog (3 LOG_ERR)\n");
 	printf("                (use -1 for none)\n");
@@ -1776,7 +1776,7 @@ static void print_usage(void)
 	printf("  -g <sec>      seconds for graceful recovery (%d)\n", DEFAULT_GRACE_SEC);
 	printf("  -w 0|1        use watchdog through wdmd (%d)\n", DEFAULT_USE_WATCHDOG);
 	printf("  -h 0|1        use high priority (RR) scheduling (%d)\n", DEFAULT_HIGH_PRIORITY);
-	printf("  -l <num>      use mlockall (0 none, 1 current, 2 current and future) (2)\n");
+	printf("  -l <num>      use mlockall (0 none, 1 current, 2 current and future) (%d)\n", DEFAULT_MLOCK_LEVEL);
 	printf("  -a 0|1        use async io (%d)\n", DEFAULT_USE_AIO);
 	printf("  -o 0|1        io timeout in seconds (%d)\n", DEFAULT_IO_TIMEOUT);
 	printf("\n");
