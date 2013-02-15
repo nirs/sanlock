@@ -16,13 +16,30 @@
 #define __unused __attribute__ ((unused))
 #endif
 
+#ifdef WITH_CPYCHECKER_SETS_EXCEPTION_ATTRIBUTE
+#define __sets_exception \
+    __attribute__((cpychecker_sets_exception))
+#else
+#define __sets_exception
+#endif
+
+#ifdef WITH_CPYCHECKER_NEGATIVE_RESULT_SETS_EXCEPTION_ATTRIBUTE
+#define __neg_sets_exception \
+    __attribute__((cpychecker_negative_result_sets_exception))
+#else
+#define __neg_sets_exception
+#endif
+
+/* Functions prototypes */
+static void __set_exception(int en, char *msg) __sets_exception;
+static int __parse_resource(PyObject *obj, struct sanlk_resource **res_ret) __neg_sets_exception;
+
 /* Sanlock module */
 PyDoc_STRVAR(pydoc_sanlock, "\
 Copyright (C) 2010-2011 Red Hat, Inc.  All rights reserved.\n\
 This copyrighted material is made available to anyone wishing to use,\n\
 modify, copy, or redistribute it subject to the terms and conditions\n\
 of the GNU General Public License v2 or (at your option) any later version.");
-PyObject *py_module;
 
 /* Sanlock exception */
 static PyObject *py_exception;
@@ -30,7 +47,7 @@ static PyObject *py_exception;
 static void
 __set_exception(int en, char *msg)
 {
-    char *err_name;
+    const char *err_name;
     PyObject *exc_tuple;
 
     if (en < 0 && en > -200) {
@@ -241,7 +258,7 @@ py_init_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
     }
 
     /* parse and check sanlock resource */
-    if (__parse_resource(disks, &res) != 0) {
+    if (__parse_resource(disks, &res) < 0) {
         return NULL;
     }
 
@@ -287,7 +304,7 @@ py_write_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ss|kiiI", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ss|kiI", kwlist,
         &lockspace, &path, &ls.host_id_disk.offset, &max_hosts,
         &io_timeout)) {
         return NULL;
@@ -363,8 +380,8 @@ py_read_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     /* fill the dictionary information: iotimeout */
     if ((ls_entry = PyInt_FromLong(io_timeout)) == NULL)
         goto exit_fail;
-    Py_DECREF(ls_entry);
     rv = PyDict_SetItemString(ls_info, "iotimeout", ls_entry);
+    Py_DECREF(ls_entry);
     if (rv != 0)
         goto exit_fail;
 
@@ -473,14 +490,14 @@ py_write_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
                                 "num_hosts", NULL};
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|iii",
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|ii",
         kwlist, &lockspace, &resource, &PyList_Type, &disks, &max_hosts,
         &num_hosts)) {
         return NULL;
     }
 
     /* parse and check sanlock resource */
-    if (__parse_resource(disks, &rs) != 0) {
+    if (__parse_resource(disks, &rs) < 0) {
         return NULL;
     }
 
@@ -701,7 +718,7 @@ py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
     }
 
     /* parse and check sanlock resource */
-    if (__parse_resource(disks, &res) != 0) {
+    if (__parse_resource(disks, &res) < 0) {
         return NULL;
     }
 
@@ -756,7 +773,7 @@ py_release(PyObject *self __unused, PyObject *args, PyObject *keywds)
     }
 
     /* parse and check sanlock resource */
-    if (__parse_resource(disks, &res) != 0) {
+    if (__parse_resource(disks, &res) < 0) {
         return NULL;
     }
 
@@ -794,7 +811,8 @@ static PyObject *
 py_killpath(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
     int rv, i, j, n, num_args, sanlockfd = -1;
-    char *p, *path, kpargs[SANLK_HELPER_ARGS_LEN];
+    char kpargs[SANLK_HELPER_ARGS_LEN];
+    const char *p, *path;
     PyObject *argslist, *item;
 
     static char *kwlist[] = {"path", "args", "slkfd", NULL};
@@ -917,51 +935,53 @@ sanlock_exception = {
     "errno", (PyCFunction) py_exception_errno, METH_O, pydoc_errno
 };
 
-static void
+static PyObject *
 initexception(void)
 {
     int rv;
-    PyObject *dict, *func, *meth;
+    PyObject *dict, *func, *meth, *excp = NULL;
 
-    dict = PyDict_New();
+    if ((dict = PyDict_New()) == NULL)
+        goto exit_fail;
 
-    if (dict == NULL)
-        return;
+    if ((func = PyCFunction_New(&sanlock_exception, NULL)) == NULL)
+        goto exit_fail;
 
-    func = PyCFunction_New(&sanlock_exception, NULL);
     meth = PyObject_CallFunction((PyObject *) &PyProperty_Type, "O", func);
     Py_DECREF(func);
-
     if (meth == NULL)
-        return;
+        goto exit_fail;
 
     rv = PyDict_SetItemString(dict, sanlock_exception.ml_name, meth);
     Py_DECREF(meth);
-
     if (rv < 0)
-        return;
+        goto exit_fail;
 
-    py_exception = PyErr_NewException("sanlock.SanlockException", NULL, dict);
-    Py_DECREF(dict);
+    excp = PyErr_NewException("sanlock.SanlockException", NULL, dict);
+
+exit_fail:
+    Py_XDECREF(dict);
+
+    return excp;
 }
 
 PyMODINIT_FUNC
 initsanlock(void)
 {
+    PyObject *py_module;
 
     py_module = Py_InitModule4("sanlock",
                 sanlock_methods, pydoc_sanlock, NULL, PYTHON_API_VERSION);
 
-    /* Python's module loader doesn't support clean recovery from errors */
     if (py_module == NULL)
         return;
 
-    /* Initializing sanlock exception */
-    initexception();
+    py_exception = initexception();
 
     if (py_exception == NULL)
         return;
 
-    Py_INCREF(py_exception);
-    PyModule_AddObject(py_module, "SanlockException", py_exception);
+    if (PyModule_AddObject(py_module, "SanlockException", py_exception) == 0) {
+        Py_INCREF(py_exception);
+    }
 }

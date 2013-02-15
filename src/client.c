@@ -549,7 +549,7 @@ int sanlock_restrict(int sock, uint32_t flags)
 	return rv;
 }
 
-int sanlock_killpath(int sock, uint32_t flags, char *path, char *args)
+int sanlock_killpath(int sock, uint32_t flags, const char *path, char *args)
 {
 	char path_max[SANLK_HELPER_PATH_LEN];
 	char args_max[SANLK_HELPER_ARGS_LEN];

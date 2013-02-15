@@ -45,7 +45,7 @@ int sanlock_register(void);
 
 int sanlock_restrict(int sock, uint32_t flags);
 
-int sanlock_killpath(int sock, uint32_t flags, char *path, char *args);
+int sanlock_killpath(int sock, uint32_t flags, const char *path, char *args);
 
 int sanlock_acquire(int sock, int pid, uint32_t flags, int res_count,
 		    struct sanlk_resource *res_args[],
