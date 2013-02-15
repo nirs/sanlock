@@ -2,6 +2,9 @@
 *.co
 .vimdir
 cscope.*
+wdmd/libwdmd.so*
+wdmd/wdmd
+wdmd/wdmd_client
 src/libsanlock.so*
 src/libsanlock_client.so*
 src/sanlock
