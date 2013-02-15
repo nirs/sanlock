@@ -684,6 +684,99 @@ py_rem_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     Py_RETURN_NONE;
 }
 
+/* get_lockspaces */
+PyDoc_STRVAR(pydoc_get_lockspaces, "\
+get_lockspaces() -> dict\n\
+Return the list of lockspaces currently managed by sanlock. The reported\n\
+flag indicates whether the lockspace is acquired (0) or in transition.\n\
+The possible transition values are SANLK_LSF_ADD if the lockspace is in\n\
+the process of being acquired, and SANLK_LSF_REM if it's in the process\n\
+of being released.\n");
+
+static PyObject *
+py_get_lockspaces(PyObject *self __unused, PyObject *args, PyObject *keywds)
+{
+    int rv, i, lss_count;
+    struct sanlk_lockspace *lss = NULL;
+    PyObject *ls_list = NULL, *ls_entry = NULL, *ls_value = NULL;
+
+    /* get all the lockspaces (gil disabled) */
+    Py_BEGIN_ALLOW_THREADS
+    rv = sanlock_get_lockspaces(&lss, &lss_count, 0);
+    Py_END_ALLOW_THREADS
+
+    if (rv < 0) {
+        __set_exception(rv, "Sanlock get lockspace failure");
+        goto exit_fail;
+    }
+
+    /* prepare the dictionary holding the information */
+    if ((ls_list = PyList_New(0)) == NULL)
+        goto exit_fail;
+
+    for (i = 0; i < lss_count; i++) {
+        if ((ls_entry = PyDict_New()) == NULL)
+            goto exit_fail;
+
+        /* fill the dictionary information: lockspace */
+        if ((ls_value = PyString_FromString(lss[i].name)) == NULL)
+            goto exit_fail;
+        rv = PyDict_SetItemString(ls_entry, "lockspace", ls_value);
+        Py_DECREF(ls_value);
+        if (rv != 0)
+            goto exit_fail;
+
+        /* fill the dictionary information: host_id */
+        if ((ls_value = PyInt_FromLong(lss[i].host_id)) == NULL)
+            goto exit_fail;
+        rv = PyDict_SetItemString(ls_entry, "host_id", ls_value);
+        Py_DECREF(ls_value);
+        if (rv != 0)
+            goto exit_fail;
+
+        /* fill the dictionary information: path */
+        if ((ls_value = PyString_FromString(lss[i].host_id_disk.path)) == NULL)
+            goto exit_fail;
+        rv = PyDict_SetItemString(ls_entry, "path", ls_value);
+        Py_DECREF(ls_value);
+        if (rv != 0)
+            goto exit_fail;
+
+        /* fill the dictionary information: offset */
+        if ((ls_value = PyInt_FromLong(lss[i].host_id_disk.offset)) == NULL)
+            goto exit_fail;
+        rv = PyDict_SetItemString(ls_entry, "offset", ls_value);
+        Py_DECREF(ls_value);
+        if (rv != 0)
+            goto exit_fail;
+
+        /* fill the dictionary information: flags */
+        if ((ls_value = PyInt_FromLong(lss[i].flags)) == NULL)
+            goto exit_fail;
+        rv = PyDict_SetItemString(ls_entry, "flags", ls_value);
+        Py_DECREF(ls_value);
+        if (rv != 0)
+            goto exit_fail;
+
+        if (PyList_Append(ls_list, ls_entry) != 0)
+            goto exit_fail;
+
+        Py_DECREF(ls_entry);
+    }
+
+    /* success */
+    free(lss);
+    return ls_list;
+
+    /* failure */
+exit_fail:
+    if (lss) free(lss);
+    Py_XDECREF(ls_entry);
+    Py_XDECREF(ls_list);
+    return NULL;
+}
+
+
 /* acquire */
 PyDoc_STRVAR(pydoc_acquire, "\
 acquire(lockspace, resource, disks [, slkfd=fd, pid=owner, shared=False])\n\
@@ -921,6 +1014,8 @@ sanlock_methods[] = {
                         METH_VARARGS|METH_KEYWORDS, pydoc_inq_lockspace},
     {"rem_lockspace", (PyCFunction) py_rem_lockspace,
                         METH_VARARGS|METH_KEYWORDS, pydoc_rem_lockspace},
+    {"get_lockspaces", (PyCFunction) py_get_lockspaces,
+                        METH_VARARGS|METH_KEYWORDS, pydoc_get_lockspaces},
     {"acquire", (PyCFunction) py_acquire,
                 METH_VARARGS|METH_KEYWORDS, pydoc_acquire},
     {"release", (PyCFunction) py_release,
@@ -968,7 +1063,7 @@ exit_fail:
 PyMODINIT_FUNC
 initsanlock(void)
 {
-    PyObject *py_module;
+    PyObject *py_module, *sk_constant;
 
     py_module = Py_InitModule4("sanlock",
                 sanlock_methods, pydoc_sanlock, NULL, PYTHON_API_VERSION);
@@ -983,5 +1078,17 @@ initsanlock(void)
 
     if (PyModule_AddObject(py_module, "SanlockException", py_exception) == 0) {
         Py_INCREF(py_exception);
+    }
+
+    if ((sk_constant = PyInt_FromLong(SANLK_LSF_ADD)) != NULL) {
+        if (PyModule_AddObject(py_module, "SANLK_LSF_ADD", sk_constant)) {
+            Py_DECREF(sk_constant);
+        }
+    }
+
+    if ((sk_constant = PyInt_FromLong(SANLK_LSF_REM)) != NULL) {
+        if (PyModule_AddObject(py_module, "SANLK_LSF_REM", sk_constant)) {
+            Py_DECREF(sk_constant);
+        }
     }
 }
