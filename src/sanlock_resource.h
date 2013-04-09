@@ -36,10 +36,12 @@
  * SANLK_REQ_KILL_PID: send SIGKILL to pid holding the resource, or
  *                     SIGTERM if SIGKILL is restricted
  * SANLK_REQ_SIGUSR1:  send SIGUSR1 to pid holding the resource
+ * SANLK_REQ_KILLPATH: run configured killpath against the pid
  */
 
 #define SANLK_REQ_KILL_PID	0x00000001
 #define SANLK_REQ_SIGUSR1	0x00000002
+#define SANLK_REQ_KILLPATH	0x00000003
 
 int sanlock_register(void);
 

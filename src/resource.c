@@ -569,7 +569,8 @@ static struct resource *new_resource(struct token *token)
 	return r;
 }
 
-int acquire_token(struct task *task, struct token *token)
+int acquire_token(struct task *task, struct token *token,
+		  char *killpath, char *killargs)
 {
 	struct leader_record leader;
 	struct resource *r;
@@ -626,6 +627,8 @@ int acquire_token(struct task *task, struct token *token)
 		return -ENOMEM;
 	}
 
+	memcpy(r->killpath, killpath, SANLK_HELPER_PATH_LEN);
+	memcpy(r->killargs, killargs, SANLK_HELPER_ARGS_LEN);
 	list_add(&token->list, &r->tokens);
 	list_add(&r->list, &resources_add);
 	token->resource = r;
@@ -820,6 +823,8 @@ static int examine_token(struct task *task, struct token *token,
 
 static void do_request(struct token *tt, int pid, uint32_t force_mode)
 {
+	char killpath[SANLK_HELPER_PATH_LEN];
+	char killargs[SANLK_HELPER_ARGS_LEN];
 	struct helper_msg hm;
 	struct resource *r;
 	uint32_t flags;
@@ -830,6 +835,8 @@ static void do_request(struct token *tt, int pid, uint32_t force_mode)
 	if (r && r->pid == pid) {
 		found = 1;
 		flags = r->flags;
+		memcpy(killpath, r->killpath, SANLK_HELPER_PATH_LEN);
+		memcpy(killargs, r->killargs, SANLK_HELPER_ARGS_LEN);
 	}
 	pthread_mutex_unlock(&resource_mutex);
 
@@ -857,24 +864,24 @@ static void do_request(struct token *tt, int pid, uint32_t force_mode)
 		hm.type = HELPER_MSG_KILLPID;
 		hm.pid = pid;
 		hm.sig = SIGUSR1;
+	} else if (force_mode == SANLK_REQ_KILLPATH) {
+		if (!killpath[0]) {
+			log_error("do_request %d force_mode %d no killpath",
+				  pid, force_mode);
+			return;
+		}
+		/* there's no thread locking for the clients array so
+		   we can't go searching for killpath/killargs for this
+		   pid from here, so we copy the info into struct
+		   resource so we can use it here. */
+		hm.type = HELPER_MSG_RUNPATH;
+		memcpy(hm.path, killpath, SANLK_HELPER_PATH_LEN);
+		memcpy(hm.args, killargs, SANLK_HELPER_ARGS_LEN);
 	} else {
 		log_error("do_request %d unknown force_mode %d",
 			  pid, force_mode);
 		return;
 	}
-#if 0
-	/* TODO: this is difficult because we can't dig into the clients
-	   array to get the killpath/killargs; the clients array is not
-	   locked and can only be accessed by the main thread. */
-
-	else if (force_mode == SANLK_REQ_KILLPATH) {
-		hm.type = HELPER_MSG_RUNPATH;
-		memcpy(hm.path, cl->killpath, SANLK_HELPER_PATH_LEN);
-		memcpy(hm.args, cl->killargs, SANLK_HELPER_ARGS_LEN);
-		if (cl->flags & CL_KILLPATH_PID)
-			hm.pid = pid;
-	}
-#endif
 
  retry:
 	rv = write(helper_kill_fd, &hm, sizeof(hm));

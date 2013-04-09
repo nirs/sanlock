@@ -126,6 +126,8 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 	struct sanlk_resource res;
 	struct sanlk_options opt;
 	struct space_info spi;
+	char killpath[SANLK_HELPER_PATH_LEN];
+	char killargs[SANLK_HELPER_ARGS_LEN];
 	char *opt_str;
 	int token_len, disks_len;
 	int fd, rv, i, j, empty_slots, lvl;
@@ -165,6 +167,9 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 		if (!cl->tokens[i])
 			empty_slots++;
 	}
+
+	memcpy(killpath, cl->killpath, SANLK_HELPER_PATH_LEN);
+	memcpy(killargs, cl->killargs, SANLK_HELPER_ARGS_LEN);
 	pthread_mutex_unlock(&cl->mutex);
 
 	if (empty_slots < new_tokens_count) {
@@ -320,7 +325,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 	for (i = 0; i < new_tokens_count; i++) {
 		token = new_tokens[i];
 
-		rv = acquire_token(task, token);
+		rv = acquire_token(task, token, killpath, killargs);
 		if (rv < 0) {
 			switch (rv) {
 			case -EEXIST:

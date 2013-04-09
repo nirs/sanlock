@@ -15,7 +15,8 @@ int lockspace_is_used(struct sanlk_lockspace *ls);
 
 void check_mode_block(struct token *token, int q, char *dblock);
 
-int acquire_token(struct task *task, struct token *token);
+int acquire_token(struct task *task, struct token *token,
+		  char *killpath, char *killargs);
 int release_token(struct task *task, struct token *token);
 void release_token_async(struct token *token);
 

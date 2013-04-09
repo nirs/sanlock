@@ -109,6 +109,8 @@ struct resource {
 	int pid;                     /* copied from token when ex */
 	uint32_t flags;
 	uint32_t release_token_id;   /* copy to temp token (tt) for log messages */
+	char killpath[SANLK_HELPER_PATH_LEN]; /* copied from client */
+	char killargs[SANLK_HELPER_ARGS_LEN]; /* copied from client */
 	struct leader_record leader; /* copy of last leader_record we wrote */
 	struct sanlk_resource r;
 };
