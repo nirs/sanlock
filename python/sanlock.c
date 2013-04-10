@@ -779,28 +779,29 @@ exit_fail:
 
 /* acquire */
 PyDoc_STRVAR(pydoc_acquire, "\
-acquire(lockspace, resource, disks [, slkfd=fd, pid=owner, shared=False])\n\
+acquire(lockspace, resource, disks \
+[, slkfd=fd, pid=owner, shared=False, version=0])\n\
 Acquire a resource lease for the current process (using the slkfd argument\n\
 to specify the sanlock file descriptor) or for an other process (using the\n\
 pid argument). If shared is True the resource will be acquired in the shared\n\
-mode.\n\
+mode. The version is the version of the lease that must be acquired or fail.\n\
 The disks must be in the format: [(path, offset), ... ]\n");
 
 static PyObject *
 py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, sanlockfd = -1, pid = -1, shared = 0;
+    int rv, sanlockfd = -1, pid = -1, shared = 0, version = 0;
     const char *lockspace, *resource;
     struct sanlk_resource *res;
     PyObject *disks;
 
     static char *kwlist[] = {"lockspace", "resource", "disks", "slkfd",
-                                "pid", "shared", NULL};
+                                "pid", "shared", "version", NULL};
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|iii", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|iiii", kwlist,
         &lockspace, &resource, &PyList_Type, &disks, &sanlockfd, &pid,
-        &shared)) {
+        &shared, &version)) {
         return NULL;
     }
 
@@ -822,6 +823,12 @@ py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
     /* prepare sanlock flags */
     if (shared) {
         res->flags |= SANLK_RES_SHARED;
+    }
+
+    /* prepare the resource version */
+    if (version) {
+        res->flags |= SANLK_RES_LVER;
+        res->lver = version;
     }
 
     /* acquire sanlock resource (gil disabled) */

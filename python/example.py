@@ -29,7 +29,8 @@ def main():
 
     try:
         print "Acquiring '%s' on '%s'" % (RESOURCE_NAME, LOCKSPACE_NAME)
-        sanlock.acquire(LOCKSPACE_NAME, RESOURCE_NAME, SNLK_DISKS, slkfd=fd)
+        sanlock.acquire(LOCKSPACE_NAME, RESOURCE_NAME, SNLK_DISKS, slkfd=fd,
+                        version=0)
         print "Releasing '%s' on '%s'" % (RESOURCE_NAME, LOCKSPACE_NAME)
         sanlock.release(LOCKSPACE_NAME, RESOURCE_NAME, SNLK_DISKS, slkfd=fd)
     finally:
