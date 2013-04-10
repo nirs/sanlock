@@ -461,6 +461,14 @@ py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
     if (rv != 0)
         goto exit_fail;
 
+    /* fill the dictionary information: version */
+    if ((rs_entry = PyInt_FromLong(rs->lver)) == NULL)
+        goto exit_fail;
+    rv = PyDict_SetItemString(rs_info, "version", rs_entry);
+    Py_DECREF(rs_entry);
+    if (rv != 0)
+        goto exit_fail;
+
     /* success */
     free(rs);
     return rs_info;
