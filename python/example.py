@@ -19,10 +19,10 @@ def main():
     fd = sanlock.register()
 
     print "Initializing '%s'" % (LOCKSPACE_NAME,)
-    sanlock.init_lockspace(LOCKSPACE_NAME, disk)
+    sanlock.write_lockspace(LOCKSPACE_NAME, disk)
 
     print "Initializing '%s' on '%s'" % (RESOURCE_NAME, LOCKSPACE_NAME)
-    sanlock.init_resource(LOCKSPACE_NAME, RESOURCE_NAME, SNLK_DISKS)
+    sanlock.write_resource(LOCKSPACE_NAME, RESOURCE_NAME, SNLK_DISKS)
 
     print "Acquiring the id '%i' on '%s'" % (HOST_ID, LOCKSPACE_NAME)
     sanlock.add_lockspace(LOCKSPACE_NAME, HOST_ID, disk)
