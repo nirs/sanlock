@@ -1,4 +1,4 @@
-.TH FENCE_SANLOCK 8 2012-09-26
+.TH FENCE_SANLOCK 8 2013-05-02
 
 .SH NAME
 fence_sanlock \- fence agent using watchdog and shared storage leases
@@ -166,7 +166,11 @@ See \-i
 
 .SH FILES 
 
-Example cluster.conf configuration for fence_sanlock:
+Example cluster.conf configuration for fence_sanlock.
+.br
+(For cman based clusters in which fenced runs agents.)
+.br
+Also see cluster.conf(5), fenced(8), fence_node(8).
 
 .nf
 <clusternode name="node01" nodeid="1">
@@ -194,10 +198,81 @@ Example cluster.conf configuration for fence_sanlock:
 <fencedevice name="wd" agent="fence_sanlock" path="/dev/fence/leases"/>
 .fi
 
+.PP
+
+Example dlm.conf configuration for fence_sanlock.
+.br
+(For non-cman based clusters in which dlm_controld runs agents.)
+.br
+Also see dlm.conf(5), dlm_controld(8).
+
+.nf
+device wd /usr/sbin/fence_sanlock path=/dev/fence/leases
+connect wd node=1 host_id=1
+connect wd node=2 host_id=2
+unfence wd
+.fi
+
+.SH TEST
+
+To test fence_sanlock directly, without clustering:
+
+.nf
+1. Initialize storage
+
+node1: create 1G lv on shared storage /dev/fence/leases
+node1: fence_sanlock -o sanlock_init -p /dev/fence/leases
+
+2. Start services
+
+node1: service fence_sanlockd start
+node2: service fence_sanlockd start
+
+3. Enable fencing
+
+node1: fence_sanlock -o on -p /dev/fence/leases -i 1
+node2: fence_sanlock -o on -p /dev/fence/leases -i 2
+
+This "unfence" step may take a couple minutes.
+
+4. Verify hosts and leases
+
+node1: sanlock status
+s fence:1:/dev/fence/leases:0
+r fence:h1:/dev/fence/leases:1048576:1 p 2465
+
+node2: sanlock status
+s fence:2:/dev/fence/leases:0
+r fence:h2:/dev/fence/leases:2097152:1 p 2366
+
+node1: sanlock host_status
+lockspace fence
+1 timestamp 717
+2 timestamp 678
+
+node2: sanlock host_status
+lockspace fence
+1 timestamp 738
+2 timestamp 678
+
+5. Fence node2
+
+node1: fence_sanlock -o off -p /dev/fence/leases -i 2
+
+This may take a few minutes to return.
+
+When node2 is not dead before fencing, sanlock on node1 will log errors
+about failing to acquire the lease while node2 is still alive.  This is
+expected.
+
+6. Success
+
+node1 fence_sanlock should exit 0 after node2 is reset by its watchdog.
+.fi
+
+
 .SH SEE ALSO
 .BR fence_sanlockd (8),
 .BR sanlock (8),
-.BR wdmd (8),
-.BR fence_node (8),
-.BR fenced (8)
+.BR wdmd (8)
 

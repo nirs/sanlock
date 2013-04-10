@@ -103,7 +103,7 @@ static void run_path(struct helper_msg *hm)
 		av[av_count++] = strdup(arg);
 	}
 
-	execv(av[0], av);
+	execvp(av[0], av);
 }
 
 static int read_hm(int fd, struct helper_msg *hm)

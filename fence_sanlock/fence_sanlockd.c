@@ -149,6 +149,36 @@ static int client_add(int fd, void (*workfn)(int ci), void (*deadfn)(int ci))
 	goto again;
 }
 
+static int read_lockfile(int *pid)
+{
+	char buf[16];
+	int fd, rv;
+
+	sprintf(lockfile_path, "%s/%s.pid", DAEMON_RUN_DIR, prog_name);
+
+	fd = open(lockfile_path, O_RDONLY);
+	if (fd < 0) {
+		log_error("lockfile open error %s: %s",
+			  lockfile_path, strerror(errno));
+		return -1;
+	}
+
+	memset(buf, 0, sizeof(buf));
+
+	rv = read(fd, buf, sizeof(buf));
+	if (rv < 0) {
+		log_error("lockfile read error %s: %s",
+			  lockfile_path, strerror(errno));
+		close(fd);
+		return -1;
+	}
+
+	*pid = atoi(buf);
+
+	close(fd);
+	return 0;
+}
+
 static int lockfile(void)
 {
 	char buf[16];
@@ -352,6 +382,26 @@ static int send_options(void)
 	return rv;
 }
 
+static int send_signal(int sig)
+{
+	int rv, pid;
+
+	openlog("fence_sanlockd-1", LOG_CONS | LOG_PID, LOG_DAEMON);
+
+	rv = read_lockfile(&pid);
+	if (rv < 0)
+		return rv;
+
+	rv = kill(pid, sig);
+	if (rv < 0) {
+		log_error("kill sig %d pid %d error %d", sig, pid, errno);
+	} else {
+		syslog(LOG_INFO, "sent signal %d to pid %d", sig, pid);
+	}
+
+	return rv;
+}
+
 /*
  * A running fence_sanlock agent has a pid file we can read.
  * We use this to check what host_id it's fencing, so we can
@@ -464,6 +514,7 @@ static void print_usage(void)
 	printf("  -i <host_id>  Local sanlock host_id (1-%d)\n", MAX_HOSTS);
 	printf("  -w            Wait for fence_sanlockd -s to send options (p,i)\n");
 	printf("  -s            Send options (p,i) to waiting fence_sanlockd -w\n");
+	printf("  -1            Send SIGUSR1 to running fence_sanlockd\n");
 	printf("  -h            Print this help, then exit\n");
 	printf("  -V            Print program version information, then exit\n");
 }
@@ -476,6 +527,7 @@ int main(int argc, char *argv[])
 	int poll_timeout;
 	int sleep_seconds;
 	int send_opts = 0, wait_opts = 0;
+	int send_sigusr1 = 0;
 	int cont = 1;
 	int optchar;
 	int sock, con, rv, i;
@@ -483,7 +535,7 @@ int main(int argc, char *argv[])
 	int victim_host_id;
 
 	while (cont) {
-		optchar = getopt(argc, argv, "Dp:i:hVws");
+		optchar = getopt(argc, argv, "Dp:i:hVws1");
 
 		switch (optchar) {
 		case 'D':
@@ -506,6 +558,9 @@ int main(int argc, char *argv[])
 		case 's':
 			send_opts = 1;
 			break;
+		case '1':
+			send_sigusr1 = 1;
+			break;
 		case 'h':
 			print_usage();
 			exit(0);
@@ -520,6 +575,11 @@ int main(int argc, char *argv[])
 			fprintf(stderr, "unknown option %c\n", optchar);
 			exit(1);
 		};
+	}
+
+	if (send_sigusr1) {
+		rv = send_signal(SIGUSR1);
+		return rv;
 	}
 
 	if (wait_opts && send_opts) {
@@ -581,6 +641,12 @@ int main(int argc, char *argv[])
 	sock = sanlock_register();
 	if (sock < 0) {
 		log_error("register error %d", sock);
+		goto out_refcount;
+	}
+
+	rv = sanlock_killpath(sock, 0, "fence_sanlockd", (char *)"-1");
+	if (rv < 0) {
+		log_error("killpath error %d", sock);
 		goto out_refcount;
 	}
 

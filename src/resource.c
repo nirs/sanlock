@@ -564,6 +564,8 @@ static struct resource *new_resource(struct token *token)
 		r->pid = token->pid;
 		if (token->flags & T_RESTRICT_SIGKILL)
 			r->flags |= R_RESTRICT_SIGKILL;
+		if (token->flags & T_RESTRICT_SIGTERM)
+			r->flags |= R_RESTRICT_SIGTERM;
 	}
 
 	return r;
@@ -856,27 +858,20 @@ static void do_request(struct token *tt, int pid, uint32_t force_mode)
 
 	memset(&hm, 0, sizeof(hm));
 
-	if (force_mode == SANLK_REQ_KILL_PID) {
+	if (force_mode == SANLK_REQ_FORCE) {
 		hm.type = HELPER_MSG_KILLPID;
 		hm.pid = pid;
 		hm.sig = (flags & R_RESTRICT_SIGKILL) ? SIGTERM : SIGKILL;
-	} else if (force_mode == SANLK_REQ_SIGUSR1) {
-		hm.type = HELPER_MSG_KILLPID;
-		hm.pid = pid;
-		hm.sig = SIGUSR1;
-	} else if (force_mode == SANLK_REQ_KILLPATH) {
-		if (!killpath[0]) {
-			log_error("do_request %d force_mode %d no killpath",
-				  pid, force_mode);
-			return;
+	} else if (force_mode == SANLK_REQ_GRACEFUL) {
+		if (killpath[0]) {
+			hm.type = HELPER_MSG_RUNPATH;
+			memcpy(hm.path, killpath, SANLK_HELPER_PATH_LEN);
+			memcpy(hm.args, killargs, SANLK_HELPER_ARGS_LEN);
+		} else {
+			hm.type = HELPER_MSG_KILLPID;
+			hm.pid = pid;
+			hm.sig = (flags & R_RESTRICT_SIGTERM) ? SIGKILL : SIGTERM;
 		}
-		/* there's no thread locking for the clients array so
-		   we can't go searching for killpath/killargs for this
-		   pid from here, so we copy the info into struct
-		   resource so we can use it here. */
-		hm.type = HELPER_MSG_RUNPATH;
-		memcpy(hm.path, killpath, SANLK_HELPER_PATH_LEN);
-		memcpy(hm.args, killargs, SANLK_HELPER_ARGS_LEN);
 	} else {
 		log_error("do_request %d unknown force_mode %d",
 			  pid, force_mode);

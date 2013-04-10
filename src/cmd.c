@@ -310,6 +310,8 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 		token->io_timeout = spi.io_timeout;
 		if (cl->restricted & SANLK_RESTRICT_SIGKILL)
 			token->flags |= T_RESTRICT_SIGKILL;
+		if (cl->restricted & SANLK_RESTRICT_SIGTERM)
+			token->flags |= T_RESTRICT_SIGTERM;
 
 		/* save a record of what this token_id is for later debugging */
 		log_level(spi.space_id, token->token_id, NULL, LOG_WARNING,

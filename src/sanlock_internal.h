@@ -68,7 +68,8 @@ struct sync_disk {
  */
 
 #define T_RESTRICT_SIGKILL	0x00000001 /* inherited from client->restricted */
-#define T_LS_DEAD		0x00000002 /* don't bother trying to release if ls is dead */
+#define T_RESTRICT_SIGTERM	0x00000002 /* inherited from client->restricted */
+#define T_LS_DEAD		0x00000004 /* don't bother trying to release if ls is dead */
 
 struct token {
 	/* values copied from acquire res arg */
@@ -99,6 +100,7 @@ struct token {
 #define R_THREAD_EXAMINE    	0x00000002
 #define R_THREAD_RELEASE	0x00000004
 #define R_RESTRICT_SIGKILL	0x00000008 /* inherited from token */
+#define R_RESTRICT_SIGTERM	0x00000010 /* inherited from token */
 
 struct resource {
 	struct list_head list;
