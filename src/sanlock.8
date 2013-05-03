@@ -515,15 +515,14 @@ set in A's bitmap for request_finish_seconds.)
 \fIforce_mode\fP determines the action the resource lease owner should
 take:
 
-\fB1\fP (KILL_PID): kill the process holding the resource lease.  When the
+\fB1\fP (FORCE): kill the process holding the resource lease.  When the
 process has exited, the resource lease will be released, and can then be
 acquired by anyone.  The kill signal is SIGKILL (or SIGTERM if SIGKILL
 is restricted.)
 
-\fB2\fP (SIGUSR1): send SIGUSR1 to the process holding the resource lease.
-
-\fB3\fP (KILLPATH): run the program configured by sanlock_killpath
-against the process holding the resource lease.
+\fB2\fP (GRACEFUL): run the program configured by sanlock_killpath
+against the process holding the resource lease.  If no killpath is
+defined, then FORCE is used.
 
 .SS Graceful recovery
 
