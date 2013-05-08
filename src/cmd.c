@@ -1931,6 +1931,34 @@ static void cmd_get_lockspaces(int fd, struct sm_header *h_recv)
 	send(fd, send_data_buf, len, MSG_NOSIGNAL);
 }
 
+static void cmd_get_hosts(int fd, struct sm_header *h_recv)
+{
+	struct sm_header h;
+	struct sanlk_lockspace lockspace;
+	int count = 0, len = 0, rv;
+
+	memset(&h, 0, sizeof(h));
+	memcpy(&h, h_recv, sizeof(struct sm_header));
+	h.length = sizeof(h);
+	h.data = 0;
+
+	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+	if (rv != sizeof(struct sanlk_lockspace)) {
+		h.data = -ENOTCONN;
+		goto out;
+	}
+
+	rv = get_hosts(&lockspace, send_data_buf, &len, &count, LOG_DUMP_SIZE);
+
+	h.length = sizeof(struct sm_header) + len;
+	h.data = rv;
+	h.data2 = count;
+out:
+	send(fd, &h, sizeof(struct sm_header), MSG_NOSIGNAL);
+	if (len)
+		send(fd, send_data_buf, len, MSG_NOSIGNAL);
+}
+
 static void cmd_restrict(int ci, int fd, struct sm_header *h_recv)
 {
 	log_debug("cmd_restrict ci %d fd %d pid %d flags %x",
@@ -2006,6 +2034,10 @@ void call_cmd_daemon(int ci, struct sm_header *h_recv, int client_maxi)
 	case SM_CMD_GET_LOCKSPACES:
 		strcpy(client[ci].owner_name, "get_lockspaces");
 		cmd_get_lockspaces(fd, h_recv);
+		break;
+	case SM_CMD_GET_HOSTS:
+		strcpy(client[ci].owner_name, "get_hosts");
+		cmd_get_hosts(fd, h_recv);
 		break;
 	};
 

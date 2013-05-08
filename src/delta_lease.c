@@ -655,6 +655,9 @@ int delta_lease_init(struct task *task,
 	if (!max_hosts)
 		max_hosts = DEFAULT_MAX_HOSTS;
 
+	if (max_hosts > DEFAULT_MAX_HOSTS)
+		return -E2BIG;
+
 	if (!io_timeout)
 		io_timeout = DEFAULT_IO_TIMEOUT;
 

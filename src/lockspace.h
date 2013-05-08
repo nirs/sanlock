@@ -26,5 +26,6 @@ int rem_lockspace_start(struct sanlk_lockspace *ls, unsigned int *space_id);
 int rem_lockspace_wait(struct sanlk_lockspace *ls, unsigned int space_id);
 void free_lockspaces(int wait);
 int get_lockspaces(char *buf, int *len, int *count, int maxlen);
+int get_hosts(struct sanlk_lockspace *ls, char *buf, int *len, int *count, int maxlen);
 
 #endif

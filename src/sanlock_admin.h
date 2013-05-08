@@ -24,6 +24,14 @@
 #define SANLK_LSF_ADD		0x00000001
 #define SANLK_LSF_REM		0x00000002
 
+/* host status returned in low byte of sanlk_host.flags by get */
+#define SANLK_HOST_UNKNOWN 0x00000001
+#define SANLK_HOST_FREE    0x00000002
+#define SANLK_HOST_LIVE    0x00000003
+#define SANLK_HOST_FAIL    0x00000004
+#define SANLK_HOST_DEAD    0x00000005
+#define SANLK_HOST_MASK    0x0000000F /* select SANLK_HOST_ from flags */
+
 /*
  * add_lockspace returns:
  * 0: the lockspace has been added successfully
@@ -73,6 +81,50 @@ int sanlock_rem_lockspace(struct sanlk_lockspace *ls, uint32_t flags);
 
 int sanlock_get_lockspaces(struct sanlk_lockspace **lss, int *lss_count,
 			   uint32_t flags);
+
+/*
+ * When host_id is > 0, returns the sanlk_host info about the
+ * specified host_id.
+ *
+ * When host_id is 0, returns sanlk_host info about all hosts
+ * that have been seen alive.
+ *
+ * host status returned by sanlk_host.flags & SANLK_HOST_MASK:
+ *
+ * UNKNOWN: after adding lockspace, there has not yet been
+ * enough time monitoring other hosts to make an accurate
+ * assessment.
+ *
+ * FREE: delta lease not held
+ * the delta lease timestamp is zero
+ *
+ * LIVE: the host is alive
+ * now - last < other_host_fail_seconds
+ *
+ * FAIL: the host is failing and may be in recovery (killing pids)
+ * now - last > other_host_fail_seconds
+ *
+ * DEAD: the host is dead, its watchdog has fired
+ * now - last > other_host_dead_seconds
+ *
+ * now: local monotonic time
+ *
+ * last: if we have never seen the host's timestamp change, then
+ * last is the local monotime when we first checked it, otherwise
+ * last is the local monotime when we last saw the timestamp change
+ * (which would be some time after it was written by the host.)
+ *
+ * other_host_fail_seconds: based on the host's io_timeout,
+ * the number of seconds after which it would begin recovery
+ * (killing pids) if still alive and unable to renew its lease.
+ *
+ * other_host_dead_seconds: based on the host's io_timeout,
+ * the number of seconds after which its watchdog has fired.
+ */
+
+int sanlock_get_hosts(const char *ls_name, uint64_t host_id,
+		      struct sanlk_host **hss, int *hss_count,
+		      uint32_t flags);
 
 /*
  * Returns the alignment in bytes required by sanlock_init()

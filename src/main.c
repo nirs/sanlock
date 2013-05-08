@@ -1153,6 +1153,7 @@ static void process_connection(int ci)
 	case SM_CMD_HOST_STATUS:
 	case SM_CMD_LOG_DUMP:
 	case SM_CMD_GET_LOCKSPACES:
+	case SM_CMD_GET_HOSTS:
 		call_cmd_daemon(ci, &h, client_maxi);
 		break;
 	case SM_CMD_ADD_LOCKSPACE:
@@ -1782,7 +1783,7 @@ static void print_usage(void)
 	printf("\n");
 	printf("sanlock client <action> [options]\n");
 	printf("sanlock client status [-D] [-o p|s]\n");
-	printf("sanlock client gets\n");
+	printf("sanlock client gets [-h 0|1]\n");
 	printf("sanlock client host_status -s LOCKSPACE [-D]\n");
 	printf("sanlock client log_dump\n");
 	printf("sanlock client shutdown [-f 0|1]\n");
@@ -2015,7 +2016,10 @@ static int read_command_line(int argc, char *argv[])
 			com.use_watchdog = atoi(optionarg);
 			break;
 		case 'h':
-			com.high_priority = atoi(optionarg);
+			if (com.action == ACT_GETS)
+				com.get_hosts = atoi(optionarg);
+			else
+				com.high_priority = atoi(optionarg);
 			break;
 		case 'l':
 			com.mlock_level = atoi(optionarg);
@@ -2143,15 +2147,96 @@ static char *lsf_to_str(uint32_t flags)
 	return lsf_str;
 }
 
+static const char *host_state_str(uint32_t flags)
+{
+	int val = flags & SANLK_HOST_MASK;
+
+	if (val == SANLK_HOST_FREE)
+		return "FREE";
+	if (val == SANLK_HOST_LIVE)
+		return "LIVE";
+	if (val == SANLK_HOST_FAIL)
+		return "FAIL";
+	if (val == SANLK_HOST_DEAD)
+		return "DEAD";
+	if (val == SANLK_HOST_UNKNOWN)
+		return "UNKNOWN";
+	return "ERROR";
+}
+
+static int do_client_gets(void)
+{
+	struct sanlk_lockspace *lss = NULL, *ls;
+	struct sanlk_host *hss = NULL, *hs;
+	int ls_count = 0, hs_count = 0;
+	int i, j, rv;
+
+	rv = sanlock_get_lockspaces(&lss, &ls_count, 0);
+	if (rv < 0)
+		log_tool("gets error %d", rv);
+
+	if (rv < 0 && rv != -ENOSPC) {
+		if (lss)
+			free(lss);
+		return rv;
+	}
+
+	if (!lss)
+		return 0;
+
+	ls = lss;
+
+	for (i = 0; i < ls_count; i++) {
+		log_tool("s %.48s:%llu:%s:%llu %s",
+			 ls->name,
+			 (unsigned long long)ls->host_id,
+			 ls->host_id_disk.path,
+			 (unsigned long long)ls->host_id_disk.offset,
+			 !ls->flags ? "" : lsf_to_str(ls->flags));
+
+		if (!com.get_hosts)
+			goto next;
+
+		rv = sanlock_get_hosts(ls->name, 0, &hss, &hs_count, 0);
+		if (rv == -EAGAIN) {
+			log_tool("hosts not ready");
+			goto next;
+		}
+		if (rv < 0) {
+			log_tool("hosts error %d", rv);
+			goto next;
+		}
+
+		if (!hss)
+			goto next;
+
+		hs = hss;
+
+		for (j = 0; j < hs_count; j++) {
+			log_tool("h %llu gen %llu timestamp %llu %s",
+				 (unsigned long long)hs->host_id,
+				 (unsigned long long)hs->generation,
+				 (unsigned long long)hs->timestamp,
+				 host_state_str(hs->flags));
+			hs++;
+		}
+		free(hss);
+ next:
+		ls++;
+	}
+
+	free(lss);
+	return 0;
+}
+
 static int do_client(void)
 {
 	struct sanlk_resource **res_args = NULL;
 	struct sanlk_resource *res;
-	struct sanlk_lockspace *lss, *ls;
 	char *res_state = NULL;
 	char *res_str = NULL;
 	uint32_t io_timeout = 0;
-	int i, fd, count;
+	int i, fd;
 	int rv = 0;
 
 	if (com.action == ACT_COMMAND || com.action == ACT_ACQUIRE) {
@@ -2174,35 +2259,9 @@ static int do_client(void)
 		break;
 
 	case ACT_GETS:
-		lss = NULL;
-
-		rv = sanlock_get_lockspaces(&lss, &count, 0);
-		if (rv < 0)
-			log_tool("gets error %d", rv);
-
-		if (rv < 0 && rv != -ENOSPC) {
-			if (lss)
-				free(lss);
-			break;
-		}
-
-		if (!lss)
-			break;
-
-		ls = lss;
-
-		for (i = 0; i < count; i++) {
-			log_tool("s %.48s:%llu:%s:%llu %s",
-				 ls->name,
-				 (unsigned long long)ls->host_id,
-				 ls->host_id_disk.path,
-				 (unsigned long long)ls->host_id_disk.offset,
-				 !ls->flags ? "" : lsf_to_str(ls->flags));
-			ls++;
-		}
-
-		free(lss);
+		rv = do_client_gets();
 		break;
+
 
 	case ACT_LOG_DUMP:
 		rv = sanlock_log_dump(LOG_DUMP_SIZE);

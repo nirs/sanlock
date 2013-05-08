@@ -258,7 +258,8 @@ struct command_line {
 	int debug_renew;
 	int quiet_fail;
 	int use_watchdog;
-	int high_priority;
+	int high_priority;		/* -h */
+	int get_hosts;			/* -h */
 	int mlock_level;
 	int max_worker_threads;
 	int aio_arg;
