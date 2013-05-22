@@ -30,19 +30,6 @@ int direct_release_id(struct task *task, int io_timeout,
 int direct_renew_id(struct task *task, int io_timeout,
 		    struct sanlk_lockspace *ls);
 
-int direct_read_id(struct task *task, int io_timeout,
-                   struct sanlk_lockspace *ls,
-                   uint64_t *timestamp,
-                   uint64_t *owner_id,
-                   uint64_t *owner_generation);
-
-int direct_live_id(struct task *task, int io_timeout,
-                   struct sanlk_lockspace *ls,
-                   uint64_t *timestamp,
-                   uint64_t *owner_id,
-                   uint64_t *owner_generation,
-                   int *live);
-
 int direct_align(struct sync_disk *disk);
 
 /* io_timeout is written in the leader record and used for the

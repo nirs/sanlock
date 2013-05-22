@@ -56,10 +56,6 @@
  * cli: sanlock direct acquire_id
  * cli: sanlock direct release_id
  * cli: sanlock direct renew_id
- * cli: sanlock direct read_id
- * cli: sanlock direct live_id
- * lib: sanlock_direct_read_id()
- * lib: sanlock_direct_live_id()
  * lib: sanlock_direct_init()
  *
  *              direct.c:
@@ -68,8 +64,6 @@
  *              direct_acquire_id()
  *              direct_release_id()
  *              direct_renew_id()
- *              direct_read_id()
- *              direct_live_id()
  *                 do_delta_action()
  *                    delta_lease.c:
  *                    delta_lease_init()
@@ -264,7 +258,6 @@ static int do_delta_action(int action,
 					 &leader,
 					 &leader);
 		break;
-	case ACT_READ_ID:
 	case ACT_READ_LEADER:
 		rv = delta_lease_leader_read(task, io_timeout, &sd,
 					     ls->name,
@@ -306,86 +299,6 @@ int direct_release_id(struct task *task, int io_timeout, struct sanlk_lockspace 
 int direct_renew_id(struct task *task, int io_timeout, struct sanlk_lockspace *ls)
 {
 	return do_delta_action(ACT_RENEW_ID, task, io_timeout, ls, -1, NULL, NULL);
-}
-
-int direct_read_id(struct task *task,
-		   int io_timeout,
-		   struct sanlk_lockspace *ls,
-		   uint64_t *timestamp,
-		   uint64_t *owner_id,
-		   uint64_t *owner_generation)
-{
-	struct leader_record leader;
-	int rv;
-
-	memset(&leader, 0, sizeof(struct leader_record));
-
-	rv = do_delta_action(ACT_READ_ID, task, io_timeout, ls, -1, NULL, &leader);
-
-	*timestamp = leader.timestamp;
-	*owner_id = leader.owner_id;
-	*owner_generation = leader.owner_generation;
-
-	return rv;
-}
-
-int direct_live_id(struct task *task,
-		   int io_timeout,
-		   struct sanlk_lockspace *ls,
-		   uint64_t *timestamp,
-		   uint64_t *owner_id,
-		   uint64_t *owner_generation,
-		   int *live)
-{
-	struct leader_record leader_begin;
-	struct leader_record leader;
-	time_t start;
-	int other_io_timeout, other_host_dead_seconds;
-	int rv;
-
-	rv = do_delta_action(ACT_READ_ID, task, io_timeout, ls, -1, NULL, &leader_begin);
-	if (rv < 0)
-		return rv;
-
-	start = monotime();
-
-	while (1) {
-		sleep(1);
-
-		rv = do_delta_action(ACT_READ_ID, task, io_timeout, ls, -1, NULL, &leader);
-		if (rv < 0)
-			return rv;
-
-		if (leader.timestamp != leader_begin.timestamp) {
-			*live = 1;
-			break;
-		}
-
-		if (leader.owner_id != leader_begin.owner_id) {
-			*live = 2;
-			break;
-		}
-
-		if (leader.owner_generation != leader_begin.owner_generation) {
-			*live = 3;
-			break;
-		}
-
-		other_io_timeout = leader_begin.io_timeout;
-		if (!other_io_timeout)
-			other_io_timeout = io_timeout;
-		other_host_dead_seconds = calc_host_dead_seconds(other_io_timeout);
-
-		if (monotime() - start > other_host_dead_seconds) {
-			*live = 0;
-			break;
-		}
-	}
-
-	*timestamp = leader.timestamp;
-	*owner_id = leader.owner_id;
-	*owner_generation = leader.owner_generation;
-	return 0;
 }
 
 int direct_align(struct sync_disk *disk)

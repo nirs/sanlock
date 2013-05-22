@@ -1803,8 +1803,6 @@ static void print_usage(void)
 	printf("sanlock direct <action> [-a 0|1] [-o 0|1]\n");
 	printf("sanlock direct init -s LOCKSPACE | -r RESOURCE\n");
 	printf("sanlock direct read_leader -s LOCKSPACE | -r RESOURCE\n");
-	printf("sanlock direct read_id -s LOCKSPACE\n");
-	printf("sanlock direct live_id -s LOCKSPACE\n");
 	printf("sanlock direct dump <path>[:<offset>]\n");
 	printf("\n");
 	printf("LOCKSPACE = <lockspace_name>:<host_id>:<path>:<offset>\n");
@@ -1943,10 +1941,6 @@ static int read_command_line(int argc, char *argv[])
 			com.action = ACT_RELEASE_ID;
 		else if (!strcmp(act, "renew_id"))
 			com.action = ACT_RENEW_ID;
-		else if (!strcmp(act, "read_id"))
-			com.action = ACT_READ_ID;
-		else if (!strcmp(act, "live_id"))
-			com.action = ACT_LIVE_ID;
 		else {
 			log_tool("direct action \"%s\" is unknown", act);
 			exit(EXIT_FAILURE);
@@ -2446,8 +2440,6 @@ static int do_client(void)
 static int do_direct(void)
 {
 	struct leader_record leader;
-	uint64_t timestamp, owner_id, owner_generation;
-	int live;
 	int rv;
 
 	setup_task_aio(&main_task, com.aio_arg, DIRECT_AIO_CB_SIZE);
@@ -2535,37 +2527,6 @@ static int do_direct(void)
 	case ACT_RENEW_ID:
 		rv = direct_renew_id(&main_task, com.io_timeout_arg, &com.lockspace);
 		log_tool("rewew_id done %d", rv);
-		break;
-
-	case ACT_READ_ID:
-		rv = direct_read_id(&main_task,
-				    com.io_timeout_arg,
-				    &com.lockspace,
-				    &timestamp,
-				    &owner_id,
-				    &owner_generation);
-
-		log_tool("read_id done %d timestamp %llu owner_id %llu owner_generation %llu",
-			 rv,
-			 (unsigned long long)timestamp,
-			 (unsigned long long)owner_id,
-			 (unsigned long long)owner_generation);
-		break;
-
-	case ACT_LIVE_ID:
-		rv = direct_live_id(&main_task,
-				    com.io_timeout_arg,
-				    &com.lockspace,
-				    &timestamp,
-				    &owner_id,
-				    &owner_generation,
-				    &live);
-
-		log_tool("live_id done %d live %d timestamp %llu owner_id %llu owner_generation %llu",
-			 rv, live,
-			 (unsigned long long)timestamp,
-			 (unsigned long long)owner_id,
-			 (unsigned long long)owner_generation);
 		break;
 
 	default:

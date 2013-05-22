@@ -291,7 +291,7 @@ Tell the sanlock daemon to initialize a resource lease on disk.
 Tell the sanlock daemon to read a lockspace from disk.  Only the
 LOCKSPACE path and offset are required.  If host_id is zero, the first
 record at offset (host_id 1) is used.  The complete LOCKSPACE and io
-timeout are printed.  (Also see sanlock direct read_leader and read_id.)
+timeout are printed.
 
 .BR "sanlock client read -r" " RESOURCE"
 
@@ -391,15 +391,6 @@ written in the host_id leases.
 
 Read a leader record from disk and print the fields.  The leader record is
 the single sector of a delta lease, or the first sector of a paxos lease.
-
-.BR "sanlock direct read_id -s" " LOCKSPACE"
-.br
-.BR "sanlock direct live_id -s" " LOCKSPACE"
-
-read_id reads a host_id and prints the owner.  live_id reads a host_id
-once a second until it the timestamp or owner change (prints live 1), or
-until host_dead_seconds (prints live 0).  (host_dead_seconds is based on
-the owner's io timeout.)
 ./" .P
 ./" .BR "sanlock direct acquire_id -s" " LOCKSPACE"
 ./" .br
