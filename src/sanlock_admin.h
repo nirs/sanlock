@@ -221,4 +221,19 @@ int sanlock_write_resource(struct sanlk_resource *res,
 
 int sanlock_read_resource(struct sanlk_resource *res, uint32_t flags);
 
+/*
+ * read resource lease and its owners from disk
+ *
+ * the sanlock daemon reads the entire lease area from disk,
+ * including the leader record and all per-host dblock/mode_block records
+ *
+ * res.lver is set (from leader record)
+ * res.flags is set to SANLK_RES_SHARED if any shared owners exist (from mode blocks)
+ * host.host_id and host.generation are set for each owner (from leader or mode blocks)
+ * host.timestamp is set for an exclusive owner (from leader record)
+ */
+
+int sanlock_read_resource_owners(struct sanlk_resource *res, uint32_t flags,
+				 struct sanlk_host **hss, int *hss_count);
+
 #endif

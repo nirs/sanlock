@@ -25,6 +25,10 @@ int request_token(struct task *task, struct token *token, uint32_t force_mode,
 
 int set_resource_examine(char *space_name, char *res_name);
 
+int read_resource_owners(struct task *task, struct token *token,
+                         struct sanlk_resource *res,
+                         char **send_buf, int *send_len, int *count);
+
 int setup_token_manager(void);
 void close_token_manager(void);
 

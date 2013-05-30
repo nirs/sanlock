@@ -41,6 +41,7 @@ enum {
 	SM_CMD_READ_RESOURCE     = 21,
 	SM_CMD_GET_LOCKSPACES    = 22,
 	SM_CMD_GET_HOSTS         = 23,
+	SM_CMD_READ_RESOURCE_OWNERS = 24,
 };
 
 struct sm_header {

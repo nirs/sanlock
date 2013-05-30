@@ -1167,6 +1167,7 @@ static void process_connection(int ci)
 	case SM_CMD_WRITE_RESOURCE:
 	case SM_CMD_READ_LOCKSPACE:
 	case SM_CMD_READ_RESOURCE:
+	case SM_CMD_READ_RESOURCE_OWNERS:
 		rv = client_suspend(ci);
 		if (rv < 0)
 			return;
@@ -2010,7 +2011,7 @@ static int read_command_line(int argc, char *argv[])
 			com.use_watchdog = atoi(optionarg);
 			break;
 		case 'h':
-			if (com.action == ACT_GETS)
+			if (com.action == ACT_GETS || com.action == ACT_CLIENT_READ)
 				com.get_hosts = atoi(optionarg);
 			else
 				com.high_priority = atoi(optionarg);
@@ -2162,7 +2163,7 @@ static int do_client_gets(void)
 {
 	struct sanlk_lockspace *lss = NULL, *ls;
 	struct sanlk_host *hss = NULL, *hs;
-	int ls_count = 0, hs_count = 0;
+	int ls_count = 0, hss_count = 0;
 	int i, j, rv;
 
 	rv = sanlock_get_lockspaces(&lss, &ls_count, 0);
@@ -2191,7 +2192,7 @@ static int do_client_gets(void)
 		if (!com.get_hosts)
 			goto next;
 
-		rv = sanlock_get_hosts(ls->name, 0, &hss, &hs_count, 0);
+		rv = sanlock_get_hosts(ls->name, 0, &hss, &hss_count, 0);
 		if (rv == -EAGAIN) {
 			log_tool("hosts not ready");
 			goto next;
@@ -2206,7 +2207,7 @@ static int do_client_gets(void)
 
 		hs = hss;
 
-		for (j = 0; j < hs_count; j++) {
+		for (j = 0; j < hss_count; j++) {
 			log_tool("h %llu gen %llu timestamp %llu %s",
 				 (unsigned long long)hs->host_id,
 				 (unsigned long long)hs->generation,
@@ -2223,13 +2224,76 @@ static int do_client_gets(void)
 	return 0;
 }
 
+static int do_client_read(void)
+{
+	struct sanlk_host *hss = NULL, *hs;
+	char *res_str = NULL;
+	uint32_t io_timeout = 0;
+	int rv, i, hss_count = 0;
+
+	if (com.lockspace.host_id_disk.path[0]) {
+		rv = sanlock_read_lockspace(&com.lockspace, 0, &io_timeout);
+	} else {
+		if (!com.get_hosts) {
+			rv = sanlock_read_resource(com.res_args[0], 0);
+		} else {
+			rv = sanlock_read_resource_owners(com.res_args[0], 0,
+							  &hss, &hss_count);
+		}
+	}
+
+	if (rv < 0) {
+		log_tool("read error %d", rv);
+		goto out;
+	}
+
+	if (com.lockspace.host_id_disk.path[0]) {
+		log_tool("s %.48s:%llu:%s:%llu",
+			 com.lockspace.name,
+			 (unsigned long long)com.lockspace.host_id,
+			 com.lockspace.host_id_disk.path,
+			 (unsigned long long)com.lockspace.host_id_disk.offset);
+		log_tool("io_timeout %u", io_timeout);
+		goto out;
+	}
+
+	rv = sanlock_res_to_str(com.res_args[0], &res_str);
+	if (rv < 0) {
+		log_tool("res_to_str error %d", rv);
+		goto out;
+	}
+
+	log_tool("r %s", res_str);
+
+	free(res_str);
+
+	if (!hss)
+		goto out;
+
+	hs = hss;
+
+	for (i = 0; i < hss_count; i++) {
+		if (hs->timestamp)
+			log_tool("h %llu gen %llu timestamp %llu",
+				 (unsigned long long)hs->host_id,
+				 (unsigned long long)hs->generation,
+				 (unsigned long long)hs->timestamp);
+		else
+			log_tool("h %llu gen %llu",
+				 (unsigned long long)hs->host_id,
+				 (unsigned long long)hs->generation);
+		hs++;
+	}
+	free(hss);
+ out:
+	return rv;
+}
+
 static int do_client(void)
 {
 	struct sanlk_resource **res_args = NULL;
 	struct sanlk_resource *res;
 	char *res_state = NULL;
-	char *res_str = NULL;
-	uint32_t io_timeout = 0;
 	int i, fd;
 	int rv = 0;
 
@@ -2255,7 +2319,6 @@ static int do_client(void)
 	case ACT_GETS:
 		rv = do_client_gets();
 		break;
-
 
 	case ACT_LOG_DUMP:
 		rv = sanlock_log_dump(LOG_DUMP_SIZE);
@@ -2401,32 +2464,7 @@ static int do_client(void)
 		break;
 
 	case ACT_CLIENT_READ:
-		if (com.lockspace.host_id_disk.path[0])
-			rv = sanlock_read_lockspace(&com.lockspace, 0, &io_timeout);
-		else
-			rv = sanlock_read_resource(com.res_args[0], 0);
-
-		if (rv < 0) {
-			log_tool("read error %d", rv);
-			break;
-		}
-
-		if (com.lockspace.host_id_disk.path[0]) {
-			log_tool("s %.48s:%llu:%s:%llu",
-				 com.lockspace.name,
-				 (unsigned long long)com.lockspace.host_id,
-				 com.lockspace.host_id_disk.path,
-				 (unsigned long long)com.lockspace.host_id_disk.offset);
-			log_tool("io_timeout %u", io_timeout);
-		} else {
-			rv = sanlock_res_to_str(com.res_args[0], &res_str);
-			if (rv < 0) {
-				log_tool("res_to_str error %d", rv);
-				break;
-			}
-			log_tool("r %s", res_str);
-			free(res_str);
-		}
+		rv = do_client_read();
 		break;
 
 	default:

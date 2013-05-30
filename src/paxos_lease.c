@@ -685,6 +685,14 @@ static int verify_leader(struct token *token,
 	return result;
 }
 
+int paxos_verify_leader(struct token *token,
+			 struct sync_disk *disk,
+			 struct leader_record *lr,
+			 const char *caller)
+{
+	return verify_leader(token, disk, lr, caller);
+}
+
 static int leaders_match(struct leader_record *a, struct leader_record *b)
 {
 	if (!memcmp(a, b, LEADER_COMPARE_LEN))
@@ -720,6 +728,33 @@ int paxos_read_resource(struct task *task,
 		memcpy(res->name, leader.resource_name, NAME_ID_SIZE);
 		res->lver = leader.lver;
 	}
+
+	return rv;
+}
+
+int paxos_read_buf(struct task *task,
+		   struct token *token,
+		   char **buf_out)
+{
+	char *iobuf, **p_iobuf;
+	struct sync_disk *disk = &token->disks[0];
+	int rv, iobuf_len;
+
+	iobuf_len = direct_align(disk);
+	if (iobuf_len < 0)
+		return iobuf_len;
+
+	p_iobuf = &iobuf;
+
+	rv = posix_memalign((void *)p_iobuf, getpagesize(), iobuf_len);
+	if (rv)
+		return rv;
+
+	memset(iobuf, 0, iobuf_len);
+
+	rv = read_iobuf(disk->fd, disk->offset, iobuf, iobuf_len, task, token->io_timeout);
+
+	*buf_out = iobuf;
 
 	return rv;
 }
