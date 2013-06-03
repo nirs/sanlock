@@ -816,7 +816,8 @@ static void cmd_request(struct task *task, struct cmd_args *ca)
 
 	token->io_timeout = spi.io_timeout;
 
-	error = request_token(task, token, force_mode, &owner_id);
+	error = request_token(task, token, force_mode, &owner_id,
+			      (ca->header.cmd_flags & SANLK_REQUEST_NEXT_LVER));
 	if (error < 0) {
 		result = error;
 		goto reply_free;

@@ -32,6 +32,21 @@
 #define SANLK_REL_ALL		0x00000001
 
 /*
+ * request flags
+ *
+ * SANLK_REQUEST_NEXT_LVER
+ * The caller specifies 0 lver in res, and the daemon
+ * automatically requests the current lver + 1.  When
+ * multiple hosts are making requests, this flag can
+ * produce unexpected results, and it would be safer
+ * to read the resource, check that the current owner
+ * is the one being targetted, and use that owner's
+ * lver + 1 as the specifically requested lver.
+ */
+
+#define SANLK_REQUEST_NEXT_LVER	0x00000001
+
+/*
  * request force_mode
  *
  * SANLK_REQ_FORCE (SANLK_REQ_KILL_PID deprecated)

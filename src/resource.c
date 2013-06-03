@@ -828,7 +828,7 @@ int acquire_token(struct task *task, struct token *token,
 }
 
 int request_token(struct task *task, struct token *token, uint32_t force_mode,
-		  uint64_t *owner_id)
+		  uint64_t *owner_id, int next_lver)
 {
 	struct leader_record leader;
 	struct request_record req;
@@ -856,6 +856,9 @@ int request_token(struct task *task, struct token *token, uint32_t force_mode,
 	}
 
 	*owner_id = leader.owner_id;
+
+	if (!token->acquire_lver && next_lver)
+		token->acquire_lver = leader.lver + 1;
 
 	if (leader.lver >= token->acquire_lver) {
 		rv = SANLK_REQUEST_OLD;
