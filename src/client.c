@@ -644,6 +644,63 @@ int sanlock_read_resource_owners(struct sanlk_resource *res, uint32_t flags,
 	return rv;
 }
 
+int sanlock_test_resource_owners(struct sanlk_resource *res GNUC_UNUSED,
+				 uint32_t flags GNUC_UNUSED,
+				 struct sanlk_host *owners, int owners_count,
+				 struct sanlk_host *hosts, int hosts_count,
+				 uint32_t *test_flags)
+{
+	struct sanlk_host *owner, *host;
+	int i, j, found, fail = 0;
+
+	*test_flags = 0;
+
+	owner = owners;
+
+	for (i = 0; i < owners_count; i++) {
+		found = 0;
+		host = hosts;
+		for (j = 0; j < hosts_count; j++) {
+			if (owner->host_id != host->host_id) {
+				host++;
+				continue;
+			}
+			found = 1;
+			break;
+		}
+
+		if (!found)
+			goto next;
+
+		if (host->generation > owner->generation)
+			goto next;
+
+		/* this should not be possible, and should never happen */
+		if (host->generation < owner->generation)
+			return -EINVAL;
+
+		switch (host->flags & SANLK_HOST_MASK) {
+		case SANLK_HOST_FREE:
+		case SANLK_HOST_DEAD:
+			break;
+		case SANLK_HOST_LIVE:
+		case SANLK_HOST_FAIL:
+		case SANLK_HOST_UNKNOWN:
+			fail = 1;
+			break;
+		default:
+			return -EINVAL;
+		}
+ next:
+		owner++;
+	}
+
+	if (fail)
+		*test_flags |= SANLK_TRF_FAIL;
+
+	return 0;
+}
+
 /* old api */
 int sanlock_init(struct sanlk_lockspace *ls,
 		 struct sanlk_resource *res,

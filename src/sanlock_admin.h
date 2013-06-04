@@ -236,4 +236,44 @@ int sanlock_read_resource(struct sanlk_resource *res, uint32_t flags);
 int sanlock_read_resource_owners(struct sanlk_resource *res, uint32_t flags,
 				 struct sanlk_host **hss, int *hss_count);
 
+/*
+ * Check the condition of a resource based on the state of the
+ * resource's owners.  This can be used to check if a resource
+ * is held by hosts that would cause an acquire to fail.
+ *
+ * owners is the list of hosts returned by sanlock_read_resource_owners()
+ * hosts is the list of hosts returned by sanlock_get_hosts()
+ *
+ * (This is a client side operation as does not go to the daemon.)
+ *
+ * For each owner, check its state in hosts:
+ *
+ * - if not found in hosts, then the owner is not running and
+ *   would not prevent acquire
+ *
+ * - if found in hosts but the generation does not match,
+ *   then the owner host has been restarted since owning the
+ *   resource and would not prevent acquire
+ *
+ * - if found in hosts with matching generation, then check
+ *   host.flags & MASK:
+ *
+ * - FREE: would not prevent acquire
+ * - DEAD: would not prevent acquire
+ * - LIVE: prevents acquire, test fails
+ * - FAIL: prevents acquire, test fails
+ * - UNKNOWN: might prevent acquire, test fails
+ *
+ *
+ * test_flags returned:
+ * SANLK_TRF_FAIL: state of owners would prevent acquire, test fails
+ */
+
+#define SANLK_TRF_FAIL 0x00000001
+
+int sanlock_test_resource_owners(struct sanlk_resource *res, uint32_t flags,
+				 struct sanlk_host *owners, int owners_count,
+				 struct sanlk_host *hosts, int hosts_count,
+				 uint32_t *test_flags);
+
 #endif
