@@ -1374,7 +1374,7 @@ static void cmd_write_lockspace(struct task *task, struct cmd_args *ca)
 {
 	struct sanlk_lockspace lockspace;
 	struct sync_disk sd;
-	int fd, rv, result;
+	int fd, rv, result, max_hosts;
 	int io_timeout = DEFAULT_IO_TIMEOUT;
 
 	fd = client[ca->ci_in].fd;
@@ -1398,6 +1398,8 @@ static void cmd_write_lockspace(struct task *task, struct cmd_args *ca)
 		goto reply;
 	}
 
+	max_hosts = ca->header.data;
+
 	memset(&sd, 0, sizeof(struct sync_disk));
 	memcpy(&sd, &lockspace.host_id_disk, sizeof(struct sanlk_disk));
 	sd.fd = -1;
@@ -1411,7 +1413,7 @@ static void cmd_write_lockspace(struct task *task, struct cmd_args *ca)
 	if (ca->header.data2)
 		io_timeout = ca->header.data2;
 
-	result = delta_lease_init(task, io_timeout, &sd, lockspace.name, ca->header.data);
+	result = delta_lease_init(task, io_timeout, &sd, lockspace.name, max_hosts);
 
 	close_disks(&sd, 1);
  reply:
@@ -1426,6 +1428,7 @@ static void cmd_write_resource(struct task *task, struct cmd_args *ca)
 	struct token *token = NULL;
 	struct sanlk_resource res;
 	int token_len, disks_len;
+	int num_hosts, max_hosts;
 	int j, fd, rv, result;
 
 	fd = client[ca->ci_in].fd;
@@ -1486,6 +1489,9 @@ static void cmd_write_resource(struct task *task, struct cmd_args *ca)
 		  token->disks[0].path,
 		  (unsigned long long)token->r.disks[0].offset);
 
+	num_hosts = ca->header.data;
+	max_hosts = ca->header.data2;
+
 	rv = open_disks(token->disks, token->r.num_disks);
 	if (rv < 0) {
 		result = rv;
@@ -1494,7 +1500,7 @@ static void cmd_write_resource(struct task *task, struct cmd_args *ca)
 
 	token->io_timeout = DEFAULT_IO_TIMEOUT;
 
-	result = paxos_lease_init(task, token, ca->header.data, ca->header.data2);
+	result = paxos_lease_init(task, token, num_hosts, max_hosts);
 
 	close_disks(token->disks, token->r.num_disks);
  reply:

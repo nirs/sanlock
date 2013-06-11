@@ -1735,6 +1735,12 @@ int paxos_lease_init(struct task *task,
 	if (max_hosts > DEFAULT_MAX_HOSTS)
 		return -E2BIG;
 
+	if (num_hosts > DEFAULT_MAX_HOSTS)
+		return -EINVAL;
+
+	if (num_hosts > max_hosts)
+		return -EINVAL;
+
 	sector_size = token->disks[0].sector_size;
 
 	align_size = direct_align(&token->disks[0]);
