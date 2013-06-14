@@ -462,7 +462,7 @@ py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
         goto exit_fail;
 
     /* fill the dictionary information: version */
-    if ((rs_entry = PyInt_FromLong(rs->lver)) == NULL)
+    if ((rs_entry = PyLong_FromUnsignedLong(rs->lver)) == NULL)
         goto exit_fail;
     rv = PyDict_SetItemString(rs_info, "version", rs_entry);
     Py_DECREF(rs_entry);
@@ -788,7 +788,7 @@ exit_fail:
 /* acquire */
 PyDoc_STRVAR(pydoc_acquire, "\
 acquire(lockspace, resource, disks \
-[, slkfd=fd, pid=owner, shared=False, version=0])\n\
+[, slkfd=fd, pid=owner, shared=False, version=None])\n\
 Acquire a resource lease for the current process (using the slkfd argument\n\
 to specify the sanlock file descriptor) or for an other process (using the\n\
 pid argument). If shared is True the resource will be acquired in the shared\n\
@@ -798,16 +798,16 @@ The disks must be in the format: [(path, offset), ... ]\n");
 static PyObject *
 py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, sanlockfd = -1, pid = -1, shared = 0, version = 0;
+    int rv, sanlockfd = -1, pid = -1, shared = 0;
     const char *lockspace, *resource;
     struct sanlk_resource *res;
-    PyObject *disks;
+    PyObject *disks, *version = Py_None;
 
     static char *kwlist[] = {"lockspace", "resource", "disks", "slkfd",
                                 "pid", "shared", "version", NULL};
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|iiii", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|iiiO", kwlist,
         &lockspace, &resource, &PyList_Type, &disks, &sanlockfd, &pid,
         &shared, &version)) {
         return NULL;
@@ -834,9 +834,13 @@ py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
     }
 
     /* prepare the resource version */
-    if (version) {
+    if (version != Py_None) {
         res->flags |= SANLK_RES_LVER;
-        res->lver = version;
+        res->lver = PyInt_AsUnsignedLongMask(version);
+        if (res->lver == -1) {
+            __set_exception(EINVAL, "Unable to convert the version value");
+            goto exit_fail;
+        }
     }
 
     /* acquire sanlock resource (gil disabled) */
@@ -896,6 +900,72 @@ py_release(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv != 0) {
         __set_exception(rv, "Sanlock resource not released");
+        goto exit_fail;
+    }
+
+    free(res);
+    Py_RETURN_NONE;
+
+exit_fail:
+    free(res);
+    return NULL;
+}
+
+/* request */
+PyDoc_STRVAR(pydoc_request, "\
+request(lockspace, resource, disks [, action=REQ_GRACEFUL, version=None])\n\
+Request the owner of a resource to do something specified by action.\n\
+The possible values for action are: REQ_GRACEFUL to request a graceful\n\
+release of the resource and REQ_FORCE to sigkill the owner of the\n\
+resource (forcible release). The version should be either the next version\n\
+to acquire or None (which automatically uses the next version).\n\
+The disks must be in the format: [(path, offset), ... ]");
+
+static PyObject *
+py_request(PyObject *self __unused, PyObject *args, PyObject *keywds)
+{
+    int rv, action = SANLK_REQ_GRACEFUL, flags = 0;
+    const char *lockspace, *resource;
+    struct sanlk_resource *res;
+    PyObject *disks, *version = Py_None;
+
+    static char *kwlist[] = {"lockspace", "resource", "disks", "action",
+                                "version", NULL};
+
+    /* parse python tuple */
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|iO", kwlist,
+        &lockspace, &resource, &PyList_Type, &disks, &action, &version)) {
+        return NULL;
+    }
+
+    /* parse and check sanlock resource */
+    if (__parse_resource(disks, &res) < 0) {
+        return NULL;
+    }
+
+    /* prepare sanlock names */
+    strncpy(res->lockspace_name, lockspace, SANLK_NAME_LEN);
+    strncpy(res->name, resource, SANLK_NAME_LEN);
+
+    /* prepare the resource version */
+    if (version == Py_None) {
+        flags = SANLK_REQUEST_NEXT_LVER;
+    } else {
+        res->flags |= SANLK_RES_LVER;
+        res->lver = PyInt_AsUnsignedLongMask(version);
+        if (res->lver == -1) {
+            __set_exception(EINVAL, "Unable to convert the version value");
+            goto exit_fail;
+        }
+    }
+
+    /* request sanlock resource (gil disabled) */
+    Py_BEGIN_ALLOW_THREADS
+    rv = sanlock_request(flags, action, res);
+    Py_END_ALLOW_THREADS
+
+    if (rv != 0) {
+        __set_exception(rv, "Sanlock request not submitted");
         goto exit_fail;
     }
 
@@ -1035,6 +1105,8 @@ sanlock_methods[] = {
                 METH_VARARGS|METH_KEYWORDS, pydoc_acquire},
     {"release", (PyCFunction) py_release,
                 METH_VARARGS|METH_KEYWORDS, pydoc_release},
+    {"request", (PyCFunction) py_request,
+                METH_VARARGS|METH_KEYWORDS, pydoc_request},
     {"killpath", (PyCFunction) py_killpath,
                 METH_VARARGS|METH_KEYWORDS, pydoc_killpath},
     {NULL, NULL, 0, NULL}
@@ -1102,8 +1174,13 @@ initsanlock(void)
         } \
     }
 
+    /* lockspaces list flags */
     PYSNLK_INIT_ADD_CONSTANT(SANLK_LSF_ADD, "LSFLAG_ADD");
     PYSNLK_INIT_ADD_CONSTANT(SANLK_LSF_REM, "LSFLAG_REM");
+
+    /* resource request flags */
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_REQ_FORCE, "REQ_FORCE");
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_REQ_GRACEFUL, "REQ_GRACEFUL");
 
 #undef PYSNLK_INIT_ADD_CONSTANT
 }
