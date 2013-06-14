@@ -49,6 +49,9 @@ def main():
                 print "Lockspace '%s' hosts: " % LOCKSPACE_NAME, hosts_list
                 break
             time.sleep(5)
+        print "Resource '%s' owners: " % RESOURCE_NAME, \
+            sanlock.read_resource_owners(
+                LOCKSPACE_NAME, RESOURCE_NAME, SNLK_DISKS)
         print "Releasing '%s' on '%s'" % (RESOURCE_NAME, LOCKSPACE_NAME)
         sanlock.release(LOCKSPACE_NAME, RESOURCE_NAME, SNLK_DISKS, slkfd=fd)
     except Exception as e:

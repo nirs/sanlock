@@ -1091,6 +1091,58 @@ exit_fail:
     return NULL;
 }
 
+/* read_resource_owners */
+PyDoc_STRVAR(pydoc_read_resource_owners, "\
+read_resource_owners(lockspace, resource, disks) -> list\n\
+Returns the list of hosts owning a resource, the list is not filtered and\n\
+it might contain hosts that are currently failing or dead. The hosts are\n\
+returned in the same format used by get_hosts.\n\
+The disks must be in the format: [(path, offset), ... ]");
+
+static PyObject *
+py_read_resource_owners(PyObject *self __unused, PyObject *args, PyObject *keywds)
+{
+    int rv, hss_count = 0;
+    const char *lockspace, *resource;
+    struct sanlk_resource *res = NULL;
+    struct sanlk_host *hss = NULL;
+    PyObject *disks, *ls_list = NULL;
+
+    static char *kwlist[] = {"lockspace", "resource", "disks", NULL};
+
+    /* parse python tuple */
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!", kwlist,
+        &lockspace, &resource, &PyList_Type, &disks)) {
+        return NULL;
+    }
+
+    /* parse and check sanlock resource */
+    if (__parse_resource(disks, &res) < 0) {
+        return NULL;
+    }
+
+    /* prepare sanlock names */
+    strncpy(res->lockspace_name, lockspace, SANLK_NAME_LEN);
+    strncpy(res->name, resource, SANLK_NAME_LEN);
+
+    /* read resource owners (gil disabled) */
+    Py_BEGIN_ALLOW_THREADS
+    rv = sanlock_read_resource_owners(res, 0, &hss, &hss_count);
+    Py_END_ALLOW_THREADS
+
+    if (rv != 0) {
+        __set_exception(rv, "Unable to read resource owners");
+        goto exit_fail;
+    }
+
+    ls_list = __hosts_to_list(hss, hss_count);
+
+exit_fail:
+    if (res) free(res);
+    if (hss) free(hss);
+    return ls_list;
+}
+
 /* killpath */
 PyDoc_STRVAR(pydoc_killpath, "\
 killpath(path, args [, slkfd=fd])\n\
@@ -1217,6 +1269,8 @@ sanlock_methods[] = {
                         METH_VARARGS|METH_KEYWORDS, pydoc_get_lockspaces},
     {"get_hosts", (PyCFunction) py_get_hosts,
                         METH_VARARGS|METH_KEYWORDS, pydoc_get_hosts},
+    {"read_resource_owners", (PyCFunction) py_read_resource_owners,
+                METH_VARARGS|METH_KEYWORDS, pydoc_read_resource_owners},
     {"acquire", (PyCFunction) py_acquire,
                 METH_VARARGS|METH_KEYWORDS, pydoc_acquire},
     {"release", (PyCFunction) py_release,
