@@ -697,9 +697,9 @@ PyDoc_STRVAR(pydoc_get_lockspaces, "\
 get_lockspaces() -> dict\n\
 Return the list of lockspaces currently managed by sanlock. The reported\n\
 flag indicates whether the lockspace is acquired (0) or in transition.\n\
-The possible transition values are SANLK_LSF_ADD if the lockspace is in\n\
-the process of being acquired, and SANLK_LSF_REM if it's in the process\n\
-of being released.\n");
+The possible transition values are LSFLAG_ADD if the lockspace is in the\n\
+process of being acquired, and LSFLAG_REM if it's in the process of being\n\
+released.\n");
 
 static PyObject *
 py_get_lockspaces(PyObject *self __unused, PyObject *args, PyObject *keywds)
@@ -1095,15 +1095,15 @@ initsanlock(void)
         Py_INCREF(py_exception);
     }
 
-    if ((sk_constant = PyInt_FromLong(SANLK_LSF_ADD)) != NULL) {
-        if (PyModule_AddObject(py_module, "SANLK_LSF_ADD", sk_constant)) {
-            Py_DECREF(sk_constant);
-        }
+#define PYSNLK_INIT_ADD_CONSTANT(x, y) \
+    if ((sk_constant = PyInt_FromLong(x)) != NULL) { \
+        if (PyModule_AddObject(py_module, y, sk_constant)) { \
+            Py_DECREF(sk_constant); \
+        } \
     }
 
-    if ((sk_constant = PyInt_FromLong(SANLK_LSF_REM)) != NULL) {
-        if (PyModule_AddObject(py_module, "SANLK_LSF_REM", sk_constant)) {
-            Py_DECREF(sk_constant);
-        }
-    }
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_LSF_ADD, "LSFLAG_ADD");
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_LSF_REM, "LSFLAG_REM");
+
+#undef PYSNLK_INIT_ADD_CONSTANT
 }
