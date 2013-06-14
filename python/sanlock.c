@@ -134,6 +134,75 @@ exit_fail:
     return -1;
 }
 
+static PyObject *
+__hosts_to_list(struct sanlk_host *hss, int hss_count)
+{
+    int i, rv;
+    PyObject *ls_list = NULL, *ls_entry = NULL, *ls_value = NULL;
+
+    /* prepare the dictionary holding the information */
+    if ((ls_list = PyList_New(0)) == NULL)
+        goto exit_fail;
+
+    for (i = 0; i < hss_count; i++) {
+        if ((ls_entry = PyDict_New()) == NULL)
+            goto exit_fail;
+
+        /* fill the dictionary information: host_id */
+        if ((ls_value = PyInt_FromLong(hss[i].host_id)) == NULL)
+            goto exit_fail;
+        rv = PyDict_SetItemString(ls_entry, "host_id", ls_value);
+        Py_DECREF(ls_value);
+        if (rv != 0)
+            goto exit_fail;
+
+        /* fill the dictionary information: generation */
+        if ((ls_value = PyInt_FromLong(hss[i].generation)) == NULL)
+            goto exit_fail;
+        rv = PyDict_SetItemString(ls_entry, "generation", ls_value);
+        Py_DECREF(ls_value);
+        if (rv != 0)
+            goto exit_fail;
+
+        /* fill the dictionary information: timestamp */
+        if ((ls_value = PyInt_FromLong(hss[i].timestamp)) == NULL)
+            goto exit_fail;
+        rv = PyDict_SetItemString(ls_entry, "timestamp", ls_value);
+        Py_DECREF(ls_value);
+        if (rv != 0)
+            goto exit_fail;
+
+        /* fill the dictionary information: io_timeout */
+        if ((ls_value = PyInt_FromLong(hss[i].io_timeout)) == NULL)
+            goto exit_fail;
+        rv = PyDict_SetItemString(ls_entry, "io_timeout", ls_value);
+        Py_DECREF(ls_value);
+        if (rv != 0)
+            goto exit_fail;
+
+        /* fill the dictionary information: flags */
+        if ((ls_value = PyInt_FromLong(hss[i].flags)) == NULL)
+            goto exit_fail;
+        rv = PyDict_SetItemString(ls_entry, "flags", ls_value);
+        Py_DECREF(ls_value);
+        if (rv != 0)
+            goto exit_fail;
+
+        if (PyList_Append(ls_list, ls_entry) != 0)
+            goto exit_fail;
+
+        Py_DECREF(ls_entry);
+    }
+
+    return ls_list;
+
+    /* failure */
+exit_fail:
+    Py_XDECREF(ls_entry);
+    Py_XDECREF(ls_list);
+    return NULL;
+}
+
 /* register */
 PyDoc_STRVAR(pydoc_register, "\
 register() -> int\n\
@@ -694,7 +763,7 @@ py_rem_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
 /* get_lockspaces */
 PyDoc_STRVAR(pydoc_get_lockspaces, "\
-get_lockspaces() -> dict\n\
+get_lockspaces() -> list\n\
 Return the list of lockspaces currently managed by sanlock. The reported\n\
 flag indicates whether the lockspace is acquired (0) or in transition.\n\
 The possible transition values are LSFLAG_ADD if the lockspace is in the\n\
@@ -714,7 +783,7 @@ py_get_lockspaces(PyObject *self __unused, PyObject *args, PyObject *keywds)
     Py_END_ALLOW_THREADS
 
     if (rv < 0) {
-        __set_exception(rv, "Sanlock get lockspace failure");
+        __set_exception(rv, "Sanlock get lockspaces failure");
         goto exit_fail;
     }
 
@@ -784,6 +853,51 @@ exit_fail:
     return NULL;
 }
 
+/* get_hosts */
+PyDoc_STRVAR(pydoc_get_hosts, "\
+get_hosts(lockspace, host_id=0) -> list\n\
+Return the list of hosts currently alive in a lockspace. When the host_id\n\
+is specified then only the requested host status is returned. The reported\n\
+flag indicates whether the host is free (HOST_FREE), alive (HOST_LIVE),\n\
+failing (HOST_FAIL), dead (HOST_DEAD) or unknown (HOST_UNKNOWN).\n\
+The unknown state is the default when sanlock just joined the lockspace\n\
+and didn't collect enough information to determine the real status of other\n\
+hosts. The dictionary returned also contains: the generation, the last\n\
+timestamp and the io_timeout.\n");
+
+static PyObject *
+py_get_hosts(PyObject *self __unused, PyObject *args, PyObject *keywds)
+{
+    int rv, hss_count = 0;
+    uint64_t host_id = 0;
+    const char *lockspace = NULL;
+    struct sanlk_host *hss = NULL;
+    PyObject *ls_list = NULL;
+
+    static char *kwlist[] = {"lockspace", "host_id", NULL};
+
+    /* parse python tuple */
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "s|k", kwlist,
+        &lockspace, &host_id)) {
+        return NULL;
+    }
+
+    /* get all the lockspaces (gil disabled) */
+    Py_BEGIN_ALLOW_THREADS
+    rv = sanlock_get_hosts(lockspace, host_id, &hss, &hss_count, 0);
+    Py_END_ALLOW_THREADS
+
+    if (rv < 0) {
+        __set_exception(rv, "Sanlock get hosts failure");
+        goto exit_fail;
+    }
+
+    ls_list = __hosts_to_list(hss, hss_count);
+
+exit_fail:
+    if (hss) free(hss);
+    return ls_list;
+}
 
 /* acquire */
 PyDoc_STRVAR(pydoc_acquire, "\
@@ -1101,6 +1215,8 @@ sanlock_methods[] = {
                         METH_VARARGS|METH_KEYWORDS, pydoc_rem_lockspace},
     {"get_lockspaces", (PyCFunction) py_get_lockspaces,
                         METH_VARARGS|METH_KEYWORDS, pydoc_get_lockspaces},
+    {"get_hosts", (PyCFunction) py_get_hosts,
+                        METH_VARARGS|METH_KEYWORDS, pydoc_get_hosts},
     {"acquire", (PyCFunction) py_acquire,
                 METH_VARARGS|METH_KEYWORDS, pydoc_acquire},
     {"release", (PyCFunction) py_release,
@@ -1181,6 +1297,13 @@ initsanlock(void)
     /* resource request flags */
     PYSNLK_INIT_ADD_CONSTANT(SANLK_REQ_FORCE, "REQ_FORCE");
     PYSNLK_INIT_ADD_CONSTANT(SANLK_REQ_GRACEFUL, "REQ_GRACEFUL");
+
+    /* hosts list flags */
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_HOST_FREE, "HOST_FREE");
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_HOST_LIVE, "HOST_LIVE");
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_HOST_FAIL, "HOST_FAIL");
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_HOST_DEAD, "HOST_DEAD");
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_HOST_UNKNOWN, "HOST_UNKNOWN");
 
 #undef PYSNLK_INIT_ADD_CONSTANT
 }

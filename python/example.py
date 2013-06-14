@@ -1,4 +1,5 @@
 import os
+import time
 import signal
 import tempfile
 import sanlock
@@ -37,6 +38,17 @@ def main():
         print "Acquiring '%s' on '%s'" % (RESOURCE_NAME, LOCKSPACE_NAME)
         sanlock.acquire(LOCKSPACE_NAME, RESOURCE_NAME, SNLK_DISKS, slkfd=fd,
                         version=0)
+        while True:
+            print "Trying to get lockspace '%s' hosts" % LOCKSPACE_NAME
+            try:
+                hosts_list = sanlock.get_hosts(LOCKSPACE_NAME)
+            except sanlock.SanlockException as e:
+                if e.errno != os.errno.EAGAIN:
+                    raise
+            else:
+                print "Lockspace '%s' hosts: " % LOCKSPACE_NAME, hosts_list
+                break
+            time.sleep(5)
         print "Releasing '%s' on '%s'" % (RESOURCE_NAME, LOCKSPACE_NAME)
         sanlock.release(LOCKSPACE_NAME, RESOURCE_NAME, SNLK_DISKS, slkfd=fd)
     except Exception as e:
