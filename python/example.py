@@ -1,4 +1,5 @@
 import os
+import signal
 import tempfile
 import sanlock
 
@@ -6,7 +7,12 @@ HOST_ID = 1
 LOCKSPACE_NAME = "lockspace1"
 RESOURCE_NAME = "resource1"
 
+def sigTermHandler():
+    print "SIGTERM signal received"
+
 def main():
+    signal.signal(signal.SIGTERM, sigTermHandler)
+
     print "Creating the sanlock disk"
     fd, disk = tempfile.mkstemp()
     os.close(fd)
@@ -33,6 +39,8 @@ def main():
                         version=0)
         print "Releasing '%s' on '%s'" % (RESOURCE_NAME, LOCKSPACE_NAME)
         sanlock.release(LOCKSPACE_NAME, RESOURCE_NAME, SNLK_DISKS, slkfd=fd)
+    except Exception as e:
+        print "Exception: ", e
     finally:
         print "Releasing the id '%i' on '%s'" % (HOST_ID, LOCKSPACE_NAME)
         sanlock.rem_lockspace(LOCKSPACE_NAME, HOST_ID, disk)
