@@ -1165,6 +1165,33 @@ static int write_new_leader(struct task *task,
  * 				6 i/os = 3 1MB reads, 3 512 byte writes
  */
 
+/*
+ * When a lease is held by host A, and host B attempts to acquire it,
+ * host B will sometimes fail quickly (within a second) with IDLIVE/-243,
+ * but other times will fail slowly (several seconds) with IDLIVE/-243.
+ * This comes from the fact that this function (on B) is looking for a change
+ * in A's delta timestamp.  To detect a timestamp change, we compare the
+ * last timestamp from A that was seen by our own renewal thread, against
+ * the delta timestamp from A that we read here directly.
+ *
+ * time X: our own delta renewal thread reads A's delta timestamp as 100
+ * time Y: host A renews its delta lease, writing timestamp 120
+ * time Z: our own delta renewal thread reads A's delta timestamp as 120
+ *
+ * If we try to acquire a resource lease held by A between time X and Y,
+ * paxos_lease_acquire() will read A's timestamp as 100, the same as our
+ * own renewal thread last saw.  paxos_lease_acquire() will reread A's
+ * delta lease once a second until it changes at time Y, at which point
+ * it will return IDLIVE.  If Y is very shortly before Z, then
+ * paxos_lease_acquire() can take up to 20 seconds to return IDLIVE.
+ *
+ * If we try to acquire a resource lease held by A between time Y and Z,
+ * paxos_lease_acquire() will read A's timestamp as 120, which is newer
+ * than our own renewal thread last saw.  paxos_lease_acquire() will
+ * fail immediately returning IDLIVE.  If Y is very shortly after X,
+ * then paxos_lease_acquire() will return IDLIVE quickly most of the time.
+ */
+
 int paxos_lease_acquire(struct task *task,
 			struct token *token,
 			uint32_t flags,
