@@ -1044,6 +1044,9 @@ int sanlock_request(uint32_t flags, uint32_t force_mode,
 {
 	int fd, rv, datalen;
 
+	if (!res)
+		return -EINVAL;
+
 	datalen = sizeof(struct sanlk_resource) +
 		  sizeof(struct sanlk_disk) * res->num_disks;
 
