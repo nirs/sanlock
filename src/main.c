@@ -945,8 +945,12 @@ static int thread_pool_create(int min_workers, int max_workers)
 	return rv;
 }
 
-/* cmd comes from a transient client/fd set up just to pass the cmd,
-   and is not being done on behalf of another registered client/fd */
+/*
+ * cmd comes from a transient client/fd set up just to pass the cmd,
+ * and is not being done on behalf of another registered client/fd.
+ * The command is processed independently of the lifetime of a specific
+ * client or the tokens held by a specific client.
+ */
 
 static void process_cmd_thread_unregistered(int ci_in, struct sm_header *h_recv)
 {
@@ -975,8 +979,15 @@ static void process_cmd_thread_unregistered(int ci_in, struct sm_header *h_recv)
 	close(client[ci_in].fd);
 }
 
-/* cmd either comes from a registered client/fd,
-   or is targeting a registered client/fd */
+/*
+ * cmd either comes from a registered client/fd, or is targeting a registered
+ * client/fd.  The processing of the cmd is closely coordinated with the
+ * lifetime of a specific client and to tokens held by that client.  Handling
+ * of the client's death or changing of the client's tokens will be serialized
+ * with the processing of this command.  This means that the end of processing
+ * this command needs to check if the client failed during the command
+ * processing and handle the cleanup of the client if so.
+ */
 
 static void process_cmd_thread_registered(int ci_in, struct sm_header *h_recv)
 {
@@ -1168,6 +1179,8 @@ static void process_connection(int ci)
 	case SM_CMD_READ_LOCKSPACE:
 	case SM_CMD_READ_RESOURCE:
 	case SM_CMD_READ_RESOURCE_OWNERS:
+	case SM_CMD_SET_LVB:
+	case SM_CMD_GET_LVB:
 		rv = client_suspend(ci);
 		if (rv < 0)
 			return;

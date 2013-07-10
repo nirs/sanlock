@@ -50,6 +50,13 @@ static pthread_mutex_t resource_mutex;
 static pthread_cond_t resource_cond;
 
 
+static void free_resource(struct resource *r)
+{
+	if (r->lvb)
+		free(r->lvb);
+	free(r);
+}
+
 void send_state_resources(int fd)
 {
 	struct resource *r;
@@ -405,6 +412,117 @@ static int clear_dead_shared(struct task *task, struct token *token,
 	return rv;
 }
 
+/* the lvb is the sector after the dblock for host_id 2000, i.e. 2002 */
+
+#define LVB_SECTOR 2002
+
+static int read_lvb_block(struct task *task, struct token *token)
+{
+	struct sync_disk *disk;
+	struct resource *r;
+	char *iobuf;
+	uint64_t offset;
+	int iobuf_len, rv;
+
+	r = token->resource;
+	disk = &token->disks[0];
+	iobuf_len = disk->sector_size;
+	iobuf = r->lvb;
+	offset = disk->offset + (LVB_SECTOR * disk->sector_size);
+
+	rv = read_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout);
+
+	return rv;
+}
+
+static int write_lvb_block(struct task *task, struct resource *r, struct token *token)
+{
+	struct sync_disk *disk;
+	char *iobuf;
+	uint64_t offset;
+	int iobuf_len, rv;
+
+	disk = &token->disks[0];
+	iobuf_len = disk->sector_size;
+	iobuf = r->lvb;
+	offset = disk->offset + (LVB_SECTOR * disk->sector_size);
+
+	rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout);
+
+	return rv;
+}
+
+int res_set_lvb(struct sanlk_resource *res, char *lvb, int lvblen)
+{
+	struct resource *r;
+	int rv = -ENOENT;
+
+	pthread_mutex_lock(&resource_mutex);
+	list_for_each_entry(r, &resources_held, list) {
+		if (strncmp(r->r.lockspace_name, res->lockspace_name, NAME_ID_SIZE))
+			continue;
+		if (strncmp(r->r.name, res->name, NAME_ID_SIZE))
+			continue;
+
+		if (!r->lvb) {
+			rv = -EINVAL;
+			break;
+		}
+
+		if (lvblen > r->leader.sector_size) {
+			rv = -E2BIG;
+			break;
+		}
+
+		memcpy(r->lvb, lvb, lvblen);
+		r->flags |= R_LVB_WRITE_RELEASE;
+		rv = 0;
+		break;
+	}
+	pthread_mutex_unlock(&resource_mutex);
+
+	return rv;
+}
+
+int res_get_lvb(struct sanlk_resource *res, char **lvb_out, int *lvblen)
+{
+	struct resource *r;
+	char *lvb;
+	int rv = -ENOENT;
+	int len = *lvblen;
+
+	pthread_mutex_lock(&resource_mutex);
+	list_for_each_entry(r, &resources_held, list) {
+		if (strncmp(r->r.lockspace_name, res->lockspace_name, NAME_ID_SIZE))
+			continue;
+		if (strncmp(r->r.name, res->name, NAME_ID_SIZE))
+			continue;
+
+		if (!r->lvb) {
+			rv = -EINVAL;
+			break;
+		}
+
+		if (!len)
+			len = r->leader.sector_size;
+
+		lvb = malloc(len);
+		if (!lvb) {
+			rv = -ENOMEM;
+			break;
+		}
+
+		memcpy(lvb, r->lvb, len);
+		*lvb_out = lvb;
+		*lvblen = len;
+		rv = 0;
+		break;
+	}
+	pthread_mutex_unlock(&resource_mutex);
+
+	return rv;
+}
+
 /* return < 0 on error, 1 on success */
 
 static int acquire_disk(struct task *task, struct token *token,
@@ -521,6 +639,9 @@ static int _release_token(struct task *task, struct token *token, int opened, in
 	if (r->flags & R_SHARED) {
 		rv = set_mode_block(task, token, token->host_id, 0, 0);
 	} else {
+		if (r->flags & R_LVB_WRITE_RELEASE)
+			write_lvb_block(task, r, token);
+
 		rv = release_disk(task, token, &r->leader);
 	}
 
@@ -536,7 +657,7 @@ static int _release_token(struct task *task, struct token *token, int opened, in
 	pthread_mutex_lock(&resource_mutex);
 	list_del(&r->list);
 	pthread_mutex_unlock(&resource_mutex);
-	free(r);
+	free_resource(r);
 
 	return rv;
 }
@@ -572,7 +693,7 @@ void release_token_async(struct token *token)
 			   is dead (release will probably fail), or the
 			   lease wasn't never acquired */
 			list_del(&r->list);
-			free(r);
+			free_resource(r);
 		} else {
 			r->flags |= R_THREAD_RELEASE;
 			r->release_token_id = token->token_id;
@@ -682,13 +803,14 @@ static struct resource *new_resource(struct token *token)
 	return r;
 }
 
-int acquire_token(struct task *task, struct token *token,
+int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 		  char *killpath, char *killargs)
 {
 	struct leader_record leader;
 	struct resource *r;
 	uint64_t acquire_lver = 0;
 	uint32_t new_num_hosts = 0;
+	int sector_size;
 	int sh_retries = 0;
 	int live_count = 0;
 	int rv;
@@ -756,6 +878,19 @@ int acquire_token(struct task *task, struct token *token,
 
 	copy_disks(&r->r.disks, &token->r.disks, token->r.num_disks);
 
+	sector_size = token->disks[0].sector_size;
+
+	if (cmd_flags & SANLK_ACQUIRE_LVB) {
+		char *iobuf, **p_iobuf;
+		p_iobuf = &iobuf;
+
+		rv = posix_memalign((void *)p_iobuf, getpagesize(), sector_size);
+		if (rv)
+			log_error("acquire_token cannot allocate lvb");
+		else
+			r->lvb = iobuf;
+	}
+
  retry:
 	memset(&leader, 0, sizeof(struct leader_record));
 
@@ -818,6 +953,9 @@ int acquire_token(struct task *task, struct token *token,
 	}
 
  out:
+	if (cmd_flags & SANLK_ACQUIRE_LVB)
+		read_lvb_block(task, token);
+
 	close_disks(token->disks, token->r.num_disks);
 
 	pthread_mutex_lock(&resource_mutex);
@@ -1054,6 +1192,9 @@ static void resource_thread_release(struct task *task, struct resource *r, struc
 	if (r->flags & R_SHARED) {
 		set_mode_block(task, tt, tt->host_id, 0, 0);
 	} else {
+		if (r->flags & R_LVB_WRITE_RELEASE)
+			write_lvb_block(task, r, tt);
+
 		release_disk(task, tt, &r->leader);
 	}
 
@@ -1062,7 +1203,7 @@ static void resource_thread_release(struct task *task, struct resource *r, struc
 	pthread_mutex_lock(&resource_mutex);
 	list_del(&r->list);
 	pthread_mutex_unlock(&resource_mutex);
-	free(r);
+	free_resource(r);
 }
 
 static void resource_thread_examine(struct task *task, struct token *tt, int pid, uint64_t lver)

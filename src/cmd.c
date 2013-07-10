@@ -327,7 +327,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 	for (i = 0; i < new_tokens_count; i++) {
 		token = new_tokens[i];
 
-		rv = acquire_token(task, token, killpath, killargs);
+		rv = acquire_token(task, token, ca->header.cmd_flags, killpath, killargs);
 		if (rv < 0) {
 			switch (rv) {
 			case -EEXIST:
@@ -885,6 +885,80 @@ static void cmd_examine(struct task *task GNUC_UNUSED, struct cmd_args *ca)
 	log_debug("cmd_examine %d,%d done %d", ca->ci_in, fd, count);
 
 	send_result(fd, &ca->header, result);
+	client_resume(ca->ci_in);
+}
+
+static void cmd_set_lvb(struct task *task GNUC_UNUSED, struct cmd_args *ca)
+{
+	struct sanlk_resource res;
+	char *lvb = NULL;
+	int lvblen, rv, fd, result;
+
+	fd = client[ca->ci_in].fd;
+
+	rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
+	if (rv != sizeof(struct sanlk_resource)) {
+		log_error("cmd_set_lvb %d,%d recv %d %d", ca->ci_in, fd, rv, errno);
+		result = -ENOTCONN;
+		goto reply;
+	}
+
+	lvblen = ca->header.length - sizeof(struct sm_header) - sizeof(struct sanlk_resource);
+
+	lvb = malloc(lvblen);
+	if (!lvb) {
+		result = -ENOMEM;
+		goto reply;
+	}
+
+	rv = recv(fd, lvb, lvblen, MSG_WAITALL);
+	if (rv != lvblen) {
+		result = -ENOTCONN;
+		goto reply;
+	}
+
+	result = res_set_lvb(&res, lvb, lvblen);
+ reply:
+	if (lvb)
+		free(lvb);
+
+	send_result(fd, &ca->header, result);
+	client_resume(ca->ci_in);
+}
+
+static void cmd_get_lvb(struct task *task GNUC_UNUSED, struct cmd_args *ca)
+{
+	struct sm_header h;
+	struct sanlk_resource res;
+	char *lvb = NULL;
+	int lvblen = 0, rv, fd, result;
+
+	fd = client[ca->ci_in].fd;
+
+	rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
+	if (rv != sizeof(struct sanlk_resource)) {
+		log_error("cmd_get_lvb %d,%d recv %d %d", ca->ci_in, fd, rv, errno);
+		result = -ENOTCONN;
+		goto reply;
+	}
+
+	/* if 0 then we use the sector size as lvb len */
+	lvblen = ca->header.data2;
+
+	result = res_get_lvb(&res, &lvb, &lvblen);
+ reply:
+	memcpy(&h, &ca->header, sizeof(struct sm_header));
+	h.data = result;
+	h.data2 = 0;
+	h.length = sizeof(h) + lvblen;
+
+	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
+
+	if (lvb) {
+		send(fd, lvb, lvblen, MSG_NOSIGNAL);
+		free(lvb);
+	}
+
 	client_resume(ca->ci_in);
 }
 
@@ -1624,6 +1698,12 @@ void call_cmd_thread(struct task *task, struct cmd_args *ca)
 		break;
 	case SM_CMD_KILLPATH:
 		cmd_killpath(task, ca);
+		break;
+	case SM_CMD_SET_LVB:
+		cmd_set_lvb(task, ca);
+		break;
+	case SM_CMD_GET_LVB:
+		cmd_get_lvb(task, ca);
 		break;
 	};
 }

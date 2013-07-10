@@ -28,6 +28,9 @@
 /* killpath flags */
 #define SANLK_KILLPATH_PID	0x00000001
 
+/* acquire flags */
+#define SANLK_ACQUIRE_LVB	0x00000001
+
 /* release flags */
 #define SANLK_REL_ALL		0x00000001
 
@@ -85,6 +88,12 @@ int sanlock_request(uint32_t flags, uint32_t force_mode,
 
 int sanlock_examine(uint32_t flags, struct sanlk_lockspace *ls,
 		    struct sanlk_resource *res);
+
+int sanlock_set_lvb(uint32_t flags, struct sanlk_resource *res,
+		    char *lvb, int lvblen);
+
+int sanlock_get_lvb(uint32_t flags, struct sanlk_resource *res,
+		    char *lvb, int lvblen);
 
 /*
  * Functions to convert between string and struct resource formats.

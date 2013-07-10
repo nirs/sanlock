@@ -1115,6 +1115,110 @@ int sanlock_examine(uint32_t flags, struct sanlk_lockspace *ls,
 	return rv;
 }
 
+int sanlock_set_lvb(uint32_t flags, struct sanlk_resource *res, char *lvb, int lvblen)
+{
+	int datalen = 0;
+	int rv, fd;
+
+	if (!res || !lvb || !lvblen)
+		return -EINVAL;
+
+	datalen = sizeof(struct sanlk_resource) + lvblen;
+
+	rv = connect_socket(&fd);
+	if (rv < 0)
+		return rv;
+
+	rv = send_header(fd, SM_CMD_SET_LVB, flags, datalen, 0, 0);
+	if (rv < 0)
+		return rv;
+
+	rv = send(fd, res, sizeof(struct sanlk_resource), 0);
+	if (rv < 0) {
+		rv = -1;
+		goto out;
+	}
+
+	rv = send(fd, lvb, lvblen, 0);
+	if (rv < 0) {
+		rv = -1;
+		goto out;
+	}
+
+	rv = recv_result(fd);
+ out:
+	close(fd);
+	return rv;
+}
+
+int sanlock_get_lvb(uint32_t flags, struct sanlk_resource *res, char *lvb, int lvblen)
+{
+	struct sm_header h;
+	char *reply_data = NULL;
+	int datalen = 0;
+	int rv, fd, len;
+
+	if (!res || !lvb || !lvblen)
+		return -EINVAL;
+
+	datalen = sizeof(struct sanlk_resource);
+
+	rv = connect_socket(&fd);
+	if (rv < 0)
+		return rv;
+
+	rv = send_header(fd, SM_CMD_GET_LVB, flags, datalen, 0, 0);
+	if (rv < 0)
+		return rv;
+
+	rv = send(fd, res, sizeof(struct sanlk_resource), 0);
+	if (rv < 0) {
+		rv = -1;
+		goto out;
+	}
+
+	/* get result */
+
+	memset(&h, 0, sizeof(h));
+
+	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	if (rv != sizeof(h)) {
+		rv = -1;
+		goto out;
+	}
+
+	len = h.length - sizeof(h);
+	if (!len) {
+		rv = (int)h.data;
+		goto out;
+	}
+
+	reply_data = malloc(len);
+	if (!reply_data) {
+		rv = -ENOMEM;
+		goto out;
+	}
+
+	rv = recv(fd, reply_data, len, MSG_WAITALL);
+	if (rv != len) {
+		free(reply_data);
+		rv = -1;
+		goto out;
+	}
+
+	if (lvblen < len)
+		len = lvblen;
+
+	memcpy(lvb, reply_data, len);
+
+	free(reply_data);
+
+	rv = (int)h.data;
+ out:
+	close(fd);
+	return rv;
+}
+
 /*
  * convert from struct sanlk_resource to string with format:
  * <lockspace_name>:<resource_name>:<path>:<offset>[:<path>:<offset>...]:<lver>
