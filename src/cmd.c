@@ -65,7 +65,7 @@ static void release_cl_tokens(struct task *task, struct client *cl)
 		token = cl->tokens[j];
 		if (!token)
 			continue;
-		release_token(task, token);
+		release_token(task, token, NULL);
 		free(token);
 	}
 }
@@ -76,7 +76,7 @@ static void release_new_tokens(struct task *task, struct token *new_tokens[],
 	int i;
 
 	for (i = 0; i < acquire_count; i++)
-		release_token(task, new_tokens[i]);
+		release_token(task, new_tokens[i], NULL);
 
 	for (i = 0; i < alloc_count; i++)
 		free(new_tokens[i]);
@@ -477,6 +477,8 @@ static void cmd_release(struct task *task, struct cmd_args *ca)
 	struct token *token;
 	struct token *rem_tokens[SANLK_MAX_RESOURCES];
 	struct sanlk_resource res;
+	struct sanlk_resource new;
+	struct sanlk_resource *resrename = NULL;
 	int fd, rv, i, j, found, pid_dead;
 	int rem_tokens_count = 0;
 	int result = 0;
@@ -503,6 +505,54 @@ static void cmd_release(struct task *task, struct cmd_args *ca)
 			cl->tokens[j] = NULL;
 		}
 		pthread_mutex_unlock(&cl->mutex);
+		goto do_remove;
+	}
+
+	if (ca->header.cmd_flags & SANLK_REL_RENAME) {
+		rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
+		if (rv != sizeof(struct sanlk_resource)) {
+			log_error("cmd_release %d,%d,%d recv res %d %d",
+				  cl_ci, cl_fd, cl_pid, rv, errno);
+			result = -ENOTCONN;
+			goto do_remove;
+		}
+
+		/* second res struct has new name for first res */
+		rv = recv(fd, &new, sizeof(struct sanlk_resource), MSG_WAITALL);
+		if (rv != sizeof(struct sanlk_resource)) {
+			log_error("cmd_release %d,%d,%d recv new %d %d",
+				  cl_ci, cl_fd, cl_pid, rv, errno);
+			result = -ENOTCONN;
+			goto do_remove;
+		}
+
+		found = 0;
+
+		pthread_mutex_lock(&cl->mutex);
+		for (j = 0; j < SANLK_MAX_RESOURCES; j++) {
+			token = cl->tokens[j];
+			if (!token)
+				continue;
+
+			if (memcmp(token->r.lockspace_name, res.lockspace_name, NAME_ID_SIZE))
+				continue;
+			if (memcmp(token->r.name, res.name, NAME_ID_SIZE))
+				continue;
+
+			rem_tokens[rem_tokens_count++] = token;
+			cl->tokens[j] = NULL;
+			found = 1;
+			break;
+		}
+		pthread_mutex_unlock(&cl->mutex);
+
+		if (!found) {
+			log_error("cmd_release %d,%d,%d no resource %.48s",
+				  cl_ci, cl_fd, cl_pid, res.name);
+			result = -1;
+		}
+
+		resrename = &new;
 		goto do_remove;
 	}
 
@@ -548,7 +598,7 @@ static void cmd_release(struct task *task, struct cmd_args *ca)
 
 	for (i = 0; i < rem_tokens_count; i++) {
 		token = rem_tokens[i];
-		rv = release_token(task, token);
+		rv = release_token(task, token, resrename);
 		if (rv < 0)
 			result = rv;
 		free(token);

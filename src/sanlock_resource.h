@@ -31,8 +31,25 @@
 /* acquire flags */
 #define SANLK_ACQUIRE_LVB	0x00000001
 
-/* release flags */
+/*
+ * release flags
+ *
+ * SANLK_REL_ALL
+ * Release all resources held by the client.
+ * The res args are ignored.
+ *
+ * SANLK_REL_RENAME
+ * Rename the resource lease on disk when it
+ * is released.  The resource is freed and
+ * renamed in a single disk operation (write
+ * to the leader record.)  The first res
+ * arg is the resource to release, and the
+ * second resource arg contains the new name
+ * for the first resource.
+ */
+
 #define SANLK_REL_ALL		0x00000001
+#define SANLK_REL_RENAME	0x00000002
 
 /*
  * request flags

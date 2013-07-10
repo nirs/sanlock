@@ -556,12 +556,13 @@ static int acquire_disk(struct task *task, struct token *token,
 /* return < 0 on error, 1 on success */
 
 static int release_disk(struct task *task, struct token *token,
-			 struct leader_record *leader)
+			struct sanlk_resource *resrename,
+			struct leader_record *leader)
 {
 	struct leader_record leader_tmp;
 	int rv;
 
-	rv = paxos_lease_release(task, token, leader, &leader_tmp);
+	rv = paxos_lease_release(task, token, resrename, leader, &leader_tmp);
 
 	log_token(token, "release_disk rv %d", rv);
 
@@ -572,7 +573,9 @@ static int release_disk(struct task *task, struct token *token,
 	return rv; /* SANLK_OK */
 }
 
-static int _release_token(struct task *task, struct token *token, int opened, int nodisk)
+static int _release_token(struct task *task, struct token *token,
+			  struct sanlk_resource *resrename,
+			  int opened, int nodisk)
 {
 	struct resource *r = token->resource;
 	uint64_t lver;
@@ -642,7 +645,7 @@ static int _release_token(struct task *task, struct token *token, int opened, in
 		if (r->flags & R_LVB_WRITE_RELEASE)
 			write_lvb_block(task, r, token);
 
-		rv = release_disk(task, token, &r->leader);
+		rv = release_disk(task, token, resrename, &r->leader);
 	}
 
 	close_disks(token->disks, token->r.num_disks);
@@ -664,17 +667,18 @@ static int _release_token(struct task *task, struct token *token, int opened, in
 
 static int release_token_nodisk(struct task *task, struct token *token)
 {
-	return _release_token(task, token, 0, 1);
+	return _release_token(task, token, NULL, 0, 1);
 }
 
 static int release_token_opened(struct task *task, struct token *token)
 {
-	return _release_token(task, token, 1, 0);
+	return _release_token(task, token, NULL, 1, 0);
 }
 
-int release_token(struct task *task, struct token *token)
+int release_token(struct task *task, struct token *token,
+		  struct sanlk_resource *resrename)
 {
-	return _release_token(task, token, 0, 0);
+	return _release_token(task, token, resrename, 0, 0);
 }
 
 /* We're releasing a token from the main thread, in which we don't want to block,
@@ -931,7 +935,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 			release_token_opened(task, token);
 			return rv;
 		} else {
-			release_disk(task, token, &leader);
+			release_disk(task, token, NULL, &leader);
 			/* the token is kept, the paxos lease is released but with shared set */
 			goto out;
 		}
@@ -1195,7 +1199,7 @@ static void resource_thread_release(struct task *task, struct resource *r, struc
 		if (r->flags & R_LVB_WRITE_RELEASE)
 			write_lvb_block(task, r, tt);
 
-		release_disk(task, tt, &r->leader);
+		release_disk(task, tt, NULL, &r->leader);
 	}
 
 	close_disks(tt->disks, tt->r.num_disks);

@@ -1669,6 +1669,7 @@ int paxos_lease_renew(struct task *task,
 
 int paxos_lease_release(struct task *task,
 			struct token *token,
+			struct sanlk_resource *resrename,
 		        struct leader_record *leader_last,
 		        struct leader_record *leader_ret)
 {
@@ -1724,6 +1725,9 @@ int paxos_lease_release(struct task *task,
 		log_leader_error(0, token, &token->disks[0], &leader, "paxos_release");
 		*/
 	}
+
+	if (resrename)
+		memcpy(leader.resource_name, resrename->name, NAME_ID_SIZE);
 
 	leader.timestamp = LEASE_FREE;
 	leader.write_id = token->host_id;

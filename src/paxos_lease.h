@@ -29,6 +29,7 @@ int paxos_lease_acquire(struct task *task,
 
 int paxos_lease_release(struct task *task,
 			struct token *token,
+			struct sanlk_resource *resrename,
 			struct leader_record *leader_last,
 			struct leader_record *leader_ret);
 

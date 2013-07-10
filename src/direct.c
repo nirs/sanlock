@@ -132,7 +132,7 @@ static int do_paxos_action(int action, struct task *task, int io_timeout,
 		rv = paxos_lease_leader_read(task, token, &leader, "direct_release");
 		if (rv < 0)
 			break;
-		rv = paxos_lease_release(task, token, &leader, leader_ret);
+		rv = paxos_lease_release(task, token, NULL, &leader, leader_ret);
 		break;
 
 	case ACT_READ_LEADER:

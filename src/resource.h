@@ -17,7 +17,8 @@ void check_mode_block(struct token *token, int q, char *dblock);
 
 int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 		  char *killpath, char *killargs);
-int release_token(struct task *task, struct token *token);
+int release_token(struct task *task, struct token *token,
+		  struct sanlk_resource *resrename);
 void release_token_async(struct token *token);
 
 int request_token(struct task *task, struct token *token, uint32_t force_mode,
