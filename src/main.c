@@ -2205,6 +2205,9 @@ static int do_client_gets(void)
 		if (!com.get_hosts)
 			goto next;
 
+		hss = NULL;
+		hss_count = 0;
+
 		rv = sanlock_get_hosts(ls->name, 0, &hss, &hss_count, 0);
 		if (rv == -EAGAIN) {
 			log_tool("hosts not ready");
