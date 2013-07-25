@@ -1400,7 +1400,7 @@ static void cmd_read_resource_owners(struct task *task, struct cmd_args *ca)
 	struct sanlk_resource res;
 	struct token *token = NULL;
 	char *send_buf;
-	int token_len, disks_len, send_len;
+	int token_len, disks_len, send_len = 0;
 	int j, fd, rv, result, count = 0;
 
 	fd = client[ca->ci_in].fd;
@@ -1486,7 +1486,7 @@ static void cmd_read_resource_owners(struct task *task, struct cmd_args *ca)
 	h.length = sizeof(h) + sizeof(res) + send_len;
 	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
 	send(fd, &res, sizeof(res), MSG_NOSIGNAL);
-	if (send_len) {
+	if (send_len && send_buf) {
 		send(fd, send_buf, send_len, MSG_NOSIGNAL);
 		free(send_buf);
 	}
