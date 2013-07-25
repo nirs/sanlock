@@ -2297,8 +2297,9 @@ static int do_client_read(void)
 				 (unsigned long long)hs->generation);
 		hs++;
 	}
-	free(hss);
  out:
+	if (hss)
+		free(hss);
 	return rv;
 }
 
