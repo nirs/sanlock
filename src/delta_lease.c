@@ -173,6 +173,8 @@ int delta_read_lockspace(struct task *task,
 
 	if (!ls->name[0])
 		space_name = leader.space_name;
+	else
+		space_name = ls->name;
 
 	error = verify_leader(disk, space_name, host_id, &leader, "read_lockspace");
 
