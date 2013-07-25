@@ -787,7 +787,7 @@ static void cmd_request(struct task *task, struct cmd_args *ca)
 	struct token *token;
 	struct sanlk_resource res;
 	struct space_info spi;
-	uint64_t owner_id;
+	uint64_t owner_id = 0;
 	uint32_t force_mode;
 	int token_len, disks_len;
 	int j, fd, rv, error, result;
