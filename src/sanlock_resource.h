@@ -100,6 +100,9 @@ int sanlock_release(int sock, int pid, uint32_t flags, int res_count,
 int sanlock_inquire(int sock, int pid, uint32_t flags, int *res_count,
 		    char **res_state);
 
+int sanlock_convert(int sock, int pid, uint32_t flags,
+		    struct sanlk_resource *res);
+
 int sanlock_request(uint32_t flags, uint32_t force_mode,
 		    struct sanlk_resource *res);
 

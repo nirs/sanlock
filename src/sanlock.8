@@ -340,6 +340,15 @@ for the given pid.  The pid must be registered with the sanlock daemon.
 acquire can optionally take a versioned RESOURCE string RESOURCE:lver,
 where lver is the version of the lease that must be acquired, or fail.
 
+.BR "sanlock client convert -r" " RESOURCE " \
+\fB-p\fP " " \fIpid\fP
+
+Tell the sanlock daemon to convert the mode of the specified resource
+lease for the given pid.  If the existing mode is exclusive (default),
+the mode of the lease can be converted to shared with RESOURCE:SH.  If the
+existing mode is shared, the mode of the lease can be converted to
+exclusive with RESOURCE (no :SH suffix).
+
 .BI "sanlock client inquire -p" " pid"
 
 Print the resource leases held the given pid.  The format is a versioned
@@ -447,11 +456,15 @@ RESOURCE option string
 .IR offset " offset on path (bytes)"
 
 .SS
-RESOURCE option string with version
+RESOURCE option string with suffix
 
 .BR \-r " " \fIlockspace_name\fP:\fIresource_name\fP:\fIpath\fP:\fIoffset\fP:\fIlver\fP
 .P
-.IR lver " leader version or SH for shared lease"
+.IR lver " leader version"
+
+.BR \-r " " \fIlockspace_name\fP:\fIresource_name\fP:\fIpath\fP:\fIoffset\fP:SH
+.P
+SH indicates shared mode
 
 .SS Defaults
 

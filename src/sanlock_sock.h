@@ -44,6 +44,7 @@ enum {
 	SM_CMD_READ_RESOURCE_OWNERS = 24,
 	SM_CMD_SET_LVB		 = 25,
 	SM_CMD_GET_LVB		 = 26,
+	SM_CMD_CONVERT		 = 27,
 };
 
 struct sm_header {

@@ -992,6 +992,48 @@ int sanlock_inquire(int sock, int pid, uint32_t flags, int *res_count,
 	return rv;
 }
 
+int sanlock_convert(int sock, int pid, uint32_t flags, struct sanlk_resource *res)
+{
+	int fd, rv, data2, datalen;
+
+	if (!res)
+		return -EINVAL;
+
+	if (sock == -1) {
+		/* connect to daemon and ask it to acquire a lease for
+		   another registered pid */
+
+		data2 = pid;
+
+		rv = connect_socket(&fd);
+		if (rv < 0)
+			return rv;
+	} else {
+		/* use our own existing registered connection and ask daemon
+		   to acquire a lease for self */
+
+		data2 = -1;
+		fd = sock;
+	}
+
+	datalen = sizeof(struct sanlk_resource);
+
+	rv = send_header(fd, SM_CMD_CONVERT, flags, datalen, 0, data2);
+	if (rv < 0)
+		goto out;
+
+	rv = send(fd, res, sizeof(struct sanlk_resource), 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	rv = recv_result(fd);
+ out:
+	close(fd);
+	return rv;
+}
+
 /* tell daemon to release lease(s) for given pid.
    I don't think the pid itself will usually tell sm to release leases,
    but it will be requested by a manager overseeing the pid */

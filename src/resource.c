@@ -260,7 +260,7 @@ static int host_live(char *lockspace_name, uint64_t host_id, uint64_t gen)
 	return 1;
 }
 
-void check_mode_block(struct token *token, int q, char *dblock)
+void check_mode_block(struct token *token, uint64_t next_lver, int q, char *dblock)
 {
 	struct mode_block *mb;
 
@@ -269,6 +269,8 @@ void check_mode_block(struct token *token, int q, char *dblock)
 	if (mb->flags & MBLOCK_SHARED) {
 		set_id_bit(q + 1, token->shared_bitmap, NULL);
 		token->shared_count++;
+		log_token(token, "ballot %llu mode[%d] shared %d",
+			  (unsigned long long)next_lver, q, token->shared_count);
 	}
 }
 
@@ -377,7 +379,7 @@ static int clear_dead_shared(struct task *task, struct token *token,
 			     int num_hosts, int *live_count)
 {
 	uint64_t host_id, max_gen = 0;
-	int i, rv, live = 0;
+	int i, rv = 0, live = 0;
 
 	for (i = 0; i < num_hosts; i++) {
 		host_id = i + 1;
@@ -690,7 +692,7 @@ static int _release_token(struct task *task, struct token *token,
 		return SANLK_ERROR;
 	}
 
-	if (token->flags & T_LS_DEAD) {
+	if (token->space_dead) {
 		/* don't bother trying disk op which will probably timeout */
 		close_disks(token->disks, token->r.num_disks);
 		rv = SANLK_OK;
@@ -827,7 +829,7 @@ void release_token_async(struct token *token)
 	pthread_mutex_lock(&resource_mutex);
 	list_del(&token->list);
 	if (list_empty(&r->tokens)) {
-		if ((token->flags & T_LS_DEAD) || !r->leader.lver) {
+		if (token->space_dead || !r->leader.lver) {
 			/* don't bother trying to release if the lockspace
 			   is dead (release will probably fail), or the
 			   lease was never acquired */
@@ -940,6 +942,316 @@ static struct resource *new_resource(struct token *token)
 	}
 
 	return r;
+}
+
+static int convert_sh2ex_token(struct task *task, struct resource *r, struct token *token)
+{
+	struct leader_record leader;
+	int live_count = 0;
+	int fail_count = 0;
+	int undo_dblock = 0;
+	int error;
+	int rv;
+
+	memset(&leader, 0, sizeof(leader));
+
+	/* paxos_lease_acquire modifies these token values, and we check them after */
+	token->shared_count = 0;
+	memset(token->shared_bitmap, 0, HOSTID_BITMAP_SIZE);
+
+	/* Using a token flag like this to manipulate the write_dblock to preserve
+	   our mblock is ugly. The diskio/paxos/resource layer separations are not
+	   quite right, but would take some major effort to change.  The flag is
+	   needed to prevent the ballot from clobbering our SHARED mblock.  Rewriting
+	   our mblock after acquire isn't safe because if the paxos acquire doesn't
+	   succeed, then we don't hold any lease for a time. */
+
+	token->flags |= T_WRITE_DBLOCK_MBLOCK_SH;
+
+	rv = paxos_lease_acquire(task, token, 0, &leader, 0, 0);
+
+	token->flags &= ~T_WRITE_DBLOCK_MBLOCK_SH;
+
+	if (rv < 0) {
+		log_errot(token, "convert_sh2ex acquire error %d t_flags %x", rv, token->flags);
+
+		/* If we might own the lease, then we need to do on-disk release
+		   of owner and dblock.  Keep token and SH mblock. */
+
+		if (token->flags & T_RETRACT_PAXOS) {
+			token->flags &= ~T_RETRACT_PAXOS;
+			undo_dblock = 1;
+			error = rv;
+			goto fail;
+		}
+
+		return rv;
+	}
+
+	memcpy(&r->leader, &leader, sizeof(struct leader_record));
+	token->r.lver = leader.lver;
+
+	/* paxos_lease_acquire set token->shared_count to the number of
+	   SHARED mode blocks it found */
+
+	if (!token->shared_count) {
+		/* no other SHARED mode blocks found */
+		goto do_mb;
+	}
+
+	log_token(token, "convert_sh2ex shared_count %d", token->shared_count);
+
+	rv = clear_dead_shared(task, token, leader.num_hosts, &live_count);
+	if (rv < 0) {
+		log_errot(token, "convert_sh2ex clear_dead error %d", rv);
+		/* Do on-disk release of owner. Keep token and SH mblock. */
+		error = rv;
+		goto fail;
+	}
+
+	log_token(token, "convert_sh2ex live_count %d", live_count);
+
+	if (live_count) {
+		/*
+		 * A live host with a sh lock exists.  The token is kept, the
+		 * lease owner is released.
+		 */
+
+		rv = release_disk(task, token, NULL, &leader);
+		if (rv < 0) {
+			log_errot(token, "convert_sh2ex release_disk error %d", rv);
+			/* Do on-disk release of owner. Keep token and SH mblock. */
+			error = rv;
+			goto fail;
+		}
+
+		/* standard exit when convert fails due to other shared locks */
+		return -EAGAIN;
+	}
+
+ do_mb:
+	rv = set_mode_block(task, token, token->host_id, token->host_generation, 0);
+	if (rv < 0) {
+		log_errot(token, "convert_sh2ex set_mode_block error %d %d", rv, fail_count);
+
+		/* We have the ex lease, so return success.  We just need to clear
+		   our SH mblock.  We retry a couple times, and then set ERASE_ALL
+		   so that when the token is later released, both owner and mblock will
+		   be cleared. */
+		   
+		if ((rv == SANLK_AIO_TIMEOUT) && (fail_count < 2)) {
+			fail_count++;
+			sleep(1);
+			goto do_mb;
+		}
+
+		if (rv < 0 && (rv != SANLK_AIO_TIMEOUT)) {
+			error = rv;
+			goto fail;
+		}
+
+		r->flags |= R_ERASE_ALL;
+	}
+
+	/* TODO: clean up the duplication of stuff among: t, t->r, r, r->r */
+	token->r.flags &= ~SANLK_RES_SHARED;
+	token->acquire_flags &= ~SANLK_RES_SHARED;
+	r->r.flags &= ~SANLK_RES_SHARED;
+	r->flags &= ~R_SHARED;
+	return SANLK_OK;
+
+ fail:
+ 	/*
+	 * We want to fail and return an error to the caller while keeping
+	 * the existing shared lease, and not being the ex owner.
+	 *
+	 * There's no easy way to pass off the undo of dblock/owner while
+	 * keeping the lease token which still represents our sh lease, so
+	 * we'll just retry here.  We don't want to retry forever, so there's
+	 * an arbitrary limit.  If we reach the limit, we may want to pass back
+	 * a new error to indicate that the lease may be in a non-standard
+	 * state, e.g. both owner and mblock sh are set.  The caller will see
+	 * the error, know that it still holds a sh lease, but the owner may be
+	 * in limbo.  To clear the lease state, it should release the lease
+	 * or leave/rejoin the lockspace.  We set ERASE_ALL on the resource
+	 * here so that if/when the caller releases its lease (explicitly or
+	 * implicitly by exit), the release_token will clear owner/dblock/mblock.
+	 *
+	 * As elsewhere, non-timeout errors during disk operations should not
+	 * happen, are considered uncorrectable, are not retried, and the
+	 * lockspace/leases should be considered invalid.
+	 */
+
+	fail_count++;
+
+	if (token->space_dead)
+		return error;
+
+	if (undo_dblock) {
+		token->flags |= T_WRITE_DBLOCK_MBLOCK_SH;
+
+		rv = paxos_erase_dblock(task, token, token->host_id);
+
+		token->flags &= ~T_WRITE_DBLOCK_MBLOCK_SH;
+
+		if ((rv == SANLK_AIO_TIMEOUT) && (fail_count < token->io_timeout)) {
+			log_errot(token, "convert_sh2ex fail %d undo dblock timeout", fail_count);
+			sleep(fail_count);
+			goto fail;
+		} else if (rv < 0) {
+			log_errot(token, "convert_sh2ex fail %d undo dblock error %d", fail_count, rv);
+			r->flags |= R_ERASE_ALL;
+			return error;
+		}
+
+		undo_dblock = 0;
+	}
+
+	rv = paxos_lease_release(task, token, NULL, leader.lver ? &leader : NULL, &leader);
+	if ((rv == SANLK_AIO_TIMEOUT) && (fail_count < token->io_timeout)) {
+		log_errot(token, "convert_sh2ex fail %d undo owner timeout", fail_count);
+		sleep(fail_count);
+		goto fail;
+	} else if (rv < 0) {
+		log_errot(token, "convert_sh2ex fail %d undo owner error %d", fail_count, rv);
+		r->flags |= R_ERASE_ALL;
+		return error;
+	}
+
+	/* We've managed to release the owner, so the lease is in a standard state
+	   with ourselves having a shared lease and not holding the owner ex. */
+
+	return error;
+}
+
+static int convert_ex2sh_token(struct task *task, struct resource *r, struct token *token)
+{
+	struct leader_record leader;
+	int fail_count = 0;
+	int rv;
+
+	memcpy(&leader, &r->leader, sizeof(leader));
+
+	if (r->flags & R_LVB_WRITE_RELEASE)
+		write_lvb_block(task, r, token);
+
+	rv = set_mode_block(task, token, token->host_id, token->host_generation, MBLOCK_SHARED);
+	if (rv < 0) {
+		log_errot(token, "convert_ex2sh set_mode_block error %d", rv);
+		return rv;
+	}
+
+ retry:
+	/* the token is kept, the paxos lease is released but with shared now set */
+	rv = release_disk(task, token, NULL, &leader);
+	if ((rv == SANLK_AIO_TIMEOUT) && (fail_count < token->io_timeout)) {
+		log_errot(token, "convert_ex2sh release_disk timeout %d", fail_count);
+		fail_count++;
+		if (token->space_dead)
+			return rv;
+		sleep(fail_count);
+		goto retry;
+	} else if (rv < 0) {
+		log_errot(token, "convert_ex2sh release_disk error %d", rv);
+
+		/* We have sh, and possibly ex.  Given this uncertain state on
+		   disk, we want release_token to ensure owner/dblock/mblock are
+		   all cleared when the lease is released by the client (either
+		   explicitly or implicitly when it exits).  ERASE_ALL
+		   will cause release_token to do this. */
+
+		r->flags |= R_ERASE_ALL;
+		return rv;
+	}
+
+	token->r.flags |= SANLK_RES_SHARED;
+	token->acquire_flags |= SANLK_RES_SHARED;
+	r->r.flags |= SANLK_RES_SHARED;
+	r->flags |= R_SHARED;
+	return SANLK_OK;
+}
+
+int convert_token(struct task *task, struct sanlk_resource *res, struct token *cl_token)
+{
+	struct resource *r;
+	struct token *tk;
+	struct token *token = NULL;
+	int sh_count = 0;
+	int rv;
+
+	/* we could probably grab cl_token->r, but it's good to verify */
+
+	pthread_mutex_lock(&resource_mutex);
+
+	r = find_resource(cl_token, &resources_held);
+	if (!r) {
+		pthread_mutex_unlock(&resource_mutex);
+		log_error("convert_token resource not found %.48s:%.48s",
+			  cl_token->r.lockspace_name, cl_token->r.name);
+		rv = -ENOENT;
+		goto out;
+	}
+
+	/* find existing token */
+
+	list_for_each_entry(tk, &r->tokens, list) {
+		if (tk == cl_token)
+			token = tk;
+
+		if (tk->acquire_flags & SANLK_RES_SHARED)
+			sh_count++;
+	}
+	pthread_mutex_unlock(&resource_mutex);
+
+	if (!token) {
+		log_errot(cl_token, "convert_token token not found pid %d %.48s:%.48s",
+			  cl_token->pid, cl_token->r.lockspace_name, cl_token->r.name);
+		rv = -ENOENT;
+		goto out;
+	}
+
+	if (sh_count && !(r->flags & R_SHARED)) {
+		/* should not be possible */
+		log_errot(token, "convert_token invalid sh_count %d flags %x", sh_count, r->flags);
+		rv = -EINVAL;
+		goto out;
+	}
+
+	if (!sh_count && (r->flags & R_SHARED)) {
+		/* should not be possible */
+		log_errot(token, "convert_token invalid sh_count %d flags %x", sh_count, r->flags);
+		rv = -EINVAL;
+		goto out;
+	}
+
+	if (!(res->flags & SANLK_RES_SHARED) && !(r->flags & R_SHARED)) {
+		rv = -EALREADY;
+		goto out;
+	}
+
+	if ((res->flags & SANLK_RES_SHARED) && (r->flags & R_SHARED)) {
+		rv = -EALREADY;
+		goto out;
+	}
+
+	rv = open_disks_fd(token->disks, token->r.num_disks);
+	if (rv < 0) {
+		log_errot(token, "convert_token open error %d", rv);
+		goto out;
+	}
+
+	if (!(res->flags & SANLK_RES_SHARED)) {
+		rv = convert_sh2ex_token(task, r, token);
+	} else if (res->flags & SANLK_RES_SHARED) {
+		rv = convert_ex2sh_token(task, r, token);
+	} else {
+		/* not possible */
+		rv = -EINVAL;
+	}
+
+	close_disks(token->disks, token->r.num_disks);
+ out:
+	return rv;
 }
 
 int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
@@ -1123,10 +1435,11 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 	}
 
 	/*
-	 * acquiring normal ex lease, and no shared holders exist.
-	 * normal exit case for successful acquire ex.
+	 * paxos_lease_acquire() calls check_mode_block() which increments
+	 * token->shared_count when it finds a mode block with SHARED set.
+	 * Zero shared_count means no one holds it shared, so we're done.
+	 * Normal exit case for successful acquire ex.
 	 */
-
 	if (!token->shared_count) {
 		goto out;
 	}
@@ -1136,6 +1449,12 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 	 * check if those other hosts are alive or dead (clear any that are dead).
 	 */
 
+	/*
+	 * paxos_lease_acquire() counted some SHARED mode blocks.
+	 * Here we check if they are held by live hosts.  If a host
+	 * with SHARED mb is dead, we clear it, otherwise it's alive
+	 * and we count it in live_count.
+	 */
 	rv = clear_dead_shared(task, token, leader.num_hosts, &live_count);
 	if (rv < 0) {
 		log_errot(token, "acquire_token clear_dead_shared error %d", rv);

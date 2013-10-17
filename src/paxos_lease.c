@@ -30,6 +30,7 @@
 #include "paxos_lease.h"
 #include "resource.h"
 #include "timeouts.h"
+#include "mode_block.h"
 
 uint32_t crc32c(uint32_t crc, uint8_t *data, size_t length);
 int get_rand(int a, int b);
@@ -86,6 +87,12 @@ int paxos_lease_request_write(struct task *task, struct token *token,
 	return SANLK_OK;
 }
 
+static int write_dblock(struct task *task,
+		        struct token *token,
+			struct sync_disk *disk,
+			uint64_t host_id,
+			struct paxos_dblock *pd);
+
 int paxos_erase_dblock(struct task *task,
 		       struct token *token,
 		       uint64_t host_id)
@@ -98,12 +105,7 @@ int paxos_erase_dblock(struct task *task,
 	memset(&dblock, 0, sizeof(dblock));
 
 	for (d = 0; d < num_disks; d++) {
-		/* 1 leader block + 1 request block;
-	   	   host_id N is block offset N-1 */
-
-		rv = write_sector(&token->disks[d], 2 + host_id - 1,
-				  (char *)&dblock, sizeof(struct paxos_dblock),
-			  	  task, token->io_timeout, "erase_dblock");
+		rv = write_dblock(task, token, &token->disks[d], host_id, &dblock);
 		if (rv < 0) {
 			error = rv;
 			continue;
@@ -116,6 +118,62 @@ int paxos_erase_dblock(struct task *task,
 	return SANLK_OK;
 }
 
+/*
+ * Write a combined dblock and mblock.  This is an odd case that doesn't fit
+ * well with the way the code has been written.  It's used when we want to
+ * convert sh to ex, which requires acquiring the lease owner, but we don't
+ * want to clobber our SHARED mblock by writing a plain dblock in the process
+ * in case there's a problem with the acquiring, we don't want to loose our
+ * shared mode lease.
+ *
+ * NB. this assumes the only mblock flag we want is MBLOCK_SHARED and that
+ * the generation we want is token->host_generation.  This is currently
+ * the case, but could change in the future.
+ */
+
+static int write_dblock_mblock_sh(struct task *task,
+			          struct token *token,
+			          struct sync_disk *disk,
+			          uint64_t host_id,
+			          struct paxos_dblock *pd)
+{
+	struct mode_block *mb;
+	char *iobuf, **p_iobuf;
+	uint64_t offset;
+	int iobuf_len, rv;
+
+	iobuf_len = disk->sector_size;
+	if (!iobuf_len)
+		return -EINVAL;
+
+	p_iobuf = &iobuf;
+
+	rv = posix_memalign((void *)p_iobuf, getpagesize(), iobuf_len);
+	if (rv)
+		return -ENOMEM;
+
+	offset = disk->offset + ((2 + host_id - 1) * disk->sector_size);
+
+	memcpy(iobuf, (char *)pd, sizeof(struct paxos_dblock));
+
+	mb = (struct mode_block *)(iobuf + MBLOCK_OFFSET);
+	mb->flags = MBLOCK_SHARED;
+	mb->generation = token->host_generation;
+
+	rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout);
+
+	if (rv < 0) {
+		log_errot(token, "write_dblock_mblock_sh host_id %llu gen %llu rv %d",
+			  (unsigned long long)host_id,
+			  (unsigned long long)token->host_generation,
+			  rv);
+	}
+
+	if (rv != SANLK_AIO_TIMEOUT)
+		free(iobuf);
+	return rv;
+}
+
 static int write_dblock(struct task *task,
 		        struct token *token,
 			struct sync_disk *disk,
@@ -123,6 +181,11 @@ static int write_dblock(struct task *task,
 			struct paxos_dblock *pd)
 {
 	int rv;
+
+	if (token->flags & T_WRITE_DBLOCK_MBLOCK_SH) {
+		/* special case to preserve our SH mode block within the dblock */
+		return write_dblock_mblock_sh(task, token, disk, host_id, pd);
+	}
 
 	/* 1 leader block + 1 request block;
 	   host_id N is block offset N-1 */
@@ -382,7 +445,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 			if (rv < 0)
 				continue;
 
-			check_mode_block(token, q, (char *)bk);
+			check_mode_block(token, next_lver, q, (char *)bk);
 
 			if (bk->lver < dblock.lver)
 				continue;

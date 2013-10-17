@@ -816,6 +816,91 @@ static void cmd_inquire(struct task *task, struct cmd_args *ca)
 	client_resume(ca->ci_in);
 }
 
+/*
+ * The behavior may be a little iffy in the case where a pid is killed (due to
+ * lockspace failure) while it is doing convert.  If the pid responds by
+ * exiting, then this cmd_convert will see pid_dead and release all tokens at
+ * the end.  If the pid wants to respond by explicitly releasing its leases,
+ * then this convert should fail and return for the same reason the lockspace
+ * failed.  Once the convert returns, the pid can respond to the killpath by
+ * releasing all the leases.
+ *
+ * This sets cmd_active, along with acquire/release/inquire, which means
+ * that it is serialized along with all cmds that set cmd_active, and
+ * cl->tokens will not change while the cmd is active.  This also means
+ * it has to handle pid_dead at the end in case the pid exited while the
+ * cmd was active and cl->tokens need to be released.
+ * (killpath also sets cmd_active so that tokens are not acquired
+ * while it's being set.)
+ */
+
+static void cmd_convert(struct task *task, struct cmd_args *ca)
+{
+	struct sanlk_resource res;
+	struct token *token;
+	struct client *cl;
+	int cl_ci = ca->ci_target;
+	int cl_fd = ca->cl_fd;
+	int cl_pid = ca->cl_pid;
+	int pid_dead = 0;
+	int result = 0;
+	int found = 0;
+	int fd, i, rv;
+
+	cl = &client[cl_ci];
+	fd = client[ca->ci_in].fd;
+
+	log_debug("cmd_convert %d,%d,%d ci_in %d fd %d",
+		  cl_ci, cl_fd, cl_pid, ca->ci_in, fd);
+
+	rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
+	if (rv != sizeof(struct sanlk_resource)) {
+		result = -ENOTCONN;
+		goto reply;
+	}
+
+	pthread_mutex_lock(&cl->mutex);
+	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
+		token = cl->tokens[i];
+		if (!token)
+			continue;
+		if (memcmp(token->r.lockspace_name, res.lockspace_name, NAME_ID_SIZE))
+			continue;
+		if (memcmp(token->r.name, res.name, NAME_ID_SIZE))
+			continue;
+		found = 1;
+		break;
+	}
+	pthread_mutex_unlock(&cl->mutex);
+
+	if (!found) {
+		result = -ENOENT;
+		goto cmd_done;
+	}
+
+	rv = convert_token(task, &res, token);
+	if (rv < 0)
+		result = rv;
+
+ cmd_done:
+	pthread_mutex_lock(&cl->mutex);
+	pid_dead = cl->pid_dead;
+	cl->cmd_active = 0;
+	pthread_mutex_unlock(&cl->mutex);
+
+ reply:
+	log_debug("cmd_convert %d,%d,%d result %d pid_dead %d",
+		  cl_ci, cl_fd, cl_pid, result, pid_dead);
+
+	if (pid_dead) {
+		release_cl_tokens(task, cl);
+		client_free(cl_ci);
+	}
+
+	send_result(fd, &ca->header, result);
+	client_resume(ca->ci_in);
+}
+
 static void cmd_request(struct task *task, struct cmd_args *ca)
 {
 	struct token *token;
@@ -1742,6 +1827,9 @@ void call_cmd_thread(struct task *task, struct cmd_args *ca)
 		break;
 	case SM_CMD_INQUIRE:
 		cmd_inquire(task, ca);
+		break;
+	case SM_CMD_CONVERT:
+		cmd_convert(task, ca);
 		break;
 	case SM_CMD_REQUEST:
 		cmd_request(task, ca);

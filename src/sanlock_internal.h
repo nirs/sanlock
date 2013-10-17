@@ -67,10 +67,10 @@ struct sync_disk {
  * 'struct resource' keeps track of resources globally, resources list
  */
 
-#define T_RESTRICT_SIGKILL	0x00000001 /* inherited from client->restricted */
-#define T_RESTRICT_SIGTERM	0x00000002 /* inherited from client->restricted */
-#define T_LS_DEAD		0x00000004 /* don't bother trying to release if ls is dead */
-#define T_RETRACT_PAXOS		0x00000008
+#define T_RESTRICT_SIGKILL	 0x00000001 /* inherited from client->restricted */
+#define T_RESTRICT_SIGTERM	 0x00000002 /* inherited from client->restricted */
+#define T_RETRACT_PAXOS		 0x00000004
+#define T_WRITE_DBLOCK_MBLOCK_SH 0x00000008 /* make paxos layer include mb SHARED with dblock */
 
 struct token {
 	/* values copied from acquire res arg */
@@ -88,9 +88,10 @@ struct token {
 	struct list_head list; /* resource->tokens */
 	struct resource *resource;
 	int pid;
-	uint32_t flags;
+	uint32_t flags;  /* be careful to avoid using this from different threads */
 	uint32_t token_id; /* used to refer to this token instance in log messages */
-	int shared_count;
+	int space_dead; /* copied from sp->space_dead, set by main thread */
+	int shared_count; /* set during ballot by paxos_lease_acquire */
 	char shared_bitmap[HOSTID_BITMAP_SIZE]; /* bit set for host_id with SH */
 
 	struct sync_disk *disks; /* shorthand, points to r.disks[0] */
@@ -309,6 +310,7 @@ enum {
 	ACT_ACQUIRE, 
 	ACT_RELEASE,
 	ACT_INQUIRE, 
+	ACT_CONVERT, 
 	ACT_REQUEST,
 	ACT_ACQUIRE_ID,
 	ACT_RELEASE_ID,

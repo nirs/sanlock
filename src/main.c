@@ -542,7 +542,7 @@ static int client_using_space(struct client *cl, struct space *sp)
 		if (!cl->kill_count)
 			log_spoke(sp, token, "client_using_space pid %d", cl->pid);
 		if (sp->space_dead)
-			token->flags |= T_LS_DEAD;
+			token->space_dead = sp->space_dead;
 		rv = 1;
 	}
 	return rv;
@@ -1190,6 +1190,7 @@ static void process_connection(int ci)
 	case SM_CMD_ACQUIRE:
 	case SM_CMD_RELEASE:
 	case SM_CMD_INQUIRE:
+	case SM_CMD_CONVERT:
 	case SM_CMD_KILLPATH:
 		/* the main_loop needs to ignore this connection
 		   while the thread is working on it */
@@ -1810,6 +1811,7 @@ static void print_usage(void)
 	printf("sanlock client rem_lockspace -s LOCKSPACE\n");
 	printf("sanlock client command -r RESOURCE -c <path> <args>\n");
 	printf("sanlock client acquire -r RESOURCE -p <pid>\n");
+	printf("sanlock client convert -r RESOURCE -p <pid>\n");
 	printf("sanlock client release -r RESOURCE -p <pid>\n");
 	printf("sanlock client inquire -p <pid>\n");
 	printf("sanlock client request -r RESOURCE -f <force_mode>\n");
@@ -1915,6 +1917,8 @@ static int read_command_line(int argc, char *argv[])
 			com.action = ACT_COMMAND;
 		else if (!strcmp(act, "acquire"))
 			com.action = ACT_ACQUIRE;
+		else if (!strcmp(act, "convert"))
+			com.action = ACT_CONVERT;
 		else if (!strcmp(act, "release"))
 			com.action = ACT_RELEASE;
 		else if (!strcmp(act, "inquire"))
@@ -2403,6 +2407,12 @@ static int do_client(void)
 		log_tool("acquire pid %d", com.pid);
 		rv = sanlock_acquire(-1, com.pid, 0, com.res_count, com.res_args, NULL);
 		log_tool("acquire done %d", rv);
+		break;
+
+	case ACT_CONVERT:
+		log_tool("convert pid %d", com.pid);
+		rv = sanlock_convert(-1, com.pid, 0, com.res_args[0]);
+		log_tool("convert done %d", rv);
 		break;
 
 	case ACT_RELEASE:
