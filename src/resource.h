@@ -33,6 +33,8 @@ int read_resource_owners(struct task *task, struct token *token,
                          struct sanlk_resource *res,
                          char **send_buf, int *send_len, int *count);
 
+void free_resources(void);
+
 int setup_token_manager(void);
 void close_token_manager(void);
 

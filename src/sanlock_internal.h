@@ -70,6 +70,7 @@ struct sync_disk {
 #define T_RESTRICT_SIGKILL	0x00000001 /* inherited from client->restricted */
 #define T_RESTRICT_SIGTERM	0x00000002 /* inherited from client->restricted */
 #define T_LS_DEAD		0x00000004 /* don't bother trying to release if ls is dead */
+#define T_RETRACT_PAXOS		0x00000008
 
 struct token {
 	/* values copied from acquire res arg */
@@ -102,6 +103,8 @@ struct token {
 #define R_RESTRICT_SIGKILL	0x00000008 /* inherited from token */
 #define R_RESTRICT_SIGTERM	0x00000010 /* inherited from token */
 #define R_LVB_WRITE_RELEASE	0x00000020
+#define R_UNDO_SHARED		0x00000040
+#define R_ERASE_ALL		0x00000080
 
 struct resource {
 	struct list_head list;
@@ -112,6 +115,7 @@ struct resource {
 	int pid;                     /* copied from token when ex */
 	uint32_t flags;
 	uint32_t release_token_id;   /* copy to temp token (tt) for log messages */
+	uint64_t thread_release_retry;
 	char *lvb;
 	char killpath[SANLK_HELPER_PATH_LEN]; /* copied from client */
 	char killargs[SANLK_HELPER_ARGS_LEN]; /* copied from client */

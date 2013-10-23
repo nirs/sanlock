@@ -86,6 +86,36 @@ int paxos_lease_request_write(struct task *task, struct token *token,
 	return SANLK_OK;
 }
 
+int paxos_erase_dblock(struct task *task,
+		       struct token *token,
+		       uint64_t host_id)
+{
+	struct paxos_dblock dblock;
+	int num_disks = token->r.num_disks;
+	int num_writes = 0;
+	int d, rv, error = -1;
+
+	memset(&dblock, 0, sizeof(dblock));
+
+	for (d = 0; d < num_disks; d++) {
+		/* 1 leader block + 1 request block;
+	   	   host_id N is block offset N-1 */
+
+		rv = write_sector(&token->disks[d], 2 + host_id - 1,
+				  (char *)&dblock, sizeof(struct paxos_dblock),
+			  	  task, token->io_timeout, "erase_dblock");
+		if (rv < 0) {
+			error = rv;
+			continue;
+		}
+		num_writes++;
+	}
+
+	if (!majority_disks(num_disks, num_writes))
+		return error;
+	return SANLK_OK;
+}
+
 static int write_dblock(struct task *task,
 		        struct token *token,
 			struct sync_disk *disk,
@@ -269,6 +299,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 	int sector_size = token->disks[0].sector_size;
 	int sector_count;
 	int iobuf_len;
+	int phase2 = 0;
 	int d, q, rv = 0;
 	int q_max = -1;
 	int error;
@@ -451,6 +482,8 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 	 * Same description as phase 1, same sequence of writes/reads.
 	 */
 
+	phase2 = 1;
+
 	log_token(token, "ballot %llu phase2 bal %llu inp %llu %llu %llu q_max %d",
 		  (unsigned long long)dblock.lver,
 		  (unsigned long long)dblock.bal,
@@ -561,6 +594,22 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 			continue;
 		free(iobuf[d]);
 	}
+
+	if (phase2 && (error < 0) &&
+	    ((error == SANLK_DBLOCK_READ) || (error == SANLK_DBLOCK_WRITE))) {
+		/*
+		 * After phase2 we might "win" the ballot even if we don't complete it
+		 * because another host could could pick and commit our dblock values.
+		 * If we abort the acquire, but are granted the lease, this would leave
+		 * us owning the lease on disk.  With this flag, the release path will
+		 * try to ensure we are not and do not become the lease owner.
+		 */
+		token->flags |= T_RETRACT_PAXOS;
+
+		log_errot(token, "ballot %llu retract error %d",
+			  (unsigned long long)next_lver, error);
+	}
+
 	return error;
 }
 
@@ -1115,26 +1164,33 @@ static int write_new_leader(struct task *task,
 {
 	int num_disks = token->r.num_disks;
 	int num_writes = 0;
-	int error = SANLK_OK;
-	int rv = 0, d;
+	int timeout = 0;
+	int rv = 0;
+	int d;
 
 	for (d = 0; d < num_disks; d++) {
 		rv = write_leader(task, token, &token->disks[d], nl);
-		if (rv < 0)
+		if (rv == SANLK_AIO_TIMEOUT)
+			timeout = 1;
+		if (rv < 0) 
 			continue;
 		num_writes++;
 	}
 
 	if (!majority_disks(num_disks, num_writes)) {
-		log_errot(token, "%s write_new_leader error %d owner %llu %llu %llu",
-			  caller, rv,
+		log_errot(token, "%s write_new_leader error %d timeout %d owner %llu %llu %llu",
+			  caller, rv, timeout,
 			  (unsigned long long)nl->owner_id,
 			  (unsigned long long)nl->owner_generation,
 			  (unsigned long long)nl->timestamp);
-		error = SANLK_LEADER_WRITE;
+		if (timeout)
+			return SANLK_AIO_TIMEOUT;
+		if (rv < 0)
+			return rv;
+		return SANLK_LEADER_WRITE;
 	}
 
-	return error;
+	return SANLK_OK;
 }
 
 /*
@@ -1597,11 +1653,20 @@ int paxos_lease_acquire(struct task *task,
 	new_leader.checksum = leader_checksum(&new_leader);
 
 	error = write_new_leader(task, token, &new_leader, "paxos_acquire");
-	if (error < 0)
+	if (error < 0) {
+		/* See comment in run_ballot about this flag. */
+		token->flags |= T_RETRACT_PAXOS;
+		memcpy(leader_ret, &new_leader, sizeof(struct leader_record));
 		goto out;
+	}
 
 	if (new_leader.owner_id != token->host_id) {
 		/* not a problem, but interesting to see, so use log_error */
+
+		/* It's possible that we commit an outdated owner id/gen here.
+		   If we go back to the top and retry, we may find that the
+		   owner host_id is alive but with a newer generation, and
+		   we'd be able to get the lease by running the ballot again. */
 
 		log_errot(token, "ballot %llu commit other owner %llu %llu %llu",
 			  (unsigned long long)new_leader.lver,
@@ -1674,6 +1739,7 @@ int paxos_lease_release(struct task *task,
 		        struct leader_record *leader_ret)
 {
 	struct leader_record leader;
+	struct leader_record *last;
 	int error;
 
 	error = paxos_lease_leader_read(task, token, &leader, "paxos_release");
@@ -1682,24 +1748,42 @@ int paxos_lease_release(struct task *task,
 		goto out;
 	}
 
-	if (leader.lver != leader_last->lver) {
+	/*
+	 * Used when the caller does not know who the owner is, but
+	 * wants to ensure it is not the owner.
+	 */
+	if (!leader_last)
+		last = &leader;
+	else
+		last = leader_last;
+
+	if (leader.lver != last->lver) {
 		log_errot(token, "paxos_release %llu other lver %llu",
-			  (unsigned long long)leader_last->lver,
+			  (unsigned long long)last->lver,
 			  (unsigned long long)leader.lver);
 		return SANLK_RELEASE_LVER;
 	}
 
-	if (leader.owner_id != token->host_id ||
-	    leader.owner_generation != token->host_generation) {
-		log_errot(token, "paxos_release %llu other owner %llu %llu %llu",
-			  (unsigned long long)leader_last->lver,
+	if (leader.timestamp == LEASE_FREE) {
+		log_errot(token, "paxos_release %llu already free %llu %llu %llu",
+			  (unsigned long long)last->lver,
 			  (unsigned long long)leader.owner_id,
 			  (unsigned long long)leader.owner_generation,
 			  (unsigned long long)leader.timestamp);
 		return SANLK_RELEASE_OWNER;
 	}
 
-	if (memcmp(&leader, leader_last, sizeof(struct leader_record))) {
+	if (leader.owner_id != token->host_id ||
+	    leader.owner_generation != token->host_generation) {
+		log_errot(token, "paxos_release %llu other owner %llu %llu %llu",
+			  (unsigned long long)last->lver,
+			  (unsigned long long)leader.owner_id,
+			  (unsigned long long)leader.owner_generation,
+			  (unsigned long long)leader.timestamp);
+		return SANLK_RELEASE_OWNER;
+	}
+
+	if (memcmp(&leader, last, sizeof(struct leader_record))) {
 		/*
 		 * This will happen when two hosts finish the same ballot
 		 * successfully, the second commiting the same inp values
@@ -1713,15 +1797,15 @@ int paxos_lease_release(struct task *task,
 		 */
 		log_errot(token, "paxos_release %llu leader different "
 			  "write %llu %llu %llu vs %llu %llu %llu",
-			  (unsigned long long)leader_last->lver,
-			  (unsigned long long)leader_last->write_id,
-			  (unsigned long long)leader_last->write_generation,
-			  (unsigned long long)leader_last->write_timestamp,
+			  (unsigned long long)last->lver,
+			  (unsigned long long)last->write_id,
+			  (unsigned long long)last->write_generation,
+			  (unsigned long long)last->write_timestamp,
 			  (unsigned long long)leader.write_id,
 			  (unsigned long long)leader.write_generation,
 			  (unsigned long long)leader.write_timestamp);
 		/*
-		log_leader_error(0, token, &token->disks[0], leader_last, "paxos_release");
+		log_leader_error(0, token, &token->disks[0], last, "paxos_release");
 		log_leader_error(0, token, &token->disks[0], &leader, "paxos_release");
 		*/
 	}

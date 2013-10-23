@@ -823,6 +823,7 @@ static int main_loop(void)
 		}
 
 		free_lockspaces(0);
+		free_resources();
 
 		gettimeofday(&now, NULL);
 		ms = time_diff(&last_check, &now);

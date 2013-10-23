@@ -368,6 +368,8 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 				lvl = LOG_DEBUG;
 				break;
 			case SANLK_ACQUIRE_IDLIVE:
+			case SANLK_ACQUIRE_OWNED:
+			case SANLK_ACQUIRE_OTHER:
 				lvl = com.quiet_fail ? LOG_DEBUG : LOG_ERR;
 				break;
 			default:
