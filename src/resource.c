@@ -57,6 +57,10 @@ static void free_resource(struct resource *r)
 	free(r);
 }
 
+/* N.B. the reporting function looks for the
+   strings "add" and "rem", so if changed, they
+   should be changed in both places. */
+
 void send_state_resources(int fd)
 {
 	struct resource *r;

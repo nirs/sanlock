@@ -73,6 +73,19 @@ static void status_client(struct sanlk_state *st, char *str, int debug)
 		print_debug(str, st->str_len);
 }
 
+static const char *add_rem_str(struct sanlk_state *st, char *str)
+{
+	if (!st->str_len)
+		return NULL;
+
+	if (strstr(str, "list=add"))
+		return "ADD";
+	if (strstr(str, "list=rem"))
+		return "REM";
+
+	return NULL;
+}
+
 /* TODO: when path strings are exported, through status or inquire, we
    should export into a malloced buffer the size of the standard chars
    plus extra esc chars. */
@@ -81,15 +94,22 @@ static void status_lockspace(struct sanlk_state *st, char *str, char *bin, int d
 {
 	struct sanlk_lockspace *ls = (struct sanlk_lockspace *)bin;
 	char path[SANLK_PATH_LEN + 1];
+	const char *add_rem;
 
 	memset(path, 0, sizeof(path));
 	sanlock_path_export(path, ls->host_id_disk.path, sizeof(path));
 
-	printf("s %.48s:%llu:%s:%llu\n",
+	printf("s %.48s:%llu:%s:%llu",
 	       ls->name,
 	       (unsigned long long)ls->host_id,
 	       path,
 	       (unsigned long long)ls->host_id_disk.offset);
+
+	add_rem = add_rem_str(st, str);
+	if (add_rem)
+		printf(" %s\n", add_rem);
+	else
+		printf("\n");
 
 	if (st->str_len && debug)
 		print_debug(str, st->str_len);
@@ -100,6 +120,7 @@ static void status_resource(struct sanlk_state *st, char *str, char *bin, int de
 	struct sanlk_resource *res = (struct sanlk_resource *)bin;
 	struct sanlk_disk *disk;
 	char path[SANLK_PATH_LEN + 1];
+	const char *add_rem;
 	int i;
 
 	printf("r %.48s:%.48s", res->lockspace_name, res->name);
@@ -114,9 +135,15 @@ static void status_resource(struct sanlk_state *st, char *str, char *bin, int de
 	}
 
 	if (res->flags & SANLK_RES_SHARED)
-		printf(":SH p %u\n", st->data32);
+		printf(":SH p %u", st->data32);
 	else
-		printf(":%llu p %u\n", (unsigned long long)st->data64, st->data32);
+		printf(":%llu p %u", (unsigned long long)st->data64, st->data32);
+
+	add_rem = add_rem_str(st, str);
+	if (add_rem)
+		printf(" %s\n", add_rem);
+	else
+		printf("\n");
 
 	if (st->str_len && debug)
 		print_debug(str, st->str_len);

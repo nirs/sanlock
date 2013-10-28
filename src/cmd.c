@@ -2099,13 +2099,17 @@ static void cmd_status(int fd, struct sm_header *h_recv, int client_maxi)
 	if (h_recv->data == SANLK_STATE_CLIENT)
 		return;
 
+	/* N.B. the reporting function looks for the
+	   strings "add" and "rem", so if changed,
+	   the strings should be changed in both places. */
+
 	pthread_mutex_lock(&spaces_mutex);
 	list_for_each_entry(sp, &spaces, list)
 		send_state_lockspace(fd, sp, "spaces");
 	list_for_each_entry(sp, &spaces_add, list)
-		send_state_lockspace(fd, sp, "spaces_add");
+		send_state_lockspace(fd, sp, "add");
 	list_for_each_entry(sp, &spaces_rem, list)
-		send_state_lockspace(fd, sp, "spaces_rem");
+		send_state_lockspace(fd, sp, "rem");
 	pthread_mutex_unlock(&spaces_mutex);
 
 	if (h_recv->data == SANLK_STATE_LOCKSPACE)
