@@ -118,6 +118,38 @@ static int check_new_tokens_space(struct client *cl,
 	return 0;
 }
 
+static const char *acquire_error_str(int error)
+{
+	switch (error) {
+	case SANLK_ACQUIRE_IDLIVE:
+	case SANLK_ACQUIRE_OWNED:
+	case SANLK_ACQUIRE_OTHER:
+		return "lease owned by other host";
+
+	case SANLK_ACQUIRE_SHRETRY:
+		return "shared lease contention";
+
+	case SANLK_DBLOCK_READ:
+	case SANLK_DBLOCK_WRITE:
+	case SANLK_LEADER_READ:
+	case SANLK_LEADER_WRITE:
+		return "lease io error";
+
+	case SANLK_LEADER_DIFF:
+	case SANLK_LEADER_MAGIC:
+	case SANLK_LEADER_VERSION:
+	case SANLK_LEADER_SECTORSIZE:
+	case SANLK_LEADER_LOCKSPACE:
+	case SANLK_LEADER_RESOURCE:
+	case SANLK_LEADER_NUMHOSTS:
+	case SANLK_LEADER_CHECKSUM:
+		return "lease data invalid";
+
+	default:
+		return "";
+	};
+}
+
 static void cmd_acquire(struct task *task, struct cmd_args *ca)
 {
 	struct client *cl;
@@ -342,8 +374,8 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 				lvl = LOG_ERR;
 			}
 			log_level(0, token->token_id, NULL, lvl,
-				  "cmd_acquire %d,%d,%d acquire_token %d",
-				  cl_ci, cl_fd, cl_pid, rv);
+				  "cmd_acquire %d,%d,%d acquire_token %d %s",
+				  cl_ci, cl_fd, cl_pid, rv, acquire_error_str(rv));
 			result = rv;
 			goto done;
 		}
