@@ -2071,9 +2071,9 @@ static void cmd_status(int fd, struct sm_header *h_recv, int client_maxi)
 	list_for_each_entry(sp, &spaces, list)
 		send_state_lockspace(fd, sp, "spaces");
 	list_for_each_entry(sp, &spaces_add, list)
-		send_state_lockspace(fd, sp, "spaces_rem");
-	list_for_each_entry(sp, &spaces_rem, list)
 		send_state_lockspace(fd, sp, "spaces_add");
+	list_for_each_entry(sp, &spaces_rem, list)
+		send_state_lockspace(fd, sp, "spaces_rem");
 	pthread_mutex_unlock(&spaces_mutex);
 
 	if (h_recv->data == SANLK_STATE_LOCKSPACE)
