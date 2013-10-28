@@ -43,7 +43,8 @@ static struct space *_search_space(const char *name,
 				   uint64_t host_id,
 				   struct list_head *head1,
 				   struct list_head *head2,
-				   struct list_head *head3)
+				   struct list_head *head3,
+				   int *listnum)
 {
 	int i;
 	struct space *sp;
@@ -63,6 +64,9 @@ static struct space *_search_space(const char *name,
 				continue;
 			if (host_id && sp->host_id != host_id)
 				continue;
+
+			if (listnum)
+				*listnum = i+1;
 			return sp;
 		}
 	}
@@ -71,7 +75,7 @@ static struct space *_search_space(const char *name,
 
 struct space *find_lockspace(const char *name)
 {
-	return _search_space(name, NULL, 0, &spaces, &spaces_rem, &spaces_add);
+	return _search_space(name, NULL, 0, &spaces, &spaces_rem, &spaces_add, NULL);
 }
 
 int _lockspace_info(const char *space_name, struct space_info *spi)
@@ -587,6 +591,7 @@ static void free_sp(struct space *sp)
 int add_lockspace_start(struct sanlk_lockspace *ls, uint32_t io_timeout, struct space **sp_out)
 {
 	struct space *sp, *sp2;
+	int listnum = 0;
 	int rv;
 
 	if (!ls->name[0] || !ls->host_id || !ls->host_id_disk.path[0]) {
@@ -614,7 +619,7 @@ int add_lockspace_start(struct sanlk_lockspace *ls, uint32_t io_timeout, struct 
 	/* search all lists for an identical lockspace */
 
 	sp2 = _search_space(sp->space_name, &sp->host_id_disk, sp->host_id,
-			    &spaces, NULL, NULL);
+			    &spaces, NULL, NULL, NULL);
 	if (sp2) {
 		pthread_mutex_unlock(&spaces_mutex);
 		rv = -EEXIST;
@@ -622,7 +627,7 @@ int add_lockspace_start(struct sanlk_lockspace *ls, uint32_t io_timeout, struct 
 	}
 
 	sp2 = _search_space(sp->space_name, &sp->host_id_disk, sp->host_id,
-			    &spaces_add, NULL, NULL);
+			    &spaces_add, NULL, NULL, NULL);
 	if (sp2) {
 		pthread_mutex_unlock(&spaces_mutex);
 		rv = -EINPROGRESS;
@@ -630,7 +635,7 @@ int add_lockspace_start(struct sanlk_lockspace *ls, uint32_t io_timeout, struct 
 	}
 
 	sp2 = _search_space(sp->space_name, &sp->host_id_disk, sp->host_id,
-			    &spaces_rem, NULL, NULL);
+			    &spaces_rem, NULL, NULL, NULL);
 	if (sp2) {
 		pthread_mutex_unlock(&spaces_mutex);
 		rv = -EAGAIN;
@@ -640,8 +645,19 @@ int add_lockspace_start(struct sanlk_lockspace *ls, uint32_t io_timeout, struct 
 	/* search all lists for a lockspace with the same name */
 
 	sp2 = _search_space(sp->space_name, NULL, 0,
-			    &spaces, &spaces_add, &spaces_rem);
+			    &spaces, &spaces_add, &spaces_rem, &listnum);
 	if (sp2) {
+		log_error("add_lockspace %.48s:%llu:%.256s:%llu conflicts with name of list%d s%d %.48s:%llu:%.256s:%llu",
+			  sp->space_name,
+			  (unsigned long long)sp->host_id,
+			  sp->host_id_disk.path,
+			  (unsigned long long)sp->host_id_disk.offset,
+			  listnum,
+			  sp2->space_id,
+			  sp2->space_name,
+			  (unsigned long long)sp2->host_id,
+			  sp2->host_id_disk.path,
+			  (unsigned long long)sp2->host_id_disk.offset);
 		pthread_mutex_unlock(&spaces_mutex);
 		rv = -EINVAL;
 		goto fail_free;
@@ -650,8 +666,19 @@ int add_lockspace_start(struct sanlk_lockspace *ls, uint32_t io_timeout, struct 
 	/* search all lists for a lockspace with the same host_id_disk */
 
 	sp2 = _search_space(NULL, &sp->host_id_disk, 0,
-			    &spaces, &spaces_add, &spaces_rem);
+			    &spaces, &spaces_add, &spaces_rem, &listnum);
 	if (sp2) {
+		log_error("add_lockspace %.48s:%llu:%.256s:%llu conflicts with path of list%d s%d %.48s:%llu:%.256s:%llu",
+			  sp->space_name,
+			  (unsigned long long)sp->host_id,
+			  sp->host_id_disk.path,
+			  (unsigned long long)sp->host_id_disk.offset,
+			  listnum,
+			  sp2->space_id,
+			  sp2->space_name,
+			  (unsigned long long)sp2->host_id,
+			  sp2->host_id_disk.path,
+			  (unsigned long long)sp2->host_id_disk.offset);
 		pthread_mutex_unlock(&spaces_mutex);
 		rv = -EINVAL;
 		goto fail_free;
@@ -757,7 +784,7 @@ int inq_lockspace(struct sanlk_lockspace *ls)
 	pthread_mutex_lock(&spaces_mutex);
 
 	sp = _search_space(ls->name, (struct sync_disk *)&ls->host_id_disk, ls->host_id,
-			   &spaces, NULL, NULL);
+			   &spaces, NULL, NULL, NULL);
 
 	if (sp) {
 		rv = 0;
@@ -767,7 +794,7 @@ int inq_lockspace(struct sanlk_lockspace *ls)
 	}
 
 	sp = _search_space(ls->name, (struct sync_disk *)&ls->host_id_disk, ls->host_id,
-			   &spaces_add, &spaces_rem, NULL);
+			   &spaces_add, &spaces_rem, NULL, NULL);
 
 	if (sp)
 		rv = -EINPROGRESS;
@@ -786,7 +813,7 @@ int rem_lockspace_start(struct sanlk_lockspace *ls, unsigned int *space_id)
 	pthread_mutex_lock(&spaces_mutex);
 
 	sp = _search_space(ls->name, (struct sync_disk *)&ls->host_id_disk, ls->host_id,
-			   &spaces_rem, NULL, NULL);
+			   &spaces_rem, NULL, NULL, NULL);
 	if (sp) {
 		pthread_mutex_unlock(&spaces_mutex);
 		rv = -EINPROGRESS;
@@ -794,7 +821,7 @@ int rem_lockspace_start(struct sanlk_lockspace *ls, unsigned int *space_id)
 	}
 
 	sp = _search_space(ls->name, (struct sync_disk *)&ls->host_id_disk, ls->host_id,
-			   &spaces_add, NULL, NULL);
+			   &spaces_add, NULL, NULL, NULL);
 	if (sp) {
 		/* add_lockspace will be aborted and undone and the sp will
 		   not be moved to the spaces list */
@@ -807,7 +834,7 @@ int rem_lockspace_start(struct sanlk_lockspace *ls, unsigned int *space_id)
 	}
 
 	sp = _search_space(ls->name, (struct sync_disk *)&ls->host_id_disk, ls->host_id,
-			   &spaces, NULL, NULL);
+			   &spaces, NULL, NULL, NULL);
 	if (!sp) {
 		pthread_mutex_unlock(&spaces_mutex);
 		rv = -ENOENT;
@@ -846,7 +873,7 @@ int rem_lockspace_wait(struct sanlk_lockspace *ls, unsigned int space_id)
 	while (1) {
 		pthread_mutex_lock(&spaces_mutex);
 		sp = _search_space(ls->name, (struct sync_disk *)&ls->host_id_disk, ls->host_id,
-			   	   &spaces, &spaces_rem, &spaces_add);
+			   	   &spaces, &spaces_rem, &spaces_add, NULL);
 		if (sp && (sp->space_id == space_id))
 			done = 0;
 		else
@@ -1031,7 +1058,7 @@ int get_hosts(struct sanlk_lockspace *ls, char *buf, int *len, int *count, int m
 	host = (struct sanlk_host *)buf;
 
 	pthread_mutex_lock(&spaces_mutex);
-	sp = _search_space(ls->name, NULL, 0, &spaces, NULL, NULL);
+	sp = _search_space(ls->name, NULL, 0, &spaces, NULL, NULL, NULL);
 	if (!sp) {
 		rv = -ENOENT;
 		goto out;
