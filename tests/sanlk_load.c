@@ -602,6 +602,45 @@ int do_rand_child(void)
 	return 0;
 }
 
+int do_all_child(void)
+{
+	int sx, rx, full;
+	int fd, rv;
+	int pid = getpid();
+
+	srandom(pid);
+
+	memset(lock_state, 0, sizeof(lock_state));
+
+	fd = sanlock_register();
+	if (fd < 0) {
+		log_error("%d sanlock_register error %d", pid, fd);
+		exit(-1);
+	}
+
+	while (!prog_stop) {
+		for (sx = 0; sx < ls_count; sx++) {
+			for (rx = 0; rx < res_count; rx++) {
+				rv = acquire_one(pid, fd, sx, rx, EX, &full);
+				if (!rv)
+					lock_state[sx][rx] = EX;
+			}
+
+			inquire_all(pid, fd);
+
+			for (rx = 0; rx < res_count-1; rx++) {
+				rv = release_one(pid, fd, sx, rx);
+				lock_state[sx][rx] = UN;
+			}
+
+			inquire_all(pid, fd);
+		}
+	}
+
+	display_rv(pid);
+	return 0;
+}
+
 /*
  * sanlk_load rand <lock_disk_base> -i <host_id> [-D -s <ls_count> -r <res_count> -p <pid_count>]
  */
@@ -822,6 +861,68 @@ int do_rand(int argc, char *argv[])
 	return 0;
 }
 
+int do_all(int argc, char *argv[])
+{
+	struct sigaction act;
+	int children[MAX_PID_COUNT];
+	int run_count = 0;
+	int i, rv, pid, status;
+
+	if (argc < 5)
+		return -1;
+
+	memset(&act, 0, sizeof(act));
+	act.sa_handler = sigterm_handler;
+	sigaction(SIGTERM, &act, NULL);
+
+	strcpy(lock_disk_base, argv[2]);
+
+	get_options(argc, argv);
+
+	rv = add_lockspaces();
+	if (rv < 0)
+		return rv;
+
+	printf("forking %d pids\n", pid_count);
+
+	for (i = 0; i < pid_count; i++) {
+		pid = fork();
+
+		if (pid < 0) {
+			log_error("fork %d failed %d run_count %d", i, errno, run_count);
+			break;
+		}
+		if (!pid) {
+			do_all_child();
+			exit(-1);
+		}
+		children[i] = pid;
+		run_count++;
+	}
+
+	printf("children running\n");
+
+	while (!prog_stop) {
+		sleep(1);
+	}
+
+	printf("stopping pids");
+
+	for (i = 0; i < pid_count; i++)
+		kill(children[i], SIGTERM);
+
+	while (run_count) {
+		pid = wait(&status);
+		if (pid > 0) {
+			run_count--;
+			printf(".");
+		}
+	}
+	printf("\n");
+
+	return 0;
+}
+
 /*
  * sanlk_load init <lock_disk_base> [<ls_count> <res_count>]
  * lock_disk_base = /dev/vg/foo
@@ -902,6 +1003,9 @@ int main(int argc, char *argv[])
 
 	else if (!strcmp(argv[1], "rand"))
 		rv = do_rand(argc, argv);
+
+	else if (!strcmp(argv[1], "all"))
+		rv = do_all(argc, argv);
 
 	if (!rv)
 		return 0;
