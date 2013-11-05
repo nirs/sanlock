@@ -225,6 +225,7 @@ struct client {
 	int suspend;
 	int need_free;
 	int kill_count;
+	int tokens_slots;
 	uint32_t flags;
 	uint32_t restricted;
 	uint64_t kill_last;
@@ -234,7 +235,7 @@ struct client {
 	pthread_mutex_t mutex;
 	void *workfn;
 	void *deadfn;
-	struct token *tokens[SANLK_MAX_RESOURCES];
+	struct token **tokens;
 };
 
 /*

@@ -10,7 +10,8 @@
 #ifndef __SANLOCK_H__
 #define __SANLOCK_H__
 
-/* pid can own this many resources at once */
+/* an acquire or release call can specify this many explicit
+   resources in a single call. */
 
 #define SANLK_MAX_RESOURCES	8
 

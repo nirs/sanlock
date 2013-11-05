@@ -260,7 +260,11 @@ static void _client_free(int ci)
 	memset(cl->killargs, 0, SANLK_HELPER_ARGS_LEN);
 	cl->workfn = NULL;
 	cl->deadfn = NULL;
-	memset(cl->tokens, 0, sizeof(struct token *) * SANLK_MAX_RESOURCES);
+
+	if (cl->tokens)
+		free(cl->tokens);
+	cl->tokens = NULL;
+	cl->tokens_slots = 0;
 
 	/* make poll() ignore this connection */
 	pollfd[ci].fd = -1;
@@ -497,7 +501,7 @@ void client_pid_dead(int ci)
 	   want to block doing disk lease i/o */
 
 	pthread_mutex_lock(&cl->mutex);
-	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
+	for (i = 0; i < cl->tokens_slots; i++) {
 		if (cl->tokens[i]) {
 			release_token_async(cl->tokens[i]);
 			free(cl->tokens[i]);
@@ -532,7 +536,7 @@ static int client_using_space(struct client *cl, struct space *sp)
 	struct token *token;
 	int i, rv = 0;
 
-	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
+	for (i = 0; i < cl->tokens_slots; i++) {
 		token = cl->tokens[i];
 		if (!token)
 			continue;

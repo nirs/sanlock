@@ -61,7 +61,7 @@ static void release_cl_tokens(struct task *task, struct client *cl)
 	struct token *token;
 	int j;
 
-	for (j = 0; j < SANLK_MAX_RESOURCES; j++) {
+	for (j = 0; j < cl->tokens_slots; j++) {
 		token = cl->tokens[j];
 		if (!token)
 			continue;
@@ -92,13 +92,15 @@ static int check_new_tokens_space(struct client *cl,
 	struct token *token;
 	int i, rv, empty_slots = 0;
 
-	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
+	for (i = 0; i < cl->tokens_slots; i++) {
 		if (!cl->tokens[i])
 			empty_slots++;
 	}
 
 	if (empty_slots < new_tokens_count) {
 		/* shouldn't ever happen */
+		log_error("check_new_tokens_space slots %d empty %d new_tokens %d",
+			  cl->tokens_slots, empty_slots, new_tokens_count);
 		return -ENOENT;
 	}
 
@@ -155,6 +157,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 	struct client *cl;
 	struct token *token = NULL;
 	struct token *new_tokens[SANLK_MAX_RESOURCES];
+	struct token **grow_tokens;
 	struct sanlk_resource res;
 	struct sanlk_options opt;
 	struct space_info spi;
@@ -168,6 +171,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 	int new_tokens_count;
 	int recv_done = 0;
 	int result = 0;
+	int grow_size;
 	int cl_ci = ca->ci_target;
 	int cl_fd = ca->cl_fd;
 	int cl_pid = ca->cl_pid;
@@ -195,9 +199,31 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 	}
 
 	empty_slots = 0;
-	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
+	for (i = 0; i < cl->tokens_slots; i++) {
 		if (!cl->tokens[i])
 			empty_slots++;
+	}
+
+	if (empty_slots < new_tokens_count) {
+		log_debug("cmd_acquire grow tokens slots %d empty %d new %d",
+			  cl->tokens_slots, empty_slots, new_tokens_count);
+
+		grow_size = (cl->tokens_slots + (SANLK_MAX_RESOURCES * 2)) * sizeof(struct token *);
+		grow_tokens = malloc(grow_size);
+		if (!grow_tokens) {
+			log_error("cmd_acquire ENOMEM grow tokens slots %d empty %d new %d grow_size %d",
+				  cl->tokens_slots, empty_slots, new_tokens_count, grow_size);
+			result = -ENOMEM;
+			pthread_mutex_unlock(&cl->mutex);
+			goto done;
+		} else {
+			memset(grow_tokens, 0, grow_size);
+			memcpy(grow_tokens, cl->tokens, cl->tokens_slots * sizeof(struct token *));
+			free(cl->tokens);
+			cl->tokens = grow_tokens;
+			cl->tokens_slots += (SANLK_MAX_RESOURCES * 2);
+			empty_slots += (SANLK_MAX_RESOURCES * 2);
+		}
 	}
 
 	memcpy(killpath, cl->killpath, SANLK_HELPER_PATH_LEN);
@@ -452,7 +478,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 
 	if (!result && !pid_dead) {
 		for (i = 0; i < new_tokens_count; i++) {
-			for (j = 0; j < SANLK_MAX_RESOURCES; j++) {
+			for (j = 0; j < cl->tokens_slots; j++) {
 				if (!cl->tokens[j]) {
 					cl->tokens[j] = new_tokens[i];
 					break;
@@ -531,7 +557,7 @@ static void cmd_release(struct task *task, struct cmd_args *ca)
 
 	if (ca->header.cmd_flags & SANLK_REL_ALL) {
 		pthread_mutex_lock(&cl->mutex);
-		for (j = 0; j < SANLK_MAX_RESOURCES; j++) {
+		for (j = 0; j < cl->tokens_slots; j++) {
 			token = cl->tokens[j];
 			if (!token)
 				continue;
@@ -563,7 +589,7 @@ static void cmd_release(struct task *task, struct cmd_args *ca)
 		found = 0;
 
 		pthread_mutex_lock(&cl->mutex);
-		for (j = 0; j < SANLK_MAX_RESOURCES; j++) {
+		for (j = 0; j < cl->tokens_slots; j++) {
 			token = cl->tokens[j];
 			if (!token)
 				continue;
@@ -604,7 +630,7 @@ static void cmd_release(struct task *task, struct cmd_args *ca)
 		found = 0;
 
 		pthread_mutex_lock(&cl->mutex);
-		for (j = 0; j < SANLK_MAX_RESOURCES; j++) {
+		for (j = 0; j < cl->tokens_slots; j++) {
 			token = cl->tokens[j];
 			if (!token)
 				continue;
@@ -658,7 +684,7 @@ static void cmd_release(struct task *task, struct cmd_args *ca)
 
 		found = 0;
 
-		for (j = 0; j < SANLK_MAX_RESOURCES; j++) {
+		for (j = 0; j < cl->tokens_slots; j++) {
 			if (!cl->tokens[j])
 				continue;
 			found = 1;
@@ -713,7 +739,7 @@ static void cmd_inquire(struct task *task, struct cmd_args *ca)
 		goto done;
 	}
 
-	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
+	for (i = 0; i < cl->tokens_slots; i++) {
 		if (cl->tokens[i])
 			res_count++;
 	}
@@ -734,7 +760,7 @@ static void cmd_inquire(struct task *task, struct cmd_args *ca)
 
 	/* should match sanlock_args_to_state() */
 
-	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
+	for (i = 0; i < cl->tokens_slots; i++) {
 		token = cl->tokens[i];
 		if (!token)
 			continue;
@@ -860,7 +886,7 @@ static void cmd_convert(struct task *task, struct cmd_args *ca)
 	}
 
 	pthread_mutex_lock(&cl->mutex);
-	for (i = 0; i < SANLK_MAX_RESOURCES; i++) {
+	for (i = 0; i < cl->tokens_slots; i++) {
 		token = cl->tokens[i];
 		if (!token)
 			continue;
@@ -2363,6 +2389,20 @@ void call_cmd_daemon(int ci, struct sm_header *h_recv, int client_maxi)
 		snprintf(client[ci].owner_name, SANLK_NAME_LEN, "%d", pid);
 		client[ci].pid = pid;
 		client[ci].deadfn = client_pid_dead;
+
+		if (client[ci].tokens) {
+			log_error("cmd_register ci %d fd %d tokens exist slots %d",
+				  ci, fd, client[ci].tokens_slots);
+			free(client[ci].tokens);
+		}
+		client[ci].tokens_slots = SANLK_MAX_RESOURCES;
+		client[ci].tokens = malloc(sizeof(struct token *) * SANLK_MAX_RESOURCES);
+		if (!client[ci].tokens) {
+			rv = -ENOMEM;
+			log_error("cmd_register ci %d fd %d ENOMEM", ci, fd);
+			break;
+		}
+		memset(client[ci].tokens, 0, sizeof(struct token *) * SANLK_MAX_RESOURCES);
 		auto_close = 0;
 		break;
 	case SM_CMD_RESTRICT:
