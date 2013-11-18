@@ -712,60 +712,6 @@ int sanlock_init(struct sanlk_lockspace *ls,
 		return sanlock_write_resource(res, max_hosts, num_hosts, 0);
 }
 
-/* src has colons unescaped, dst should have them escaped with backslash */
-
-size_t sanlock_path_export(char *dst, const char *src, size_t dstlen)
-{
-	size_t j = 0, escaped = 0;
-	const char *p = src;
-
-	while (j < dstlen) {
-		if (*p == ':' || *p == '\\') {
-			if (!escaped) {
-				dst[j] = '\\', escaped = 1;
-				goto next_loop;
-			}
-
-			escaped = 0;
-		}
-
-		dst[j] = *p;
-
-		if (*p == '\0') return j; /* success */
-		p++;
-
- next_loop:
-		j++;
-	}
-
-	return 0;
-}
-
-/* src has colons escaped with backslash, dst should have backslash removed */
-
-size_t sanlock_path_import(char *dst, const char *src, size_t dstlen)
-{
-	size_t j = 0;
-	const char *p = src;
-
-	while (j < dstlen) {
-		if (*p == '\\')
-			goto next_loop;
-
-		dst[j] = *p;
-
-		if (*p == '\0')
-			return j;
-
-		j++;
-
- next_loop:
-		p++;
-	}
-
-	return 0;
-}
-
 int sanlock_register(void)
 {
 	int sock, rv;
@@ -1262,6 +1208,91 @@ int sanlock_get_lvb(uint32_t flags, struct sanlk_resource *res, char *lvb, int l
 }
 
 /*
+ * src may have colons/spaces escaped (with backslash) or unescaped.
+ * if unescaped colons/spaces are found, insert backslash before them.
+ *
+ * returns strlen of dst.
+ */
+
+size_t sanlock_path_export(char *dst, const char *src, size_t dstlen)
+{
+	int i = 0; /* pos in src */
+	int j = 0; /* pos in dst */
+
+	memset(dst, 0, dstlen);
+
+	for (i = 0; i < strlen(src); i++) {
+
+		/* take an escape character plus whatever follows it. */
+
+		if (src[i] == '\\') {
+			if (j > dstlen - 3)
+				goto out;
+
+			dst[j] = src[i];
+			j++;
+			i++;
+			dst[j] = src[i];
+
+			goto next_char;
+		}
+
+		/* add escape character before an unescaped space or colon. */
+
+		if ((src[i] == ' ') || (src[i] == ':')) {
+			if (j > dstlen - 3)
+				goto out;
+
+			dst[j] = '\\';
+			j++;
+			dst[j] = src[i];
+
+			goto next_char;
+		}
+
+		/* copy non-special char from src to dst. */
+
+		if (j > dstlen - 2)
+			goto out;
+
+		dst[j] = src[i];
+
+ next_char:
+		if (dst[j] == '\0')
+			goto out;
+
+		j++;
+	}
+ out:
+	return strlen(dst);
+}
+
+/* src has colons/spaces escaped with backslash, dst should have backslash removed */
+
+size_t sanlock_path_import(char *dst, const char *src, size_t dstlen)
+{
+	size_t j = 0;
+	const char *p = src;
+
+	while (j < dstlen) {
+		if (*p == '\\')
+			goto next_loop;
+
+		dst[j] = *p;
+
+		if (*p == '\0')
+			return j;
+
+		j++;
+
+ next_loop:
+		p++;
+	}
+
+	return 0;
+}
+
+/*
  * convert from struct sanlk_resource to string with format:
  * <lockspace_name>:<resource_name>:<path>:<offset>[:<path>:<offset>...]:<lver>
  */
@@ -1323,6 +1354,11 @@ int sanlock_res_to_str(struct sanlk_resource *res, char **str_ret)
 /*
  * convert to struct sanlk_resource from string with format:
  * <lockspace_name>:<resource_name>:<path>:<offset>[:<path>:<offset>...][:<lver>]
+ *
+ * If str contains a backslash escape character, the backslash needs to be
+ * excluded from the string in res struct.  The path string in the res struct
+ * needs to be suitable for passing to open(2), which means it should not
+ * include escape characters.
  */
 
 int sanlock_str_to_res(char *str, struct sanlk_resource **res_ret)
@@ -1373,6 +1409,8 @@ int sanlock_str_to_res(char *str, struct sanlk_resource **res_ret)
 	for (i = 0; i < len + 1; i++) {
 		if (str[i] == '\\') {
 			if (i == (len - 1))
+				goto fail;
+			if (j >= SANLK_PATH_LEN)
 				goto fail;
 
 			i++;
@@ -1465,14 +1503,6 @@ int sanlock_args_to_state(int res_count,
 			return -EINVAL;
 		}
 
-		/* space is str separator, so it's invalid within each str */
-
-		if (strstr(str, " ")) {
-			free(str);
-			free(state);
-			return -EINVAL;
-		}
-
 		if (i)
 			strcat(state, " ");
 		strcat(state, str);
@@ -1498,9 +1528,15 @@ int sanlock_state_to_args(char *res_state,
 	struct sanlk_resource *res;
 	char str[SANLK_MAX_RES_STR + 1];
 	int count = 1, arg_count = 0;
+	int escape = 0;
+	int sep_colons = 0;
 	int i, j, len, rv;
 
 	for (i = 0; i < strlen(res_state); i++) {
+		if (res_state[i] == '\\') {
+			i++;
+			continue;
+		}
 		if (res_state[i] == ' ')
 			count++;
 	}
@@ -1514,11 +1550,43 @@ int sanlock_state_to_args(char *res_state,
 
 	j = 0;
 	memset(str, 0, sizeof(str));
+	sep_colons = 0;
 
 	len = strlen(res_state);
 
 	for (i = 0; i < len + 1; i++) {
+
+		if (i < len && res_state[i] == '\\') {
+			str[j++] = res_state[i];
+			escape = 1;
+			continue;
+		}
+
+		if (i < len && escape) {
+			str[j++] = res_state[i];
+			escape = 0;
+			continue;
+		}
+
+		if ((i < len) && (res_state[i] == ' ') && (sep_colons < 3)) {
+			/*
+			 * This is a bit dubious.  It's meant to detect when
+			 * a res string contains an unescaped space, and
+			 * inserts an escape char before it.  An unescaped
+			 * space within a res string would otherwise be
+			 * misinterpreted as a separator between res strings.
+			 * If we've not yet seen three colons within a single
+			 * res string, then we should not be at the end yet.
+			 */
+			str[j++] = '\\';
+			str[j++] = res_state[i];
+			continue;
+		}
+
 		if (i < len && res_state[i] != ' ') {
+			if (res_state[i] == ':')
+				sep_colons++;
+
 			str[j++] = res_state[i];
 			continue;
 		}
@@ -1534,6 +1602,7 @@ int sanlock_state_to_args(char *res_state,
 
 		j = 0;
 		memset(str, 0, sizeof(str));
+		sep_colons = 0;
 	}
 
 	/* caller to free res_count res and args */
