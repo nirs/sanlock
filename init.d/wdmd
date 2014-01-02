@@ -3,7 +3,7 @@
 # wdmd - watchdog multiplexing daemon
 #
 # chkconfig: 2345 97 03
-# description: starts and stops sanlock daemon
+# description: starts and stops wdmd daemon
 #
 
 
@@ -31,12 +31,27 @@ WDMDOPTS="-G $WDMDGROUP"
 
 [ -f /etc/sysconfig/$prog ] && . /etc/sysconfig/$prog
 
+watchdog_probe() {
+	$exec --probe > /dev/null 2>&1
+	retval=$?
+	return $retval
+}
+
 watchdog_check() {
-	if [ ! -c /dev/watchdog ]; then
+	watchdog_probe
+	retval=$?
+
+	if [ $retval -ne 0 ]; then
 		echo -n $"Loading the softdog kernel module: "
 		modprobe softdog && udevadm settle
-		[ -c /dev/watchdog ] && success || failure
-		echo
+
+		watchdog_probe
+		retval=$?
+		if [ $retval -ne 0 ]; then
+			failure; echo
+			return 1
+		fi
+		success; echo
 	fi
 }
 

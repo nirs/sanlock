@@ -1085,6 +1085,120 @@ static int setup_watchdog(void)
 
 }
 
+static int probe_dev(const char *path)
+{
+	struct stat buf;
+	int fd, err, rv, timeout;
+
+	rv = stat(path, &buf);
+	if (rv < 0) {
+		fprintf(stderr, "error %d stat %s\n", errno, path);
+		return -1;
+	}
+
+	fd = open(path, O_WRONLY | O_CLOEXEC);
+	if (fd < 0) {
+		fprintf(stderr, "error %d open %s\n", errno, path);
+		return fd;
+	}
+
+	timeout = 0;
+
+	rv = ioctl(fd, WDIOC_GETTIMEOUT, &timeout);
+	if (rv < 0) {
+		fprintf(stderr, "error %d ioctl gettimeout %s\n", errno, path);
+		rv = -1;
+		goto out;
+	}
+
+	if (timeout == fire_timeout) {
+		printf("%s\n", path);
+		rv = 0;
+		goto out;
+	}
+
+	timeout = fire_timeout;
+
+	rv = ioctl(fd, WDIOC_SETTIMEOUT, &timeout);
+	if (rv < 0) {
+		fprintf(stderr, "error %d ioctl settimeout %s\n", errno, path);
+		rv = -1;
+		goto out;
+	}
+
+	if (timeout != fire_timeout) {
+		fprintf(stderr, "error %d invalid timeout %s\n", errno, path);
+		rv = -1;
+		goto out;
+	}
+
+	printf("%s\n", path);
+	rv = 0;
+
+ out:
+	err = write(fd, "V", 1);
+	if (err < 0) {
+		fprintf(stderr, "probe failed to disarm %s error %d %d\n", path, err, errno);
+		openlog("wdmd", LOG_CONS | LOG_PID, LOG_DAEMON);
+		syslog(LOG_ERR, "probe failed to disarm %s error %d %d\n", path, err, errno);
+	}
+
+	close(fd);
+	return rv;
+}
+
+static int probe_watchdog(void)
+{
+	int rv;
+
+	if (!saved_path[0])
+		goto opt;
+
+	rv = probe_dev(saved_path);
+	if (!rv)
+		return 0;
+
+ opt:
+	if (!option_path[0] || !strcmp(saved_path, option_path))
+		goto zero;
+
+	rv = probe_dev(option_path);
+	if (!rv)
+		return 0;
+
+ zero:
+	if (!strcmp(saved_path, "/dev/watchdog0") ||
+	    !strcmp(option_path, "/dev/watchdog0"))
+		goto one;
+
+	rv = probe_dev((char *)"/dev/watchdog0");
+	if (!rv)
+		return 0;
+
+ one:
+	if (!strcmp(saved_path, "/dev/watchdog1") ||
+	    !strcmp(option_path, "/dev/watchdog1"))
+		goto old;
+
+	rv = probe_dev((char *)"/dev/watchdog1");
+	if (!rv)
+		return 0;
+
+ old:
+	if (!strcmp(saved_path, "/dev/watchdog") ||
+	    !strcmp(option_path, "/dev/watchdog"))
+		goto out;
+
+	rv = probe_dev((char *)"/dev/watchdog");
+	if (!rv)
+		return 0;
+
+ out:
+	fprintf(stderr, "no watchdog device, load a watchdog driver\n");
+	return -1;
+
+}
+
 static void pet_watchdog(void)
 {
 	int rv, unused;
@@ -1397,6 +1511,7 @@ static void print_usage_and_exit(int status)
 	printf("--version, -V         print version\n");
 	printf("--help, -h            print usage\n");
 	printf("--dump, -d            print debug from daemon\n");
+	printf("--probe, -p           print path of functional watchdog device\n");
 	printf("-D                    debug: no fork and print all logging to stderr\n");
 	printf("-H 0|1                use high priority features (1 yes, 0 no, default %d)\n",
 				      DEFAULT_HIGH_PRIORITY);
@@ -1425,6 +1540,7 @@ static void print_version_and_exit(void)
 
 int main(int argc, char *argv[])
 {
+	int do_probe = 0;
 	int rv;
 
 	while (1) {
@@ -1433,12 +1549,13 @@ int main(int argc, char *argv[])
 
 	    static struct option long_options[] = {
 	        {"help",    no_argument, 0,  'h' },
+	        {"probe",   no_argument, 0,  'p' },
 	        {"dump",    no_argument, 0,  'd' },
 	        {"version", no_argument, 0,  'V' },
 	        {0,         0,           0,  0 }
 	    };
 
-	    c = getopt_long(argc, argv, "hdVDH:G:S:s:k:w:",
+	    c = getopt_long(argc, argv, "hpdVDH:G:S:s:k:w:",
 	                    long_options, &option_index);
 	    if (c == -1)
 	         break;
@@ -1447,6 +1564,9 @@ int main(int argc, char *argv[])
 	        case 'h':
                     print_usage_and_exit(0);
 	            break;
+		case 'p':
+		    do_probe = 1;
+		    break;
 		case 'd':
 		    print_debug_and_exit();
 		    break;
@@ -1476,6 +1596,14 @@ int main(int argc, char *argv[])
 		    option_path[WDPATH_SIZE - 1] = '\0';
 		    break;
 	    }
+	}
+
+	if (do_probe) {
+		rv = probe_watchdog();
+		if (rv < 0)
+			exit(EXIT_FAILURE);
+		else
+			exit(EXIT_SUCCESS);
 	}
 
 	if (!daemon_debug) {

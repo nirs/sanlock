@@ -79,6 +79,12 @@ it is considered a failure.
   Print debug information from the daemon.
 
 .TP
+.B \-\-probe, \-p
+  Print path of functional watchdog device.  Exit code 0 indicates a
+  functional device was found.  Exit code 1 indicates a functional device
+  was not found.
+
+.TP
 .B \-D
   Enable debugging to stderr and don't fork.
 
@@ -102,5 +108,9 @@ it is considered a failure.
 .TP
 .BI \-k " num"
   Kill unfinished scripts after num seconds.
+
+.TP
+.BI \-w " path"
+  The path to the watchdog device to try first.
 
 
