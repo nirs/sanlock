@@ -325,6 +325,7 @@ enum {
 	ACT_CLIENT_ALIGN,
 	ACT_EXAMINE,
 	ACT_GETS,
+	ACT_VERSION,
 };
 
 EXTERN int external_shutdown;
@@ -343,6 +344,13 @@ EXTERN struct list_head spaces;
 EXTERN struct list_head spaces_rem;
 EXTERN struct list_head spaces_add;
 EXTERN pthread_mutex_t spaces_mutex;
+
+/* major.minor.patch-build (TODO: get build) */
+EXTERN uint8_t sanlock_version_major;
+EXTERN uint8_t sanlock_version_minor;
+EXTERN uint8_t sanlock_version_patch;
+EXTERN uint8_t sanlock_version_build;
+EXTERN uint32_t sanlock_version_combined;
 
 #endif
 

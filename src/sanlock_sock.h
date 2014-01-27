@@ -14,6 +14,7 @@
 #define SANLK_SOCKET_NAME "sanlock.sock"
 
 #define SM_MAGIC 0x04282010
+#define SM_PROTO 0x00000001
 
 #define MAX_CLIENT_MSG (1024 * 1024) /* TODO: this is random */
 
@@ -45,6 +46,7 @@ enum {
 	SM_CMD_SET_LVB		 = 25,
 	SM_CMD_GET_LVB		 = 26,
 	SM_CMD_CONVERT		 = 27,
+	SM_CMD_VERSION		 = 28,
 };
 
 struct sm_header {

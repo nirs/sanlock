@@ -826,6 +826,7 @@ static void cmd_inquire(struct task *task, struct cmd_args *ca)
 	}
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
+	h.version = SM_PROTO;
 	h.data = result;
 	h.data2 = res_count;
 
@@ -1143,6 +1144,7 @@ static void cmd_get_lvb(struct task *task GNUC_UNUSED, struct cmd_args *ca)
 	result = res_get_lvb(&res, &lvb, &lvblen);
  reply:
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
+	h.version = SM_PROTO;
 	h.data = result;
 	h.data2 = 0;
 	h.length = sizeof(h) + lvblen;
@@ -1439,6 +1441,7 @@ static void cmd_read_lockspace(struct task *task, struct cmd_args *ca)
 	log_debug("cmd_read_lockspace %d,%d done %d", ca->ci_in, fd, result);
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
+	h.version = SM_PROTO;
 	h.data = result;
 	h.data2 = io_timeout;
 	h.length = sizeof(h) + sizeof(lockspace);
@@ -1531,6 +1534,7 @@ static void cmd_read_resource(struct task *task, struct cmd_args *ca)
 	log_debug("cmd_read_resource %d,%d done %d", ca->ci_in, fd, result);
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
+	h.version = SM_PROTO;
 	h.data = result;
 	h.data2 = 0;
 	h.length = sizeof(h) + sizeof(res);
@@ -1626,6 +1630,7 @@ static void cmd_read_resource_owners(struct task *task, struct cmd_args *ca)
 	log_debug("cmd_read_resource_owners %d,%d count %d done %d", ca->ci_in, fd, count, result);
 
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
+	h.version = SM_PROTO;
 	h.data = result;
 	h.data2 = count;
 	h.length = sizeof(h) + sizeof(res) + send_len;
@@ -1938,7 +1943,11 @@ static int print_state_daemon(char *str)
 		 "helper_kill_fd=%d "
 		 "helper_full_count=%u "
 		 "helper_last_status=%llu "
-		 "monotime=%llu",
+		 "monotime=%llu "
+		 "version_str=%s "
+		 "version_num=%u.%u.%u "
+		 "version_hex=%08x "
+		 "smproto_hex=%08x",
 		 our_host_name_global,
 		 main_task.use_aio,
 		 kill_grace_seconds,
@@ -1946,7 +1955,13 @@ static int print_state_daemon(char *str)
 		 helper_kill_fd,
 		 helper_full_count,
 		 (unsigned long long)helper_last_status,
-		 (unsigned long long)monotime());
+		 (unsigned long long)monotime(),
+		 VERSION,
+		 sanlock_version_major,
+		 sanlock_version_minor,
+		 sanlock_version_patch,
+		 sanlock_version_combined,
+		 SM_PROTO);
 
 	return strlen(str) + 1;
 }
@@ -2195,6 +2210,7 @@ static void cmd_status(int fd, struct sm_header *h_recv, int client_maxi)
 
 	memset(&h, 0, sizeof(h));
 	memcpy(&h, h_recv, sizeof(struct sm_header));
+	h.version = SM_PROTO;
 	h.length = sizeof(h);
 	h.data = 0;
 
@@ -2248,6 +2264,7 @@ static void cmd_host_status(int fd, struct sm_header *h_recv)
 
 	memset(&h, 0, sizeof(h));
 	memcpy(&h, h_recv, sizeof(struct sm_header));
+	h.version = SM_PROTO;
 	h.length = sizeof(h);
 	h.data = 0;
 
@@ -2303,6 +2320,7 @@ static void cmd_log_dump(int fd, struct sm_header *h_recv)
 
 	copy_log_dump(send_data_buf, &len);
 
+	h_recv->version = SM_PROTO;
 	h_recv->data = len;
 
 	send(fd, h_recv, sizeof(struct sm_header), MSG_NOSIGNAL);
@@ -2315,6 +2333,7 @@ static void cmd_get_lockspaces(int fd, struct sm_header *h_recv)
 
 	rv = get_lockspaces(send_data_buf, &len, &count, LOG_DUMP_SIZE);
 
+	h_recv->version = SM_PROTO;
 	h_recv->length = sizeof(struct sm_header) + len;
 	h_recv->data = rv;
 	h_recv->data2 = count;
@@ -2331,6 +2350,7 @@ static void cmd_get_hosts(int fd, struct sm_header *h_recv)
 
 	memset(&h, 0, sizeof(h));
 	memcpy(&h, h_recv, sizeof(struct sm_header));
+	h.version = SM_PROTO;
 	h.length = sizeof(h);
 	h.data = 0;
 
@@ -2358,7 +2378,22 @@ static void cmd_restrict(int ci, int fd, struct sm_header *h_recv)
 
 	client[ci].restricted = h_recv->cmd_flags;
 
+	h_recv->version = SM_PROTO;
 	send_result(fd, h_recv, 0);
+}
+
+static void cmd_version(int ci GNUC_UNUSED, int fd, struct sm_header *h_recv)
+{
+	h_recv->magic = SM_MAGIC;
+	h_recv->version = SM_PROTO;
+	h_recv->cmd = SM_CMD_VERSION;
+	h_recv->cmd_flags = 0;
+	h_recv->length = sizeof(struct sm_header);
+	h_recv->seq = 0;
+	h_recv->data = 0;
+	h_recv->data2 = sanlock_version_combined;
+
+	send(fd, h_recv, sizeof(struct sm_header), MSG_NOSIGNAL);
 }
 
 static int get_peer_pid(int fd, int *pid)
@@ -2407,6 +2442,10 @@ void call_cmd_daemon(int ci, struct sm_header *h_recv, int client_maxi)
 		break;
 	case SM_CMD_RESTRICT:
 		cmd_restrict(ci, fd, h_recv);
+		auto_close = 0;
+		break;
+	case SM_CMD_VERSION:
+		cmd_version(ci, fd, h_recv);
 		auto_close = 0;
 		break;
 	case SM_CMD_SHUTDOWN:

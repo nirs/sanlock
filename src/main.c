@@ -436,6 +436,7 @@ void send_result(int fd, struct sm_header *h_recv, int result)
 	struct sm_header h;
 
 	memcpy(&h, h_recv, sizeof(struct sm_header));
+	h.version = SM_PROTO;
 	h.length = sizeof(h);
 	h.data = result;
 	h.data2 = 0;
@@ -1158,12 +1159,19 @@ static void process_connection(int ci)
 			  ci, client[ci].fd, client[ci].pid, h.cmd);
 		goto dead;
 	}
+	if (h.version && (h.cmd != SM_CMD_VERSION) &&
+	    (h.version & 0xFFFF0000) > (SM_PROTO & 0xFFFF0000)) {
+		log_error("ci %d recv %d proto %x vs %x",
+			  ci, rv, h.version , SM_PROTO);
+		goto dead;
+	}
 
 	client[ci].cmd_last = h.cmd;
 
 	switch (h.cmd) {
 	case SM_CMD_REGISTER:
 	case SM_CMD_RESTRICT:
+	case SM_CMD_VERSION:
 	case SM_CMD_SHUTDOWN:
 	case SM_CMD_STATUS:
 	case SM_CMD_HOST_STATUS:
@@ -1864,8 +1872,14 @@ static int read_command_line(int argc, char *argv[])
 		exit(EXIT_SUCCESS);
 	}
 
-	if (!strcmp(arg1, "version") || !strcmp(arg1, "--version") ||
-	    !strcmp(arg1, "-V")) {
+	if (!strcmp(arg1, "version")) {
+		printf("%u.%u.%u\n",
+		       sanlock_version_major, sanlock_version_minor,
+		       sanlock_version_patch);
+		exit(EXIT_SUCCESS);
+	}
+
+	if (!strcmp(arg1, "--version") || !strcmp(arg1, "-V")) {
 		printf("%s %s (built %s %s)\n",
 		       argv[0], VERSION, __DATE__, __TIME__);
 		exit(EXIT_SUCCESS);
@@ -1939,6 +1953,8 @@ static int read_command_line(int argc, char *argv[])
 			com.action = ACT_CLIENT_INIT;
 		else if (!strcmp(act, "read"))
 			com.action = ACT_CLIENT_READ;
+		else if (!strcmp(act, "version"))
+			com.action = ACT_VERSION;
 		else {
 			log_tool("client action \"%s\" is unknown", act);
 			exit(EXIT_FAILURE);
@@ -2315,6 +2331,38 @@ static int do_client_read(void)
 	return rv;
 }
 
+static void do_client_version(void)
+{
+	uint32_t version = 0;
+	uint32_t proto = 0;
+	int rv;
+
+	rv = sanlock_version(0, &version, &proto);
+	if (rv < 0) {
+		log_tool("daemon version error %d", rv);
+	}
+
+	log_tool("client version %u.%u.%u (0x%08x)",
+		 sanlock_version_major,
+		 sanlock_version_minor,
+		 sanlock_version_patch,
+		 sanlock_version_combined);
+
+	log_tool("daemon version %u.%u.%u (0x%08x)",
+		 (version & 0xFF000000) >> 24,
+		 (version & 0x00FF0000) >> 16,
+		 (version & 0x0000FF00) >> 8,
+		 version);
+
+	log_tool("client socket protocol %u.%u",
+		  (SM_PROTO & 0xFFFF0000) >> 16,
+		  (SM_PROTO & 0x0000FFFF));
+
+	log_tool("daemon socket protocol %u.%u",
+		  (proto & 0xFFFF0000) >> 16,
+		  (proto & 0x0000FFFF));
+}
+
 static int do_client(void)
 {
 	struct sanlk_resource **res_args = NULL;
@@ -2499,6 +2547,10 @@ static int do_client(void)
 		rv = do_client_read();
 		break;
 
+	case ACT_VERSION:
+		do_client_version();
+		break;
+
 	default:
 		log_tool("action not implemented");
 		rv = -1;
@@ -2608,6 +2660,42 @@ static int do_direct(void)
 	return rv;
 }
 
+static void set_sanlock_version(void)
+{
+	char version_str[64];
+	char *major_str, *minor_str, *patch_str;
+	char *d1, *d2;
+
+	strncpy(version_str, VERSION, 64);
+
+	d1 = strstr(version_str, ".");
+	if (!d1)
+		return;
+
+	d2 = strstr(d1 + 1, ".");
+	if (!d2)
+		return;
+
+	major_str = version_str;
+	minor_str = d1 + 1;
+	patch_str = d2 + 1;
+
+	*d1 = '\0';
+	*d2 = '\0';
+
+	sanlock_version_major = atoi(major_str);
+	sanlock_version_minor = atoi(minor_str);
+	sanlock_version_patch = atoi(patch_str);
+
+	sanlock_version_build = 0; /* TODO */
+
+	sanlock_version_combined = 0;
+	sanlock_version_combined |= sanlock_version_major << 24;
+	sanlock_version_combined |= sanlock_version_minor << 16;
+	sanlock_version_combined |= sanlock_version_patch << 8;
+	sanlock_version_combined |= sanlock_version_build;
+}
+
 int main(int argc, char *argv[])
 {
 	int rv;
@@ -2617,6 +2705,8 @@ int main(int argc, char *argv[])
 	BUILD_BUG_ON(sizeof(struct helper_msg) != SANLK_HELPER_MSG_LEN);
 
 	/* initialize global EXTERN variables */
+
+	set_sanlock_version();
 
 	kill_count_max = 100;
 	kill_grace_seconds = DEFAULT_GRACE_SEC;

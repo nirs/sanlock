@@ -276,4 +276,6 @@ int sanlock_test_resource_owners(struct sanlk_resource *res, uint32_t flags,
 				 struct sanlk_host *hosts, int hosts_count,
 				 uint32_t *test_flags);
 
+int sanlock_version(uint32_t flags, uint32_t *version, uint32_t *proto);
+
 #endif

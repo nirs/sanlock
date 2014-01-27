@@ -71,6 +71,7 @@ static int send_header(int sock, int cmd, uint32_t cmd_flags, int datalen,
 
 	memset(&header, 0, sizeof(struct sm_header));
 	header.magic = SM_MAGIC;
+	header.version = SM_PROTO;
 	header.cmd = cmd;
 	header.cmd_flags = cmd_flags;
 	header.length = sizeof(header) + datalen;
@@ -739,6 +740,38 @@ int sanlock_restrict(int sock, uint32_t flags)
 
 	rv = recv_result(sock);
 	return rv;
+}
+
+int sanlock_version(uint32_t flags, uint32_t *version, uint32_t *proto)
+{
+	struct sm_header h;
+	int fd, rv;
+
+	rv = connect_socket(&fd);
+	if (rv < 0)
+		return rv;
+
+	rv = send_header(fd, SM_CMD_VERSION, flags, 0, 0, 0);
+	if (rv < 0)
+		return rv;
+
+	memset(&h, 0, sizeof(struct sm_header));
+
+	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	if (rv < 0)
+		return -errno;
+	if (rv != sizeof(h))
+		return -1;
+
+	if (proto)
+		*proto = h.version;
+
+	rv = (int)h.data;
+	if (rv < 0)
+		return rv;
+
+	*version = h.data2;
+	return 0;
 }
 
 int sanlock_killpath(int sock, uint32_t flags, const char *path, char *args)
