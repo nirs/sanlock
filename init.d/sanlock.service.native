@@ -1,0 +1,13 @@
+[Unit]
+Description=Shared Storage Lease Manager
+After=syslog.target
+Wants=wdmd.service
+
+[Service]
+Type=forking
+ExecStart=/usr/sbin/sanlock daemon -U sanlock -G sanlock
+SendSIGKILL=no
+
+[Install]
+WantedBy=multi-user.target
+

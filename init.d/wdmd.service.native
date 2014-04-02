@@ -1,0 +1,13 @@
+[Unit]
+Description=Watchdog Multiplexing Daemon
+After=syslog.target
+
+[Service]
+Type=forking
+ExecStartPre=/lib/systemd/systemd-wdmd watchdog-check
+ExecStart=/usr/sbin/wdmd -G sanlock
+SendSIGKILL=no
+
+[Install]
+WantedBy=multi-user.target
+

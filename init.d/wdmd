@@ -135,6 +135,9 @@ case "$1" in
 		rh_status_q || exit 7
 		$1
 		;;
+	watchdog-check)
+		watchdog_check
+		;;
 	force-reload)
 		force_reload
 		;;
