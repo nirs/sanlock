@@ -47,6 +47,7 @@ enum {
 	SM_CMD_GET_LVB		 = 26,
 	SM_CMD_CONVERT		 = 27,
 	SM_CMD_VERSION		 = 28,
+	SM_CMD_SHUTDOWN_WAIT     = 29,
 };
 
 struct sm_header {

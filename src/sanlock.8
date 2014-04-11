@@ -273,7 +273,10 @@ Print the sanlock daemon internal debug log.
 Ask the sanlock daemon to exit.  Without the force option (-f 0), the
 command will be ignored if any lockspaces exist.  With the force option
 (-f 1), any registered processes will be killed, their resource leases
-released, and lockspaces removed.
+released, and lockspaces removed.  With the wait option (-w 1), the
+command will wait for a result from the daemon indicating that it has
+shut down and is exiting, or cannot shut down because lockspaces
+exist (command fails).
 
 .BR "sanlock client init -s" " LOCKSPACE"
 

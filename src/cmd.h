@@ -24,4 +24,6 @@ void call_cmd_thread(struct task *task, struct cmd_args *ca);
 /* cmds processed by main loop */
 void call_cmd_daemon(int ci, struct sm_header *h_recv, int client_maxi);
 
+void daemon_shutdown_reply(void);
+
 #endif

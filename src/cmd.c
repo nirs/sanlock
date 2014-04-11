@@ -1159,6 +1159,74 @@ static void cmd_get_lvb(struct task *task GNUC_UNUSED, struct cmd_args *ca)
 	client_resume(ca->ci_in);
 }
 
+static int shutdown_reply_ci = -1;
+static int shutdown_reply_fd = -1;
+
+static int daemon_shutdown_start(int ci, int fd, int force)
+{
+	int rv;
+
+	if (force) {
+		shutdown_reply_ci = ci;
+		shutdown_reply_fd = fd;
+		external_shutdown = 2;
+		return 0;
+	}
+
+	pthread_mutex_lock(&spaces_mutex);
+	if (list_empty(&spaces) &&
+	    list_empty(&spaces_rem) &&
+	    list_empty(&spaces_add)) {
+		shutdown_reply_ci = ci;
+		shutdown_reply_fd = fd;
+		external_shutdown = 1;
+		rv = 0;
+	} else {
+		rv = -EBUSY;
+	}
+	pthread_mutex_unlock(&spaces_mutex);
+
+	return rv;
+}
+
+static void cmd_shutdown_wait(struct task *task GNUC_UNUSED, struct cmd_args *ca)
+{
+	int fd, result;
+
+	fd = client[ca->ci_in].fd;
+
+	result = daemon_shutdown_start(ca->ci_in, fd, ca->header.data);
+
+	/*
+	 * daemon_shutdown_reply will send the result at the
+	 * end of main_loop.
+	 */
+	if (!result)
+		return;
+
+	send_result(fd, &ca->header, result);
+	client_resume(ca->ci_in);
+}
+
+void daemon_shutdown_reply(void)
+{
+	struct sm_header h;
+
+	/* shutdown wait was not used */
+	if (shutdown_reply_fd == -1)
+		return;
+
+	memset(&h, 0, sizeof(h));
+	h.magic = SM_MAGIC;
+	h.version = SM_PROTO;
+	h.length = sizeof(h);
+
+	send(shutdown_reply_fd, &h, sizeof(h), MSG_NOSIGNAL);
+	close(shutdown_reply_fd);
+
+	client_resume(shutdown_reply_ci);
+}
+
 static void cmd_add_lockspace(struct cmd_args *ca)
 {
 	struct sanlk_lockspace lockspace;
@@ -1907,6 +1975,9 @@ void call_cmd_thread(struct task *task, struct cmd_args *ca)
 		break;
 	case SM_CMD_GET_LVB:
 		cmd_get_lvb(task, ca);
+		break;
+	case SM_CMD_SHUTDOWN_WAIT:
+		cmd_shutdown_wait(task, ca);
 		break;
 	};
 }

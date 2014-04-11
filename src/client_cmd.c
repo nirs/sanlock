@@ -636,15 +636,40 @@ int sanlock_log_dump(int max_size)
 	return rv;
 }
 
-int sanlock_shutdown(uint32_t force)
+int sanlock_shutdown(uint32_t force, int wait_result)
 {
+	struct sm_header h;
+	int cmd;
 	int fd;
+	int rv = 0;
 
-	fd = send_command(SM_CMD_SHUTDOWN, force);
+	if (wait_result)
+		cmd = SM_CMD_SHUTDOWN_WAIT;
+	else
+		cmd = SM_CMD_SHUTDOWN;
+
+	fd = send_command(cmd, force);
 	if (fd < 0)
 		return fd;
 
+	if (cmd != SM_CMD_SHUTDOWN_WAIT)
+		goto out;
+
+	memset(&h, 0, sizeof(h));
+
+	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+	if (rv != sizeof(h)) {
+		rv = -1;
+		goto out;
+	}
+
+	rv = h.data;
+ out:
 	close(fd);
-	return 0;
+	return rv;
 }
 

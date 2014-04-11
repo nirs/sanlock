@@ -265,6 +265,7 @@ struct command_line {
 	int debug;
 	int debug_renew;
 	int quiet_fail;
+	int wait;
 	int use_watchdog;
 	int high_priority;		/* -h */
 	int get_hosts;			/* -h */
