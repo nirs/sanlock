@@ -6,8 +6,8 @@
  * of the GNU General Public License v2 or (at your option) any later version.
  */
 
-#ifndef __HOST_ID_H__
-#define __HOST_ID__H__
+#ifndef __LOCKSPACE_H__
+#define __LOCKSPACE__H__
 
 struct space *find_lockspace(const char *name);
 int _lockspace_info(const char *space_name, struct space_info *spi);
@@ -27,5 +27,9 @@ int rem_lockspace_wait(struct sanlk_lockspace *ls, unsigned int space_id);
 void free_lockspaces(int wait);
 int get_lockspaces(char *buf, int *len, int *count, int maxlen);
 int get_hosts(struct sanlk_lockspace *ls, char *buf, int *len, int *count, int maxlen);
+int lockspace_set_event(struct sanlk_lockspace *ls, struct sanlk_host_event *he, uint32_t flags);
+int lockspace_reg_event(struct sanlk_lockspace *ls, int fd, uint32_t flags);
+int lockspace_end_event(struct sanlk_lockspace *ls);
+int send_event_callbacks(uint32_t space_id, uint64_t from_host_id, uint64_t from_generation, struct sanlk_host_event *he);
 
 #endif

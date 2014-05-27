@@ -69,7 +69,7 @@ static int send_header(int sock, int cmd, uint32_t cmd_flags, int datalen,
 	struct sm_header header;
 	int rv;
 
-	memset(&header, 0, sizeof(struct sm_header));
+	memset(&header, 0, sizeof(header));
 	header.magic = SM_MAGIC;
 	header.version = SM_PROTO;
 	header.cmd = cmd;
@@ -78,7 +78,7 @@ static int send_header(int sock, int cmd, uint32_t cmd_flags, int datalen,
 	header.data = data;
 	header.data2 = data2;
 
-	rv = send(sock, (void *) &header, sizeof(struct sm_header), 0);
+	rv = send(sock, (void *) &header, sizeof(header), 0);
 	if (rv < 0)
 		return -errno;
 
@@ -109,7 +109,7 @@ static int recv_result(int fd)
 	struct sm_header h;
 	int rv;
 
-	memset(&h, 0, sizeof(struct sm_header));
+	memset(&h, 0, sizeof(h));
 
 	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv < 0)
@@ -181,7 +181,7 @@ int sanlock_get_lockspaces(struct sanlk_lockspace **lss, int *lss_count,
 
 	/* receive result and ls structs */
 
-	memset(&h, 0, sizeof(struct sm_header));
+	memset(&h, 0, sizeof(h));
 
 	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv < 0) {
@@ -269,7 +269,7 @@ int sanlock_get_hosts(const char *ls_name, uint64_t host_id,
 
 	/* receive result and ls structs */
 
-	memset(&h, 0, sizeof(struct sm_header));
+	memset(&h, 0, sizeof(h));
 
 	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv < 0) {
@@ -373,7 +373,7 @@ int sanlock_read_lockspace(struct sanlk_lockspace *ls, uint32_t flags, uint32_t 
 
 	/* receive result, io_timeout and ls struct */
 
-	memset(&h, 0, sizeof(struct sm_header));
+	memset(&h, 0, sizeof(h));
 
 	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv < 0) {
@@ -442,7 +442,7 @@ int sanlock_read_resource(struct sanlk_resource *res, uint32_t flags)
 
 	/* receive result and res struct */
 
-	memset(&h, 0, sizeof(struct sm_header));
+	memset(&h, 0, sizeof(h));
 
 	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv < 0) {
@@ -580,7 +580,7 @@ int sanlock_read_resource_owners(struct sanlk_resource *res, uint32_t flags,
 
 	/* receive result, res struct, and host structs */
 
-	memset(&h, 0, sizeof(struct sm_header));
+	memset(&h, 0, sizeof(h));
 
 	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv < 0) {
@@ -702,6 +702,214 @@ int sanlock_test_resource_owners(struct sanlk_resource *res GNUC_UNUSED,
 	return 0;
 }
 
+int sanlock_reg_event(const char *ls_name, struct sanlk_host_event *he, uint32_t flags)
+{
+	struct sm_header h;
+	struct sanlk_lockspace ls;
+	struct sanlk_host_event ev;
+	int rv, reg_fd;
+
+	if (!ls_name)
+		return -EINVAL;
+
+	memset(&ls, 0, sizeof(ls));
+	strncpy(ls.name, ls_name, SANLK_NAME_LEN);
+
+	memset(&ev, 0, sizeof(ev));
+	if (he)
+		memcpy(&ev, he, sizeof(ev));
+
+	rv = connect_socket(&reg_fd);
+	if (rv < 0)
+		return rv;
+
+	rv = send_header(reg_fd, SM_CMD_REG_EVENT, flags, sizeof(ls) + sizeof(ev), 0, 0);
+	if (rv < 0)
+		goto fail;
+
+	rv = send(reg_fd, &ls, sizeof(ls), 0);
+	if (rv < 0)
+		goto fail;
+
+	rv = send(reg_fd, &ev, sizeof(ev), 0);
+	if (rv < 0)
+		goto fail;
+
+	memset(&h, 0, sizeof(h));
+
+	rv = recv(reg_fd, &h, sizeof(h), MSG_WAITALL);
+	if (rv < 0) {
+		rv = -errno;
+		goto fail;
+	}
+
+	if (rv != sizeof(h)) {
+		rv = -1;
+		goto fail;
+	}
+
+	rv = (int)h.data;
+	if (rv < 0)
+		goto fail;
+
+	return reg_fd;
+fail:
+	close(reg_fd);
+	return rv;
+}
+
+int sanlock_end_event(int reg_fd, const char *ls_name, uint32_t flags)
+{
+	struct sm_header h;
+	struct sanlk_lockspace ls;
+	int rv, fd;
+	uint32_t end = 1;
+
+	if (!ls_name)
+		return -EINVAL;
+
+	/*
+	 * write 4 bytes to the registered fd.  sanlock attempts
+	 * a non-blocking read of 4 bytes from registered fds to
+	 * check if they have been unregistered.
+	 */
+
+	rv = send(reg_fd, &end, sizeof(end), 0);
+	if (rv < 0) {
+		close(reg_fd);
+		return -EALREADY;
+	}
+
+	close(reg_fd);
+
+	/*
+	 * sanlock does not poll registered event fds because
+	 * it receives nothing from them during normal operation,
+	 * only to indicate it's being closed.  So, we need
+	 * to tell sanlock to check the registered event fds to
+	 * remove the one we've written to and closed above.
+	 */
+
+	memset(&ls, 0, sizeof(ls));
+	strncpy(ls.name, ls_name, SANLK_NAME_LEN);
+
+	rv = connect_socket(&fd);
+	if (rv < 0)
+		return rv;
+
+	rv = send_header(fd, SM_CMD_END_EVENT, flags, sizeof(ls), 0, 0);
+	if (rv < 0)
+		goto out;
+
+	rv = send(fd, &ls, sizeof(ls), 0);
+	if (rv < 0)
+		goto out;
+
+	memset(&h, 0, sizeof(h));
+
+	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	if (rv != sizeof(h)) {
+		rv = -1;
+		goto out;
+	}
+
+	rv = (int)h.data;
+	if (rv < 0)
+		goto out;
+
+	rv = 0;
+out:
+	close(fd);
+	return rv;
+}
+
+int sanlock_set_event(const char *ls_name, struct sanlk_host_event *he, uint32_t flags)
+{
+	struct sanlk_lockspace ls;
+	struct sm_header h;
+	int rv, fd;
+
+	if (!ls_name || !he)
+		return -EINVAL;
+
+	memset(&ls, 0, sizeof(struct sanlk_lockspace));
+	strncpy(ls.name, ls_name, SANLK_NAME_LEN);
+
+	rv = connect_socket(&fd);
+	if (rv < 0)
+		return rv;
+
+	rv = send_header(fd, SM_CMD_SET_EVENT, flags,
+			 sizeof(struct sanlk_lockspace) + sizeof(struct sanlk_host_event),
+			 0, 0);
+	if (rv < 0)
+		goto out;
+
+	rv = send(fd, &ls, sizeof(ls), 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	rv = send(fd, he, sizeof(struct sanlk_host_event), 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	memset(&h, 0, sizeof(h));
+
+	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	if (rv != sizeof(h)) {
+		rv = -1;
+		goto out;
+	}
+
+	rv = (int)h.data;
+ out:
+	close(fd);
+	return rv;
+}
+
+int sanlock_get_event(int reg_fd, GNUC_UNUSED uint32_t flags, struct sanlk_host_event *he,
+		      uint64_t *from_host_id, uint64_t *from_generation)
+{
+	struct event_cb cb;
+	int rv;
+
+	/*
+	 * The caller's poll(2) indicates there's data, it doesn't know how 
+	 * many events to read, and doesn't want to block, so they want to
+	 * get events until we return -EAGAIN to indicate there are no more.
+	 */
+
+	rv = recv(reg_fd, &cb, sizeof(cb), MSG_DONTWAIT);
+	if (rv < 0)
+		return -errno;
+
+	if (rv != sizeof(cb))
+		return -1;
+
+	memcpy(he, &cb.he, sizeof(struct sanlk_host_event));
+
+	if (from_host_id)
+		*from_host_id = cb.from_host_id;
+	if (from_generation)
+		*from_generation = cb.from_generation;
+
+	return 0;
+}
+
 /* old api */
 int sanlock_init(struct sanlk_lockspace *ls,
 		 struct sanlk_resource *res,
@@ -755,7 +963,7 @@ int sanlock_version(uint32_t flags, uint32_t *version, uint32_t *proto)
 	if (rv < 0)
 		return rv;
 
-	memset(&h, 0, sizeof(struct sm_header));
+	memset(&h, 0, sizeof(h));
 
 	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv < 0)

@@ -20,6 +20,7 @@
 #include <time.h>
 #include <syslog.h>
 #include <sys/types.h>
+#include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/un.h>
 
@@ -76,6 +77,17 @@ static struct space *_search_space(const char *name,
 struct space *find_lockspace(const char *name)
 {
 	return _search_space(name, NULL, 0, &spaces, &spaces_rem, &spaces_add, NULL);
+}
+
+static struct space *find_lockspace_id(uint32_t space_id)
+{
+	struct space *sp;
+
+	list_for_each_entry(sp, &spaces, list) {
+		if (sp->space_id == space_id)
+			return sp;
+	}
+	return NULL;
 }
 
 int _lockspace_info(const char *space_name, struct space_info *spi)
@@ -222,12 +234,11 @@ int host_info(char *space_name, uint64_t host_id, struct host_status *hs_out)
 	return 0;
 }
 
-static void create_bitmap(struct space *sp, char *bitmap)
+static void create_bitmap_and_extra(struct space *sp, char *bitmap, struct delta_extra *extra)
 {
 	uint64_t now;
 	int i;
 	char c;
-	int request_finish_seconds = calc_request_finish_seconds(sp->io_timeout);
 
 	now = monotime();
 
@@ -239,26 +250,37 @@ static void create_bitmap(struct space *sp, char *bitmap)
 		if (!sp->host_status[i].set_bit_time)
 			continue;
 
-		if (now - sp->host_status[i].set_bit_time > request_finish_seconds) {
-			log_space(sp, "bitmap clear host_id %d", i+1);
+		if (now - sp->host_status[i].set_bit_time > sp->set_bitmap_seconds) {
+			/* log_space(sp, "bitmap clear host_id %d", i+1); */
 			sp->host_status[i].set_bit_time = 0;
 		} else {
 			set_id_bit(i+1, bitmap, &c);
-			log_space(sp, "bitmap set host_id %d byte %x", i+1, c);
+			/* log_space(sp, "bitmap set host_id %d byte %x", i+1, c); */
 		}
 	}
+
+	extra->field1 = sp->host_event.generation;
+	extra->field2 = sp->host_event.event;
+	extra->field3 = sp->host_event.data;
 	pthread_mutex_unlock(&sp->mutex);
 }
+
+/* 
+ * Called from main thread to look through the lease data collected in
+ * the last renewal.  Records liveness history about other hosts in the
+ * lockspace, checks if another host is notifying us (through their bitmap)
+ * to look at resource requests or an event they've written.
+ */
 
 void check_other_leases(struct space *sp, char *buf)
 {
 	struct leader_record *leader;
 	struct sync_disk *disk;
 	struct host_status *hs;
+	struct sanlk_host_event he;
 	char *bitmap;
 	uint64_t now;
 	int i, new;
-	int request_finish_seconds = calc_request_finish_seconds(sp->io_timeout);
 
 	disk = &sp->host_id_disk;
 
@@ -294,10 +316,31 @@ void check_other_leases(struct space *sp, char *buf)
 		if (!test_id_bit(sp->host_id, bitmap))
 			continue;
 
-		/* this host has made a request for us, we won't take a new
-		   request from this host for another request_finish_seconds */
+		/*
+		 * Our bit is set in the bitmap, so this host is
+		 * notifying us of a host_event or resource request.
+		 */
 
-		if (now - hs->last_req < request_finish_seconds)
+		memset(&he, 0, sizeof(he));
+		he.generation = leader->write_id;
+		he.event = leader->write_generation;
+		he.data = leader->write_timestamp;
+
+		/*
+		 * Pass an event to the resource_thread which is a
+		 * convenient place to do callbacks (we don't want
+		 * the main thread to be delayed with that.)
+		 */
+		if (he.event) {
+			log_space(sp, "host event from host_id %d", i+1);
+			add_host_event(sp->space_id, &he,
+				       hs->owner_id, hs->owner_generation);
+		}
+
+		/* this host has made a resource request for us, we won't take a new
+		   request from this host for another set_bitmap_seconds */
+
+		if (now - hs->last_req < sp->set_bitmap_seconds)
 			continue;
 
 		log_space(sp, "request from host_id %d", i+1);
@@ -305,6 +348,10 @@ void check_other_leases(struct space *sp, char *buf)
 		new = 1;
 	}
 
+	/*
+	 * Have the resource_thread check the request records of resources
+	 * in this lockspace.
+	 */
 	if (new)
 		set_resource_examine(sp->space_name, NULL);
 }
@@ -385,6 +432,7 @@ static int corrupt_result(int result)
 static void *lockspace_thread(void *arg_in)
 {
 	char bitmap[HOSTID_BITMAP_SIZE];
+	struct delta_extra extra;
 	struct task task;
 	struct space *sp;
 	struct leader_record leader;
@@ -502,12 +550,13 @@ static void *lockspace_thread(void *arg_in)
 		 */
 
 		memset(bitmap, 0, sizeof(bitmap));
-		create_bitmap(sp, bitmap);
+		memset(&extra, 0, sizeof(extra));
+		create_bitmap_and_extra(sp, bitmap, &extra);
 
 		delta_begin = monotime();
 
 		delta_result = delta_lease_renew(&task, sp, &sp->host_id_disk,
-						 sp->space_name, bitmap,
+						 sp->space_name, bitmap, &extra,
 						 delta_result, &read_result,
 						 &leader, &leader);
 		delta_length = monotime() - delta_begin;
@@ -593,6 +642,7 @@ int add_lockspace_start(struct sanlk_lockspace *ls, uint32_t io_timeout, struct 
 	struct space *sp, *sp2;
 	int listnum = 0;
 	int rv;
+	int i;
 
 	if (!ls->name[0] || !ls->host_id || !ls->host_id_disk.path[0]) {
 		log_error("add_lockspace bad args id %llu name %zu path %zu",
@@ -612,7 +662,11 @@ int add_lockspace_start(struct sanlk_lockspace *ls, uint32_t io_timeout, struct 
 	sp->host_id_disk.fd = -1;
 	sp->host_id = ls->host_id;
 	sp->io_timeout = io_timeout;
+	sp->set_bitmap_seconds = calc_set_bitmap_seconds(io_timeout);
 	pthread_mutex_init(&sp->mutex, NULL);
+
+	for (i = 0; i < MAX_EVENT_FDS; i++)
+		sp->event_fds[i] = -1;
 
 	pthread_mutex_lock(&spaces_mutex);
 
@@ -1106,6 +1160,241 @@ int get_hosts(struct sanlk_lockspace *ls, char *buf, int *len, int *count, int m
 
 	*count = host_count;
 
+	return rv;
+}
+
+static int _clean_event_fds(struct space *sp)
+{
+	uint32_t end;
+	int count = 0;
+	int old_fd;
+	int i, rv;
+
+	pthread_mutex_lock(&sp->mutex);
+	for (i = 0; i < MAX_EVENT_FDS; i++) {
+		if (sp->event_fds[i] == -1)
+			continue;
+
+		old_fd = sp->event_fds[i];
+
+		rv = recv(old_fd, &end, sizeof(end), MSG_DONTWAIT);
+		if (rv == -1 && errno == EAGAIN)
+			continue;
+
+		if ((rv == sizeof(end)) && (end != 1)) {
+			log_erros(sp, "clean_event_fds ignore end value %u on event fd %d", end, old_fd);
+			continue;
+		}
+
+		if ((rv == sizeof(end)) || !rv || (rv < 0))
+			log_space(sp, "clean_event_fds unregister event fd %d recv %d", old_fd, rv);
+		else
+			log_erros(sp, "clean_event_fds close event fd %d recv %d", old_fd, rv);
+
+		close(old_fd);
+		sp->event_fds[i] = -1;
+		count++;
+	}
+	pthread_mutex_unlock(&sp->mutex);
+
+	return count;
+}
+
+/*
+ * end_event/reg_event don't need to worry about sp being freed
+ * beause the main daemon thread processes end_event/reg_event,
+ * and the main thread is also the only thread that will free
+ * sp structs.
+ */
+
+int lockspace_end_event(struct sanlk_lockspace *ls)
+{
+	struct space *sp;
+
+	if (!ls->name[0])
+		return -EINVAL;
+
+	pthread_mutex_lock(&spaces_mutex);
+	sp = _search_space(ls->name, NULL, 0, &spaces, NULL, NULL, NULL);
+	pthread_mutex_unlock(&spaces_mutex);
+	if (!sp)
+		return -ENOENT;
+
+	_clean_event_fds(sp);
+	return 0;
+}
+
+int lockspace_reg_event(struct sanlk_lockspace *ls, int fd, GNUC_UNUSED uint32_t flags)
+{
+	struct space *sp;
+	int retried = 0;
+	int cleaned = 0;
+	int new_fd = -1;
+	int i;
+
+	if (!ls->name[0])
+		return -EINVAL;
+
+	pthread_mutex_lock(&spaces_mutex);
+	sp = _search_space(ls->name, NULL, 0, &spaces, NULL, NULL, NULL);
+	if (!sp) {
+		pthread_mutex_unlock(&spaces_mutex);
+		log_error("lockspace_reg_event %s not found", ls->name);
+		return -ENOENT;
+	}
+	pthread_mutex_unlock(&spaces_mutex);
+retry:
+	pthread_mutex_lock(&sp->mutex);
+	for (i = 0; i < MAX_EVENT_FDS; i++) {
+		if (sp->event_fds[i] != -1)
+			continue;
+		/* _client_free closes the fd when the reg_event call is done,
+		   so we dup it here instead of adding a special case in
+		   _client free to keep it open. */
+		new_fd = dup(fd);
+		sp->event_fds[i] = new_fd;
+		break;
+	}
+	pthread_mutex_unlock(&sp->mutex);
+	log_space(sp, "lockspace_reg_event new_fd %d from client fd %d", new_fd, fd);
+
+	if (new_fd < 0) {
+		if (retried)
+			return -ENOCSI;
+		cleaned = _clean_event_fds(sp);
+		if (!cleaned)
+			return -ENOCSI;
+		retried = 1;
+		goto retry;
+	}
+	return 0;
+}
+
+int lockspace_set_event(struct sanlk_lockspace *ls, struct sanlk_host_event *he, uint32_t flags)
+{
+	struct space *sp;
+	struct host_status *hs;
+	uint64_t now;
+	int i, rv = 0;
+
+	if (!ls->name[0])
+		return -EINVAL;
+
+	if (!he->host_id || he->host_id > DEFAULT_MAX_HOSTS)
+		return -EINVAL;
+
+	pthread_mutex_lock(&spaces_mutex);
+	sp = _search_space(ls->name, NULL, 0, &spaces, NULL, NULL, NULL);
+	if (!sp) {
+		pthread_mutex_unlock(&spaces_mutex);
+		return -ENOENT;
+	}
+	pthread_mutex_unlock(&spaces_mutex);
+
+	if (!he->generation && (flags & SANLK_SETEV_CUR_GENERATION)) {
+		hs = &(sp->host_status[he->host_id-1]);
+		he->generation = hs->owner_generation;
+	}
+
+	now = monotime();
+
+	pthread_mutex_lock(&sp->mutex);
+
+	if (flags & SANLK_SETEV_CLEAR_EVENT) {
+		memset(&sp->host_event, 0, sizeof(struct sanlk_host_event));
+		sp->set_event_time = now;
+		goto out;
+	}
+
+	if (flags & SANLK_SETEV_CLEAR_HOSTID) {
+		sp->host_status[he->host_id-1].set_bit_time = 0;
+		goto out;
+	}
+
+	if (flags & SANLK_SETEV_REPLACE_EVENT)
+		goto set;
+
+	/* log a warning if one non-zero event clobbers another non-zero event */
+
+	if ((now - sp->set_event_time < sp->set_bitmap_seconds) &&
+	    sp->host_event.event && he->event &&
+	    (sp->host_event.event != he->event)) {
+		log_level(sp->space_id, 0, NULL, LOG_WARNING,
+			  "event %llu %llu %llu %llu replaced by %llu %llu %llu %llu t %llu",
+			  (unsigned long long)sp->host_event.host_id,
+			  (unsigned long long)sp->host_event.generation,
+			  (unsigned long long)sp->host_event.event,
+			  (unsigned long long)sp->host_event.data,
+			  (unsigned long long)he->host_id,
+			  (unsigned long long)he->generation,
+			  (unsigned long long)he->event,
+			  (unsigned long long)he->data,
+			  (unsigned long long)sp->set_event_time);
+		rv = -EBUSY;
+		goto out;
+	}
+set:
+	sp->set_event_time = now;
+	sp->host_status[he->host_id-1].set_bit_time = now;
+	memcpy(&sp->host_event, he, sizeof(struct sanlk_host_event));
+
+	if (flags & SANLK_SETEV_ALL_HOSTS) {
+		for (i = 0; i < DEFAULT_MAX_HOSTS; i++)
+			sp->host_status[i].set_bit_time = now;
+	}
+out:
+	pthread_mutex_unlock(&sp->mutex);
+	return rv;
+}
+
+int send_event_callbacks(uint32_t space_id,
+			 uint64_t from_host_id,
+			 uint64_t from_generation,
+			 struct sanlk_host_event *he)
+{
+	struct space *sp;
+	struct event_cb cb;
+	int fd, i;
+	int rv = 0;
+
+	memset(&cb, 0, sizeof(cb));
+	cb.h.magic = SM_MAGIC;
+	cb.h.version = SM_CB_PROTO;
+	cb.h.cmd = SM_CB_GET_EVENT;
+	cb.h.length = sizeof(cb);
+
+	memcpy(&cb.he, he, sizeof(struct sanlk_host_event));
+
+	cb.from_host_id = from_host_id;
+	cb.from_generation = from_generation;
+
+	pthread_mutex_lock(&spaces_mutex);
+	sp = find_lockspace_id(space_id);
+	if (!sp) {
+		pthread_mutex_unlock(&spaces_mutex);
+		rv = -ENOSPC;
+		goto ret;
+	}
+	pthread_mutex_unlock(&spaces_mutex);
+
+	pthread_mutex_lock(&sp->mutex);
+
+	for (i = 0; i < MAX_EVENT_FDS; i++) {
+		if (sp->event_fds[i] == -1)
+			continue;
+
+		fd = sp->event_fds[i];
+
+		rv = send(fd, &cb, sizeof(cb), MSG_NOSIGNAL | MSG_DONTWAIT);
+		if (rv < 0) {
+			log_erros(sp, "send_event_callbacks error %d %d close fd %d", rv, errno, fd);
+			close(fd);
+			sp->event_fds[i] = -1;
+		}
+		log_space(sp, "sent event to fd %d", fd);
+	}
+	pthread_mutex_unlock(&sp->mutex);
+ret:
 	return rv;
 }
 

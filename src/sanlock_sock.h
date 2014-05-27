@@ -16,6 +16,8 @@
 #define SM_MAGIC 0x04282010
 #define SM_PROTO 0x00000001
 
+#define SM_CB_PROTO 0x00000001
+
 #define MAX_CLIENT_MSG (1024 * 1024) /* TODO: this is random */
 
 enum {
@@ -48,7 +50,12 @@ enum {
 	SM_CMD_CONVERT		 = 27,
 	SM_CMD_VERSION		 = 28,
 	SM_CMD_SHUTDOWN_WAIT     = 29,
+	SM_CMD_REG_EVENT         = 30,
+	SM_CMD_END_EVENT         = 31,
+	SM_CMD_SET_EVENT         = 32,
 };
+
+#define SM_CB_GET_EVENT 1
 
 struct sm_header {
 	uint32_t magic;
@@ -80,5 +87,12 @@ struct sanlk_state {
 };
 
 int sanlock_socket_address(struct sockaddr_un *addr);
+
+struct event_cb {
+	struct sm_header h;
+	struct sanlk_host_event he;
+	uint64_t from_host_id;
+	uint64_t from_generation;
+};
 
 #endif

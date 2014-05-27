@@ -278,4 +278,84 @@ int sanlock_test_resource_owners(struct sanlk_resource *res, uint32_t flags,
 
 int sanlock_version(uint32_t flags, uint32_t *version, uint32_t *proto);
 
+/*
+ * Lockspace host events
+ *
+ * reg: register with the sanlock daemon, returns a fd to use in poll(2).
+ * end: unregister and close our fd in the sanlock daemon.
+ * set: set/write an event for another host, in the next ls lease renewal.
+ * get: get/read an event from another host from the registered fd.
+ *
+ * reg_event
+ * . he arg is unused, can be NULL
+ * . returns -ENOCSI if no more event fds for the ls are available
+ *   (MAX_EVENT_FDS 32)
+ *
+ * set_event
+ * . CUR_GENERATION with zero generation in he means that sanlock
+ *   will fill in the he generation with the current generation.
+ * . CLEAR_HOSTID will cause sanlock to clear the host_id in its
+ *   bitmap in the next renewal, even if the default time for clearing
+ *   it has not been reached.  generation/event/data are ignored.
+ * . CLEAR_EVENT will cause sanlock to zero the generation/event/data values
+ *   in the next renewal.  host_id is ignored.
+ * . REPLACE_EVENT will cause sanlock to replace the existing event/data
+ *   values when they would otherwise be rejected with -EBUSY due to a
+ *   previous set_event.
+ * . ALL_HOSTS causes the bits for all host_ids to be set.
+ *
+ * Multiple set_event calls
+ * . set_event replaces the last event/data values
+ * . set_event replaces the last generation value
+ * . set_event adds the host_id to the notification bitmap,
+ *   leaving any host_id bits that are already set.
+ *
+ * This allows the same event/data values to be passed to multiple
+ * host_ids at once, but without using host_id generations;
+ * generation should be set to 0 in the set_event calls.
+ *
+ * To send the same event/data values (A,B) to hosts 1,2,3:
+ * T=10 set_event(1, A, B);
+ * T=10 set_event(2, A, B);
+ * T=10 set_event(3, A, B);
+ *
+ * The A,B values from each call replace those from the previous call,
+ * but with no effect because they are the same.  Bits for 1,2,3 will
+ * all be set in the notification bitmap.
+ *
+ * To send different event/data values to different hosts, wait for
+ * set_bitmap_seconds between the two set_event calls:
+ * T=10 set_event(1, A, B);
+ * T=70 set_event(2, C, D);
+ *
+ * The bit for 1 will be cleared from the bitmap by the time that the
+ * bit for 2 is set.  C,D replace A,B, but host 1 will have seen A,B
+ * already, or won't be looking for it any longer.
+ *
+ * Sequential set_events with different event/data values, within a short
+ * time span is likely to produce unwanted results, because the new
+ * event/data values replace the previous values before the previous values
+ * have been read:
+ * T=10 set_event(1, A, B);
+ * T=11 set_event(2, C, D);
+ *
+ * In this case, A,B are replaced by C,D, and both hosts 1 and 2 will be
+ * notified of an event.  host 1 will see values C,D, and will not get A,B.
+ *
+ * Unless the REPLACE_EVENT flag is used, sanlock will return -EBUSY from
+ * set_event in this case.
+ */
+
+#define SANLK_SETEV_CUR_GENERATION 0x00000001
+#define SANLK_SETEV_CLEAR_HOSTID   0x00000002
+#define SANLK_SETEV_CLEAR_EVENT    0x00000004
+#define SANLK_SETEV_REPLACE_EVENT  0x00000008
+#define SANLK_SETEV_ALL_HOSTS      0x00000010
+
+int sanlock_reg_event(const char *ls_name, struct sanlk_host_event *he, uint32_t flags);
+int sanlock_end_event(int fd, const char *ls_name, uint32_t flags);
+int sanlock_set_event(const char *ls_name, struct sanlk_host_event *he, uint32_t flags);
+int sanlock_get_event(int fd, uint32_t flags, struct sanlk_host_event *he,
+		      uint64_t *from_host_id, uint64_t *from_generation);
+
 #endif

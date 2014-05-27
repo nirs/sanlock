@@ -49,6 +49,7 @@ static struct list_head resources_add;
 static struct list_head resources_rem;
 static pthread_mutex_t resource_mutex;
 static pthread_cond_t resource_cond;
+static struct list_head host_events;
 
 
 static void free_resource(struct resource *r)
@@ -1864,11 +1865,51 @@ static void resource_thread_examine(struct task *task, struct token *tt, int pid
 	}
 }
 
+struct recv_he {
+	struct list_head list;
+	uint32_t space_id;
+	uint64_t from_host_id;
+	uint64_t from_generation;
+	struct sanlk_host_event he;
+};
+
+void add_host_event(uint32_t space_id, struct sanlk_host_event *he,
+		    uint64_t from_host_id, uint64_t from_generation)
+{
+	struct recv_he *rhe;
+
+	rhe = malloc(sizeof(struct recv_he));
+	if (!rhe) {
+		log_error("add_host_event no mem");
+		return;
+	}
+
+	memset(rhe, 0, sizeof(struct recv_he));
+	memcpy(&rhe->he, he, sizeof(struct sanlk_host_event));
+	rhe->space_id = space_id;
+	rhe->from_host_id = from_host_id;
+	rhe->from_generation = from_generation;
+
+	pthread_mutex_lock(&resource_mutex);
+	list_add_tail(&rhe->list, &host_events);
+	resource_thread_work = 1;
+	pthread_cond_signal(&resource_cond);
+	pthread_mutex_unlock(&resource_mutex);
+}
+
+static struct recv_he *find_host_event(void)
+{
+	if (list_empty(&host_events))
+		return NULL;
+	return list_first_entry(&host_events, struct recv_he, list);
+}
+
 static void *resource_thread(void *arg GNUC_UNUSED)
 {
 	struct task task;
 	struct resource *r;
 	struct token *tt = NULL;
+	struct recv_he *rhe;
 	uint64_t lver;
 	int pid, tt_len;
 
@@ -1894,6 +1935,15 @@ static void *resource_thread(void *arg GNUC_UNUSED)
 				goto out;
 			}
 			pthread_cond_wait(&resource_cond, &resource_mutex);
+		}
+
+		rhe = find_host_event();
+		if (rhe) {
+			list_del(&rhe->list);
+			pthread_mutex_unlock(&resource_mutex);
+			send_event_callbacks(rhe->space_id, rhe->from_host_id, rhe->from_generation, &rhe->he);
+			free(rhe);
+			continue;
 		}
 
 		/* FIXME: it's not nice how we copy a bunch of stuff
@@ -1994,6 +2044,7 @@ int setup_token_manager(void)
 	INIT_LIST_HEAD(&resources_add);
 	INIT_LIST_HEAD(&resources_rem);
 	INIT_LIST_HEAD(&resources_held);
+	INIT_LIST_HEAD(&host_events);
 
 	rv = pthread_create(&resource_pt, NULL, resource_thread, NULL);
 	if (rv)

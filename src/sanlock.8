@@ -201,6 +201,8 @@ COMMAND can be one of three primary top level choices
 .br
 .BR "sanlock direct" " access storage directly (no coordination with daemon)"
 
+.SS Daemon Command
+
 .BR "sanlock daemon" " [options]"
 
 .BR -D "    "
@@ -239,8 +241,11 @@ use high priority (RR) scheduling
 .BR -l " num"
 use mlockall (0 none, 1 current, 2 current and future)
 
-.BR \-a " 0|1"
-use async i/o
+./" non-aio is untested and may not work
+./" .BR \-a " 0|1"
+./" use async i/o
+
+.SS Client Command
 
 .B "sanlock client"
 .I action
@@ -375,12 +380,28 @@ out the action specified by the requested force_mode.
 Examine requests for all resource leases currently held in the named
 lockspace.  Only lockspace_name is used from the LOCKSPACE argument.
 
+.BR "sanlock client set_event -s" " LOCKSPACE " \
+\fB-i\fP " " \fIhost_id\fP " " \
+\fB-g\fP " " \fIgen\fP " " \
+\fB-e\fP " " \fInum\fP " " \
+\fB-d\fP " " \fInum\fP
+
+Set an event for another host.  When the sanlock daemon next renews
+its delta lease for the lockspace it will: set the bit for the host_id
+in its bitmap, and set the generation, event and data values in its own
+delta lease.  An application that has registered for events from this
+lockspace on the destination host will get the event that has been set
+when the destination sees the event during its next delta lease renewal.
+
+.SS Direct Command
+
 .B "sanlock direct"
 .I action
 [options]
 
-.BR \-a " 0|1"
-use async i/o
+./" non-aio is untested and may not work
+./" .BR \-a " 0|1"
+./" use async i/o
 
 .BI -o " sec"
 io timeout in seconds
@@ -517,7 +538,7 @@ that corresponds to the host_id of B.  When B next renews its delta lease,
 it reads the delta leases for all hosts and checks each bitmap to see if
 its own host_id has been set.  It finds the bit for its own host_id set in
 A's bitmap, and examines its resource request records.  (The bit remains
-set in A's bitmap for request_finish_seconds.)
+set in A's bitmap for set_bitmap_seconds.)
 
 \fIforce_mode\fP determines the action the resource lease owner should
 take:

@@ -76,6 +76,7 @@ CFLAGS += -D_GNU_SOURCE \
 	-Winline \
 	-Wredundant-decls \
 	-Wno-sign-compare \
+	-Wno-strict-overflow \
 	-fexceptions \
 	-fasynchronous-unwind-tables \
 	-fdiagnostics-show-option \

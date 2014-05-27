@@ -48,8 +48,10 @@ int calc_id_renewal_warn_seconds(int io_timeout)
 	return 6 * io_timeout;
 }
 
-int calc_request_finish_seconds(int io_timeout)
+int calc_set_bitmap_seconds(int io_timeout)
 {
+	if (com.set_bitmap_seconds)
+		return com.set_bitmap_seconds;
 	/* 3 * id_renewal_seconds, somewhat random choice */
 	return 6 * io_timeout;
 }

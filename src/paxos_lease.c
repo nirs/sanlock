@@ -1336,6 +1336,8 @@ int paxos_lease_acquire(struct task *task,
 	int error, rv, us;
 	int other_io_timeout, other_host_dead_seconds;
 
+	memset(&dblock, 0, sizeof(dblock)); /* shut up compiler */
+
 	log_token(token, "paxos_acquire begin %x %llu %d",
 		  flags, (unsigned long long)acquire_lver, new_num_hosts);
 

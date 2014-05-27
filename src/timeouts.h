@@ -452,7 +452,7 @@ int calc_host_dead_seconds(int io_timeout);
 int calc_id_renewal_seconds(int io_timeout);
 int calc_id_renewal_fail_seconds(int io_timeout);
 int calc_id_renewal_warn_seconds(int io_timeout);
-int calc_request_finish_seconds(int io_timeout);
+int calc_set_bitmap_seconds(int io_timeout);
 void log_timeouts(int io_timeout_arg);
 
 #endif

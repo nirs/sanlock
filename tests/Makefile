@@ -4,6 +4,7 @@ TARGET3 = sanlk_client
 TARGET4 = killpath
 TARGET5 = sanlk_path
 TARGET6 = sanlk_testr
+TARGET7 = sanlk_events
 
 SOURCE1 = devcount.c
 SOURCE2 = sanlk_load.c
@@ -11,6 +12,7 @@ SOURCE3 = sanlk_client.c
 SOURCE4 = killpath.c
 SOURCE5 = sanlk_path.c
 SOURCE6 = sanlk_testr.c
+SOURCE7 = sanlk_events.c
 
 CFLAGS += -D_GNU_SOURCE -g \
 	-Wall \
@@ -34,7 +36,7 @@ CFLAGS += -D_GNU_SOURCE -g \
 
 LDFLAGS = -lrt -laio -lblkid -lsanlock
 
-all: $(TARGET1) $(TARGET2) $(TARGET3) $(TARGET4) $(TARGET5) $(TARGET6)
+all: $(TARGET1) $(TARGET2) $(TARGET3) $(TARGET4) $(TARGET5) $(TARGET6) $(TARGET7)
 
 $(TARGET1): $(SOURCE1)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< -o $@ -L. -I../src -L../src
@@ -54,6 +56,9 @@ $(TARGET5): $(SOURCE5)
 $(TARGET6): $(SOURCE6)
 	$(CC) $(CFLAGS) $(LDFLAGS) $< -o $@ -L. -I../src -L../src
 
+$(TARGET7): $(SOURCE7)
+	$(CC) $(CFLAGS) $(LDFLAGS) $< -o $@ -L. -I../src -L../src
+
 clean:
-	rm -f *.o *.so *.so.* $(TARGET) $(TARGET2) $(TARGET3) $(TARGET4) $(TARGET5) $(TARGET6)
+	rm -f *.o *.so *.so.* $(TARGET) $(TARGET2) $(TARGET3) $(TARGET4) $(TARGET5) $(TARGET6) $(TARGET7)
 

@@ -1294,12 +1294,14 @@ static void cmd_inq_lockspace(struct cmd_args *ca)
 		goto reply;
 	}
 
+	/*
 	log_debug("cmd_inq_lockspace %d,%d %.48s:%llu:%s:%llu flags %x",
 		  ca->ci_in, fd, lockspace.name,
 		  (unsigned long long)lockspace.host_id,
 		  lockspace.host_id_disk.path,
 		  (unsigned long long)lockspace.host_id_disk.offset,
 		  ca->header.cmd_flags);
+	*/
 
 	while (1) {
 		result = inq_lockspace(&lockspace);
@@ -1310,7 +1312,7 @@ static void cmd_inq_lockspace(struct cmd_args *ca)
 	}
 
  reply:
-	log_debug("cmd_inq_lockspace %d,%d done %d", ca->ci_in, fd, result);
+	/* log_debug("cmd_inq_lockspace %d,%d done %d", ca->ci_in, fd, result); */
 
 	send_result(fd, &ca->header, result);
 	client_resume(ca->ci_in);
@@ -1915,6 +1917,36 @@ static void cmd_killpath(struct task *task, struct cmd_args *ca)
 	client_resume(ca->ci_in);
 }
 
+static void cmd_set_event(struct task *task GNUC_UNUSED, struct cmd_args *ca)
+{
+	struct sanlk_lockspace lockspace;
+	struct sanlk_host_event he;
+	int rv, fd, result;
+
+	fd = client[ca->ci_in].fd;
+
+	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+	if (rv != sizeof(struct sanlk_lockspace)) {
+	        result = -ENOTCONN;
+	        goto reply;
+	}
+
+	rv = recv(fd, &he, sizeof(struct sanlk_host_event), MSG_WAITALL);
+	if (rv != sizeof(struct sanlk_host_event)) {
+	        result = -ENOTCONN;
+	        goto reply;
+	}
+
+	log_debug("set_lockspace_event %s", lockspace.name);
+
+	result = lockspace_set_event(&lockspace, &he, ca->header.cmd_flags);
+
+	log_debug("cmd_set_event result %d", result);
+reply:
+	send_result(fd, &ca->header, result);
+	client_resume(ca->ci_in);
+}
+
 void call_cmd_thread(struct task *task, struct cmd_args *ca)
 {
 	switch (ca->header.cmd) {
@@ -1978,6 +2010,9 @@ void call_cmd_thread(struct task *task, struct cmd_args *ca)
 		break;
 	case SM_CMD_SHUTDOWN_WAIT:
 		cmd_shutdown_wait(task, ca);
+		break;
+	case SM_CMD_SET_EVENT:
+		cmd_set_event(task, ca);
 		break;
 	};
 }
@@ -2467,6 +2502,62 @@ static void cmd_version(int ci GNUC_UNUSED, int fd, struct sm_header *h_recv)
 	send(fd, h_recv, sizeof(struct sm_header), MSG_NOSIGNAL);
 }
 
+static void cmd_reg_event(int fd, struct sm_header *h_recv)
+{
+	struct sm_header h;
+	struct sanlk_lockspace lockspace;
+	struct sanlk_host_event he;
+	int rv;
+
+	memcpy(&h, h_recv, sizeof(struct sm_header));
+	h.version = SM_PROTO;
+	h.length = sizeof(struct sm_header);
+
+	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+	if (rv != sizeof(struct sanlk_lockspace)) {
+		h.data = -ENOTCONN;
+		goto out;
+	}
+
+	/* currently unused */
+	rv = recv(fd, &he, sizeof(he), MSG_WAITALL);
+	if (rv != sizeof(he)) {
+		h.data = -ENOTCONN;
+		goto out;
+	}
+
+	rv = lockspace_reg_event(&lockspace, fd, h_recv->cmd_flags);
+
+	h.data = rv;
+out:
+	log_debug("cmd_reg_event fd %d rv %d", fd, rv);
+	send(fd, &h, sizeof(struct sm_header), MSG_NOSIGNAL);
+}
+
+static void cmd_end_event(int fd, struct sm_header *h_recv)
+{
+	struct sm_header h;
+	struct sanlk_lockspace lockspace;
+	int rv;
+
+	memcpy(&h, h_recv, sizeof(struct sm_header));
+	h.version = SM_PROTO;
+	h.length = sizeof(struct sm_header);
+
+	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+	if (rv != sizeof(struct sanlk_lockspace)) {
+		h.data = -ENOTCONN;
+		goto out;
+	}
+
+	rv = lockspace_end_event(&lockspace);
+
+	h.data = rv;
+out:
+	log_debug("cmd_end_event fd %d rv %d", fd, rv);
+	send(fd, &h, sizeof(struct sm_header), MSG_NOSIGNAL);
+}
+
 static int get_peer_pid(int fd, int *pid)
 {
 	struct ucred cred;
@@ -2554,6 +2645,14 @@ void call_cmd_daemon(int ci, struct sm_header *h_recv, int client_maxi)
 	case SM_CMD_GET_HOSTS:
 		strcpy(client[ci].owner_name, "get_hosts");
 		cmd_get_hosts(fd, h_recv);
+		break;
+	case SM_CMD_REG_EVENT:
+		strcpy(client[ci].owner_name, "reg_event");
+		cmd_reg_event(fd, h_recv);
+		break;
+	case SM_CMD_END_EVENT:
+		strcpy(client[ci].owner_name, "end_event");
+		cmd_end_event(fd, h_recv);
 		break;
 	};
 

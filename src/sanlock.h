@@ -101,6 +101,13 @@ struct sanlk_host {
 	uint32_t flags;
 };
 
+struct sanlk_host_event {
+	uint64_t host_id;
+	uint64_t generation;
+	uint64_t event;
+	uint64_t data;
+};
+
 size_t sanlock_path_export(char *dst, const char *src, size_t dstlen);
 size_t sanlock_path_import(char *dst, const char *src, size_t dstlen);
 

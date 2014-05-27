@@ -36,6 +36,9 @@ int read_resource_owners(struct task *task, struct token *token,
 
 void free_resources(void);
 
+void add_host_event(uint32_t space_id, struct sanlk_host_event *he,
+		    uint64_t from_host_id, uint64_t from_generation);
+
 int setup_token_manager(void);
 void close_token_manager(void);
 

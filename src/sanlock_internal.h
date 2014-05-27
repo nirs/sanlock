@@ -61,6 +61,12 @@ struct sync_disk {
 	int fd;			/* sanlk_disk pad2 */
 };
 
+struct delta_extra {
+	uint64_t field1;
+	uint64_t field2;
+	uint64_t field3;
+};
+
 /*
  * There are two different wrappers around a sanlk_resource:
  * 'struct token' keeps track of resources per-client, client.tokens[]
@@ -150,6 +156,9 @@ struct host_status {
 	uint16_t io_timeout;
 };
 
+/* The max number of connections that can get events for a lockspace. */
+#define MAX_EVENT_FDS 32
+
 struct space {
 	struct list_head list;
 	char space_name[NAME_ID_SIZE];
@@ -158,6 +167,7 @@ struct space {
 	uint64_t host_generation;
 	struct sync_disk host_id_disk;
 	uint32_t io_timeout;
+	uint32_t set_bitmap_seconds;
 	int align_size;
 	int renew_fail;
 	int space_dead;
@@ -165,6 +175,9 @@ struct space {
 	int external_remove;
 	int thread_stop;
 	int wd_fd;
+	int event_fds[MAX_EVENT_FDS];
+	struct sanlk_host_event host_event;
+	uint64_t set_event_time;
 	pthread_t thread;
 	pthread_mutex_t mutex; /* protects lease_status, thread_stop  */
 	struct lease_status lease_status;
@@ -273,14 +286,17 @@ struct command_line {
 	int max_worker_threads;
 	int aio_arg;
 	int io_timeout_arg;
+	int set_bitmap_seconds;
 	char *uname;			/* -U */
 	int uid;				/* -U */
 	char *gname;			/* -G */
 	int gid;				/* -G */
 	int pid;				/* -p */
 	char sort_arg;
-	uint64_t local_host_id;			/* -i */
-	uint64_t local_host_generation;		/* -g */
+	uint64_t host_id;			/* -i */
+	uint64_t host_generation;		/* -g */
+	uint64_t he_event;			/* -e */
+	uint64_t he_data;			/* -d */
 	int num_hosts;				/* -n */
 	int max_hosts;				/* -m */
 	int res_count;
@@ -327,6 +343,7 @@ enum {
 	ACT_EXAMINE,
 	ACT_GETS,
 	ACT_VERSION,
+	ACT_SET_EVENT,
 };
 
 EXTERN int external_shutdown;

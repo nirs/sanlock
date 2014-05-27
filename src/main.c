@@ -1180,6 +1180,8 @@ static void process_connection(int ci)
 	case SM_CMD_LOG_DUMP:
 	case SM_CMD_GET_LOCKSPACES:
 	case SM_CMD_GET_HOSTS:
+	case SM_CMD_REG_EVENT:
+	case SM_CMD_END_EVENT:
 		call_cmd_daemon(ci, &h, client_maxi);
 		break;
 	case SM_CMD_ADD_LOCKSPACE:
@@ -1197,6 +1199,7 @@ static void process_connection(int ci)
 	case SM_CMD_SET_LVB:
 	case SM_CMD_GET_LVB:
 	case SM_CMD_SHUTDOWN_WAIT:
+	case SM_CMD_SET_EVENT:
 		rv = client_suspend(ci);
 		if (rv < 0)
 			return;
@@ -1816,6 +1819,7 @@ static void print_usage(void)
 	printf("sanlock client status [-D] [-o p|s]\n");
 	printf("sanlock client gets [-h 0|1]\n");
 	printf("sanlock client host_status -s LOCKSPACE [-D]\n");
+	printf("sanlock client set_event -s LOCKSPACE -i <host_id> [-g gen] -e <event> -d <data>\n");
 	printf("sanlock client log_dump\n");
 	printf("sanlock client shutdown [-f 0|1] [-w 0|1]\n");
 	printf("sanlock client init -s LOCKSPACE | -r RESOURCE\n");
@@ -1958,6 +1962,8 @@ static int read_command_line(int argc, char *argv[])
 			com.action = ACT_CLIENT_READ;
 		else if (!strcmp(act, "version"))
 			com.action = ACT_VERSION;
+		else if (!strcmp(act, "set_event"))
+			com.action = ACT_SET_EVENT;
 		else {
 			log_tool("client action \"%s\" is unknown", act);
 			exit(EXIT_FAILURE);
@@ -2070,6 +2076,9 @@ static int read_command_line(int argc, char *argv[])
 					com.io_timeout_arg = DEFAULT_IO_TIMEOUT;
 			}
 			break;
+		case 'b':
+			com.set_bitmap_seconds = atoi(optionarg);
+			break;
 		case 'n':
 			com.num_hosts = atoi(optionarg);
 			break;
@@ -2079,11 +2088,15 @@ static int read_command_line(int argc, char *argv[])
 		case 'p':
 			com.pid = atoi(optionarg);
 			break;
+		case 'd':
+			com.he_data = strtoull(optionarg, NULL, 0);
+			break;
 		case 'e':
 			strncpy(com.our_host_name, optionarg, NAME_ID_SIZE);
+			com.he_event = strtoull(optionarg, NULL, 0);
 			break;
 		case 'i':
-			com.local_host_id = atoll(optionarg);
+			com.host_id = strtoull(optionarg, NULL, 0);
 			break;
 		case 'g':
 			if (com.type == COM_DAEMON) {
@@ -2091,7 +2104,7 @@ static int read_command_line(int argc, char *argv[])
 				if (sec <= 60 && sec >= 0)
 					kill_grace_seconds = sec;
 			} else {
-				com.local_host_generation = atoll(optionarg);
+				com.host_generation = strtoull(optionarg, NULL, 0);
 			}
 			break;
 		case 'f':
@@ -2369,6 +2382,7 @@ static void do_client_version(void)
 
 static int do_client(void)
 {
+	struct sanlk_host_event he;
 	struct sanlk_resource **res_args = NULL;
 	struct sanlk_resource *res;
 	char *res_state = NULL;
@@ -2555,6 +2569,20 @@ static int do_client(void)
 		do_client_version();
 		break;
 
+	case ACT_SET_EVENT:
+		log_tool("set_event %llu %llu event 0x%llx data 0x%llx",
+			 (unsigned long long)com.host_id,
+			 (unsigned long long)com.host_generation,
+			 (unsigned long long)com.he_event,
+			 (unsigned long long)com.he_data);
+		he.host_id = com.host_id;
+		he.generation = com.host_generation;
+		he.event = com.he_event;
+		he.data = com.he_data;
+		rv = sanlock_set_event(com.lockspace.name, &he, 0);
+                log_tool("set_event done %d", rv);
+                break;
+
 	default:
 		log_tool("action not implemented");
 		rv = -1;
@@ -2626,7 +2654,7 @@ static int do_direct(void)
 	case ACT_ACQUIRE:
 		rv = direct_acquire(&main_task, com.io_timeout_arg,
 				    com.res_args[0], com.num_hosts,
-				    com.local_host_id, com.local_host_generation,
+				    com.host_id, com.host_generation,
 				    &leader);
 		log_tool("acquire done %d", rv);
 		break;

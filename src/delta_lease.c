@@ -410,6 +410,7 @@ int delta_lease_renew(struct task *task,
 		      struct sync_disk *disk,
 		      char *space_name,
 		      char *bitmap,
+		      struct delta_extra *extra,
 		      int prev_result,
 		      int *read_result,
 		      struct leader_record *leader_last,
@@ -566,6 +567,13 @@ int delta_lease_renew(struct task *task,
 
 	leader.timestamp = new_ts;
 	leader.checksum = leader_checksum(&leader);
+
+	/* TODO: rename the leader fields */
+	if (extra) {
+		leader.write_id = extra->field1;
+		leader.write_generation = extra->field2;
+		leader.write_timestamp = extra->field3;
+	}
 
 	p_wbuf = &wbuf;
 	rv = posix_memalign((void *)p_wbuf, getpagesize(), sector_size);
