@@ -1078,7 +1078,7 @@ int get_hosts(struct sanlk_lockspace *ls, char *buf, int *len, int *count, int m
 	for (i = 0; i < DEFAULT_MAX_HOSTS; i++) {
 		hs = &sp->host_status[i];
 
-		if (ls->host_id && ls->host_id != i)
+		if (ls->host_id && (ls->host_id != (i + 1)))
 			continue;
 
 		if (!ls->host_id && !hs->timestamp)
