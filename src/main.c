@@ -686,6 +686,11 @@ static int all_pids_dead(struct space *sp)
 	if (stuck || check)
 		return 0;
 
+	if (sp->external_used) {
+		log_erros(sp, "external_used keeping lockspace running");
+		return 0;
+	}
+
 	if (sp->renew_fail)
 		log_erros(sp, "all pids clear");
 	else
@@ -1182,6 +1187,7 @@ static void process_connection(int ci)
 	case SM_CMD_GET_HOSTS:
 	case SM_CMD_REG_EVENT:
 	case SM_CMD_END_EVENT:
+	case SM_CMD_SET_CONFIG:
 		call_cmd_daemon(ci, &h, client_maxi);
 		break;
 	case SM_CMD_ADD_LOCKSPACE:

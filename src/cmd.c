@@ -2558,6 +2558,30 @@ out:
 	send(fd, &h, sizeof(struct sm_header), MSG_NOSIGNAL);
 }
 
+static void cmd_set_config(int fd, struct sm_header *h_recv)
+{
+	struct sm_header h;
+	struct sanlk_lockspace lockspace;
+	int rv;
+
+	memcpy(&h, h_recv, sizeof(struct sm_header));
+	h.version = SM_PROTO;
+	h.length = sizeof(struct sm_header);
+
+	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+	if (rv != sizeof(struct sanlk_lockspace)) {
+		h.data = -ENOTCONN;
+		goto out;
+	}
+
+	rv = lockspace_set_config(&lockspace, h_recv->cmd_flags, h_recv->data);
+
+	h.data = rv;
+out:
+	log_debug("cmd_set_config fd %d rv %d", fd, rv);
+	send(fd, &h, sizeof(struct sm_header), MSG_NOSIGNAL);
+}
+
 static int get_peer_pid(int fd, int *pid)
 {
 	struct ucred cred;
@@ -2653,6 +2677,10 @@ void call_cmd_daemon(int ci, struct sm_header *h_recv, int client_maxi)
 	case SM_CMD_END_EVENT:
 		strcpy(client[ci].owner_name, "end_event");
 		cmd_end_event(fd, h_recv);
+		break;
+	case SM_CMD_SET_CONFIG:
+		strcpy(client[ci].owner_name, "set_config");
+		cmd_set_config(fd, h_recv);
 		break;
 	};
 

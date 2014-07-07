@@ -127,6 +127,24 @@ int sanlock_get_hosts(const char *ls_name, uint64_t host_id,
 		      uint32_t flags);
 
 /*
+ * set_config cmd values
+ *
+ * USED: the lockspace is being used by an external entity.
+ * This has the same effect on lockspace recovery as resources
+ * that are not released by a pid that cannot be killed.
+ * If the lockspace fails (the delta lease cannot be renewed),
+ * the lockspace will not exit while this flag is set, which
+ * will lead to the watchdog firing.
+ *
+ * UNUSED: clears the USED flag in the lockspace.
+ */
+
+#define SANLK_CONFIG_USED	0x00000001
+#define SANLK_CONFIG_UNUSED	0x00000002
+
+int sanlock_set_config(const char *ls_name, uint32_t flags, uint32_t cmd, void *data);
+
+/*
  * Returns the alignment in bytes required by sanlock_init()
  * (1MB for disks with 512 sectors, 8MB for disks with 4096 sectors)
  */

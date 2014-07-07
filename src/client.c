@@ -323,6 +323,53 @@ int sanlock_get_hosts(const char *ls_name, uint64_t host_id,
 	return rv;
 }
 
+int sanlock_set_config(const char *ls_name, uint32_t flags, uint32_t cmd, GNUC_UNUSED void *data)
+{
+	struct sanlk_lockspace ls;
+	struct sm_header h;
+	int rv, fd;
+
+	if (!ls_name)
+		return -EINVAL;
+
+	memset(&ls, 0, sizeof(struct sanlk_lockspace));
+	strncpy(ls.name, ls_name, SANLK_NAME_LEN);
+
+	rv = connect_socket(&fd);
+	if (rv < 0)
+		return rv;
+
+	rv = send_header(fd, SM_CMD_SET_CONFIG, flags,
+			 sizeof(struct sanlk_lockspace),
+			 cmd, 0);
+	if (rv < 0)
+		goto out;
+
+	rv = send(fd, &ls, sizeof(ls), 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	memset(&h, 0, sizeof(h));
+
+	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	if (rv != sizeof(h)) {
+		rv = -1;
+		goto out;
+	}
+
+	rv = (int)h.data;
+ out:
+	close(fd);
+	return rv;
+}
+
 int sanlock_align(struct sanlk_disk *disk)
 {
 	int rv, fd;

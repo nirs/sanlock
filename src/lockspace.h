@@ -31,5 +31,6 @@ int lockspace_set_event(struct sanlk_lockspace *ls, struct sanlk_host_event *he,
 int lockspace_reg_event(struct sanlk_lockspace *ls, int fd, uint32_t flags);
 int lockspace_end_event(struct sanlk_lockspace *ls);
 int send_event_callbacks(uint32_t space_id, uint64_t from_host_id, uint64_t from_generation, struct sanlk_host_event *he);
+int lockspace_set_config(struct sanlk_lockspace *ls, uint32_t flags, uint32_t cmd);
 
 #endif

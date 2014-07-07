@@ -173,6 +173,7 @@ struct space {
 	int space_dead;
 	int killing_pids;
 	int external_remove;
+	int external_used;
 	int thread_stop;
 	int wd_fd;
 	int event_fds[MAX_EVENT_FDS];

@@ -1163,6 +1163,40 @@ int get_hosts(struct sanlk_lockspace *ls, char *buf, int *len, int *count, int m
 	return rv;
 }
 
+int lockspace_set_config(struct sanlk_lockspace *ls, GNUC_UNUSED uint32_t flags, uint32_t cmd)
+{
+	struct space *sp;
+	int rv;
+
+	pthread_mutex_lock(&spaces_mutex);
+	sp = _search_space(ls->name, NULL, 0, &spaces, NULL, NULL, NULL);
+	if (!sp) {
+		pthread_mutex_unlock(&spaces_mutex);
+		rv = -ENOENT;
+		goto out;
+	}
+	pthread_mutex_unlock(&spaces_mutex);
+
+	pthread_mutex_lock(&sp->mutex);
+
+	if (cmd == SANLK_CONFIG_USED) {
+		if (sp->space_dead) {
+			rv = -ENOSPC;
+		} else {
+			sp->external_used = 1;
+			rv = 0;
+		}
+	} else if (cmd == SANLK_CONFIG_UNUSED) {
+		sp->external_used = 0;
+		rv = 0;
+	} else {
+		rv = -EINVAL;
+	}
+	pthread_mutex_unlock(&sp->mutex);
+ out:
+	return rv;
+}
+
 static int _clean_event_fds(struct space *sp)
 {
 	uint32_t end;
