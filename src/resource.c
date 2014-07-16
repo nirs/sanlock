@@ -25,13 +25,13 @@
 
 #include "sanlock_internal.h"
 #include "diskio.h"
+#include "ondisk.h"
 #include "log.h"
 #include "paxos_lease.h"
 #include "lockspace.h"
 #include "resource.h"
 #include "task.h"
 #include "timeouts.h"
-#include "mode_block.h"
 #include "helper.h"
 
 /* from cmd.c */
@@ -88,11 +88,13 @@ int read_resource_owners(struct task *task, struct token *token,
 			 char **send_buf, int *send_len, int *count)
 {
 	struct leader_record leader;
+	struct leader_record leader_end;
+	struct mode_block mb;
 	struct sync_disk *disk;
 	struct sanlk_host *host;
-	struct mode_block *mb;
+	struct mode_block *mb_end;
 	uint64_t host_id;
-	char *dblock;
+	char *lease_buf_dblock;
 	char *lease_buf = NULL;
 	char *hosts_buf = NULL;
 	int host_count = 0;
@@ -111,7 +113,9 @@ int read_resource_owners(struct task *task, struct token *token,
 		return rv;
 	}
 
-	memcpy(&leader, lease_buf, sizeof(struct leader_record));
+	memcpy(&leader_end, lease_buf, sizeof(struct leader_record));
+
+	leader_record_in(&leader_end, &leader);
 
 	rv = paxos_verify_leader(token, disk, &leader, "read_resource_owners");
 	if (rv < 0)
@@ -123,11 +127,14 @@ int read_resource_owners(struct task *task, struct token *token,
 		host_count++;
 
 	for (i = 0; i < leader.num_hosts; i++) {
-		dblock = lease_buf + ((2 + i) * disk->sector_size);
-		mb = (struct mode_block *)(dblock + MBLOCK_OFFSET);
+		lease_buf_dblock = lease_buf + ((2 + i) * disk->sector_size);
+		mb_end = (struct mode_block *)(lease_buf_dblock + MBLOCK_OFFSET);
+
+		mode_block_in(mb_end, &mb);
+
 		host_id = i + 1;
 
-		if (!(mb->flags & MBLOCK_SHARED))
+		if (!(mb.flags & MBLOCK_SHARED))
 			continue;
 
 		res->flags |= SANLK_RES_SHARED;
@@ -172,18 +179,21 @@ int read_resource_owners(struct task *task, struct token *token,
 	}
 
 	for (i = 0; i < leader.num_hosts; i++) {
-		dblock = lease_buf + ((2 + i) * disk->sector_size);
-		mb = (struct mode_block *)(dblock + MBLOCK_OFFSET);
+		lease_buf_dblock = lease_buf + ((2 + i) * disk->sector_size);
+		mb_end = (struct mode_block *)(lease_buf_dblock + MBLOCK_OFFSET);
+
+		mode_block_in(mb_end, &mb);
+
 		host_id = i + 1;
 
-		if (!(mb->flags & MBLOCK_SHARED))
+		if (!(mb.flags & MBLOCK_SHARED))
 			continue;
 
 		if (leader.timestamp && leader.owner_id && (host_id == leader.owner_id))
 			continue;
 
 		host->host_id = host_id;
-		host->generation = mb->generation;
+		host->generation = mb.generation;
 		host++;
 	}
 	rv = 0;
@@ -261,13 +271,16 @@ static int host_live(char *lockspace_name, uint64_t host_id, uint64_t gen)
 	return 1;
 }
 
-void check_mode_block(struct token *token, uint64_t next_lver, int q, char *dblock)
+void check_mode_block(struct token *token, uint64_t next_lver, int q, char *dblock_buf)
 {
-	struct mode_block *mb;
+	struct mode_block *mb_end;
+	struct mode_block mb;
 
-	mb = (struct mode_block *)(dblock + MBLOCK_OFFSET);
+	mb_end = (struct mode_block *)(dblock_buf + MBLOCK_OFFSET);
 
-	if (mb->flags & MBLOCK_SHARED) {
+	mode_block_in(mb_end, &mb);
+
+	if (mb.flags & MBLOCK_SHARED) {
 		set_id_bit(q + 1, token->shared_bitmap, NULL);
 		token->shared_count++;
 		log_token(token, "ballot %llu mode[%d] shared %d",
@@ -279,7 +292,8 @@ static int set_mode_block(struct task *task, struct token *token,
 			  uint64_t host_id, uint64_t gen, uint32_t flags)
 {
 	struct sync_disk *disk;
-	struct mode_block *mb;
+	struct mode_block mb;
+	struct mode_block mb_end;
 	char *iobuf, **p_iobuf;
 	uint64_t offset;
 	int num_disks = token->r.num_disks;
@@ -306,9 +320,12 @@ static int set_mode_block(struct task *task, struct token *token,
 		if (rv < 0)
 			break;
 
-		mb = (struct mode_block *)(iobuf + MBLOCK_OFFSET);
-		mb->flags = flags;
-		mb->generation = gen;
+		memset(&mb, 0, sizeof(mb));
+		mb.flags = flags;
+		mb.generation = gen;
+
+		mode_block_out(&mb, &mb_end);
+		memcpy(iobuf + MBLOCK_OFFSET, &mb_end, sizeof(struct mode_block));
 
 		rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout);
 		if (rv < 0)
@@ -332,7 +349,8 @@ static int read_mode_block(struct task *task, struct token *token,
 			   uint64_t host_id, uint64_t *max_gen)
 {
 	struct sync_disk *disk;
-	struct mode_block *mb;
+	struct mode_block *mb_end;
+	struct mode_block mb;
 	char *iobuf, **p_iobuf;
 	uint64_t offset;
 	uint64_t max = 0;
@@ -360,13 +378,15 @@ static int read_mode_block(struct task *task, struct token *token,
 		if (rv < 0)
 			break;
 
-		mb = (struct mode_block *)(iobuf + MBLOCK_OFFSET);
+		mb_end = (struct mode_block *)(iobuf + MBLOCK_OFFSET);
 
-		if (!(mb->flags & MBLOCK_SHARED))
+		mode_block_in(mb_end, &mb);
+
+		if (!(mb.flags & MBLOCK_SHARED))
 			continue;
 
-		if (!max || mb->generation > max)
-			max = mb->generation;
+		if (!max || mb.generation > max)
+			max = mb.generation;
 	}
 
 	if (rv != SANLK_AIO_TIMEOUT)

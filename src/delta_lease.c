@@ -24,6 +24,7 @@
 
 #include "sanlock_internal.h"
 #include "diskio.h"
+#include "ondisk.h"
 #include "direct.h"
 #include "log.h"
 #include "paxos_lease.h"
@@ -133,14 +134,17 @@ static int verify_leader(struct sync_disk *disk,
 	log_leader_error(result, space_name, host_id, disk, lr, caller);
 
 	/*
+	struct leader_record leader_end;
 	struct leader_record leader_rr;
 	int rv;
 
-	memset(&leader_rr, 0, sizeof(leader_rr));
+	memset(&leader_end, 0, sizeof(leader_end));
 
-	rv = read_sectors(disk, host_id - 1, 1, (char *)&leader_rr,
+	rv = read_sectors(disk, host_id - 1, 1, (char *)&leader_end,
 			  sizeof(struct leader_record),
 			  NULL, "delta_verify");
+	
+	leader_record_in(&leader_end, &leader_rr);
 
 	log_leader_error(rv, space_name, host_id, disk, &leader_rr, "delta_verify");
 	*/
@@ -158,18 +162,21 @@ int delta_read_lockspace(struct task *task,
 			 int io_timeout,
 			 int *io_timeout_ret)
 {
+	struct leader_record leader_end;
 	struct leader_record leader;
 	char *space_name;
 	int rv, error;
 
 	/* host_id N is block offset N-1 */
 
-	memset(&leader, 0, sizeof(struct leader_record));
+	memset(&leader_end, 0, sizeof(struct leader_record));
 
-	rv = read_sectors(disk, host_id - 1, 1, (char *)&leader, sizeof(struct leader_record),
+	rv = read_sectors(disk, host_id - 1, 1, (char *)&leader_end, sizeof(struct leader_record),
 			  task, io_timeout, "read_lockspace");
 	if (rv < 0)
 		return rv;
+
+	leader_record_in(&leader_end, &leader);
 
 	if (!ls->name[0])
 		space_name = leader.space_name;
@@ -194,18 +201,21 @@ int delta_lease_leader_read(struct task *task, int io_timeout,
 			    struct leader_record *leader_ret,
 			    const char *caller)
 {
+	struct leader_record leader_end;
 	struct leader_record leader;
 	int rv, error;
 
 	/* host_id N is block offset N-1 */
 
-	memset(&leader, 0, sizeof(struct leader_record));
+	memset(&leader_end, 0, sizeof(struct leader_record));
 	memset(leader_ret, 0, sizeof(struct leader_record));
 
-	rv = read_sectors(disk, host_id - 1, 1, (char *)&leader, sizeof(struct leader_record),
+	rv = read_sectors(disk, host_id - 1, 1, (char *)&leader_end, sizeof(struct leader_record),
 			  task, io_timeout, "delta_leader");
 	if (rv < 0)
 		return rv;
+
+	leader_record_in(&leader_end, &leader);
 
 	error = verify_leader(disk, space_name, host_id, &leader, caller);
 
@@ -238,6 +248,7 @@ int delta_lease_acquire(struct task *task,
 {
 	struct leader_record leader;
 	struct leader_record leader1;
+	struct leader_record leader_end;
 	uint64_t new_ts;
 	int other_io_timeout, other_host_dead_seconds, other_id_renewal_seconds;
 	int i, error, rv, delay, delta_large_delay;
@@ -358,7 +369,9 @@ int delta_lease_acquire(struct task *task,
 		  (unsigned long long)leader.timestamp,
 		  leader.resource_name);
 
-	rv = write_sector(disk, host_id - 1, (char *)&leader, sizeof(struct leader_record),
+	leader_record_out(&leader, &leader_end);
+
+	rv = write_sector(disk, host_id - 1, (char *)&leader_end, sizeof(struct leader_record),
 			  task, sp->io_timeout, "delta_leader");
 	if (rv < 0) {
 		log_space(sp, "delta_acquire write error %d", rv);
@@ -417,6 +430,7 @@ int delta_lease_renew(struct task *task,
 		      struct leader_record *leader_ret)
 {
 	struct leader_record leader;
+	struct leader_record leader_end;
 	char **p_iobuf;
 	char **p_wbuf;
 	char *wbuf;
@@ -496,6 +510,12 @@ int delta_lease_renew(struct task *task,
 		task->iobuf = NULL;
 	}
 
+	/*
+	 * NB. this task->iobuf is also copied by the lockspace thread
+	 * into renewal_read_buf, which is then copied in the main loop
+	 * by check_our_lease and passed to check_other_leases.
+	 */
+
 	if (!task->iobuf) {
 		/* this will happen the first time renew is called, and after
 		   a timed out renewal read fails to be reaped (see
@@ -523,7 +543,8 @@ int delta_lease_renew(struct task *task,
 
  read_done:
 	*read_result = SANLK_OK;
-	memcpy(&leader, task->iobuf+id_offset, sizeof(struct leader_record));
+	memcpy(&leader_end, task->iobuf+id_offset, sizeof(struct leader_record));
+	leader_record_in(&leader_end, &leader);
 
 	rv = verify_leader(disk, space_name, host_id, &leader, "delta_renew");
 	if (rv < 0) {
@@ -582,7 +603,10 @@ int delta_lease_renew(struct task *task,
 		return -ENOMEM;
 	}
 	memset(wbuf, 0, sector_size);
-	memcpy(wbuf, &leader, sizeof(struct leader_record));
+
+	leader_record_out(&leader, &leader_end);
+
+	memcpy(wbuf, &leader_end, sizeof(struct leader_record));
 	memcpy(wbuf+LEADER_RECORD_MAX, bitmap, HOSTID_BITMAP_SIZE);
 
 	/* extend io timeout for this one write; we need to give this write
@@ -616,6 +640,7 @@ int delta_lease_release(struct task *task,
 			struct leader_record *leader_ret)
 {
 	struct leader_record leader;
+	struct leader_record leader_end;
 	uint64_t host_id;
 	int rv;
 
@@ -631,7 +656,9 @@ int delta_lease_release(struct task *task,
 	leader.timestamp = LEASE_FREE;
 	leader.checksum = leader_checksum(&leader);
 
-	rv = write_sector(disk, host_id - 1, (char *)&leader, sizeof(struct leader_record),
+	leader_record_out(&leader, &leader_end);
+
+	rv = write_sector(disk, host_id - 1, (char *)&leader_end, sizeof(struct leader_record),
 			  task, sp->io_timeout, "delta_leader");
 	if (rv < 0) {
 		log_space(sp, "delta_release write error %d", rv);
@@ -656,7 +683,9 @@ int delta_lease_init(struct task *task,
 		     char *space_name,
 		     int max_hosts)
 {
-	struct leader_record *leader;
+	struct leader_record leader_first;
+	struct leader_record leader_end;
+	struct leader_record leader;
 	char *iobuf, **p_iobuf;
 	int iobuf_len;
 	int align_size;
@@ -691,20 +720,26 @@ int delta_lease_init(struct task *task,
 	/* host_id N is block offset N-1 */
 
 	for (i = 0; i < max_hosts; i++) {
-		leader = (struct leader_record *)(iobuf + (i * disk->sector_size));
-		leader->magic = DELTA_DISK_MAGIC;
-		leader->version = DELTA_DISK_VERSION_MAJOR | DELTA_DISK_VERSION_MINOR;
-		leader->sector_size = disk->sector_size;
-		leader->max_hosts = 1;
-		leader->timestamp = LEASE_FREE;
-		leader->io_timeout = io_timeout;
-		strncpy(leader->space_name, space_name, NAME_ID_SIZE);
-		leader->checksum = leader_checksum(leader);
+		memset(&leader, 0, sizeof(struct leader_record));
+		leader.magic = DELTA_DISK_MAGIC;
+		leader.version = DELTA_DISK_VERSION_MAJOR | DELTA_DISK_VERSION_MINOR;
+		leader.sector_size = disk->sector_size;
+		leader.max_hosts = 1;
+		leader.timestamp = LEASE_FREE;
+		leader.io_timeout = io_timeout;
+		strncpy(leader.space_name, space_name, NAME_ID_SIZE);
+		leader.checksum = leader_checksum(&leader);
 
 		/* make the first record invalid so we can do a single atomic
 		   write below to commit the whole thing */
-		if (!i)
-			leader->magic = 0;
+		if (!i) {
+			leader.magic = 0;
+			memcpy(&leader_first, &leader, sizeof(struct leader_record));
+		}
+
+		leader_record_out(&leader, &leader_end);
+
+		memcpy(iobuf + (i * disk->sector_size), &leader_end, sizeof(struct leader_record));
 	}
 
 	rv = write_iobuf(disk->fd, disk->offset, iobuf, iobuf_len, task, io_timeout);
@@ -713,8 +748,9 @@ int delta_lease_init(struct task *task,
 
 	/* commit the whole lockspace by making the first record valid */
 
-	leader = (struct leader_record *)iobuf;
-	leader->magic = DELTA_DISK_MAGIC;
+	leader_first.magic = DELTA_DISK_MAGIC;
+	leader_record_out(&leader_first, &leader_end);
+	memcpy(iobuf, &leader_end, sizeof(struct leader_record));
 
 	rv = write_iobuf(disk->fd, disk->offset, iobuf, disk->sector_size, task, io_timeout);
  out:

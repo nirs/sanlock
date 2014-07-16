@@ -26,6 +26,8 @@
 #include "sanlock_rv.h"
 #include "sanlock_resource.h"
 #include "leader.h"
+#include "paxos_dblock.h"
+#include "mode_block.h"
 #include "list.h"
 #include "monotime.h"
 

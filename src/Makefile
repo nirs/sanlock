@@ -21,6 +21,7 @@ CMD_SOURCE = \
 	delta_lease.c \
 	direct.c \
 	diskio.c \
+	ondisk.c \
 	helper.c \
 	lockspace.c \
 	lockfile.c \
@@ -41,6 +42,7 @@ LIB_ENTIRE_SOURCE = \
 	sanlock_sock.c \
 	crc32c.c \
 	diskio.c \
+	ondisk.c \
 	delta_lease.c \
 	paxos_lease.c \
 	direct.c \

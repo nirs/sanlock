@@ -23,6 +23,7 @@
 
 #include "sanlock_internal.h"
 #include "diskio.h"
+#include "ondisk.h"
 #include "direct.h"
 #include "log.h"
 #include "lockspace.h"
@@ -30,22 +31,9 @@
 #include "paxos_lease.h"
 #include "resource.h"
 #include "timeouts.h"
-#include "mode_block.h"
 
 uint32_t crc32c(uint32_t crc, uint8_t *data, size_t length);
 int get_rand(int a, int b);
-
-#define DBLOCK_CHECKSUM_LEN	 48  /* ends before checksum field */
-
-struct paxos_dblock {
-	uint64_t mbal;
-	uint64_t bal;
-	uint64_t inp;	/* host_id */
-	uint64_t inp2;	/* host_id generation */
-	uint64_t inp3;	/* host_id's timestamp */
-	uint64_t lver;
-	uint32_t checksum;
-};
 
 static uint32_t roundup_power_of_two(uint32_t val)
 {
@@ -62,28 +50,36 @@ static uint32_t roundup_power_of_two(uint32_t val)
 int paxos_lease_request_read(struct task *task, struct token *token,
 			     struct request_record *rr)
 {
+	struct request_record rr_end;
 	int rv;
 
 	/* 1 = request record is second sector */
 
-	rv = read_sectors(&token->disks[0], 1, 1, (char *)rr,
+	rv = read_sectors(&token->disks[0], 1, 1, (char *)&rr_end,
 			  sizeof(struct request_record),
 			  task, token->io_timeout, "request");
 	if (rv < 0)
 		return rv;
+
+	request_record_in(&rr_end, rr);
+
 	return SANLK_OK;
 }
 
 int paxos_lease_request_write(struct task *task, struct token *token,
 			      struct request_record *rr)
 {
+	struct request_record rr_end;
 	int rv;
 
-	rv = write_sector(&token->disks[0], 1, (char *)rr,
+	request_record_out(rr, &rr_end);
+
+	rv = write_sector(&token->disks[0], 1, (char *)&rr_end,
 			  sizeof(struct request_record),
 			  task, token->io_timeout, "request");
 	if (rv < 0)
 		return rv;
+
 	return SANLK_OK;
 }
 
@@ -97,15 +93,15 @@ int paxos_erase_dblock(struct task *task,
 		       struct token *token,
 		       uint64_t host_id)
 {
-	struct paxos_dblock dblock;
+	struct paxos_dblock dblock_end;
 	int num_disks = token->r.num_disks;
 	int num_writes = 0;
 	int d, rv, error = -1;
 
-	memset(&dblock, 0, sizeof(dblock));
+	memset(&dblock_end, 0, sizeof(struct paxos_dblock));
 
 	for (d = 0; d < num_disks; d++) {
-		rv = write_dblock(task, token, &token->disks[d], host_id, &dblock);
+		rv = write_dblock(task, token, &token->disks[d], host_id, &dblock_end);
 		if (rv < 0) {
 			error = rv;
 			continue;
@@ -137,10 +133,16 @@ static int write_dblock_mblock_sh(struct task *task,
 			          uint64_t host_id,
 			          struct paxos_dblock *pd)
 {
-	struct mode_block *mb;
+	struct paxos_dblock pd_end;
+	struct mode_block mb;
+	struct mode_block mb_end;
 	char *iobuf, **p_iobuf;
 	uint64_t offset;
 	int iobuf_len, rv;
+
+	memset(&mb, 0, sizeof(mb));
+	mb.flags = MBLOCK_SHARED;
+	mb.generation = token->host_generation;
 
 	iobuf_len = disk->sector_size;
 	if (!iobuf_len)
@@ -154,11 +156,11 @@ static int write_dblock_mblock_sh(struct task *task,
 
 	offset = disk->offset + ((2 + host_id - 1) * disk->sector_size);
 
-	memcpy(iobuf, (char *)pd, sizeof(struct paxos_dblock));
+	paxos_dblock_out(pd, &pd_end);
+	mode_block_out(&mb, &mb_end);
 
-	mb = (struct mode_block *)(iobuf + MBLOCK_OFFSET);
-	mb->flags = MBLOCK_SHARED;
-	mb->generation = token->host_generation;
+	memcpy(iobuf, (char *)&pd_end, sizeof(struct paxos_dblock));
+	memcpy(iobuf + MBLOCK_OFFSET, (char *)&mb_end, sizeof(struct mode_block));
 
 	rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout);
 
@@ -180,6 +182,7 @@ static int write_dblock(struct task *task,
 			uint64_t host_id,
 			struct paxos_dblock *pd)
 {
+	struct paxos_dblock pd_end;
 	int rv;
 
 	if (token->flags & T_WRITE_DBLOCK_MBLOCK_SH) {
@@ -190,7 +193,9 @@ static int write_dblock(struct task *task,
 	/* 1 leader block + 1 request block;
 	   host_id N is block offset N-1 */
 
-	rv = write_sector(disk, 2 + host_id - 1, (char *)pd, sizeof(struct paxos_dblock),
+	paxos_dblock_out(pd, &pd_end);
+
+	rv = write_sector(disk, 2 + host_id - 1, (char *)&pd_end, sizeof(struct paxos_dblock),
 			  task, token->io_timeout, "dblock");
 	return rv;
 }
@@ -200,9 +205,12 @@ static int write_leader(struct task *task,
 			struct sync_disk *disk,
 			struct leader_record *lr)
 {
+	struct leader_record lr_end;
 	int rv;
 
-	rv = write_sector(disk, 0, (char *)lr, sizeof(struct leader_record),
+	leader_record_out(lr, &lr_end);
+
+	rv = write_sector(disk, 0, (char *)&lr_end, sizeof(struct leader_record),
 			  task, token->io_timeout, "leader");
 	return rv;
 }
@@ -213,12 +221,16 @@ static int read_dblock(struct task *task,
 		       uint64_t host_id,
 		       struct paxos_dblock *pd)
 {
+	struct paxos_dblock pd_end;
 	int rv;
 
 	/* 1 leader block + 1 request block; host_id N is block offset N-1 */
 
-	rv = read_sectors(disk, 2 + host_id - 1, 1, (char *)pd, sizeof(struct paxos_dblock),
+	rv = read_sectors(disk, 2 + host_id - 1, 1, (char *)&pd_end, sizeof(struct paxos_dblock),
 			  task, "dblock");
+
+	paxos_dblock_in(&pd_end, pd);
+
 	return rv;
 }
 
@@ -227,6 +239,7 @@ static int read_dblocks(struct task *task,
 			struct paxos_dblock *pds,
 			int pds_count)
 {
+	struct paxos_dblock pd_end;
 	char *data;
 	int data_len, rv, i;
 
@@ -250,8 +263,12 @@ static int read_dblocks(struct task *task,
 	   paxos_dblock */
 
 	for (i = 0; i < pds_count; i++) {
-		memcpy(&pds[i], data + (i * disk->sector_size),
+		memcpy(&pd_end, data + (i * disk->sector_size),
 		       sizeof(struct paxos_dblock));
+
+		paxos_dblock_in(&pd_end, &pd);
+
+		memcpy(&pds[i], &pd, sizeof(struct paxos_dblock));
 	}
 
 	rv = 0;
@@ -267,12 +284,15 @@ static int read_leader(struct task *task,
 		       struct sync_disk *disk,
 		       struct leader_record *lr)
 {
+	struct leader_record lr_end;
 	int rv;
 
 	/* 0 = leader record is first sector */
 
-	rv = read_sectors(disk, 0, 1, (char *)lr, sizeof(struct leader_record),
+	rv = read_sectors(disk, 0, 1, (char *)&lr_end, sizeof(struct leader_record),
 			  task, token->io_timeout, "leader");
+
+	leader_record_in(&lr_end, lr);
 
 	return rv;
 }
@@ -352,7 +372,9 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 		      struct paxos_dblock *dblock_out)
 {
 	struct paxos_dblock dblock;
+	struct paxos_dblock bk_in;
 	struct paxos_dblock bk_max;
+	struct paxos_dblock *bk_end;
 	struct paxos_dblock *bk;
 	struct sync_disk *disk;
 	char *iobuf[SANLK_MAX_DISKS];
@@ -437,15 +459,17 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 			continue;
 		num_reads++;
 
-
 		for (q = 0; q < num_hosts; q++) {
-			bk = (struct paxos_dblock *)(iobuf[d] + ((2 + q)*sector_size));
+			bk_end = (struct paxos_dblock *)(iobuf[d] + ((2 + q)*sector_size));
+
+			paxos_dblock_in(bk_end, &bk_in);
+			bk = &bk_in;
 
 			rv = verify_dblock(token, bk);
 			if (rv < 0)
 				continue;
 
-			check_mode_block(token, next_lver, q, (char *)bk);
+			check_mode_block(token, next_lver, q, (char *)bk_end);
 
 			if (bk->lver < dblock.lver)
 				continue;
@@ -588,7 +612,10 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 		num_reads++;
 
 		for (q = 0; q < num_hosts; q++) {
-			bk = (struct paxos_dblock *)(iobuf[d] + ((2 + q)*sector_size));
+			bk_end = (struct paxos_dblock *)(iobuf[d] + ((2 + q)*sector_size));
+
+			paxos_dblock_in(bk_end, &bk_in);
+			bk = &bk_in;
 
 			rv = verify_dblock(token, bk);
 			if (rv < 0)
@@ -725,6 +752,7 @@ static int verify_leader(struct token *token,
 			 struct leader_record *lr,
 			 const char *caller)
 {
+	struct leader_record leader_end;
 	struct leader_record leader_rr;
 	uint32_t sum;
 	int result, rv;
@@ -786,11 +814,13 @@ static int verify_leader(struct token *token,
  fail:
 	log_leader_error(result, token, disk, lr, caller);
 
-	memset(&leader_rr, 0, sizeof(leader_rr));
+	memset(&leader_end, 0, sizeof(struct leader_record));
 
-	rv = read_sectors(disk, 0, 1, (char *)&leader_rr,
+	rv = read_sectors(disk, 0, 1, (char *)&leader_end,
 			  sizeof(struct leader_record),
 			  NULL, 1, "paxos_verify");
+
+	leader_record_in(&leader_end, &leader_rr);
 
 	log_leader_error(rv, token, disk, &leader_rr, "paxos_verify");
 
@@ -1026,10 +1056,13 @@ static int _lease_read_one(struct task *task,
 			   int *max_q,
 			   const char *caller)
 {
+	struct leader_record leader_end;
+	struct paxos_dblock our_dblock_end;
+	struct paxos_dblock bk;
 	char *iobuf, **p_iobuf;
 	uint32_t host_id = token->host_id;
 	uint32_t sector_size = disk->sector_size;
-	struct paxos_dblock *bk;
+	struct paxos_dblock *bk_end;
 	uint64_t tmp_mbal = 0;
 	int q, tmp_q = -1, rv, iobuf_len;
 
@@ -1049,23 +1082,27 @@ static int _lease_read_one(struct task *task,
 	if (rv < 0)
 		goto out;
 
-	memcpy(leader_ret, iobuf, sizeof(struct leader_record));
+	memcpy(&leader_end, iobuf, sizeof(struct leader_record));
+	leader_record_in(&leader_end, leader_ret);
 
-	memcpy(our_dblock, iobuf + ((host_id + 1) * sector_size), sizeof(struct paxos_dblock));
+	memcpy(&our_dblock_end, iobuf + ((host_id + 1) * sector_size), sizeof(struct paxos_dblock));
+	paxos_dblock_in(&our_dblock_end, our_dblock);
 
 	rv = verify_leader(token, disk, leader_ret, caller);
 	if (rv < 0)
 		goto out;
 
 	for (q = 0; q < leader_ret->num_hosts; q++) {
-		bk = (struct paxos_dblock *)(iobuf + ((2 + q) * sector_size));
+		bk_end = (struct paxos_dblock *)(iobuf + ((2 + q) * sector_size));
 
-		rv = verify_dblock(token, bk);
+		paxos_dblock_in(bk_end, &bk);
+
+		rv = verify_dblock(token, &bk);
 		if (rv < 0)
 			goto out;
 
-		if (!tmp_mbal || bk->mbal > tmp_mbal) {
-			tmp_mbal = bk->mbal;
+		if (!tmp_mbal || bk.mbal > tmp_mbal) {
+			tmp_mbal = bk.mbal;
 			tmp_q = q;
 		}
 	}
@@ -1899,8 +1936,10 @@ int paxos_lease_init(struct task *task,
 		     int num_hosts, int max_hosts)
 {
 	char *iobuf, **p_iobuf;
-	struct leader_record *leader;
-	struct request_record *rr;
+	struct leader_record leader;
+	struct leader_record leader_end;
+	struct request_record rr;
+	struct request_record rr_end;
 	int iobuf_len;
 	int sector_size;
 	int align_size;
@@ -1940,20 +1979,26 @@ int paxos_lease_init(struct task *task,
 
 	memset(iobuf, 0, iobuf_len);
 
-	leader = (struct leader_record *)iobuf;
-	leader->magic = PAXOS_DISK_MAGIC;
-	leader->version = PAXOS_DISK_VERSION_MAJOR | PAXOS_DISK_VERSION_MINOR;
-	leader->sector_size = sector_size;
-	leader->num_hosts = num_hosts;
-	leader->max_hosts = max_hosts;
-	leader->timestamp = LEASE_FREE;
-	strncpy(leader->space_name, token->r.lockspace_name, NAME_ID_SIZE);
-	strncpy(leader->resource_name, token->r.name, NAME_ID_SIZE);
-	leader->checksum = leader_checksum(leader);
+	memset(&leader, 0, sizeof(leader));
+	leader.magic = PAXOS_DISK_MAGIC;
+	leader.version = PAXOS_DISK_VERSION_MAJOR | PAXOS_DISK_VERSION_MINOR;
+	leader.sector_size = sector_size;
+	leader.num_hosts = num_hosts;
+	leader.max_hosts = max_hosts;
+	leader.timestamp = LEASE_FREE;
+	strncpy(leader.space_name, token->r.lockspace_name, NAME_ID_SIZE);
+	strncpy(leader.resource_name, token->r.name, NAME_ID_SIZE);
+	leader.checksum = leader_checksum(&leader);
 
-	rr = (struct request_record *)(iobuf + sector_size);
-	rr->magic = REQ_DISK_MAGIC;
-	rr->version = REQ_DISK_VERSION_MAJOR | REQ_DISK_VERSION_MINOR;
+	memset(&rr, 0, sizeof(rr));
+	rr.magic = REQ_DISK_MAGIC;
+	rr.version = REQ_DISK_VERSION_MAJOR | REQ_DISK_VERSION_MINOR;
+
+	leader_record_out(&leader, &leader_end);
+	request_record_out(&rr, &rr_end);
+
+	memcpy(iobuf, &leader_end, sizeof(struct leader_record));
+	memcpy(iobuf + sector_size, &rr_end, sizeof(struct request_record));
 
 	for (d = 0; d < token->r.num_disks; d++) {
 		rv = write_iobuf(token->disks[d].fd, token->disks[d].offset,

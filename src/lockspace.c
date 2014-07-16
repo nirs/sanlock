@@ -28,6 +28,7 @@
 #include "sanlock_admin.h"
 #include "sanlock_sock.h"
 #include "diskio.h"
+#include "ondisk.h"
 #include "log.h"
 #include "delta_lease.h"
 #include "lockspace.h"
@@ -270,10 +271,21 @@ static void create_bitmap_and_extra(struct space *sp, char *bitmap, struct delta
  * the last renewal.  Records liveness history about other hosts in the
  * lockspace, checks if another host is notifying us (through their bitmap)
  * to look at resource requests or an event they've written.
+ *
+ * NB. the way that this gets the copy of all leases to look at is
+ * unfortunately very subtle and convoluted.
+ *
+ * The lockspace thread makes a copy of task iobuf, which holds all
+ * delta leases that were read in the last renewal, into
+ * sp->lease_status.renewal_read_buf.  Then check_our_lease() called
+ * by the main loop makes a copy of sp->lease_status.renewal_read_buf
+ * to pass to this function.
  */
 
 void check_other_leases(struct space *sp, char *buf)
 {
+	struct leader_record leader_in;
+	struct leader_record *leader_end;
 	struct leader_record *leader;
 	struct sync_disk *disk;
 	struct host_status *hs;
@@ -294,7 +306,10 @@ void check_other_leases(struct space *sp, char *buf)
 		if (!hs->first_check)
 			hs->first_check = now;
 
-		leader = (struct leader_record *)(buf + (i * disk->sector_size));
+		leader_end = (struct leader_record *)(buf + (i * disk->sector_size));
+
+		leader_record_in(leader_end, &leader_in);
+		leader = &leader_in;
 
 		if (hs->owner_id == leader->owner_id &&
 		    hs->owner_generation == leader->owner_generation &&
@@ -311,7 +326,7 @@ void check_other_leases(struct space *sp, char *buf)
 		if (i+1 == sp->host_id)
 			continue;
 
-		bitmap = (char *)leader + HOSTID_BITMAP_OFFSET;
+		bitmap = (char *)leader_end + HOSTID_BITMAP_OFFSET;
 
 		if (!test_id_bit(sp->host_id, bitmap))
 			continue;
@@ -372,7 +387,10 @@ int check_our_lease(struct space *sp, int *check_all, char *check_buf)
 	corrupt_result = sp->lease_status.corrupt_result;
 
 	if (sp->lease_status.renewal_read_count > sp->lease_status.renewal_read_check) {
-		/* main loop will pass this buf to check_other_leases next */
+		/*
+		 * NB. it's unfortunate how subtle this is.
+		 * main loop will pass this buf to check_other_leases next
+		 */
 		sp->lease_status.renewal_read_check = sp->lease_status.renewal_read_count;
 		*check_all = 1;
 		if (check_buf)
@@ -582,6 +600,7 @@ static void *lockspace_thread(void *arg_in)
 			sp->lease_status.corrupt_result = corrupt_result(delta_result);
 
 		if (read_result == SANLK_OK && task.iobuf) {
+			/* NB. be careful with how this iobuf escapes */
 			memcpy(sp->lease_status.renewal_read_buf, task.iobuf, sp->align_size);
 			sp->lease_status.renewal_read_count++;
 		}

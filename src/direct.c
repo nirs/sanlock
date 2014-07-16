@@ -24,12 +24,12 @@
 
 #include "sanlock_internal.h"
 #include "diskio.h"
+#include "ondisk.h"
 #include "log.h"
 #include "resource.h"
 #include "direct.h"
 #include "paxos_lease.h"
 #include "delta_lease.h"
-#include "mode_block.h"
 #include "timeouts.h"
 
 /*
@@ -362,8 +362,11 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 {
 	char *data, *bitmap;
 	char *colon, *off_str;
+	struct leader_record *lr_end;
 	struct leader_record *lr;
-	struct request_record *rr;
+	struct leader_record lr_in;
+	struct request_record rr;
+	struct mode_block mb;
 	struct sync_disk sd;
 	char sname[NAME_ID_SIZE+1];
 	char rname[NAME_ID_SIZE+1];
@@ -425,14 +428,20 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 		rv = read_sectors(&sd, sector_nr, sector_count, data, datalen,
 				  task, DEFAULT_IO_TIMEOUT, "dump");
 
-		lr = (struct leader_record *)data;
+		lr_end = (struct leader_record *)data;
+
+		leader_record_in(lr_end, &lr_in);
+		lr = &lr_in;
 
 		if (lr->magic == DELTA_DISK_MAGIC) {
 			for (i = 0; i < sector_count; i++) {
-				lr = (struct leader_record *)(data + (i * sd.sector_size));
+				lr_end = (struct leader_record *)(data + (i * sd.sector_size));
 
-				if (!lr->magic)
+				if (!lr_end->magic)
 					continue;
+
+				leader_record_in(lr_end, &lr_in);
+				lr = &lr_in;
 
 				/* has never been acquired, don't print */
 				if (!lr->owner_id && !lr->owner_generation)
@@ -449,7 +458,7 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 					(unsigned long long)lr->owner_generation);
 
 				if (force_mode) {
-					bitmap = (char *)lr + LEADER_RECORD_MAX;
+					bitmap = (char *)lr_end + LEADER_RECORD_MAX;
 					for (b = 0; b < DEFAULT_MAX_HOSTS; b++) {
 						if (test_id_bit(b+1, bitmap))
 							printf(" %d", b+1);
@@ -470,21 +479,24 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 			       (unsigned long long)lr->lver);
 
 			if (force_mode) {
-				rr = (struct request_record *)(data + sd.sector_size);
+				struct request_record *rr_end = (struct request_record *)(data + sd.sector_size);
+				request_record_in(rr_end, &rr);
 				printf("/%llu/%u",
-				       (unsigned long long)rr->lver, rr->force_mode);
+				       (unsigned long long)rr.lver, rr.force_mode);
 			}
 			printf("\n");
 
 			for (i = 0; i < lr->num_hosts; i++) {
-				char *pd = data + ((2 + i) * sd.sector_size);
-				struct mode_block *mb = (struct mode_block *)(pd + MBLOCK_OFFSET);
+				char *pd_end = data + ((2 + i) * sd.sector_size);
+				struct mode_block *mb_end = (struct mode_block *)(pd_end + MBLOCK_OFFSET);
 
-				if (!(mb->flags & MBLOCK_SHARED))
+				mode_block_in(mb_end, &mb);
+
+				if (!(mb.flags & MBLOCK_SHARED))
 					continue;
 
 				printf("                                                                                                          ");
-				printf("%04u %04llu SH\n", i+1, (unsigned long long)mb->generation);
+				printf("%04u %04llu SH\n", i+1, (unsigned long long)mb.generation);
 			}
 		} else {
 			break;
@@ -504,7 +516,8 @@ int direct_next_free(struct task *task, char *path)
 {
 	char *data;
 	char *colon, *off_str;
-	struct leader_record *lr;
+	struct leader_record *lr_end;
+	struct leader_record lr;
 	struct sync_disk sd;
 	uint64_t sector_nr;
 	int sector_count, datalen, align_size;
@@ -549,9 +562,11 @@ int direct_next_free(struct task *task, char *path)
 		rv = read_sectors(&sd, sector_nr, 1, data, datalen,
 				  task, DEFAULT_IO_TIMEOUT, "next_free");
 
-		lr = (struct leader_record *)data;
+		lr_end = (struct leader_record *)data;
 
-		if (lr->magic != DELTA_DISK_MAGIC && lr->magic != PAXOS_DISK_MAGIC) {
+		leader_record_in(lr_end, &lr);
+
+		if (lr.magic != DELTA_DISK_MAGIC && lr.magic != PAXOS_DISK_MAGIC) {
 			printf("%llu\n", (unsigned long long)(sector_nr * sd.sector_size));
 			rv = 0;
 			goto out_free;
