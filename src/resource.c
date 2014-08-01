@@ -47,6 +47,7 @@ static int resource_thread_work_examine;
 static struct list_head resources_held;
 static struct list_head resources_add;
 static struct list_head resources_rem;
+static struct list_head resources_orphan;
 static pthread_mutex_t resource_mutex;
 static pthread_cond_t resource_cond;
 static struct list_head host_events;
@@ -78,8 +79,12 @@ void send_state_resources(int fd)
 		list_for_each_entry(token, &r->tokens, list)
 			send_state_resource(fd, r, "add", token->pid, token->token_id);
 	}
+
 	list_for_each_entry(r, &resources_rem, list)
 		send_state_resource(fd, r, "rem", r->pid, r->release_token_id);
+
+	list_for_each_entry(r, &resources_orphan, list)
+		send_state_resource(fd, r, "orphan", r->pid, r->release_token_id);
 	pthread_mutex_unlock(&resource_mutex);
 }
 
@@ -856,6 +861,9 @@ void release_token_async(struct token *token)
 			   lease was never acquired */
 			list_del(&r->list);
 			free_resource(r);
+		} else if (token->acquire_flags & SANLK_RES_PERSISTENT) {
+			r->release_token_id = token->token_id;
+			list_move(&r->list, &resources_orphan);
 		} else {
 			r->flags |= R_THREAD_RELEASE;
 			r->release_token_id = token->token_id;
@@ -882,6 +890,11 @@ static struct resource *find_resource(struct token *token,
 	return NULL;
 }
 
+/*
+ * Determines if lockspace is "used" for the purpose of
+ * rem_lockspace(REM_UNUSED).
+ */
+
 int lockspace_is_used(struct sanlk_lockspace *ls)
 {
 	struct resource *r;
@@ -899,12 +912,30 @@ int lockspace_is_used(struct sanlk_lockspace *ls)
 		if (!strncmp(r->r.lockspace_name, ls->name, NAME_ID_SIZE))
 			goto yes;
 	}
+	list_for_each_entry(r, &resources_orphan, list) {
+		if (!strncmp(r->r.lockspace_name, ls->name, NAME_ID_SIZE))
+			goto yes;
+	}
 	pthread_mutex_unlock(&resource_mutex);
 	return 0;
  yes:
 	pthread_mutex_unlock(&resource_mutex);
 	return 1;
 }
+
+int resource_orphan_count(char *space_name)
+{
+	struct resource *r;
+	int count = 0;
+
+	pthread_mutex_lock(&resource_mutex);
+	list_for_each_entry(r, &resources_orphan, list) {
+		if (!strncmp(r->r.lockspace_name, space_name, NAME_ID_SIZE))
+			count++;
+	}
+	pthread_mutex_unlock(&resource_mutex);
+	return count;
+}	
 
 static void copy_disks(void *dst, void *src, int num_disks)
 {
@@ -1293,6 +1324,10 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 
 	pthread_mutex_lock(&resource_mutex);
 
+	/*
+	 * Check if this resource already exists on any of the resource lists.
+	 */
+
 	r = find_resource(token, &resources_rem);
 	if (r) {
 		if (!com.quiet_fail)
@@ -1326,6 +1361,73 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 		pthread_mutex_unlock(&resource_mutex);
 		return -EEXIST;
 	}
+
+	/* caller did not ask for orphan, but an orphan exists */
+
+	r = find_resource(token, &resources_orphan);
+	if (r && !(cmd_flags & SANLK_ACQUIRE_ORPHAN)) {
+		log_errot(token, "acquire_token found orphan");
+		pthread_mutex_unlock(&resource_mutex);
+		return -EUCLEAN;
+	}
+
+	/* caller asked for exclusive orphan, but a shared orphan exists */
+
+	if (r && (cmd_flags & SANLK_ACQUIRE_ORPHAN) && 
+	    (r->flags & R_SHARED) && !(token->acquire_flags & SANLK_RES_SHARED)) {
+		log_errot(token, "acquire_token orphan is shared");
+		pthread_mutex_unlock(&resource_mutex);
+		return -EUCLEAN;
+	}
+
+	/* caller asked for a shared orphan, but an exclusive orphan exists */
+
+	if (r && (cmd_flags & SANLK_ACQUIRE_ORPHAN) &&
+	    !(r->flags & R_SHARED) && (token->acquire_flags & SANLK_RES_SHARED)) {
+		log_errot(token, "acquire_token orphan is exclusive");
+		pthread_mutex_unlock(&resource_mutex);
+		return -EUCLEAN;
+	}
+
+	/* caller asked for shared orphan, and a shared orphan exists */
+
+	if (r && (cmd_flags & SANLK_ACQUIRE_ORPHAN) && 
+	    (r->flags & R_SHARED) && (token->acquire_flags & SANLK_RES_SHARED)) {
+		log_token(token, "acquire_token adopt shared orphan");
+		token->resource = r;
+		list_add(&token->list, &r->tokens);
+		list_move(&r->list, &resources_held);
+		pthread_mutex_unlock(&resource_mutex);
+		return SANLK_OK;
+	}
+
+	/* caller asked for exclusive orphan, and an exclusive orphan exists */
+
+	if (r && (cmd_flags & SANLK_ACQUIRE_ORPHAN) &&
+	    !(r->flags & R_SHARED) && !(token->acquire_flags & SANLK_RES_SHARED)) {
+		log_token(token, "acquire_token adopt orphan");
+		token->r.lver = r->leader.lver;
+		r->pid = token->pid;
+		token->resource = r;
+		list_add(&token->list, &r->tokens);
+		list_move(&r->list, &resources_held);
+		pthread_mutex_unlock(&resource_mutex);
+
+		/* do this to initialize some token fields */
+		rv = open_disks(token->disks, token->r.num_disks);
+		if (rv < 0) {
+			/* TODO: what parts above need to be undone? */
+			log_errot(token, "acquire_token orphan open error %d", rv);
+			release_token_nodisk(task, token);
+			return rv;
+		}
+		close_disks(token->disks, token->r.num_disks);
+		return SANLK_OK;
+	}
+
+	/*
+	 * The resource does not exist, so create it.
+	 */
 
 	r = new_resource(token);
 	if (!r) {
@@ -2038,6 +2140,48 @@ static void *resource_thread(void *arg GNUC_UNUSED)
 	return NULL;
 }
 
+int release_orphan(struct sanlk_resource *res)
+{
+	struct resource *r, *safe;
+	int count = 0;
+
+	pthread_mutex_lock(&resource_mutex);
+	list_for_each_entry_safe(r, safe, &resources_orphan, list) {
+		if (strncmp(r->r.lockspace_name, res->lockspace_name, NAME_ID_SIZE))
+			continue;
+
+		if (!res->name[0] || !strncmp(r->r.name, res->name, NAME_ID_SIZE)) {
+			log_debug("release orphan %.48s:%.48s", r->r.lockspace_name, r->r.name);
+			r->flags |= R_THREAD_RELEASE;
+			list_move(&r->list, &resources_rem);
+			count++;
+		}
+	}
+	pthread_mutex_unlock(&resource_mutex);
+
+	if (count) {
+		resource_thread_work = 1;
+		pthread_cond_signal(&resource_cond);
+	}
+
+	return count;
+}
+
+void purge_resource_orphans(char *space_name)
+{
+	struct resource *r, *safe;
+
+	pthread_mutex_lock(&resource_mutex);
+	list_for_each_entry_safe(r, safe, &resources_orphan, list) {
+		if (strncmp(r->r.lockspace_name, space_name, NAME_ID_SIZE))
+			continue;
+		log_debug("purge orphan %.48s:%.48s", r->r.lockspace_name, r->r.name);
+		list_del(&r->list);
+		free_resource(r);
+	}
+	pthread_mutex_unlock(&resource_mutex);
+}
+
 /*
  * This is called by the main_loop once a second during normal operation.
  * The resources_rem list should normally be empty, so this does nothing.
@@ -2064,6 +2208,7 @@ int setup_token_manager(void)
 	INIT_LIST_HEAD(&resources_add);
 	INIT_LIST_HEAD(&resources_rem);
 	INIT_LIST_HEAD(&resources_held);
+	INIT_LIST_HEAD(&resources_orphan);
 	INIT_LIST_HEAD(&host_events);
 
 	rv = pthread_create(&resource_pt, NULL, resource_thread, NULL);

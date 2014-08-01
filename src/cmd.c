@@ -568,6 +568,19 @@ static void cmd_release(struct task *task, struct cmd_args *ca)
 		goto do_remove;
 	}
 
+	if (ca->header.cmd_flags & SANLK_REL_ORPHAN) {
+		rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
+		if (rv != sizeof(struct sanlk_resource)) {
+			log_error("cmd_release %d,%d,%d recv res %d %d",
+				  cl_ci, cl_fd, cl_pid, rv, errno);
+			result = -ENOTCONN;
+			goto do_remove;
+		}
+
+		result = release_orphan(&res);
+		goto out;
+	}
+
 	if (ca->header.cmd_flags & SANLK_REL_RENAME) {
 		rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
 		if (rv != sizeof(struct sanlk_resource)) {
@@ -664,7 +677,7 @@ static void cmd_release(struct task *task, struct cmd_args *ca)
 		free(token);
 	}
 
-
+ out:
 	pthread_mutex_lock(&cl->mutex);
 	log_debug("cmd_release %d,%d,%d result %d pid_dead %d count %d",
 		  cl_ci, cl_fd, cl_pid, result, cl->pid_dead,
@@ -2117,6 +2130,9 @@ static int print_state_lockspace(struct space *sp, char *str, const char *list_n
 		 "renew_fail=%d "
 		 "space_dead=%d "
 		 "killing_pids=%d "
+		 "used_retries=%u "
+		 "external_used=%d "
+		 "used_by_orphans=%d "
 		 "corrupt_result=%d "
 		 "acquire_last_result=%d "
 		 "renewal_last_result=%d "
@@ -2131,6 +2147,9 @@ static int print_state_lockspace(struct space *sp, char *str, const char *list_n
 		 sp->renew_fail,
 		 sp->space_dead,
 		 sp->killing_pids,
+		 sp->used_retries,
+		 (sp->flags & SP_EXTERNAL_USED) ? 1 : 0,
+		 (sp->flags & SP_USED_BY_ORPHANS) ? 1 : 0,
 		 sp->lease_status.corrupt_result,
 		 sp->lease_status.acquire_last_result,
 		 sp->lease_status.renewal_last_result,

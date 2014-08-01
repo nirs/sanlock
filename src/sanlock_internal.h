@@ -161,6 +161,9 @@ struct host_status {
 /* The max number of connections that can get events for a lockspace. */
 #define MAX_EVENT_FDS 32
 
+#define SP_EXTERNAL_USED   0x00000001
+#define SP_USED_BY_ORPHANS 0x00000002
+
 struct space {
 	struct list_head list;
 	char space_name[NAME_ID_SIZE];
@@ -170,12 +173,13 @@ struct space {
 	struct sync_disk host_id_disk;
 	uint32_t io_timeout;
 	uint32_t set_bitmap_seconds;
+	uint32_t flags; /* SP_ */
+	uint32_t used_retries;
 	int align_size;
 	int renew_fail;
 	int space_dead;
 	int killing_pids;
 	int external_remove;
-	int external_used;
 	int thread_stop;
 	int wd_fd;
 	int event_fds[MAX_EVENT_FDS];
@@ -290,6 +294,12 @@ struct command_line {
 	int aio_arg;
 	int io_timeout_arg;
 	int set_bitmap_seconds;
+	int persistent;
+	int orphan_set;
+	int orphan;
+	int used_set;
+	int used;
+	int all;
 	char *uname;			/* -U */
 	int uid;				/* -U */
 	char *gname;			/* -G */
@@ -347,6 +357,7 @@ enum {
 	ACT_GETS,
 	ACT_VERSION,
 	ACT_SET_EVENT,
+	ACT_SET_CONFIG,
 };
 
 EXTERN int external_shutdown;

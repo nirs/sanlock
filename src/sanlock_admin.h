@@ -137,10 +137,17 @@ int sanlock_get_hosts(const char *ls_name, uint64_t host_id,
  * will lead to the watchdog firing.
  *
  * UNUSED: clears the USED flag in the lockspace.
+ *
+ * USED_BY_ORPHANS: the lockspace should be considered USED
+ * if there are orphan resources for the lockspace.
+ *
+ * UNUSED_BY_ORPHANS: clear the USED_BY_ORPHAN flag in the lockspace.
  */
 
-#define SANLK_CONFIG_USED	0x00000001
-#define SANLK_CONFIG_UNUSED	0x00000002
+#define SANLK_CONFIG_USED		0x00000001
+#define SANLK_CONFIG_UNUSED		0x00000002
+#define SANLK_CONFIG_USED_BY_ORPHANS	0x00000004
+#define SANLK_CONFIG_UNUSED_BY_ORPHANS	0x00000008
 
 int sanlock_set_config(const char *ls_name, uint32_t flags, uint32_t cmd, void *data);
 

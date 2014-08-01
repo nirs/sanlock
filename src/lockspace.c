@@ -347,6 +347,10 @@ void check_other_leases(struct space *sp, char *buf)
 		 * the main thread to be delayed with that.)
 		 */
 		if (he.event) {
+			/*
+			 * lock order: spaces_mutex (main_loop), then
+			 * resource_mutex (add_host_event).
+			 */
 			log_space(sp, "host event from host_id %d", i+1);
 			add_host_event(sp->space_id, &he,
 				       hs->owner_id, hs->owner_generation);
@@ -446,6 +450,14 @@ static int corrupt_result(int result)
 		return 0;
 	}
 }
+
+/*
+ * This thread must not be stopped unless all pids that may be using any
+ * resources in it are dead/gone.  (The USED flag in the lockspace represents
+ * pids using resources in the lockspace, when those pids are not using actual
+ * sanlock resources.  So the USED flag must also prevent this thread from
+ * stopping.)
+ */
 
 static void *lockspace_thread(void *arg_in)
 {
@@ -644,6 +656,20 @@ static void *lockspace_thread(void *arg_in)
 
 	if (opened)
 		close(sp->host_id_disk.fd);
+
+	/*
+	 * TODO: are there cases where struct resources for this lockspace
+	 * still exist on resource_held/resource_add/resource_rem?  Is that ok?
+	 * Should we purge all of them here?  When a lockspace is removed and
+	 * pids are killed, their resources go through release_token_async,
+	 * which will see token->space_dead, and those resources are freed
+	 * directly.  resources that may have already been on resources_rem and
+	 * the resource_thread may be in the middle of releasing one of them.
+	 * For any further async releases, resource_thread will see that the
+	 * lockspace is going away and will just free the resource.
+	 */
+
+	purge_resource_orphans(sp->space_name);
 
 	close_task_aio(&task);
 	return NULL;
@@ -1198,17 +1224,35 @@ int lockspace_set_config(struct sanlk_lockspace *ls, GNUC_UNUSED uint32_t flags,
 
 	pthread_mutex_lock(&sp->mutex);
 
-	if (cmd == SANLK_CONFIG_USED) {
+	switch (cmd) {
+	case SANLK_CONFIG_USED:
 		if (sp->space_dead) {
 			rv = -ENOSPC;
 		} else {
-			sp->external_used = 1;
+			sp->flags |= SP_EXTERNAL_USED;
 			rv = 0;
 		}
-	} else if (cmd == SANLK_CONFIG_UNUSED) {
-		sp->external_used = 0;
+		break;
+
+	case SANLK_CONFIG_UNUSED:
+		sp->flags &= ~SP_EXTERNAL_USED;
 		rv = 0;
-	} else {
+		break;
+
+	case SANLK_CONFIG_USED_BY_ORPHANS:
+		if (sp->space_dead) {
+			rv = -ENOSPC;
+		} else {
+			sp->flags |= SP_USED_BY_ORPHANS;
+			rv = 0;
+		}
+		break;
+
+	case SANLK_CONFIG_UNUSED_BY_ORPHANS:
+		sp->flags &= ~SP_USED_BY_ORPHANS;
+		rv = 0;
+		break;
+	default:
 		rv = -EINVAL;
 	}
 	pthread_mutex_unlock(&sp->mutex);

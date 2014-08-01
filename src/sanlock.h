@@ -58,9 +58,36 @@ struct sanlk_disk {
 	uint32_t pad2;
 };
 
+/*
+ * PERSISTENT: if the pid holding the resource lease exits,
+ * the lease will not be released, but will be moved to the
+ * orphans list.  On disk and from the perspective of other
+ * hosts, nothing changes when a lease is orphaned; it continues
+ * to be held by the host.
+ *
+ * (If persistent shared locks are used on a resource, then
+ * all the locks on that resource should be persistent.)
+ *
+ * A new process can acquire an orphan resource using
+ * the ACQUIRE_ORPHAN flag.  This implies that the lockspace
+ * had continued running and the resource not released by the
+ * host between the time the resource became an orphan and was
+ * then transferred to a new process.
+ *
+ * Orphan impact on the lockspace: if the lockspace is stopping
+ * because of rem, or lease failure, the ls config option
+ * USED_BY_ORPHANS will block the release of the lockspace
+ * (like the USED option), if orphans exist for the lockspace.
+ * Without USED_BY_ORPHANS, the lockspace would exit and
+ * leave the orphan resources unchanged (not released) on disk.
+ * The unreleased orphan resources could be acquired by another
+ * host if the lockspace lease is cleanly released.
+ */
+
 #define SANLK_RES_LVER		0x1	/* lver field is set */
 #define SANLK_RES_NUM_HOSTS	0x2	/* data32 field is new num_hosts */
 #define SANLK_RES_SHARED	0x4
+#define SANLK_RES_PERSISTENT	0x8
 
 struct sanlk_resource {
 	char lockspace_name[SANLK_NAME_LEN]; /* terminating \0 not required */

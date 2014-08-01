@@ -1,4 +1,4 @@
-.TH SANLOCK 8 2011-08-05
+.TH SANLOCK 8 2011-08-04
 
 .SH NAME
 sanlock \- shared storage lock manager
@@ -238,8 +238,14 @@ use watchdog through wdmd
 .BR -h " 0|1"
 use high priority (RR) scheduling
 
-.BR -l " num"
+.BI -l " num"
 use mlockall (0 none, 1 current, 2 current and future)
+
+.BI -b " sec"
+seconds a host id bit will remain set in delta lease bitmap
+
+.BI -e " str"
+local host name used in delta leases
 
 ./" non-aio is untested and may not work
 ./" .BR \-a " 0|1"
@@ -392,6 +398,19 @@ in its bitmap, and set the generation, event and data values in its own
 delta lease.  An application that has registered for events from this
 lockspace on the destination host will get the event that has been set
 when the destination sees the event during its next delta lease renewal.
+
+.BR "sanlock client set_config -s" " LOCKSPACE
+
+Set a configuration value for a lockspace.
+Only lockspace_name is used from the LOCKSPACE argument.
+The USED flag has the same effect on a lockspace as a process
+holding a resource lease that will not exit.  The USED_BY_ORPHANS
+flag means that an orphan resource lease will have the same effect
+as the USED.
+.br
+\-u 0|1 Set (1) or clear (0) the USED flag.
+.br
+\-O 0|1 Set (1) or clear (0) the USED_BY_ORPHANS flag.
 
 .SS Direct Command
 
@@ -576,6 +595,15 @@ run that will terminate or suspend each pid, and explicitly release the
 leases it held.  sanlock will run this program for each pid.  It has N
 seconds to terminate the pid or explicitly release its leases before
 sanlock escalates to SIGKILL for the remaining M seconds.
+
+.SS Persistent and orphan resource leases
+
+A resource lease can be acquired with the PERSISTENT flag (-P 1).  If the
+process holding the lease exits, the lease will not be released, but kept
+on an orphan list.  Another local process can acquire an orphan lease
+using the ORPHAN flag (-O 1), or release the orphan lease using the ORPHAN
+flag (-O 1).  All orphan leases can be released by setting the lockspace
+name (-s lockspace_name) with no resource name.
 
 .SH SEE ALSO
 .BR wdmd (8)

@@ -82,6 +82,8 @@ static const char *add_rem_str(struct sanlk_state *st, char *str)
 		return "ADD";
 	if (strstr(str, "list=rem"))
 		return "REM";
+	if (strstr(str, "list=orphan"))
+		return "ORPHAN";
 
 	return NULL;
 }

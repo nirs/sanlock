@@ -30,6 +30,7 @@
 
 /* acquire flags */
 #define SANLK_ACQUIRE_LVB	0x00000001
+#define SANLK_ACQUIRE_ORPHAN	0x00000002
 
 /*
  * release flags
@@ -46,10 +47,20 @@
  * arg is the resource to release, and the
  * second resource arg contains the new name
  * for the first resource.
+ *
+ * SANLK_REL_ORPHAN
+ * Release orphan resources asynchronously.
+ * Takes a single resource struct.  If the
+ * resource name is empty, then all orphans
+ * for the specified lockspace are released.
+ * If the resource name is set, then an
+ * orphan with the matching resource name is
+ * released.
  */
 
 #define SANLK_REL_ALL		0x00000001
 #define SANLK_REL_RENAME	0x00000002
+#define SANLK_REL_ORPHAN	0x00000004
 
 /*
  * request flags

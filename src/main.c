@@ -686,12 +686,28 @@ static int all_pids_dead(struct space *sp)
 	if (stuck || check)
 		return 0;
 
-	if (sp->external_used) {
-		log_erros(sp, "external_used keeping lockspace running");
+	if (sp->flags & SP_EXTERNAL_USED) {
+		if (!sp->used_retries || !(sp->used_retries % 1000))
+			log_erros(sp, "used external blocking lockspace removal");
+		sp->used_retries++;
 		return 0;
 	}
 
-	if (sp->renew_fail)
+	if (sp->flags & SP_USED_BY_ORPHANS) {
+		/*
+		 * lock ordering: spaces_mutex (main_loop), then
+		 * resource_mutex (resource_orphan_count)
+		 */
+		int orphans = resource_orphan_count(sp->space_name);
+		if (orphans) {
+			if (!sp->used_retries || !(sp->used_retries % 1000))
+				log_erros(sp, "used by orphan %d blocking lockspace removal", orphans);
+			sp->used_retries++;
+			return 0;
+		}
+	}
+
+	if (sp->renew_fail || sp->used_retries)
 		log_erros(sp, "all pids clear");
 	else
 		log_space(sp, "all pids clear");
@@ -1818,14 +1834,17 @@ static void print_usage(void)
 	printf("  -w 0|1        use watchdog through wdmd (%d)\n", DEFAULT_USE_WATCHDOG);
 	printf("  -h 0|1        use high priority (RR) scheduling (%d)\n", DEFAULT_HIGH_PRIORITY);
 	printf("  -l <num>      use mlockall (0 none, 1 current, 2 current and future) (%d)\n", DEFAULT_MLOCK_LEVEL);
-	printf("  -a 0|1        use async io (%d)\n", DEFAULT_USE_AIO);
-	printf("  -o 0|1        io timeout in seconds (%d)\n", DEFAULT_IO_TIMEOUT);
+	printf("  -b <sec>      seconds a host id bit will remain set in delta lease bitmap\n");
+	printf("                (default: 6 * io_timeout)\n");
+	printf("  -e <str>      local host name used in delta leases\n");
+	printf("                (default: generate new uuid)\n");
 	printf("\n");
 	printf("sanlock client <action> [options]\n");
 	printf("sanlock client status [-D] [-o p|s]\n");
 	printf("sanlock client gets [-h 0|1]\n");
 	printf("sanlock client host_status -s LOCKSPACE [-D]\n");
 	printf("sanlock client set_event -s LOCKSPACE -i <host_id> [-g gen] -e <event> -d <data>\n");
+	printf("sanlock client set_config -s LOCKSPACE [-u 0|1] [-O 0|1]\n");
 	printf("sanlock client log_dump\n");
 	printf("sanlock client shutdown [-f 0|1] [-w 0|1]\n");
 	printf("sanlock client init -s LOCKSPACE | -r RESOURCE\n");
@@ -1970,6 +1989,8 @@ static int read_command_line(int argc, char *argv[])
 			com.action = ACT_VERSION;
 		else if (!strcmp(act, "set_event"))
 			com.action = ACT_SET_EVENT;
+		else if (!strcmp(act, "set_config"))
+			com.action = ACT_SET_CONFIG;
 		else {
 			log_tool("client action \"%s\" is unknown", act);
 			exit(EXIT_FAILURE);
@@ -2051,6 +2072,7 @@ static int read_command_line(int argc, char *argv[])
 			log_syslog_priority = atoi(optionarg);
 			break;
 		case 'a':
+			com.all = atoi(optionarg);
 			com.aio_arg = atoi(optionarg);
 			if (com.aio_arg && com.aio_arg != 1)
 				com.aio_arg = 1;
@@ -2129,6 +2151,17 @@ static int read_command_line(int argc, char *argv[])
 		case 'G':
 			com.gname = optionarg;
 			com.gid = group_to_gid(optionarg);
+			break;
+		case 'O':
+			com.orphan_set = 1;
+			com.orphan = atoi(optionarg);
+			break;
+		case 'P':
+			com.persistent = atoi(optionarg);
+			break;
+		case 'u':
+			com.used_set = 1;
+			com.used = atoi(optionarg);
 			break;
 
 		case 'c':
@@ -2392,17 +2425,24 @@ static int do_client(void)
 	struct sanlk_resource **res_args = NULL;
 	struct sanlk_resource *res;
 	char *res_state = NULL;
+	uint32_t flags = 0;
+	uint32_t config_cmd = 0;
 	int i, fd;
 	int rv = 0;
 
 	if (com.action == ACT_COMMAND || com.action == ACT_ACQUIRE) {
-		if (com.num_hosts) {
-			for (i = 0; i < com.res_count; i++) {
-				res = com.res_args[i];
+		for (i = 0; i < com.res_count; i++) {
+			res = com.res_args[i];
+
+			if (com.num_hosts) {
 				res->flags |= SANLK_RES_NUM_HOSTS;
 				res->data32 = com.num_hosts;
 			}
+
+			if (com.persistent)
+				res->flags |= SANLK_RES_PERSISTENT;
 		}
+
 	}
 
 	switch (com.action) {
@@ -2436,8 +2476,9 @@ static int do_client(void)
 		if (fd < 0)
 			goto out;
 
+		flags |= com.orphan ? SANLK_ACQUIRE_ORPHAN : 0;
 		log_tool("acquire fd %d", fd);
-		rv = sanlock_acquire(fd, -1, 0, com.res_count, com.res_args, NULL);
+		rv = sanlock_acquire(fd, -1, flags, com.res_count, com.res_args, NULL);
 		log_tool("acquire done %d", rv);
 
 		if (rv < 0)
@@ -2481,6 +2522,7 @@ static int do_client(void)
 
 	case ACT_ACQUIRE:
 		log_tool("acquire pid %d", com.pid);
+		flags |= com.orphan ? SANLK_ACQUIRE_ORPHAN : 0;
 		rv = sanlock_acquire(-1, com.pid, 0, com.res_count, com.res_args, NULL);
 		log_tool("acquire done %d", rv);
 		break;
@@ -2493,7 +2535,25 @@ static int do_client(void)
 
 	case ACT_RELEASE:
 		log_tool("release pid %d", com.pid);
-		rv = sanlock_release(-1, com.pid, 0, com.res_count, com.res_args);
+		/*
+		 * Odd case to specify: release all orphan resources for the named lockspace.
+		 * Uses -s lockspace_name instead of using -r, but the function takes a
+		 * struct resource, so we take the lockspace arg and copy the name into
+		 * a resource struct.  When releasing one named orphan resource, the
+		 * usual -r lockspace_name:resource_name arg is used.
+		 */
+		if (com.orphan && !com.res_count && com.lockspace.name[0]) {
+			struct sanlk_resource *res_ls = malloc(sizeof(struct sanlk_resource));
+			if (!res_ls)
+				break;
+			memset(res_ls, 0, sizeof(struct sanlk_resource));
+			strcpy(res_ls->lockspace_name, com.lockspace.name);
+			com.res_args[0] = res_ls;
+			com.res_count = 1;
+		}
+		flags |= com.orphan ? SANLK_REL_ORPHAN : 0;
+		flags |= com.all ? SANLK_REL_ALL: 0;
+		rv = sanlock_release(-1, com.pid, flags, com.res_count, com.res_args);
 		log_tool("release done %d", rv);
 		break;
 
@@ -2588,6 +2648,20 @@ static int do_client(void)
 		rv = sanlock_set_event(com.lockspace.name, &he, 0);
                 log_tool("set_event done %d", rv);
                 break;
+
+	case ACT_SET_CONFIG:
+		if (com.orphan_set)
+			config_cmd = com.orphan ? SANLK_CONFIG_USED_BY_ORPHANS :
+						  SANLK_CONFIG_UNUSED_BY_ORPHANS;
+
+		else if (com.used_set)
+			config_cmd = com.used ? SANLK_CONFIG_USED :
+						SANLK_CONFIG_UNUSED;
+
+		log_tool("set_config %s %u", com.lockspace.name, config_cmd);
+		rv = sanlock_set_config(com.lockspace.name, 0, config_cmd, NULL);
+		log_tool("set_config done %d", rv);
+		break;
 
 	default:
 		log_tool("action not implemented");
