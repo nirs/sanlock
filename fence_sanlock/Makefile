@@ -4,6 +4,12 @@ TARGET2 = fence_sanlock
 SOURCE1 = fence_sanlockd.c
 SOURCE2 = fence_sanlock.in
 
+OPTIMIZE_FLAG = -O2 -Wp,-D_FORTIFY_SOURCE=2
+ifeq ($(DEBUG), 1)
+	OPTIMIZE_FLAG = -O0
+	CFLAGS += -g
+endif
+
 CFLAGS += -D_GNU_SOURCE -g \
 	-Wall \
 	-Wformat \
@@ -18,10 +24,11 @@ CFLAGS += -D_GNU_SOURCE -g \
 	-Winline \
 	-Wredundant-decls \
 	-Wno-sign-compare \
-	-Wp,-D_FORTIFY_SOURCE=2 \
 	-fexceptions \
 	-fasynchronous-unwind-tables \
-	-fdiagnostics-show-option
+	-fdiagnostics-show-option \
+	$(OPTIMIZE_FLAG) \
+	$(NULL)
 
 VER=$(shell cat ../VERSION)
 CFLAGS += -DVERSION=\"$(VER)\" -I../src -I../wdmd

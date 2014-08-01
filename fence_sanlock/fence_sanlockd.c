@@ -680,6 +680,19 @@ int main(int argc, char *argv[])
 
 	log_debug("add_lockspace done %d", rv);
 
+	/*
+	 * If we allowed the lockspace to be cleanly released
+	 * while our orphan lock still existed, then another
+	 * host could acquire our lease as soon as we release
+	 * the lockspace delta lease.
+	 */
+
+	rv = sanlock_set_config(ls.name, 0, SANLK_CONFIG_USED_BY_ORPHANS, NULL);
+	if (rv < 0) {
+		log_error("set_config error %d", rv);
+		goto out_lockspace;
+	}
+
 	memset(rdbuf, 0, sizeof(rdbuf));
 	r = (struct sanlk_resource *)&rdbuf;
 	strcpy(r->lockspace_name, "fence");
@@ -687,6 +700,7 @@ int main(int argc, char *argv[])
 	sprintf(r->disks[0].path, "%s", lease_path);
 	r->disks[0].offset = our_host_id * align;
 	r->num_disks = 1;
+	r->flags = SANLK_RES_PERSISTENT;
 
 	log_debug("acquire begin");
 
