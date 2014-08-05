@@ -4,7 +4,6 @@ TARGET2 = sanlk-reset
 SOURCE1 = sanlk_resetd.c
 SOURCE2 = sanlk_reset.c
 
-DEBUG = 1
 OPTIMIZE_FLAG = -O2 -Wp,-D_FORTIFY_SOURCE=2
 ifeq ($(DEBUG), 1)
    OPTIMIZE_FLAG = -O0
