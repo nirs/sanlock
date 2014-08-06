@@ -1,6 +1,7 @@
 [Unit]
 Description=daemon for host reset
-After=syslog.target wdmd.service sanlock.service
+After=wdmd.service sanlock.service
+Requires=wdmd.service sanlock.service
 
 [Service]
 Type=forking

@@ -4,7 +4,6 @@ After=syslog.target
 
 [Service]
 Type=forking
-ControlGroup=cpu:/
 ExecStart=/lib/systemd/systemd-wdmd start
 ExecStop=/lib/systemd/systemd-wdmd stop
 
