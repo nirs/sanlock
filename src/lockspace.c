@@ -451,6 +451,20 @@ static int corrupt_result(int result)
 	}
 }
 
+static void close_event_fds(struct space *sp)
+{
+	int i;
+
+	pthread_mutex_lock(&sp->mutex);
+	for (i = 0; i < MAX_EVENT_FDS; i++) {
+		if (sp->event_fds[i] == -1)
+			continue;
+
+		close(sp->event_fds[i]);
+		sp->event_fds[i] = -1;
+	}
+}
+
 /*
  * This thread must not be stopped unless all pids that may be using any
  * resources in it are dead/gone.  (The USED flag in the lockspace represents
@@ -670,6 +684,8 @@ static void *lockspace_thread(void *arg_in)
 	 */
 
 	purge_resource_orphans(sp->space_name);
+
+	close_event_fds(sp);
 
 	close_task_aio(&task);
 	return NULL;
