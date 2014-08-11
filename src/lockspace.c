@@ -463,6 +463,7 @@ static void close_event_fds(struct space *sp)
 		close(sp->event_fds[i]);
 		sp->event_fds[i] = -1;
 	}
+	pthread_mutex_unlock(&sp->mutex);
 }
 
 /*
