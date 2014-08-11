@@ -1374,11 +1374,11 @@ int lockspace_set_event(struct sanlk_lockspace *ls, struct sanlk_host_event *he,
 	uint64_t now;
 	int i, rv = 0;
 
-	if (!ls->name[0])
+	if (!ls->name[0] || !he->host_id || he->host_id > DEFAULT_MAX_HOSTS) {
+		log_error("set_event invalid args host_id %llu name %s",
+			  (unsigned long long)he->host_id, ls->name);
 		return -EINVAL;
-
-	if (!he->host_id || he->host_id > DEFAULT_MAX_HOSTS)
-		return -EINVAL;
+	}
 
 	pthread_mutex_lock(&spaces_mutex);
 	sp = _search_space(ls->name, NULL, 0, &spaces, NULL, NULL, NULL);
