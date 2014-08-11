@@ -497,6 +497,11 @@ int main(int argc, char *argv[])
 
 	memset(&he, 0, sizeof(he));
 
+	if (argc < 2) {
+		usage();
+		exit(EXIT_FAILURE);
+	}
+
 	static struct option long_options[] = {
 		{"help",	   no_argument,       0, 'h' },
 		{"version",        no_argument,       0, 'V' },
