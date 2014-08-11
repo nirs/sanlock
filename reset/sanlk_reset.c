@@ -463,6 +463,9 @@ static void usage(void)
 	printf("Update the local sanlk-resetd to not watch lockspaces for reset events:\n");
 	printf("%s end lockspace_name ...\n", prog_name);
 	printf("\n");
+	printf("Update the local sanlk-resetd to clear all lockspaces being watched:\n");
+	printf("%s clear all\n", prog_name);
+	printf("\n");
 	printf("Reset another host through a lockspace it is watching:\n");
 	printf("%s reset lockspace_name:host_id ...\n", prog_name);
 	printf("  --host-id | -i <num>\n");
@@ -562,7 +565,7 @@ int main(int argc, char *argv[])
 	 * Update local sanlk-resetd.
 	 */
 
-	if (!strcmp(cmd, "reg") || !strcmp(cmd, "end")) {
+	if (!strcmp(cmd, "reg") || !strcmp(cmd, "end") || !strcmp(cmd, "clear")) {
 		return update_local_daemon(cmd);
 	}
 

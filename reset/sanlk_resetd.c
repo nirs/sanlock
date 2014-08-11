@@ -251,6 +251,21 @@ static void set_event_out(char *ls_name, uint64_t event_out, uint64_t from_host,
 		log_error("set_event error %d ls %s", rv, ls_name);
 }
 
+static int find_ls(char *name)
+{
+	int i;
+
+	for (i = 0; i < MAX_LS; i++) {
+		if (!ls_names[i])
+			continue;
+
+		if (!strcmp(name, ls_names[i]))
+			return i;
+	}
+
+	return -1;
+}
+
 static int register_ls(int i)
 {
 	int fd;
@@ -260,12 +275,12 @@ static int register_ls(int i)
 
 	fd = sanlock_reg_event(ls_names[i], NULL, 0);
 	if (fd < 0) {
-		log_error("reg_event error %d ls %s", fd, ls_names[i]);
+		log_error("reg_event %d error %d ls %s", i, fd, ls_names[i]);
 		free(ls_names[i]);
 		ls_names[i] = NULL;
 		return fd;
 	} else {
-		log_debug("reg_event fd %d ls %s", fd, ls_names[i]);
+		log_debug("reg_event %d fd %d ls %s", i, fd, ls_names[i]);
 		ls_fd[i] = fd;
 		pollfd[i].fd = fd;
 		pollfd[i].events = POLLIN;
@@ -276,6 +291,7 @@ static int register_ls(int i)
 
 static void unregister_ls(int i)
 {
+	log_debug("end_event %d fd %d ls %s", i, ls_fd[i], ls_names[i]);
 	sanlock_end_event(ls_fd[i], ls_names[i], 0);
 	free(ls_names[i]);
 	ls_names[i] = NULL;
@@ -458,7 +474,7 @@ static void process_update(int fd)
 		return;
 	}
 
-	buf[UPDATE_SIZE] = '\0';
+	buf[UPDATE_SIZE-1] = '\0';
 
 	rv = sscanf(buf, "%s %s", cmd, name);
 	if (rv != 2) {
@@ -468,6 +484,15 @@ static void process_update(int fd)
 
 	if (!strcmp(cmd, "reg")) {
 		log_debug("process_update reg %s", name);
+
+		/* if the name exists, end then reg */
+		i = find_ls(name);
+		if (i > -1) {
+			unregister_ls(i);
+			ls_names[i] = strdup(name);
+			register_ls(i);
+			return;
+		}
 
 		for (i = 0; i < MAX_LS; i++) {
 			if (ls_names[i])
@@ -486,6 +511,14 @@ static void process_update(int fd)
 				continue;
 			unregister_ls(i);
 			return;
+		}
+	} else if (!strcmp(cmd, "clear")) {
+		log_debug("process_update clear %s", name);
+
+		for (i = 0; i < MAX_LS; i++) {
+			if (!ls_names[i])
+				continue;
+			unregister_ls(i);
 		}
 	} else {
 		log_debug("process_update cmd unknown");
