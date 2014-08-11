@@ -446,14 +446,27 @@ static int setup_update(void)
 {
 	int s, rv;
 
+	rv = mkdir(SANLK_RESETD_RUNDIR, 0755);
+	if (rv < 0 && errno != EEXIST)
+		return rv;
+
 	s = setup_resetd_socket();
 
+	unlink(update_addr.sun_path);
 	rv = bind(s, (struct sockaddr *) &update_addr, update_addrlen);
 	if (rv < 0)
-		return rv;
+		goto fail_close;
+
+	rv = chmod(update_addr.sun_path, SANLK_RESETD_SOCKET_MODE);
+	if (rv < 0)
+		goto fail_close;
 
 	update_fd = s;
 	return 0;
+
+fail_close:
+	close(s);
+	return -1;
 }
 
 static void process_update(int fd)

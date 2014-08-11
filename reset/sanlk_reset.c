@@ -439,7 +439,7 @@ static int update_local_daemon(char *cmd)
 
 		rv = sendto(s, buf, UPDATE_SIZE, 0, (struct sockaddr *)&update_addr, update_addrlen);
 		if (rv < 0) {
-			printf("Failed to update local sanlk-resetd %d\n", rv);
+			printf("Failed to update local sanlk-resetd: %s\n", strerror(errno));
 			return rv;
 		} else {
 			printf("Updated %s %s\n", cmd, ls_names[i]);
