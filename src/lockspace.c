@@ -337,6 +337,7 @@ void check_other_leases(struct space *sp, char *buf)
 		 */
 
 		memset(&he, 0, sizeof(he));
+		he.host_id = sp->host_id;
 		he.generation = leader->write_id;
 		he.event = leader->write_generation;
 		he.data = leader->write_timestamp;
