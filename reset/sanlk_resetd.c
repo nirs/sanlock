@@ -519,12 +519,12 @@ static void process_update(int fd)
 	} else if (!strcmp(cmd, "end")) {
 		log_debug("process_update end %s", name);
 
-		for (i = 0; i < MAX_LS; i++) {
-			if (!ls_names[i] || strcmp(ls_names[i], name))
-				continue;
+		i = find_ls(name);
+		if (i > -1) {
 			unregister_ls(i);
 			return;
 		}
+
 	} else if (!strcmp(cmd, "clear")) {
 		log_debug("process_update clear %s", name);
 
