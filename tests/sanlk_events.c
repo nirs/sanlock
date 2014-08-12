@@ -85,7 +85,9 @@ int main(int argc, char *argv[])
 					break;
 			 	}
 
-				printf("get_event 0x%llx 0x%llx from %llu %llu\n",
+				printf("get_event host_id %llu generation %llu event 0x%llx data 0x%llx from %llu %llu\n",
+					(unsigned long long)he.host_id,
+					(unsigned long long)he.generation,
 					(unsigned long long)he.event,
 					(unsigned long long)he.data,
 					(unsigned long long)from_host,
