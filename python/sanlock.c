@@ -1243,6 +1243,254 @@ py_exception_errno(PyObject *self, PyBaseExceptionObject *exc_obj)
     return exc_errno;
 }
 
+/* reg_event */
+PyDoc_STRVAR(pydoc_reg_event, "\
+reg_event(lockspace) -> int\n\
+Register an event listener for lockspace and return an open file descriptor\n\
+for waiting for lockspace events. When the file descriptor becomes readable,\n\
+you can use get_event to get pending events. When you are done, you must\n\
+unregister the event listener using end_event.");
+
+static PyObject *
+py_reg_event(PyObject *self __unused, PyObject *args)
+{
+    const char *lockspace = NULL;
+    int fd = -1;
+
+    if (!PyArg_ParseTuple(args, "s", &lockspace))
+        return NULL;
+
+    Py_BEGIN_ALLOW_THREADS
+    fd = sanlock_reg_event(lockspace, NULL /* event */, 0 /* flags */);
+    Py_END_ALLOW_THREADS
+
+    if (fd < 0) {
+        __set_exception(fd, "Unable to register event fd");
+        return NULL;
+    }
+
+    return Py_BuildValue("i", fd);
+}
+
+/* get_event */
+PyDoc_STRVAR(pydoc_get_event, "\
+get_event(fd) -> list\n\
+Get list of lockspace events.\n\
+\n\
+Each event is a dictionary with the following keys:\n\
+  from_host_id      host id of the host setting this event (int)\n\
+  from_generation   host generation of the host setting this event (int)\n\
+  host_id           my host id (int)\n\
+  generation        my generation where the event was set (int)\n\
+  event             event number (int)\n\
+  data              optional event data (int)\n\
+");
+
+static PyObject *
+py_get_event(PyObject *self __unused, PyObject *args)
+{
+    int fd = -1;
+    struct sanlk_host_event he;
+    uint64_t from_host_id;
+    uint64_t from_generation;
+    PyObject *events = NULL;
+    PyObject *item = NULL;
+    PyObject *value = NULL;
+    int rv;
+
+    if (!PyArg_ParseTuple(args, "i", &fd))
+        return NULL;
+
+    if ((events = PyList_New(0)) == NULL)
+        goto exit_fail;
+
+    for (;;) {
+        Py_BEGIN_ALLOW_THREADS
+        rv = sanlock_get_event(fd, 0, &he, &from_host_id, &from_generation);
+        Py_END_ALLOW_THREADS
+
+        if (rv == -EAGAIN)
+            break;
+
+        if (rv != 0) {
+            __set_exception(rv, "Unable to get events");
+            goto exit_fail;
+        }
+
+        if ((item = PyDict_New()) == NULL)
+            goto exit_fail;
+
+        /* from_host_id */
+        if ((value = PyLong_FromUnsignedLongLong(from_host_id)) == NULL)
+            goto exit_fail;
+        rv = PyDict_SetItemString(item, "from_host_id", value);
+        Py_DECREF(value);
+        if (rv != 0)
+            goto exit_fail;
+
+        /* from_generation */
+        if ((value = PyLong_FromUnsignedLongLong(from_generation)) == NULL)
+            goto exit_fail;
+        rv = PyDict_SetItemString(item, "from_generation", value);
+        Py_DECREF(value);
+        if (rv != 0)
+            goto exit_fail;
+
+        /* host_id */
+        if ((value = PyLong_FromUnsignedLongLong(he.host_id)) == NULL)
+            goto exit_fail;
+        rv = PyDict_SetItemString(item, "host_id", value);
+        Py_DECREF(value);
+        if (rv != 0)
+            goto exit_fail;
+
+        /* generation */
+        if ((value = PyLong_FromUnsignedLongLong(he.generation)) == NULL)
+            goto exit_fail;
+        rv = PyDict_SetItemString(item, "generation", value);
+        Py_DECREF(value);
+        if (rv != 0)
+            goto exit_fail;
+
+        /* event */
+        if ((value = PyLong_FromUnsignedLongLong(he.event)) == NULL)
+            goto exit_fail;
+        rv = PyDict_SetItemString(item, "event", value);
+        Py_DECREF(value);
+        if (rv != 0)
+            goto exit_fail;
+
+        /* data */
+        if ((value = PyLong_FromUnsignedLongLong(he.data)) == NULL)
+            goto exit_fail;
+        rv = PyDict_SetItemString(item, "data", value);
+        Py_DECREF(value);
+        if (rv != 0)
+            goto exit_fail;
+
+        if (PyList_Append(events, item) != 0)
+            goto exit_fail;
+
+        Py_DECREF(item);
+        item = NULL;
+    }
+
+    return events;
+
+exit_fail:
+    Py_XDECREF(item);
+    Py_XDECREF(events);
+    return NULL;
+}
+
+/* end_event */
+PyDoc_STRVAR(pydoc_end_event, "\
+end_event(fd, lockspace)\n\
+Unregister an event listener for lockspace registered with reg_event.");
+
+static PyObject *
+py_end_event(PyObject *self __unused, PyObject *args)
+{
+    int fd = -1;
+    const char *lockspace = NULL;
+    int rv;
+
+    if (!PyArg_ParseTuple(args, "is", &fd, &lockspace))
+        return NULL;
+
+    Py_BEGIN_ALLOW_THREADS
+    rv = sanlock_end_event(fd, lockspace, 0 /* flags */);
+    Py_END_ALLOW_THREADS
+
+    if (rv < 0) {
+        __set_exception(rv, "Unable to unregister event fd");
+        return NULL;
+    }
+
+    Py_RETURN_NONE;
+}
+
+/* set_event */
+PyDoc_STRVAR(pydoc_set_event, "\
+set_event(lockspace, host_id, generation, event, data=0, flags=0)\n\
+Set events to hosts on a lockspace.\n\
+\n\
+Arguments\n\
+  lockspace         lockspace name (str)\n\
+  host_id           recipient host_id (int)\n\
+  generation        recipient generation (int)\n\
+  event             event number (int)\n\
+  data              optional event data (int)\n\
+  flags             optional combination of event flags (int)\n\
+\n\
+Flags\n\
+  SETEV_CUR_GENERATION      if generation is zero, use current host\n\
+                            generation.\n\
+  SETEV_CLEAR_HOSTID        clear the host_id in the next renewal so host_id\n\
+                            will stop seeing this event. If the same event\n\
+                            was sent to other hosts, they will continue to\n\
+                            see the event until the event is cleared.\n\
+  SETEV_CLEAR_EVENT         Clear the event/data/generation values in the\n\
+                            next renewal, ending this event.\n\
+  SETEV_REPLACE_EVENT       Replace the existing event/data values of the\n\
+                            current event. Without this flag, the operation\n\
+                            will raise SanlockException with -EBUSY error.\n\
+  SETEV_ALL_HOSTS           set event for all hosts.\n\
+\n\
+Examples\n\
+\n\
+  Send event 1 to host 42 on lockspace 'foo', using current host generation:\n\
+  set_event('foo', 42, 0, 1, flags=SETEV_CUR_GENERATION)\n\
+\n\
+  Send the same event also to host 7 on lockspace 'foo', using current host\n\
+  generation. Both host 42 and host 7 will see the same event:\n\
+  set_event('foo', 7, 0, 1, flags=SETEV_CUR_GENERATION)\n\
+\n\
+  Send event 3 to all hosts on lockspace 'foo', replacing previous events\n\
+  sent to other hosts. Note that you must use a valid host_id, but the\n\
+  generation is ignored:\n\
+  set_event('foo', 1, 0, 3, flags=SETEV_ALL_HOSTS|SETEV_REPLACE_EVENT)\n\
+\n\
+Notes\n\
+\n\
+Sequential set_events with different event/data values, within a short\n\
+time span is likely to produce unwanted results, because the new\n\
+event/data values replace the previous values before the previous values\n\
+have been read.\n\
+\n\
+Unless SETEV_REPLACE_EVENT flag is used, sanlock will raise SanlockException\n\
+with -EBUSY error in this case.\n\
+");
+
+static PyObject *
+py_set_event(PyObject *self __unused, PyObject *args, PyObject *keywds)
+{
+    const char *lockspace;
+    struct sanlk_host_event he = {0};
+    uint32_t flags = 0;
+    int rv;
+
+    static char *kwlist[] = {"lockspace", "host_id", "generation", "event",
+                             "data", "flags", NULL};
+
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "sKKK|KI", kwlist,
+        &lockspace, &he.host_id, &he.generation, &he.event, &he.data,
+        &flags)) {
+        return NULL;
+    }
+
+    Py_BEGIN_ALLOW_THREADS
+    rv = sanlock_set_event(lockspace, &he, flags);
+    Py_END_ALLOW_THREADS
+
+    if (rv < 0) {
+        __set_exception(rv, "Unable to set event");
+        return NULL;
+    }
+
+    Py_RETURN_NONE;
+}
+
 static PyMethodDef
 sanlock_methods[] = {
     {"register", py_register, METH_NOARGS, pydoc_register},
@@ -1279,6 +1527,11 @@ sanlock_methods[] = {
                 METH_VARARGS|METH_KEYWORDS, pydoc_request},
     {"killpath", (PyCFunction) py_killpath,
                 METH_VARARGS|METH_KEYWORDS, pydoc_killpath},
+    {"reg_event", (PyCFunction) py_reg_event, METH_VARARGS, pydoc_reg_event},
+    {"get_event", (PyCFunction) py_get_event, METH_VARARGS, pydoc_get_event},
+    {"end_event", (PyCFunction) py_end_event, METH_VARARGS, pydoc_end_event},
+    {"set_event", (PyCFunction) py_set_event,
+                METH_VARARGS|METH_KEYWORDS, pydoc_set_event},
     {NULL, NULL, 0, NULL}
 };
 
@@ -1358,6 +1611,13 @@ initsanlock(void)
     PYSNLK_INIT_ADD_CONSTANT(SANLK_HOST_FAIL, "HOST_FAIL");
     PYSNLK_INIT_ADD_CONSTANT(SANLK_HOST_DEAD, "HOST_DEAD");
     PYSNLK_INIT_ADD_CONSTANT(SANLK_HOST_UNKNOWN, "HOST_UNKNOWN");
+
+    /* set event flags */
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_SETEV_CUR_GENERATION, "SETEV_CUR_GENERATION");
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_SETEV_CLEAR_HOSTID,   "SETEV_CLEAR_HOSTID");
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_SETEV_CLEAR_EVENT,    "SETEV_CLEAR_EVENT");
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_SETEV_REPLACE_EVENT,  "SETEV_REPLACE_EVENT");
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_SETEV_ALL_HOSTS,      "SETEV_ALL_HOSTS");
 
 #undef PYSNLK_INIT_ADD_CONSTANT
 }
