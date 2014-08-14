@@ -1,0 +1,62 @@
+.TH SANLK\-RESETD 8 2014-08-14
+
+.SH NAME
+sanlk\-resetd \- host reset daemon
+
+.SH SYNOPSIS
+.B sanlk\-resetd
+[OPTIONS]
+.IR lockspace_name " ..."
+
+.SH DESCRIPTION
+
+The sanlk\-resetd daemon gets events from specified sanlock lockspaces.
+Events are defined to cause sanlk\-resetd to:
+.br
+- use wdmd/watchdog to reset the host
+.br
+- use /proc/sysrq\-trigger to reboot the host
+
+The sanlk\-reset program can be run on another host to request that
+sanlk\-resetd reset the host it is running on.  Both hosts must be
+operational and have continued access to a common lockspace for the reset
+request to succeed.  After setting the event, the sanlk\-reset program
+monitors the host status in the sanlock lockspace until the target host is
+dead.
+
+The sanlk\-reset program can also be run on the same host as sanlk\-resetd
+to update which lockspaces the local sanlk\-resetd is watching for events.
+
+.SH OPTIONS
+.TP
+.B \-\-version, \-V
+Print version.
+
+.TP
+.B \-\-help, \-h
+Print usage.
+
+.TP
+.B \-\-foreground, \-f
+Don't fork.
+
+.TP
+.B \-\-daemon\-debug, \-D
+Enable debugging to stderr and don't fork.
+
+.TP
+.B \-\-sysrq\-reboot, \-b 0|1
+Enable/Disable (1/0) use of /proc/sysrq\-trigger to reboot.
+
+.TP
+.BI "\-\-sysrq\-delay, \-d " sec
+Delay this many seconds before using /proc/sysrq\-trigger.
+
+.TP
+.B \-\-resource-mode, \-R 0|1
+Resource leases are used (1) or not used (0) to protect storage.
+
+.SH SEE ALSO
+.BR sanlk\-reset (8)
+.BR sanlock (8)
+.BR wdmd (8)

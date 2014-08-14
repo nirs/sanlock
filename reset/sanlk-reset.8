@@ -1,0 +1,83 @@
+.TH SANLK-RESET 8 2014-08-14
+
+.SH NAME
+sanlk-reset \- host reset program
+
+.SH SYNOPSIS
+.B sanlk\-reset
+[OPTIONS]
+.I action
+.IR lockspace_name " ..."
+
+.SH DESCRIPTION
+
+The sanlk\-reset program sets events in specified sanlock lockspaces.
+Events are defined to cause sanlk\-resetd on another host to:
+.br
+- use wdmd/watchdog to reset the host
+.br
+- use /proc/sysrq\-trigger to reboot the host
+
+Both hosts must be operational and have continued access to a common
+lockspace for the reset request to succeed.  After setting the event, the
+sanlk\-reset program monitors the host status in the sanlock lockspace
+until the target host is dead.
+
+The sanlk\-reset program can also be run on the same host as sanlk\-resetd
+to update which lockspaces the local sanlk\-resetd is watching for events.
+
+.SH OPTIONS
+.TP
+.B \-\-version, \-V
+Print version.
+
+.TP
+.B \-\-help, \-h
+Print usage.
+
+.SS Reset another host
+
+The event is set in each lockspace specified.  The target host may have a
+different host id in each lockspace.
+
+.B sanlk\-reset reset
+.IR lockspace_name:host_id " ..."
+
+.TP
+.BI "\-\-host\-id, \-i " num
+Host id to reset. (Use only with single lockspace name.)
+
+.TP
+.BI "\-\-generation, \-g " num
+Generation of host. (Use only with single lockspace name.)
+
+.TP
+.B \-\-sysrq\-reboot, \-b 0|1
+Enable/Disable (1/0) use of /proc/sysrq\-trigger to reboot.
+
+.TP
+.B \-\-resource-mode, \-R 0|1
+Resource leases are used (1) or not used (0) to protect storage.
+
+.SS Update the local sanlk\-resetd
+
+\&
+
+to watch new lockspaces for reset events:
+
+.B sanlk\-reset reg
+.IR lockspace_name " ..."
+
+to not watch lockspaces for reset events:
+
+.B sanlk\-reset end
+.IR lockspace_name " ..."
+
+to clear all lockspaces being watched:
+
+.B sanlk\-reset clear all
+
+.SH SEE ALSO
+.BR sanlk\-resetd (8)
+.BR sanlock (8)
+.BR wdmd (8)
