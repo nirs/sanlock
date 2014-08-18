@@ -451,7 +451,7 @@ static int update_local_daemon(char *cmd)
 
 static void usage(void)
 {
-	printf("%s [options] reg|end|reset lockspaces\n", prog_name);
+	printf("%s [options] reg|end|clear|reset lockspaces\n", prog_name);
 	printf("  --help | -h\n");
 	printf("        Show this help information.\n");
 	printf("  --version | -V\n");
