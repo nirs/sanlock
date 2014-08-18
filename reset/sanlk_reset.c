@@ -553,12 +553,18 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	if (optind >= argc) {
+		fprintf(stderr, "command is required\n");
+		exit(2);
+	}
+
+	cmd = argv[optind];
+	optind++;
+
 	ls_count = 0;
 
 	for (i = optind; i < argc; i++) {
-		if (i == optind) {
-			cmd = argv[i];
-		} else if (ls_count == MAX_LS) {
+		if (ls_count == MAX_LS) {
 			fprintf(stderr, "ignore lockspace_name %s\n", argv[i]);
 		} else {
 			ls_names[ls_count] = argv[i];
