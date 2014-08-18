@@ -566,6 +566,11 @@ int main(int argc, char *argv[])
 		}
 	}
 
+	if (!ls_count) {
+		fprintf(stderr, "lockspace_name is required\n");
+		exit(2);
+	}
+
 	/*
 	 * Update local sanlk-resetd.
 	 */
@@ -580,11 +585,6 @@ int main(int argc, char *argv[])
 
 	if (strcmp(cmd, "reset")) {
 		fprintf(stderr, "unknown command\n");
-		exit(2);
-	}
-
-	if (!ls_count) {
-		fprintf(stderr, "lockspace_name is required\n");
 		exit(2);
 	}
 
