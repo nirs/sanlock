@@ -58,3 +58,5 @@ MANDIR=/usr/share/man
 install: all
 	$(INSTALL) -d $(DESTDIR)/$(BINDIR)
 	$(INSTALL) -c -m 755 $(TARGET1) $(TARGET2) $(DESTDIR)/$(BINDIR)
+	$(INSTALL) -m 644 sanlk-reset.8 $(DESTDIR)/$(MANDIR)/man8/
+	$(INSTALL) -m 644 sanlk-resetd.8 $(DESTDIR)/$(MANDIR)/man8/
