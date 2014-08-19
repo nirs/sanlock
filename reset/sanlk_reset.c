@@ -38,6 +38,7 @@ static struct sockaddr_un update_addr;
 static socklen_t update_addrlen;
 #include "sanlk_reset.h"
 
+#define EXIT_USAGE 2
 #define MAX_LS 64
 
 static char *prog_name;
@@ -430,7 +431,7 @@ static int update_local_daemon(char *cmd)
 	s = setup_resetd_socket();
 	if (s < 0) {
 		fprintf(stderr, "Failed to create socket %d\n", s);
-		return s;
+		return EXIT_FAILURE;
 	}
 
 	for (i = 0; i < ls_count; i++) {
@@ -440,13 +441,13 @@ static int update_local_daemon(char *cmd)
 		rv = sendto(s, buf, UPDATE_SIZE, 0, (struct sockaddr *)&update_addr, update_addrlen);
 		if (rv < 0) {
 			printf("Failed to update local sanlk-resetd: %s\n", strerror(errno));
-			return rv;
+			return EXIT_FAILURE;
 		} else {
 			printf("Updated %s %s\n", cmd, ls_names[i]);
 		}
 	}
 
-	return 0;
+	return EXIT_SUCCESS;
 }
 
 static void usage(void)
@@ -499,7 +500,7 @@ int main(int argc, char *argv[])
 
 	if (argc < 2) {
 		usage();
-		exit(EXIT_FAILURE);
+		exit(EXIT_USAGE);
 	}
 
 	static struct option long_options[] = {
@@ -549,7 +550,7 @@ int main(int argc, char *argv[])
 		case '?':
 		default:
 			usage();
-			exit(2);
+			exit(EXIT_USAGE);
 		}
 	}
 
@@ -575,7 +576,7 @@ int main(int argc, char *argv[])
 
 	if (!ls_count) {
 		fprintf(stderr, "lockspace_name is required\n");
-		exit(2);
+		exit(EXIT_USAGE);
 	}
 
 	/*
@@ -592,12 +593,12 @@ int main(int argc, char *argv[])
 
 	if (strcmp(cmd, "reset")) {
 		fprintf(stderr, "unknown command\n");
-		exit(2);
+		exit(EXIT_USAGE);
 	}
 
 	if ((ls_count > 1) && (target_host_id || target_generation)) {
 		fprintf(stderr, "-i and -g options are only allowed with a single lockspace_name\n");
-		exit(2);
+		exit(EXIT_USAGE);
 	}
 
 	for (i = 0; i < ls_count; i++) {
@@ -612,7 +613,7 @@ int main(int argc, char *argv[])
 
 		if (ls_hostids[i] < 1 || ls_hostids[i] > 2000) {
 			fprintf(stderr, "invalid host_id %d", ls_hostids[i]);
-			exit(2);
+			exit(EXIT_USAGE);
 		}
 	}
 
