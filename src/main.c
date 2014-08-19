@@ -2723,12 +2723,22 @@ static int do_direct(void)
 			 (unsigned long long)leader.timestamp);
 		log_tool("checksum 0x%0x", leader.checksum);
 		log_tool("io_timeout %u", leader.io_timeout);
-		log_tool("write_id %llu",
-			 (unsigned long long)leader.write_id);
-		log_tool("write_generation %llu",
-			 (unsigned long long)leader.write_generation);
-		log_tool("write_timestamp %llu",
-			 (unsigned long long)leader.write_timestamp);
+
+		if (com.res_args[0]) {
+			log_tool("write_id %llu",
+				 (unsigned long long)leader.write_id);
+			log_tool("write_generation %llu",
+				 (unsigned long long)leader.write_generation);
+			log_tool("write_timestamp %llu",
+				 (unsigned long long)leader.write_timestamp);
+		} else {
+			log_tool("extra1 %llu",
+				 (unsigned long long)leader.write_id);
+			log_tool("extra2 %llu",
+				 (unsigned long long)leader.write_generation);
+			log_tool("extra3 %llu",
+				 (unsigned long long)leader.write_timestamp);
+		}
 		break;
 
 	case ACT_ACQUIRE:
