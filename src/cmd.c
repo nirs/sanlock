@@ -2190,14 +2190,16 @@ static int print_state_host(struct host_status *hs, char *str)
 		 "owner_id=%llu "
 		 "owner_generation=%llu "
 		 "timestamp=%llu "
-		 "io_timeout=%u",
+		 "io_timeout=%u "
+		 "owner_name=%.48s",
 		 (unsigned long long)hs->last_check,
 		 (unsigned long long)hs->last_live,
 		 (unsigned long long)hs->last_req,
 		 (unsigned long long)hs->owner_id,
 		 (unsigned long long)hs->owner_generation,
 		 (unsigned long long)hs->timestamp,
-		 hs->io_timeout);
+		 hs->io_timeout,
+		 hs->owner_name);
 
 	return strlen(str) + 1;
 }

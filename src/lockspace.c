@@ -311,16 +311,80 @@ void check_other_leases(struct space *sp, char *buf)
 		leader_record_in(leader_end, &leader_in);
 		leader = &leader_in;
 
+		/*
+		 * If this lease has invalid fields, log an error.  Limit the logging
+		 * frequency to avoid blowing up logs if some lease is left in a bad
+		 * state for a long time.  Should we check other fields in addition
+		 * to magic and space_name?
+		 */
+		if ((leader->magic != DELTA_DISK_MAGIC) || (strncmp(leader->space_name, sp->space_name, NAME_ID_SIZE))) {
+			if (!hs->lease_bad || !(hs->lease_bad % 100)) {
+				log_erros(sp, "check_other_lease invalid for host %llu %llu ts %llu name %.48s in %.48s",
+					  (unsigned long long)hs->owner_id,
+					  (unsigned long long)hs->owner_generation,
+					  (unsigned long long)hs->timestamp,
+					  hs->owner_name,
+					  sp->space_name);
+				log_erros(sp, "check_other_lease leader %x owner %llu %llu ts %llu sn %.48s rn %.48s",
+					  leader->magic,
+					  (unsigned long long)leader->owner_id,
+					  (unsigned long long)leader->owner_generation,
+					  (unsigned long long)leader->timestamp,
+					  leader->space_name,
+					  leader->resource_name);
+			}
+			hs->lease_bad++;
+			if (!hs->lease_bad)
+				hs->lease_bad++;
+		} else {
+			if (hs->lease_bad) {
+				log_erros(sp, "check_other_lease corrected for host %llu %llu ts %llu name %.48s in %.48s",
+					  (unsigned long long)hs->owner_id,
+					  (unsigned long long)hs->owner_generation,
+					  (unsigned long long)hs->timestamp,
+					  hs->owner_name,
+					  sp->space_name);
+			}
+			hs->lease_bad = 0;
+		}
+
+		/*
+		 * Save a record of each new host instance to help with debugging.
+		 */
+		if (!hs->lease_bad &&
+		    (strncmp(hs->owner_name, leader->resource_name, NAME_ID_SIZE) ||
+		     (hs->owner_generation != leader->owner_generation))) {
+			log_level(sp->space_id, 0, NULL, LOG_WARNING,
+				  "host %llu %llu %llu %.48s",
+				  (unsigned long long)leader->owner_id,
+				  (unsigned long long)leader->owner_generation,
+				  (unsigned long long)leader->timestamp,
+				  leader->resource_name);
+			strncpy(hs->owner_name, leader->resource_name, NAME_ID_SIZE);
+		}
+
 		if (hs->owner_id == leader->owner_id &&
 		    hs->owner_generation == leader->owner_generation &&
 		    hs->timestamp == leader->timestamp) {
 			continue;
 		}
 
-		hs->owner_id = leader->owner_id;
-		hs->owner_generation = leader->owner_generation;
+		/*
+		 * Replacing good values with potentially bad values
+		 * would have no purpose, and would confuse things, so
+		 * don't replace these fields if the lease is bad.
+		 * But, continue to update the timestamp because we don't
+		 * want to consider the host to be dead if the lease
+		 * is being renewed, even if the lease has bad fields.
+		 */
+		if (!hs->lease_bad) {
+			hs->owner_id = leader->owner_id;
+			hs->owner_generation = leader->owner_generation;
+			strncpy(hs->owner_name, leader->resource_name, NAME_ID_SIZE);
+			hs->io_timeout = leader->io_timeout;
+		}
+
 		hs->timestamp = leader->timestamp;
-		hs->io_timeout = leader->io_timeout;
 		hs->last_live = now;
 
 		if (i+1 == sp->host_id)

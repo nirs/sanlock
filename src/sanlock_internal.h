@@ -156,6 +156,8 @@ struct host_status {
 	uint64_t timestamp; /* remote monotime */
 	uint64_t set_bit_time;
 	uint16_t io_timeout;
+	uint16_t lease_bad;
+	char owner_name[NAME_ID_SIZE];
 };
 
 /* The max number of connections that can get events for a lockspace. */
