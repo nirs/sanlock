@@ -60,4 +60,8 @@ int paxos_erase_dblock(struct task *task,
                        struct token *token,
                        uint64_t host_id);
 
+int paxos_lease_leader_clobber(struct task *task,
+                               struct token *token,
+                               struct leader_record *leader,
+                               const char *caller);
 #endif

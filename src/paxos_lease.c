@@ -215,6 +215,27 @@ static int write_leader(struct task *task,
 	return rv;
 }
 
+/*
+ * NB. this should not be used to write the leader record, it is meant only
+ * for manually clobbering the disk to corrupt it for testing, or to manually
+ * repair it after it's corrupted.
+ */
+
+int paxos_lease_leader_clobber(struct task *task,
+			       struct token *token,
+			       struct leader_record *leader,
+			       const char *caller)
+{
+	struct leader_record lr_end;
+	int rv;
+
+	leader_record_out(leader, &lr_end);
+
+	rv = write_sector(&token->disks[0], 0, (char *)&lr_end, sizeof(struct leader_record),
+			  task, token->io_timeout, caller);
+	return rv;
+}
+
 #if 0
 static int read_dblock(struct task *task,
 		       struct sync_disk *disk,

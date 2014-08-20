@@ -78,6 +78,7 @@ static int do_paxos_action(int action, struct task *task, int io_timeout,
 			   int max_hosts, int num_hosts,
 			   uint64_t local_host_id,
 			   uint64_t local_host_generation,
+			   struct leader_record *leader_in,
 			   struct leader_record *leader_ret)
 {
 	struct token *token;
@@ -138,6 +139,10 @@ static int do_paxos_action(int action, struct task *task, int io_timeout,
 	case ACT_READ_LEADER:
 		rv = paxos_lease_leader_read(task, token, &leader, "direct_read_leader");
 		break;
+
+	case ACT_WRITE_LEADER:
+		rv = paxos_lease_leader_clobber(task, token, leader_in, "direct_clobber");
+		break;
 	}
 
 	close_disks(token->disks, token->r.num_disks);
@@ -167,6 +172,7 @@ int direct_acquire(struct task *task, int io_timeout,
 	return do_paxos_action(ACT_ACQUIRE, task, io_timeout, res,
 			       -1, num_hosts,
 			       local_host_id, local_host_generation,
+			       NULL,
 			       leader_ret);
 }
 
@@ -177,6 +183,7 @@ int direct_release(struct task *task, int io_timeout,
 	return do_paxos_action(ACT_RELEASE, task, io_timeout, res,
 			       -1, -1,
 			       0, 0,
+			       NULL,
 			       leader_ret);
 }
 
@@ -186,6 +193,7 @@ static int do_delta_action(int action,
 			   struct sanlk_lockspace *ls,
 			   int max_hosts,
 			   char *our_host_name,
+			   struct leader_record *leader_in,
 			   struct leader_record *leader_ret)
 {
 	struct leader_record leader;
@@ -266,6 +274,11 @@ static int do_delta_action(int action,
 					     &leader,
 					     "direct_read");
 		break;
+	case ACT_WRITE_LEADER:
+		rv = delta_lease_leader_clobber(task, io_timeout, &sd,
+					        ls->host_id,
+					        leader_in,
+					        "direct_clobber");
 	}
 
 	close_disks(&sd, 1);
@@ -289,17 +302,17 @@ static int do_delta_action(int action,
 int direct_acquire_id(struct task *task, int io_timeout, struct sanlk_lockspace *ls,
 		      char *our_host_name)
 {
-	return do_delta_action(ACT_ACQUIRE_ID, task, io_timeout, ls, -1, our_host_name, NULL);
+	return do_delta_action(ACT_ACQUIRE_ID, task, io_timeout, ls, -1, our_host_name, NULL, NULL);
 }
 
 int direct_release_id(struct task *task, int io_timeout, struct sanlk_lockspace *ls)
 {
-	return do_delta_action(ACT_RELEASE_ID, task, io_timeout, ls, -1, NULL, NULL);
+	return do_delta_action(ACT_RELEASE_ID, task, io_timeout, ls, -1, NULL, NULL, NULL);
 }
 
 int direct_renew_id(struct task *task, int io_timeout, struct sanlk_lockspace *ls)
 {
-	return do_delta_action(ACT_RENEW_ID, task, io_timeout, ls, -1, NULL, NULL);
+	return do_delta_action(ACT_RENEW_ID, task, io_timeout, ls, -1, NULL, NULL, NULL);
 }
 
 int direct_align(struct sync_disk *disk)
@@ -320,7 +333,7 @@ int direct_write_lockspace(struct task *task, struct sanlk_lockspace *ls,
 		return -1;
 
 	return do_delta_action(ACT_DIRECT_INIT, task, io_timeout, ls,
-			       max_hosts, NULL, NULL);
+			       max_hosts, NULL, NULL, NULL);
 }
 
 int direct_write_resource(struct task *task, struct sanlk_resource *res,
@@ -336,7 +349,7 @@ int direct_write_resource(struct task *task, struct sanlk_resource *res,
 		return -ENODEV;
 
 	return do_paxos_action(ACT_DIRECT_INIT, task, 0, res,
-			       max_hosts, num_hosts, 0, 0, NULL);
+			       max_hosts, num_hosts, 0, 0, NULL, NULL);
 }
 
 int direct_read_leader(struct task *task,
@@ -348,11 +361,30 @@ int direct_read_leader(struct task *task,
 	int rv = -1;
 
 	if (ls && ls->host_id_disk.path[0])
-		rv = do_delta_action(ACT_READ_LEADER, task, io_timeout, ls, -1, NULL, leader_ret);
+		rv = do_delta_action(ACT_READ_LEADER, task, io_timeout, ls, -1, NULL, NULL, leader_ret);
 
 	else if (res)
 		rv = do_paxos_action(ACT_READ_LEADER, task, io_timeout, res,
-				     -1, -1, 0, 0, leader_ret);
+				     -1, -1, 0, 0, NULL, leader_ret);
+	return rv;
+}
+
+int direct_write_leader(struct task *task,
+		        int io_timeout,
+		        struct sanlk_lockspace *ls,
+		        struct sanlk_resource *res,
+			struct leader_record *leader)
+{
+	int rv = -1;
+
+	if (ls && ls->host_id_disk.path[0]) {
+		rv = do_delta_action(ACT_WRITE_LEADER, task, io_timeout, ls, -1, NULL, leader, NULL);
+
+	} else if (res) {
+		rv = do_paxos_action(ACT_WRITE_LEADER, task, io_timeout, res,
+				     -1, -1, 0, 0, leader, NULL);
+	}
+
 	return rv;
 }
 

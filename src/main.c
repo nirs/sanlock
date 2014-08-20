@@ -53,6 +53,7 @@
 #include "cmd.h"
 #include "helper.h"
 #include "timeouts.h"
+#include "paxos_lease.h"
 
 #define ONEMB 1048576
 
@@ -2006,6 +2007,8 @@ static int read_command_line(int argc, char *argv[])
 			com.action = ACT_NEXT_FREE;
 		else if (!strcmp(act, "read_leader"))
 			com.action = ACT_READ_LEADER;
+		else if (!strcmp(act, "write_leader"))
+			com.action = ACT_WRITE_LEADER;
 		else if (!strcmp(act, "acquire"))
 			com.action = ACT_ACQUIRE;
 		else if (!strcmp(act, "release"))
@@ -2070,6 +2073,9 @@ static int read_command_line(int argc, char *argv[])
 			break;
 		case 'S':
 			log_syslog_priority = atoi(optionarg);
+			break;
+		case 'F':
+			com.file_path = strdup(optionarg);
 			break;
 		case 'a':
 			com.all = atoi(optionarg);
@@ -2671,23 +2677,269 @@ static int do_client(void)
 	return rv;
 }
 
+#define MAX_LINE 128
+
+static int read_file_leader(struct leader_record *leader, int is_ls)
+{
+	FILE *file;
+	char line[MAX_LINE];
+	char field[MAX_LINE];
+	char val[MAX_LINE];
+	uint32_t checksum = 0;
+	uint32_t new_checksum;
+	struct leader_record lr;
+	int rv;
+
+	file = fopen(com.file_path, "r");
+	if (!file) {
+		log_tool("open error %d %s", errno, com.file_path);
+		return -1;
+	}
+
+	memcpy(&lr, leader, sizeof(lr));
+
+	memset(line, 0, sizeof(line));
+
+	while (fgets(line, MAX_LINE, file)) {
+
+		memset(field, 0, sizeof(field));
+		memset(val, 0, sizeof(val));
+
+		rv = sscanf(line, "%s %s", field, val);
+		if (rv != 2) {
+			log_tool("ignore line: \"%s\"", line);
+			continue;
+		}
+
+		if (!strcmp(field, "magic")) {
+			sscanf(val, "0x%x", &lr.magic);
+
+		} else if (!strcmp(field, "version")) {
+			sscanf(val, "0x%x", &lr.version);
+
+		} else if (!strcmp(field, "flags")) {
+			sscanf(val, "0x%x", &lr.flags);
+
+		} else if (!strcmp(field, "sector_size")) {
+			sscanf(val, "%u", &lr.sector_size);
+
+		} else if (!strcmp(field, "num_hosts")) {
+			sscanf(val, "%llu", (unsigned long long *)&lr.num_hosts);
+
+		} else if (!strcmp(field, "max_hosts")) {
+			sscanf(val, "%llu", (unsigned long long *)&lr.max_hosts);
+
+		} else if (!strcmp(field, "owner_id")) {
+			sscanf(val, "%llu", (unsigned long long *)&lr.owner_id);
+
+		} else if (!strcmp(field, "owner_generation")) {
+			sscanf(val, "%llu", (unsigned long long *)&lr.owner_generation);
+
+		} else if (!strcmp(field, "lver")) {
+			sscanf(val, "%llu", (unsigned long long *)&lr.lver);
+
+		} else if (!strcmp(field, "space_name")) {
+			strncpy(lr.space_name, val, NAME_ID_SIZE);
+
+		} else if (!strcmp(field, "resource_name")) {
+			strncpy(lr.resource_name, val, NAME_ID_SIZE);
+
+		} else if (!strcmp(field, "timestamp")) {
+			sscanf(val, "%llu", (unsigned long long *)&lr.timestamp);
+
+		} else if (!strcmp(field, "checksum")) {
+			sscanf(val, "0x%x", &checksum);
+
+		} else if (!strcmp(field, "io_timeout")) {
+			sscanf(val, "%hu", &lr.io_timeout);
+
+		} else if (is_ls && !strcmp(field, "extra1")) {
+			sscanf(val, "%llu", (unsigned long long *)&lr.write_id);
+
+		} else if (is_ls && !strcmp(field, "extra2")) {
+			sscanf(val, "%llu", (unsigned long long *)&lr.write_generation);
+
+		} else if (is_ls && !strcmp(field, "extra3")) {
+			sscanf(val, "%llu", (unsigned long long *)&lr.write_timestamp);
+
+		} else if (!is_ls && !strcmp(field, "write_id")) {
+			sscanf(val, "%llu", (unsigned long long *)&lr.write_id);
+
+		} else if (!is_ls && !strcmp(field, "write_generation")) {
+			sscanf(val, "%llu", (unsigned long long *)&lr.write_generation);
+
+		} else if (!is_ls && !strcmp(field, "write_timestamp")) {
+			sscanf(val, "%llu", (unsigned long long *)&lr.write_timestamp);
+		} else {
+			log_tool("ignore field: \"%s\"", field);
+		}
+
+		memset(line, 0, sizeof(line));
+	}
+
+	new_checksum = leader_checksum(&lr);
+
+	if (!com.force_mode) {
+		lr.checksum = new_checksum;
+		log_tool("use new generated checksum %x", new_checksum);
+	} else {
+		lr.checksum = checksum;
+		log_tool("warning: using specified checksum %x (generated is %x)",
+			 checksum, new_checksum);
+	}
+
+	memcpy(leader, &lr, sizeof(lr));
+	return 0;
+}
+
+static void print_leader(struct leader_record *leader, int is_ls)
+{
+	log_tool("magic 0x%0x", leader->magic);
+	log_tool("version 0x%x", leader->version);
+	log_tool("flags 0x%x", leader->flags);
+	log_tool("sector_size %u", leader->sector_size);
+	log_tool("num_hosts %llu", (unsigned long long)leader->num_hosts);
+	log_tool("max_hosts %llu", (unsigned long long)leader->max_hosts);
+	log_tool("owner_id %llu", (unsigned long long)leader->owner_id);
+	log_tool("owner_generation %llu", (unsigned long long)leader->owner_generation);
+	log_tool("lver %llu", (unsigned long long)leader->lver);
+	log_tool("space_name %.48s", leader->space_name);
+	log_tool("resource_name %.48s", leader->resource_name);
+	log_tool("timestamp %llu", (unsigned long long)leader->timestamp);
+	log_tool("checksum 0x%0x", leader->checksum);
+	log_tool("io_timeout %u", leader->io_timeout);
+
+	if (!is_ls) {
+		log_tool("write_id %llu", (unsigned long long)leader->write_id);
+		log_tool("write_generation %llu", (unsigned long long)leader->write_generation);
+		log_tool("write_timestamp %llu", (unsigned long long)leader->write_timestamp);
+	} else {
+		log_tool("extra1 %llu", (unsigned long long)leader->write_id);
+		log_tool("extra2 %llu", (unsigned long long)leader->write_generation);
+		log_tool("extra3 %llu", (unsigned long long)leader->write_timestamp);
+	}
+}
+
+static int do_direct_read_leader(void)
+{
+	struct leader_record leader;
+	int rv;
+
+	rv = direct_read_leader(&main_task, com.io_timeout_arg,
+				&com.lockspace, com.res_args[0],
+				&leader);
+
+	log_tool("read_leader done %d", rv);
+
+	print_leader(&leader, com.res_args[0] ? 0 : 1);
+
+	return rv;
+}
+
+/*
+ * read the current leader record from disk, override any values found in
+ * the file, write back the result.
+ */
+
+static int do_direct_write_leader(void)
+{
+	struct leader_record leader;
+	char *res_str = NULL;
+	int is_ls = com.res_args[0] ? 0 : 1;
+	int rv;
+
+	memset(&leader, 0, sizeof(leader));
+
+	direct_read_leader(&main_task, com.io_timeout_arg,
+			   &com.lockspace, com.res_args[0],
+			   &leader);
+
+	rv = read_file_leader(&leader, is_ls);
+	if (rv < 0)
+		return rv;
+
+	/* make a record in the logs that this has been done */
+
+	if (is_ls) {
+		syslog(LOG_WARNING, "write_leader lockspace %.48s:%llu:%s:%llu",
+		       com.lockspace.name,
+		       (unsigned long long)com.lockspace.host_id,
+		       com.lockspace.host_id_disk.path,
+		       (unsigned long long)com.lockspace.host_id_disk.offset);
+	} else {
+		rv = sanlock_res_to_str(com.res_args[0], &res_str);
+		if (rv < 0) {
+			syslog(LOG_WARNING, "write_leader resource %.48s:%.48s",
+			       com.res_args[0]->lockspace_name, com.res_args[0]->name);
+		} else {
+			syslog(LOG_WARNING, "write_leader resource %s", res_str);
+		}
+	}
+
+	rv = direct_write_leader(&main_task, com.io_timeout_arg,
+				 &com.lockspace, com.res_args[0],
+				 &leader);
+
+	log_tool("write_leader done %d", rv);
+
+	print_leader(&leader, is_ls);
+
+	if (res_str)
+		free(res_str);
+
+	return rv;
+}
+
+static int do_direct_init(void)
+{
+	char *res_str = NULL;
+	int rv;
+
+	if (com.lockspace.host_id_disk.path[0]) {
+		syslog(LOG_WARNING, "init lockspace %.48s:%llu:%s:%llu",
+		       com.lockspace.name,
+		       (unsigned long long)com.lockspace.host_id,
+		       com.lockspace.host_id_disk.path,
+		       (unsigned long long)com.lockspace.host_id_disk.offset);
+
+		rv = direct_write_lockspace(&main_task, &com.lockspace,
+					    com.max_hosts, com.io_timeout_arg);
+	} else {
+		rv = sanlock_res_to_str(com.res_args[0], &res_str);
+		if (rv < 0) {
+			syslog(LOG_WARNING, "init resource %.48s:%.48s",
+			       com.res_args[0]->lockspace_name, com.res_args[0]->name);
+		} else {
+			syslog(LOG_WARNING, "init resource %s", res_str);
+		}
+
+		rv = direct_write_resource(&main_task, com.res_args[0],
+					   com.max_hosts, com.num_hosts);
+	}
+
+	log_tool("init done %d", rv);
+
+	if (res_str)
+		free(res_str);
+
+	return rv;
+}
+
 static int do_direct(void)
 {
 	struct leader_record leader;
 	int rv;
 
+	/* we want a record of any out-of-band changes to disk */
+	openlog("sanlock-direct", LOG_CONS | LOG_PID, LOG_DAEMON);
+
 	setup_task_aio(&main_task, com.aio_arg, DIRECT_AIO_CB_SIZE);
 	sprintf(main_task.name, "%s", "main_direct");
 
 	switch (com.action) {
+
 	case ACT_DIRECT_INIT:
-		if (com.lockspace.host_id_disk.path[0])
-			rv = direct_write_lockspace(&main_task, &com.lockspace,
-						    com.max_hosts, com.io_timeout_arg);
-		else
-			rv = direct_write_resource(&main_task, com.res_args[0],
-						   com.max_hosts, com.num_hosts);
-		log_tool("init done %d", rv);
+		rv = do_direct_init();
 		break;
 
 	case ACT_DUMP:
@@ -2699,49 +2951,15 @@ static int do_direct(void)
 		break;
 
 	case ACT_READ_LEADER:
-		rv = direct_read_leader(&main_task, com.io_timeout_arg,
-					&com.lockspace, com.res_args[0],
-					&leader);
-		log_tool("read_leader done %d", rv);
-		log_tool("magic 0x%0x", leader.magic);
-		log_tool("version 0x%x", leader.version);
-		log_tool("flags 0x%x", leader.flags);
-		log_tool("sector_size %u", leader.sector_size);
-		log_tool("num_hosts %llu",
-			 (unsigned long long)leader.num_hosts);
-		log_tool("max_hosts %llu",
-			 (unsigned long long)leader.max_hosts);
-		log_tool("owner_id %llu",
-			 (unsigned long long)leader.owner_id);
-		log_tool("owner_generation %llu",
-			 (unsigned long long)leader.owner_generation);
-		log_tool("lver %llu",
-			 (unsigned long long)leader.lver);
-		log_tool("space_name %.48s", leader.space_name);
-		log_tool("resource_name %.48s", leader.resource_name);
-		log_tool("timestamp %llu",
-			 (unsigned long long)leader.timestamp);
-		log_tool("checksum 0x%0x", leader.checksum);
-		log_tool("io_timeout %u", leader.io_timeout);
-
-		if (com.res_args[0]) {
-			log_tool("write_id %llu",
-				 (unsigned long long)leader.write_id);
-			log_tool("write_generation %llu",
-				 (unsigned long long)leader.write_generation);
-			log_tool("write_timestamp %llu",
-				 (unsigned long long)leader.write_timestamp);
-		} else {
-			log_tool("extra1 %llu",
-				 (unsigned long long)leader.write_id);
-			log_tool("extra2 %llu",
-				 (unsigned long long)leader.write_generation);
-			log_tool("extra3 %llu",
-				 (unsigned long long)leader.write_timestamp);
-		}
+		rv = do_direct_read_leader();
+		break;
+	
+	case ACT_WRITE_LEADER:
+		rv = do_direct_write_leader();
 		break;
 
 	case ACT_ACQUIRE:
+		syslog(LOG_WARNING, "acquire");
 		rv = direct_acquire(&main_task, com.io_timeout_arg,
 				    com.res_args[0], com.num_hosts,
 				    com.host_id, com.host_generation,
@@ -2750,12 +2968,14 @@ static int do_direct(void)
 		break;
 
 	case ACT_RELEASE:
+		syslog(LOG_WARNING, "release");
 		rv = direct_release(&main_task, com.io_timeout_arg,
 				    com.res_args[0], &leader);
 		log_tool("release done %d", rv);
 		break;
 
 	case ACT_ACQUIRE_ID:
+		syslog(LOG_WARNING, "acquire_id");
 		setup_host_name();
 
 		rv = direct_acquire_id(&main_task, com.io_timeout_arg,
@@ -2764,11 +2984,13 @@ static int do_direct(void)
 		break;
 
 	case ACT_RELEASE_ID:
+		syslog(LOG_WARNING, "release_id");
 		rv = direct_release_id(&main_task, com.io_timeout_arg, &com.lockspace);
 		log_tool("release_id done %d", rv);
 		break;
 
 	case ACT_RENEW_ID:
+		syslog(LOG_WARNING, "renew_id");
 		rv = direct_renew_id(&main_task, com.io_timeout_arg, &com.lockspace);
 		log_tool("rewew_id done %d", rv);
 		break;
@@ -2779,6 +3001,7 @@ static int do_direct(void)
 	}
 
 	close_task_aio(&main_task);
+	closelog();
 	return rv;
 }
 

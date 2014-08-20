@@ -224,6 +224,30 @@ int delta_lease_leader_read(struct task *task, int io_timeout,
 }
 
 /*
+ * NB. this should not be used to write the leader record, it is meant only
+ * for manually clobbering the disk to corrupt it for testing, or to manually
+ * repair it after it's corrupted.
+ */
+
+int delta_lease_leader_clobber(struct task *task, int io_timeout,
+			       struct sync_disk *disk,
+			       uint64_t host_id,
+			       struct leader_record *leader,
+			       const char *caller)
+{
+	struct leader_record leader_end;
+	int rv;
+
+	leader_record_out(leader, &leader_end);
+
+	rv = write_sector(disk, host_id - 1, (char *)&leader_end, sizeof(struct leader_record),
+			  task, io_timeout, caller);
+	if (rv < 0)
+		return rv;
+	return SANLK_OK;
+}
+
+/*
  * delta_lease_acquire:
  * set the owner of host_id to our_host_name.
  *

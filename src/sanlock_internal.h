@@ -318,6 +318,7 @@ struct command_line {
 	int sh_retries;
 	uint32_t force_mode;
 	char our_host_name[SANLK_NAME_LEN+1];
+	char *file_path;
 	char *dump_path;
 	struct sanlk_lockspace lockspace;	/* -s LOCKSPACE */
 	struct sanlk_resource *res_args[SANLK_MAX_RESOURCES]; /* -r RESOURCE */
@@ -360,6 +361,7 @@ enum {
 	ACT_VERSION,
 	ACT_SET_EVENT,
 	ACT_SET_CONFIG,
+	ACT_WRITE_LEADER,
 };
 
 EXTERN int external_shutdown;

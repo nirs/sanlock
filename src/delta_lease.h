@@ -56,4 +56,10 @@ int delta_read_lockspace(struct task *task,
 			int io_timeout,
 			int *io_timeout_ret);
 
+int delta_lease_leader_clobber(struct task *task, int io_timeout,
+                               struct sync_disk *disk,
+                               uint64_t host_id,
+                               struct leader_record *leader,
+                               const char *caller);
+
 #endif
