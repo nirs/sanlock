@@ -311,6 +311,8 @@ static int reset_done(void)
 		if ((rv < 0) || (hs == NULL) || (hs_count != 1) || (hs->host_id != host_id)) {
 			log_error("sanlock_get_hosts error %d ls %s:%d",
 				  rv, ls_names[i], ls_hostids[i]);
+			if (hs)
+				free(hs);
 			continue;
 		}
 
@@ -441,12 +443,14 @@ static int update_local_daemon(char *cmd)
 		rv = sendto(s, buf, UPDATE_SIZE, 0, (struct sockaddr *)&update_addr, update_addrlen);
 		if (rv < 0) {
 			printf("Failed to update local sanlk-resetd: %s\n", strerror(errno));
+			close(s);
 			return EXIT_FAILURE;
 		} else {
 			printf("Updated %s %s\n", cmd, ls_names[i]);
 		}
 	}
 
+	close(s);
 	return EXIT_SUCCESS;
 }
 

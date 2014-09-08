@@ -2157,12 +2157,12 @@ int release_orphan(struct sanlk_resource *res)
 			count++;
 		}
 	}
-	pthread_mutex_unlock(&resource_mutex);
 
 	if (count) {
 		resource_thread_work = 1;
 		pthread_cond_signal(&resource_cond);
 	}
+	pthread_mutex_unlock(&resource_mutex);
 
 	return count;
 }

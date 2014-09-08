@@ -451,6 +451,8 @@ static int setup_update(void)
 		return rv;
 
 	s = setup_resetd_socket();
+	if (s < 0)
+		return s;
 
 	unlink(update_addr.sun_path);
 	rv = bind(s, (struct sockaddr *) &update_addr, update_addrlen);

@@ -2776,6 +2776,7 @@ static int read_file_leader(struct leader_record *leader, int is_ls)
 
 		memset(line, 0, sizeof(line));
 	}
+	fclose(file);
 
 	new_checksum = leader_checksum(&lr);
 
