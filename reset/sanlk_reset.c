@@ -47,6 +47,7 @@ static struct pollfd *pollfd;
 static int use_watchdog = 1;
 static int use_sysrq_reboot = 0;
 static int resource_mode;
+static int debug_mode;
 static int target_host_id;
 static uint64_t target_generation;
 static int ls_count;
@@ -60,27 +61,31 @@ static int ls_is_dead[MAX_LS];
 static int ls_is_free[MAX_LS];
 static int ls_renewals[MAX_LS];
 
-#define log_debug(fmt, args...) \
+
+#define errlog(fmt, args...) \
 do { \
 	fprintf(stderr, "%llu " fmt "\n", (unsigned long long)time(NULL), ##args); \
 } while (0)
 
-#define log_error(fmt, args...) \
+#define log_debug(fmt, args...) \
 do { \
-	log_debug(fmt, ##args); \
-	syslog(LOG_ERR, fmt, ##args); \
+	if (debug_mode) \
+		errlog(fmt, ##args); \
 } while (0)
+
+#define log_info(fmt, args...) \
+	errlog(fmt, ##args)
 
 #define log_warn(fmt, args...) \
 do { \
-	log_debug(fmt, ##args); \
+	errlog(fmt, ##args); \
 	syslog(LOG_WARNING, fmt, ##args); \
 } while (0)
 
-#define log_notice(fmt, args...) \
+#define log_error(fmt, args...) \
 do { \
-	log_debug(fmt, ##args); \
-	syslog(LOG_NOTICE, fmt, ##args); \
+	errlog(fmt, ##args); \
+	syslog(LOG_ERR, fmt, ##args); \
 } while (0)
 
 static uint64_t monotime(void)
@@ -362,11 +367,15 @@ static int reset_done(void)
 
 		state = ls_host_flags[i] & SANLK_HOST_MASK;
 
-		if (state == SANLK_HOST_DEAD)
+		if (state == SANLK_HOST_DEAD && !ls_is_dead[i]) {
 			ls_is_dead[i] = 1;
+			log_info("host dead in ls %s:%d", ls_names[i], ls_hostids[i]);
+		}
 
-		if (state == SANLK_HOST_FREE)
+		if (state == SANLK_HOST_FREE && !ls_is_free[i]) {
 			ls_is_free[i] = 1;
+			log_info("host free in ls %s:%d", ls_names[i], ls_hostids[i]);
+		}
 
 		if (resource_mode && ls_is_dead[i])
 			is_done = 1;
@@ -374,11 +383,8 @@ static int reset_done(void)
 		if (!resource_mode && ls_is_dead[i] && ls_is_resetting[i])
 			is_done = 1;
 
-		if (ls_is_dead[i])
-			log_notice("host dead in ls %s:%d", ls_names[i], ls_hostids[i]);
-
 		if (is_done)
-			log_notice("reset done in ls %s:%d", ls_names[i], ls_hostids[i]);
+			log_info("reset done in ls %s:%d", ls_names[i], ls_hostids[i]);
 	}
 
 	return is_done;
@@ -388,6 +394,8 @@ static void get_events(int i)
 {
 	struct sanlk_host_event from_he;
 	uint64_t from_host, from_gen;
+	int resetting = 0;
+	int rebooting = 0;
 	int rv;
 
 	while (1) {
@@ -401,26 +409,26 @@ static void get_events(int i)
 			break;
 		}
 
-		if ((from_host == ls_hostids[i]) &&
-		    ((from_he.event & EVENT_RESETTING) || (from_he.event & EVENT_REBOOTING))) {
-			log_notice("notice of %s%s(%llx %llx) from host %llu %llu ls %s",
-				   (from_he.event & EVENT_RESETTING) ? "resetting " : "",
-				   (from_he.event & EVENT_REBOOTING) ? "rebooting " : "",
-				   (unsigned long long)from_he.event,
-				   (unsigned long long)from_he.data,
-				   (unsigned long long)from_host,
-				   (unsigned long long)from_gen,
-				   ls_names[i]);
+		log_debug("got event %llx %llx from host %llu %llu in ls %s:%d",
+			  (unsigned long long)from_he.event,
+			  (unsigned long long)from_he.data,
+			  (unsigned long long)from_host,
+			  (unsigned long long)from_gen,
+			  ls_names[i],
+			  ls_hostids[i]);
 
-			if (from_he.event & EVENT_RESETTING)
+		resetting = from_he.event & EVENT_RESETTING;
+		rebooting = from_he.event & EVENT_REBOOTING;
+
+		if ((from_host == ls_hostids[i]) && (resetting || rebooting)) {
+			log_info("host %s%sin ls %s:%d",
+				 resetting ? "resetting " : "",
+				 rebooting ? "rebooting " : "",
+				 ls_names[i],
+				 ls_hostids[i]);
+
+			if (resetting)
 				ls_is_resetting[i] = 1;
-		} else {
-			log_notice("event ignored %llx %llx from host %llu %llu ls %s",
-				   (unsigned long long)from_he.event,
-				   (unsigned long long)from_he.data,
-				   (unsigned long long)from_host,
-				   (unsigned long long)from_gen,
-				   ls_names[i]);
 		}
 	}
 }
@@ -461,6 +469,8 @@ static void usage(void)
 	printf("        Show this help information.\n");
 	printf("  --version | -V\n");
 	printf("        Show version.\n");
+	printf("  --debug-mode | -D\n");
+	printf("        Log debugging information.\n");
 	printf("\n");
 	printf("Update the local sanlk-resetd to watch lockspaces for reset events:\n");
 	printf("%s reg lockspace_name ...\n", prog_name);
@@ -515,6 +525,7 @@ int main(int argc, char *argv[])
 		{"watchdog",       required_argument, 0, 'w' },
 		{"sysrq-reboot",   required_argument, 0, 'b' },
 		{"resource-mode",  required_argument, 0, 'R' },
+		{"debug-mode",     no_argument,       0, 'D' },
 		{0, 0, 0, 0 }
 	};
 
@@ -522,7 +533,7 @@ int main(int argc, char *argv[])
 		int c;
 		int option_index = 0;
 
-		c = getopt_long(argc, argv, "hVi:g:w:b:R:",
+		c = getopt_long(argc, argv, "hVi:g:w:b:R:D",
 				long_options, &option_index);
 		if (c == -1)
 			break;
@@ -550,6 +561,9 @@ int main(int argc, char *argv[])
 			break;
 		case 'R':
 			resource_mode = atoi(optarg);
+			break;
+		case 'D':
+			debug_mode = 1;
 			break;
 		case '?':
 		default:
@@ -679,14 +693,19 @@ int main(int argc, char *argv[])
 			log_error("set_event error %d ls %s", rv, ls_names[i]);
 			unregister_ls(i);
 		} else {
-			log_notice("asked host %llu %llu to %s%s(%llx %llx) through ls %s",
-				   (unsigned long long)he.host_id,
-				   (unsigned long long)he.generation,
-				   (he.event & EVENT_RESET) ? "reset " : "",
-				   (he.event & EVENT_REBOOT) ? "reboot " : "",
-				   (unsigned long long)he.event,
-				   (unsigned long long)he.data,
-				   ls_names[i]);
+			log_debug("set event %llx %llx for host %llu %llu in ls %s:%d",
+				  (unsigned long long)he.event,
+				  (unsigned long long)he.data,
+				  (unsigned long long)he.host_id,
+				  (unsigned long long)he.generation,
+				  ls_names[i],
+				  ls_hostids[i]);
+
+			log_info("asked host to %s%sin ls %s:%d",
+				 (he.event & EVENT_RESET) ? "reset " : "",
+				 (he.event & EVENT_REBOOT) ? "reboot " : "",
+				 ls_names[i],
+				 ls_hostids[i]);
 		}
 	}
 
@@ -734,7 +753,7 @@ int main(int argc, char *argv[])
 	}
 
 	if (done) {
-		log_notice("reset done in %u seconds", (uint32_t)(monotime() - begin));
+		log_info("reset done in %u seconds", (uint32_t)(monotime() - begin));
 		exit(EXIT_SUCCESS);
 	} else {
 		log_error("reset failed in %u seconds", (uint32_t)(monotime() - begin));
