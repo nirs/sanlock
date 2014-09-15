@@ -41,6 +41,91 @@ static socklen_t update_addrlen;
 #define EXIT_USAGE 2
 #define MAX_LS 64
 
+/*
+ * native timeout: calculate directly when a host's watchdog
+ * should have fired, based on sanlock/wdmd/watchdog timings.
+ * This can complete much quicker than waiting for the sanlock
+ * host status states.  The host status states are based on a
+ * lockspace failing to renew a lease, and determining the
+ * latest possible watchdog firing based on that.  The reset
+ * case is based on lockspace storage remaining accessable,
+ * and a host acknowledging through a RESETTING event that
+ * its watchdog has been set to expire.  Until the watchdog
+ * fires, the host will continue renewing its lease.  We can
+ * derive a faster completion based on the RESETTING event
+ * rather than waiting for the sanlock host status, which
+ * would still be correct, but longer, because it's based on
+ * the obvious lack of renewals following the reset.  So,
+ * with native timeout, the completion timing begins from the
+ * RESETTING acknowledgment, but with the sanlock host status,
+ * the completion timing begins from the final renewal before
+ * the reset.
+ *
+ * Native timeout calculation:
+ *
+ * This timeout calculation begins when we see the RESETTING
+ * event from the host.  It can take multiple lease renewal
+ * intervals for the RESET and RESETTING events to be transmitted
+ * between hosts.  The time required for these events precedes the
+ * timeout considered in the following.  The total time required
+ * for the program would be the sum of the time required for
+ * the RESET/RESETTING events, and the native timeout.
+ *
+ * When we first see the host is resetting, make a record
+ * of the local time (ls_resetting_begin_local) and the remote
+ * timestamp from the delta lease renewal (ls_resetting_begin_timestamp).
+ *
+ * We'll continue watching the resetting host for another
+ * local 90 seconds from the local time saved here.  After
+ * that 90 seconds, we'll check the last timestamp seen from
+ * the host.  If the last timestamp is more than 70 seconds after
+ * than the first timestamp we saved upon seeing resetting,
+ * then the host's watchdog device failed to fire when required
+ * (watchdog_failed_to_fire).
+ *
+ * The resetting host should be reset (its watchdog should fire)
+ * at most 70 seconds after it sets RESETTING.  So, it should not
+ * be possible for a renewal timestamp to be more than 70 seconds
+ * later than the timestamp when it set the RESETTING event.
+ *
+ * T0: host sets RESETTING
+ * T0: host sets up expired wdmd connection
+ * T10: wdmd test interval wakes and sees new expired connection
+ * T10: wdmd closes /dev/watchdog uncleanly, which issues final ping
+ * T70: 60 seconds later, the watchdog device fires
+ *
+ * The host continues renewing its delta lease up until its watchdog
+ * fires at T70, so there may be a renewal right at T70, 70 seconds
+ * after it set RESETTING.
+ *
+ * We continue watching for a renewal for 20 seconds after this
+ * latest possible renewal, to give the host time for another
+ * renewal if its watchdog failed to fire.  If we do not see another
+ * renewal for 20 seconds (the max standard renewal interval), then
+ * this is a confirmation that the watchdog fired as expected by T70.
+ *
+ * If the host's watchdog fails to fire, and storage access is maintained,
+ * then the resetting host will continue to renew its lease.  This program
+ * will then see renewal timestamps later than T70, and will fail.
+ *
+ * If the host's watchdog fails to reset it, and the host also loses its
+ * storage access, then this program will incorrectly conclude that the
+ * host has been reset when it is not.
+ *
+ * The times (90, 70) are based on the following sanlock/wdmd defaults:
+ * . 10 second io_timeout
+ * . 60 second watchdog_fire_timeout
+ * . 20 second id_renewal_seconds
+ * . 10 second wdmd test interval
+ *
+ * If the resetting host has a different io_timeout, then disable
+ * the native timeout check and depend on the host status check.
+ */
+
+#define NATIVE_TIMEOUT_SECONDS 90
+#define NATIVE_RENEWAL_SECONDS 70
+#define NATIVE_VERIFY_SECONDS (NATIVE_TIMEOUT_SECONDS - NATIVE_RENEWAL_SECONDS)
+
 static char *prog_name;
 static uint64_t begin;
 static struct pollfd *pollfd;
@@ -50,10 +135,15 @@ static int resource_mode;
 static int debug_mode;
 static int target_host_id;
 static uint64_t target_generation;
+static int native_timeout = NATIVE_TIMEOUT_SECONDS;
+static int native_renewal = NATIVE_RENEWAL_SECONDS;
+static int watchdog_failed_to_fire;
 static int ls_count;
 static char *ls_names[MAX_LS];
 static int ls_hostids[MAX_LS];
 static int ls_fd[MAX_LS];
+static uint64_t ls_resetting_begin_timestamp[MAX_LS];
+static uint64_t ls_resetting_begin_local[MAX_LS];
 static uint64_t ls_timestamp[MAX_LS];
 static uint32_t ls_host_flags[MAX_LS];
 static int ls_is_resetting[MAX_LS];
@@ -212,6 +302,9 @@ static int reset_fail(void)
 	int cmd_wait = 0;
 	int i;
 
+	if (watchdog_failed_to_fire)
+		return 1;
+
 	for (i = 0; i < MAX_LS; i++) {
 		if (!ls_names[i])
 			continue;
@@ -293,9 +386,11 @@ static int reset_fail(void)
 static int reset_done(void)
 {
 	struct sanlk_host *hs;
+	uint64_t now;
 	uint64_t host_id;
 	uint32_t state;
 	int hs_count;
+	int ls_is_done;
 	int is_done = 0;
 	int i, rv;
 
@@ -334,10 +429,78 @@ static int reset_done(void)
 			  (unsigned long long)hs->timestamp,
 			  ls_names[i], ls_hostids[i]);
 
+		if (hs->timestamp && (hs->io_timeout != 10) && native_timeout) {
+			log_error("disable native_timeout due to zero io_timeout in %s:%d",
+				  ls_names[i], ls_hostids[i]);
+			native_timeout = 0;
+		}
+
 		free(hs);
 	}
 
 	/*
+	 * The native timeout check.
+	 */
+
+	if (!native_timeout)
+		goto check_host_status;
+
+	for (i = 0; i < MAX_LS; i++) {
+		if (!ls_names[i])
+			continue;
+
+		if (!ls_is_resetting[i])
+			continue;
+
+		now = monotime();
+
+		if (!ls_resetting_begin_local[i]) {
+			ls_resetting_begin_timestamp[i] = ls_timestamp[i];
+			ls_resetting_begin_local[i] = now;
+
+			log_debug("resetting begin local %llu timestamp %llu in ls %s:%d",
+				  (unsigned long long)ls_resetting_begin_local[i],
+				  (unsigned long long)ls_resetting_begin_timestamp[i],
+				  ls_names[i], ls_hostids[i]);
+		}
+
+		if (now - ls_resetting_begin_local[i] > native_timeout) {
+			if (ls_timestamp[i] - ls_resetting_begin_timestamp[i] > native_renewal) {
+				/*
+				 * This should never happen.
+				 */
+				log_error("watchdog failed to fire in ls %s:%d", ls_names[i], ls_hostids[i]);
+				log_error("resetting_begin_local %llu now %llu "
+					  "resetting_begin_timestamp %llu timestamp %llu "
+					  "native_timeout %d native_renewal %d "
+					  "ls %s:%d",
+					  (unsigned long long)ls_resetting_begin_local[i],
+					  (unsigned long long)now,
+					  (unsigned long long)ls_resetting_begin_timestamp[i],
+					  (unsigned long long)ls_timestamp[i],
+					  native_timeout, native_renewal,
+					  ls_names[i], ls_hostids[i]);
+
+				watchdog_failed_to_fire = 1;
+			} else {
+				log_info("reset done by native_timeout in ls %s:%d", ls_names[i], ls_hostids[i]);
+				is_done = 1;
+			}
+		} else {
+			log_debug("native timeout seconds remaining %d in ls %s:%d",
+				  native_timeout - (int)(now - ls_resetting_begin_local[i]),
+				  ls_names[i], ls_hostids[i]);
+		}
+	}
+
+	if (watchdog_failed_to_fire)
+		return 0;
+
+ check_host_status:
+
+	/*
+	 * The host status check.
+	 *
 	 * The lockspace behavior is different when resource leases
 	 * are not used to protect storage, so the conditions to check
 	 * depend on the --with-resources option.
@@ -365,6 +528,8 @@ static int reset_done(void)
 		if (!ls_names[i])
 			continue;
 
+		ls_is_done = 0;
+
 		state = ls_host_flags[i] & SANLK_HOST_MASK;
 
 		if (state == SANLK_HOST_DEAD && !ls_is_dead[i]) {
@@ -377,14 +542,18 @@ static int reset_done(void)
 			log_info("host free in ls %s:%d", ls_names[i], ls_hostids[i]);
 		}
 
-		if (resource_mode && ls_is_dead[i])
+		if (resource_mode && ls_is_dead[i]) {
+			ls_is_done = 1;
 			is_done = 1;
+		}
 
-		if (!resource_mode && ls_is_dead[i] && ls_is_resetting[i])
+		if (!resource_mode && ls_is_dead[i] && ls_is_resetting[i]) {
+			ls_is_done = 1;
 			is_done = 1;
+		}
 
-		if (is_done)
-			log_info("reset done in ls %s:%d", ls_names[i], ls_hostids[i]);
+		if (ls_is_done)
+			log_info("reset done by host_status in ls %s:%d", ls_names[i], ls_hostids[i]);
 	}
 
 	return is_done;
@@ -483,16 +652,30 @@ static void usage(void)
 	printf("\n");
 	printf("Reset another host through a lockspace it is watching:\n");
 	printf("%s reset lockspace_name:host_id ...\n", prog_name);
+	printf("\n");
 	printf("  --host-id | -i <num>\n");
 	printf("        Host id to reset.\n");
+	printf("\n");
 	printf("  --generation | -g <num>\n");
 	printf("        Generation of host id (default 0 for current generation).\n");
+	printf("\n");
 	printf("  --watchdog | -w 0|1\n");
 	printf("        Disable (0) use of wdmd/watchdog for testing.\n");
+	printf("\n");
 	printf("  --sysrq-reboot | -b 0|1\n");
 	printf("        Enable/Disable (1/0) use of /proc/sysrq-trigger to reboot (default 0).\n");
+	printf("\n");
 	printf("  --resource-mode | -R 0|1\n");
 	printf("        Resource leases are used (1) or not used (0) to protect storage.\n");
+	printf("\n");
+	printf("  --native-timeout | -t <num>\n");
+	printf("        Disable native timeout by setting to 0.\n");
+#if 0
+	printf("        Reset completion is calculated natively and is faster than\n");
+	printf("        waiting for the sanlock host status.  Set to 0 to disable.\n");
+	printf("        (default %d, using a lower value can produce invalid result.)\n", NATIVE_TIMEOUT_SECONDS);
+#endif
+	printf("\n");
 	printf("  The event will be set in each lockspace_name (max %d).\n", MAX_LS);
 	printf("  The -i and -g options can only be used with a single lockspace_name arg.\n");
 	printf("\n");
@@ -525,6 +708,7 @@ int main(int argc, char *argv[])
 		{"watchdog",       required_argument, 0, 'w' },
 		{"sysrq-reboot",   required_argument, 0, 'b' },
 		{"resource-mode",  required_argument, 0, 'R' },
+		{"native-timeout", required_argument, 0, 't' },
 		{"debug-mode",     no_argument,       0, 'D' },
 		{0, 0, 0, 0 }
 	};
@@ -561,6 +745,14 @@ int main(int argc, char *argv[])
 			break;
 		case 'R':
 			resource_mode = atoi(optarg);
+			break;
+		case 't':
+			if (!atoi(optarg))
+				native_timeout = 0;
+#if 0
+			if (native_timeout > NATIVE_VERIFY_SECONDS)
+				native_renewal = native_timeout - NATIVE_VERIFY_SECONDS;
+#endif
 			break;
 		case 'D':
 			debug_mode = 1;
