@@ -47,6 +47,16 @@ static uint32_t roundup_power_of_two(uint32_t val)
 	return val;
 }
 
+uint32_t leader_checksum(struct leader_record *lr)
+{
+	return crc32c((uint32_t)~1, (uint8_t *)lr, LEADER_CHECKSUM_LEN);
+}
+
+static uint32_t dblock_checksum(struct paxos_dblock *pd)
+{
+	return crc32c((uint32_t)~1, (uint8_t *)pd, DBLOCK_CHECKSUM_LEN);
+}
+
 int paxos_lease_request_read(struct task *task, struct token *token,
 			     struct request_record *rr)
 {
@@ -138,6 +148,7 @@ static int write_dblock_mblock_sh(struct task *task,
 	struct mode_block mb_end;
 	char *iobuf, **p_iobuf;
 	uint64_t offset;
+	uint32_t checksum;
 	int iobuf_len, rv;
 
 	memset(&mb, 0, sizeof(mb));
@@ -157,6 +168,14 @@ static int write_dblock_mblock_sh(struct task *task,
 	offset = disk->offset + ((2 + host_id - 1) * disk->sector_size);
 
 	paxos_dblock_out(pd, &pd_end);
+
+	/*
+	 * N.B. must compute checksum after the data has been byte swapped.
+	 */
+	checksum = dblock_checksum(&pd_end);
+	pd->checksum = checksum;
+	pd_end.checksum = cpu_to_le32(checksum);
+
 	mode_block_out(&mb, &mb_end);
 
 	memcpy(iobuf, (char *)&pd_end, sizeof(struct paxos_dblock));
@@ -183,6 +202,7 @@ static int write_dblock(struct task *task,
 			struct paxos_dblock *pd)
 {
 	struct paxos_dblock pd_end;
+	uint32_t checksum;
 	int rv;
 
 	if (token->flags & T_WRITE_DBLOCK_MBLOCK_SH) {
@@ -195,6 +215,13 @@ static int write_dblock(struct task *task,
 
 	paxos_dblock_out(pd, &pd_end);
 
+	/*
+	 * N.B. must compute checksum after the data has been byte swapped.
+	 */
+	checksum = dblock_checksum(&pd_end);
+	pd->checksum = checksum;
+	pd_end.checksum = cpu_to_le32(checksum);
+
 	rv = write_sector(disk, 2 + host_id - 1, (char *)&pd_end, sizeof(struct paxos_dblock),
 			  task, token->io_timeout, "dblock");
 	return rv;
@@ -206,9 +233,17 @@ static int write_leader(struct task *task,
 			struct leader_record *lr)
 {
 	struct leader_record lr_end;
+	uint32_t checksum;
 	int rv;
 
 	leader_record_out(lr, &lr_end);
+
+	/*
+	 * N.B. must compute checksum after the data has been byte swapped.
+	 */
+	checksum = leader_checksum(&lr_end);
+	lr->checksum = checksum;
+	lr_end.checksum = cpu_to_le32(checksum);
 
 	rv = write_sector(disk, 0, (char *)&lr_end, sizeof(struct leader_record),
 			  task, token->io_timeout, "leader");
@@ -227,9 +262,17 @@ int paxos_lease_leader_clobber(struct task *task,
 			       const char *caller)
 {
 	struct leader_record lr_end;
+	uint32_t checksum;
 	int rv;
 
 	leader_record_out(leader, &lr_end);
+
+	/*
+	 * N.B. must compute checksum after the data has been byte swapped.
+	 */
+	checksum = leader_checksum(&lr_end);
+	leader->checksum = checksum;
+	lr_end.checksum = cpu_to_le32(checksum);
 
 	rv = write_sector(&token->disks[0], 0, (char *)&lr_end, sizeof(struct leader_record),
 			  task, token->io_timeout, caller);
@@ -303,7 +346,8 @@ static int read_dblocks(struct task *task,
 static int read_leader(struct task *task,
 		       struct token *token,
 		       struct sync_disk *disk,
-		       struct leader_record *lr)
+		       struct leader_record *lr,
+		       uint32_t *checksum)
 {
 	struct leader_record lr_end;
 	int rv;
@@ -313,28 +357,22 @@ static int read_leader(struct task *task,
 	rv = read_sectors(disk, 0, 1, (char *)&lr_end, sizeof(struct leader_record),
 			  task, token->io_timeout, "leader");
 
+	/* N.B. checksum is computed while the data is in ondisk format. */
+	*checksum = leader_checksum(&lr_end);
+
 	leader_record_in(&lr_end, lr);
 
 	return rv;
 }
 
-static uint32_t dblock_checksum(struct paxos_dblock *pd)
+static int verify_dblock(struct token *token, struct paxos_dblock *pd, uint32_t checksum)
 {
-	return crc32c((uint32_t)~1, (uint8_t *)pd, DBLOCK_CHECKSUM_LEN);
-}
-
-static int verify_dblock(struct token *token, struct paxos_dblock *pd)
-{
-	uint32_t sum;
-
 	if (!pd->checksum && !pd->mbal && !pd->bal && !pd->inp && !pd->lver)
 		return SANLK_OK;
 
-	sum = dblock_checksum(pd);
-
-	if (pd->checksum != sum) {
+	if (pd->checksum != checksum) {
 		log_errot(token, "verify_dblock wrong checksum %x %x",
-			  pd->checksum, sum);
+			  pd->checksum, checksum);
 		return SANLK_DBLOCK_CHECKSUM;
 	}
 
@@ -400,6 +438,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 	struct sync_disk *disk;
 	char *iobuf[SANLK_MAX_DISKS];
 	char **p_iobuf[SANLK_MAX_DISKS];
+	uint32_t checksum;
 	int num_disks = token->r.num_disks;
 	int num_writes, num_reads;
 	int sector_size = token->disks[0].sector_size;
@@ -444,7 +483,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 	memset(&dblock, 0, sizeof(struct paxos_dblock));
 	dblock.mbal = our_mbal;
 	dblock.lver = next_lver;
-	dblock.checksum = dblock_checksum(&dblock);
+	dblock.checksum = 0; /* set after paxos_dblock_out */
 
 	memset(&bk_max, 0, sizeof(struct paxos_dblock));
 
@@ -483,10 +522,12 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 		for (q = 0; q < num_hosts; q++) {
 			bk_end = (struct paxos_dblock *)(iobuf[d] + ((2 + q)*sector_size));
 
+			checksum = dblock_checksum(bk_end);
+
 			paxos_dblock_in(bk_end, &bk_in);
 			bk = &bk_in;
 
-			rv = verify_dblock(token, bk);
+			rv = verify_dblock(token, bk, checksum);
 			if (rv < 0)
 				continue;
 
@@ -569,7 +610,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 		dblock.inp3 = monotime();
 	}
 	dblock.bal = dblock.mbal;
-	dblock.checksum = dblock_checksum(&dblock);
+	dblock.checksum = 0; /* set after paxos_dblock_out */
 
 	if (bk_max.inp) {
 		/* not a problem, but interesting to see, so use log_error */
@@ -635,10 +676,12 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 		for (q = 0; q < num_hosts; q++) {
 			bk_end = (struct paxos_dblock *)(iobuf[d] + ((2 + q)*sector_size));
 
+			checksum = dblock_checksum(bk_end);
+
 			paxos_dblock_in(bk_end, &bk_in);
 			bk = &bk_in;
 
-			rv = verify_dblock(token, bk);
+			rv = verify_dblock(token, bk, checksum);
 			if (rv < 0)
 				continue;
 
@@ -724,11 +767,6 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 	return error;
 }
 
-uint32_t leader_checksum(struct leader_record *lr)
-{
-	return crc32c((uint32_t)~1, (uint8_t *)lr, LEADER_CHECKSUM_LEN);
-}
-
 static void log_leader_error(int result,
 			     struct token *token,
 			     struct sync_disk *disk,
@@ -771,11 +809,11 @@ static void log_leader_error(int result,
 static int verify_leader(struct token *token,
 			 struct sync_disk *disk,
 			 struct leader_record *lr,
+			 uint32_t checksum,
 			 const char *caller)
 {
 	struct leader_record leader_end;
 	struct leader_record leader_rr;
-	uint32_t sum;
 	int result, rv;
 
 	if (lr->magic != PAXOS_DISK_MAGIC) {
@@ -821,11 +859,9 @@ static int verify_leader(struct token *token,
 		goto fail;
 	}
 
-	sum = leader_checksum(lr);
-
-	if (lr->checksum != sum) {
+	if (lr->checksum != checksum) {
 		log_errot(token, "verify_leader wrong checksum %x %x %s",
-			  lr->checksum, sum, disk->path);
+			  lr->checksum, checksum, disk->path);
 		result = SANLK_LEADER_CHECKSUM;
 		goto fail;
 	}
@@ -851,9 +887,10 @@ static int verify_leader(struct token *token,
 int paxos_verify_leader(struct token *token,
 			 struct sync_disk *disk,
 			 struct leader_record *lr,
+			 uint32_t checksum,
 			 const char *caller)
 {
-	return verify_leader(token, disk, lr, caller);
+	return verify_leader(token, disk, lr, checksum, caller);
 }
 
 static int leaders_match(struct leader_record *a, struct leader_record *b)
@@ -870,11 +907,12 @@ int paxos_read_resource(struct task *task,
 			struct sanlk_resource *res)
 {
 	struct leader_record leader;
+	uint32_t checksum;
 	int rv;
 
 	memset(&leader, 0, sizeof(struct leader_record));
 
-	rv = read_leader(task, token, &token->disks[0], &leader);
+	rv = read_leader(task, token, &token->disks[0], &leader, &checksum);
 	if (rv < 0)
 		return rv;
 
@@ -884,7 +922,7 @@ int paxos_read_resource(struct task *task,
 	if (!res->name[0])
 		memcpy(token->r.name, leader.resource_name, NAME_ID_SIZE);
 
-	rv = verify_leader(token, &token->disks[0], &leader, "read_resource");
+	rv = verify_leader(token, &token->disks[0], &leader, checksum, "read_resource");
 
 	if (rv == SANLK_OK) {
 		memcpy(res->lockspace_name, leader.space_name, NAME_ID_SIZE);
@@ -928,15 +966,16 @@ static int _leader_read_one(struct task *task,
 			    const char *caller)
 {
 	struct leader_record leader;
+	uint32_t checksum;
 	int rv;
 
 	memset(&leader, 0, sizeof(struct leader_record));
 
-	rv = read_leader(task, token, &token->disks[0], &leader);
+	rv = read_leader(task, token, &token->disks[0], &leader, &checksum);
 	if (rv < 0)
 		return rv;
 
-	rv = verify_leader(token, &token->disks[0], &leader, caller);
+	rv = verify_leader(token, &token->disks[0], &leader, checksum, caller);
 
 	/* copy what we read even if verify finds a problem */
 
@@ -953,6 +992,7 @@ static int _leader_read_num(struct task *task,
 {
 	struct leader_record leader;
 	struct leader_record *leaders;
+	uint32_t checksum;
 	int *leader_reps;
 	int leaders_len, leader_reps_len;
 	int num_reads;
@@ -985,11 +1025,11 @@ static int _leader_read_num(struct task *task,
 	num_reads = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = read_leader(task, token, &token->disks[d], &leaders[d]);
+		rv = read_leader(task, token, &token->disks[d], &leaders[d], &checksum);
 		if (rv < 0)
 			continue;
 
-		rv = verify_leader(token, &token->disks[d], &leaders[d], caller);
+		rv = verify_leader(token, &token->disks[d], &leaders[d], checksum, caller);
 		if (rv < 0)
 			continue;
 
@@ -1083,6 +1123,7 @@ static int _lease_read_one(struct task *task,
 	char *iobuf, **p_iobuf;
 	uint32_t host_id = token->host_id;
 	uint32_t sector_size = disk->sector_size;
+	uint32_t checksum;
 	struct paxos_dblock *bk_end;
 	uint64_t tmp_mbal = 0;
 	int q, tmp_q = -1, rv, iobuf_len;
@@ -1104,21 +1145,26 @@ static int _lease_read_one(struct task *task,
 		goto out;
 
 	memcpy(&leader_end, iobuf, sizeof(struct leader_record));
+
+	checksum = leader_checksum(&leader_end);
+
 	leader_record_in(&leader_end, leader_ret);
 
 	memcpy(&our_dblock_end, iobuf + ((host_id + 1) * sector_size), sizeof(struct paxos_dblock));
 	paxos_dblock_in(&our_dblock_end, our_dblock);
 
-	rv = verify_leader(token, disk, leader_ret, caller);
+	rv = verify_leader(token, disk, leader_ret, checksum, caller);
 	if (rv < 0)
 		goto out;
 
 	for (q = 0; q < leader_ret->num_hosts; q++) {
 		bk_end = (struct paxos_dblock *)(iobuf + ((2 + q) * sector_size));
 
+		checksum = dblock_checksum(bk_end);
+
 		paxos_dblock_in(bk_end, &bk);
 
-		rv = verify_dblock(token, &bk);
+		rv = verify_dblock(token, &bk, checksum);
 		if (rv < 0)
 			goto out;
 
@@ -1773,7 +1819,7 @@ int paxos_lease_acquire(struct task *task,
 			new_leader.flags &= ~LFL_SHORT_HOLD;
 	}
 
-	new_leader.checksum = leader_checksum(&new_leader);
+	new_leader.checksum = 0; /* set after leader_record_out */
 
 	error = write_new_leader(task, token, &new_leader, "paxos_acquire");
 	if (error < 0) {
@@ -1843,7 +1889,7 @@ int paxos_lease_renew(struct task *task,
 	}
 
 	new_leader.timestamp = monotime();
-	new_leader.checksum = leader_checksum(&new_leader);
+	new_leader.checksum = 0; /* set after leader_record_out */
 
 	error = write_new_leader(task, token, &new_leader);
 	if (error < 0)
@@ -1941,7 +1987,7 @@ int paxos_lease_release(struct task *task,
 	leader.write_generation = token->host_generation;
 	leader.write_timestamp = monotime();
 	leader.flags &= ~LFL_SHORT_HOLD;
-	leader.checksum = leader_checksum(&leader);
+	leader.checksum = 0; /* set after leader_record_out */
 
 	error = write_new_leader(task, token, &leader, "paxos_release");
 	if (error < 0)
@@ -1961,6 +2007,7 @@ int paxos_lease_init(struct task *task,
 	struct leader_record leader_end;
 	struct request_record rr;
 	struct request_record rr_end;
+	uint32_t checksum;
 	int iobuf_len;
 	int sector_size;
 	int align_size;
@@ -2009,13 +2056,21 @@ int paxos_lease_init(struct task *task,
 	leader.timestamp = LEASE_FREE;
 	strncpy(leader.space_name, token->r.lockspace_name, NAME_ID_SIZE);
 	strncpy(leader.resource_name, token->r.name, NAME_ID_SIZE);
-	leader.checksum = leader_checksum(&leader);
+	leader.checksum = 0; /* set after leader_record_out */
 
 	memset(&rr, 0, sizeof(rr));
 	rr.magic = REQ_DISK_MAGIC;
 	rr.version = REQ_DISK_VERSION_MAJOR | REQ_DISK_VERSION_MINOR;
 
 	leader_record_out(&leader, &leader_end);
+
+	/*
+	 * N.B. must compute checksum after the data has been byte swapped.
+	 */
+	checksum = leader_checksum(&leader_end);
+	leader.checksum = checksum;
+	leader_end.checksum = cpu_to_le32(checksum);
+
 	request_record_out(&rr, &rr_end);
 
 	memcpy(iobuf, &leader_end, sizeof(struct leader_record));

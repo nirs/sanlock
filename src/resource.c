@@ -99,6 +99,7 @@ int read_resource_owners(struct task *task, struct token *token,
 	struct sanlk_host *host;
 	struct mode_block *mb_end;
 	uint64_t host_id;
+	uint32_t checksum;
 	char *lease_buf_dblock;
 	char *lease_buf = NULL;
 	char *hosts_buf = NULL;
@@ -120,9 +121,11 @@ int read_resource_owners(struct task *task, struct token *token,
 
 	memcpy(&leader_end, lease_buf, sizeof(struct leader_record));
 
+	checksum = leader_checksum(&leader_end);
+
 	leader_record_in(&leader_end, &leader);
 
-	rv = paxos_verify_leader(token, disk, &leader, "read_resource_owners");
+	rv = paxos_verify_leader(token, disk, &leader, checksum, "read_resource_owners");
 	if (rv < 0)
 		goto out;
 

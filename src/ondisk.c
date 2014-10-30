@@ -16,28 +16,6 @@
 #include "ondisk.h"
 
 /*
- * sanlock ondisk format is little endian.
- */
-
-#if __BYTE_ORDER == __BIG_ENDIAN
-#define le16_to_cpu(x) (bswap_16((x)))
-#define le32_to_cpu(x) (bswap_32((x)))
-#define le64_to_cpu(x) (bswap_64((x)))
-#define cpu_to_le16(x) (bswap_16((x)))
-#define cpu_to_le32(x) (bswap_32((x)))
-#define cpu_to_le64(x) (bswap_64((x)))
-#endif
-
-#if __BYTE_ORDER == __LITTLE_ENDIAN
-#define le16_to_cpu(x) (x)
-#define le32_to_cpu(x) (x)
-#define le64_to_cpu(x) (x)
-#define cpu_to_le16(x) (x)
-#define cpu_to_le32(x) (x)
-#define cpu_to_le64(x) (x)
-#endif
-
-/*
  * "end" variables point to ondisk format (endian converted) structures.
  */
 
@@ -79,7 +57,8 @@ void leader_record_out(struct leader_record *lr, struct leader_record *end)
 	memcpy(end->resource_name, lr->resource_name, NAME_ID_SIZE);
 	end->timestamp        = cpu_to_le64(lr->timestamp);
 	end->unused1          = cpu_to_le64(lr->unused1);
-	end->checksum         = cpu_to_le32(lr->checksum);
+	/* N.B. the checksum must be computed after the byte swapping */
+	/* leader_record_out(lr, end); checksum = compute(end); end->checksum = cpu_to_le32(checksum); */
 	end->unused2          = cpu_to_le16(lr->unused2);
 	end->io_timeout       = cpu_to_le16(lr->io_timeout);
 	end->write_id         = cpu_to_le64(lr->write_id);
@@ -122,7 +101,8 @@ void paxos_dblock_out(struct paxos_dblock *pd, struct paxos_dblock *end)
 	end->inp2     = cpu_to_le64(pd->inp2);
 	end->inp3     = cpu_to_le64(pd->inp3);
 	end->lver     = cpu_to_le64(pd->lver);
-	end->checksum = cpu_to_le32(pd->checksum);
+	/* N.B. the checksum must be computed after the byte swapping */
+	/* paxos_dblock_out(pd, end); checksum = compute(end), end->checksum = cpu_to_le32(checksum); */
 }
 
 void mode_block_in(struct mode_block *end, struct mode_block *mb)

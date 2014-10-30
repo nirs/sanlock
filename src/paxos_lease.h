@@ -54,6 +54,7 @@ int paxos_read_buf(struct task *task,
 int paxos_verify_leader(struct token *token,
                          struct sync_disk *disk,
                          struct leader_record *lr,
+			 uint32_t checksum,
                          const char *caller);
 
 int paxos_erase_dblock(struct task *task,

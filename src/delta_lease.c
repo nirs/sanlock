@@ -81,9 +81,9 @@ static int verify_leader(struct sync_disk *disk,
 			 char *space_name,
 			 uint64_t host_id,
 			 struct leader_record *lr,
+			 uint32_t checksum,
 			 const char *caller)
 {
-	uint32_t sum;
 	int result;
 
 	if (lr->magic != DELTA_DISK_MAGIC) {
@@ -118,12 +118,10 @@ static int verify_leader(struct sync_disk *disk,
 		goto fail;
 	}
 
-	sum = leader_checksum(lr);
-
-	if (lr->checksum != sum) {
+	if (lr->checksum != checksum) {
 		log_error("verify_leader %llu wrong checksum %x %x %s",
 			  (unsigned long long)host_id,
-			  lr->checksum, sum, disk->path);
+			  lr->checksum, checksum, disk->path);
 		result = SANLK_LEADER_CHECKSUM;
 		goto fail;
 	}
@@ -164,6 +162,7 @@ int delta_read_lockspace(struct task *task,
 {
 	struct leader_record leader_end;
 	struct leader_record leader;
+	uint32_t checksum;
 	char *space_name;
 	int rv, error;
 
@@ -176,6 +175,9 @@ int delta_read_lockspace(struct task *task,
 	if (rv < 0)
 		return rv;
 
+	/* N.B. compute checksum before byte swapping */
+	checksum = leader_checksum(&leader_end);
+
 	leader_record_in(&leader_end, &leader);
 
 	if (!ls->name[0])
@@ -183,7 +185,7 @@ int delta_read_lockspace(struct task *task,
 	else
 		space_name = ls->name;
 
-	error = verify_leader(disk, space_name, host_id, &leader, "read_lockspace");
+	error = verify_leader(disk, space_name, host_id, &leader, checksum, "read_lockspace");
 
 	if (error == SANLK_OK) {
 		memcpy(ls->name, leader.space_name, SANLK_NAME_LEN);
@@ -203,6 +205,7 @@ int delta_lease_leader_read(struct task *task, int io_timeout,
 {
 	struct leader_record leader_end;
 	struct leader_record leader;
+	uint32_t checksum;
 	int rv, error;
 
 	/* host_id N is block offset N-1 */
@@ -215,9 +218,12 @@ int delta_lease_leader_read(struct task *task, int io_timeout,
 	if (rv < 0)
 		return rv;
 
+	/* N.B. compute checksum before byte swapping */
+	checksum = leader_checksum(&leader_end);
+
 	leader_record_in(&leader_end, &leader);
 
-	error = verify_leader(disk, space_name, host_id, &leader, caller);
+	error = verify_leader(disk, space_name, host_id, &leader, checksum, caller);
 
 	memcpy(leader_ret, &leader, sizeof(struct leader_record));
 	return error;
@@ -274,6 +280,7 @@ int delta_lease_acquire(struct task *task,
 	struct leader_record leader1;
 	struct leader_record leader_end;
 	uint64_t new_ts;
+	uint32_t checksum;
 	int other_io_timeout, other_host_dead_seconds, other_id_renewal_seconds;
 	int i, error, rv, delay, delta_large_delay;
 
@@ -385,7 +392,7 @@ int delta_lease_acquire(struct task *task,
 	leader.owner_id = host_id;
 	leader.owner_generation++;
 	snprintf(leader.resource_name, NAME_ID_SIZE, "%s", our_host_name);
-	leader.checksum = leader_checksum(&leader);
+	leader.checksum = 0; /* set below */
 
 	log_space(sp, "delta_acquire write %llu %llu %llu %.48s",
 		  (unsigned long long)leader.owner_id,
@@ -394,6 +401,13 @@ int delta_lease_acquire(struct task *task,
 		  leader.resource_name);
 
 	leader_record_out(&leader, &leader_end);
+
+	/*
+	 * N.B. must compute checksum after the data has been byte swapped.
+	 */
+	checksum = leader_checksum(&leader_end);
+	leader.checksum = checksum;
+	leader_end.checksum = cpu_to_le32(checksum);
 
 	rv = write_sector(disk, host_id - 1, (char *)&leader_end, sizeof(struct leader_record),
 			  task, sp->io_timeout, "delta_leader");
@@ -458,6 +472,7 @@ int delta_lease_renew(struct task *task,
 	char **p_iobuf;
 	char **p_wbuf;
 	char *wbuf;
+	uint32_t checksum;
 	uint64_t host_id, id_offset, new_ts;
 	int rv, iobuf_len, sector_size;
 
@@ -568,9 +583,13 @@ int delta_lease_renew(struct task *task,
  read_done:
 	*read_result = SANLK_OK;
 	memcpy(&leader_end, task->iobuf+id_offset, sizeof(struct leader_record));
+
+	/* N.B. compute checksum before byte swapping */
+	checksum = leader_checksum(&leader_end);
+
 	leader_record_in(&leader_end, &leader);
 
-	rv = verify_leader(disk, space_name, host_id, &leader, "delta_renew");
+	rv = verify_leader(disk, space_name, host_id, &leader, checksum, "delta_renew");
 	if (rv < 0) {
 		log_erros(sp, "delta_renew verify_leader error %d", rv);
 		return rv;
@@ -611,7 +630,7 @@ int delta_lease_renew(struct task *task,
 	}
 
 	leader.timestamp = new_ts;
-	leader.checksum = leader_checksum(&leader);
+	leader.checksum = 0; /* set below */
 
 	/* TODO: rename the leader fields */
 	if (extra) {
@@ -629,6 +648,13 @@ int delta_lease_renew(struct task *task,
 	memset(wbuf, 0, sector_size);
 
 	leader_record_out(&leader, &leader_end);
+
+	/*
+	 * N.B. must compute checksum after the data has been byte swapped.
+	 */
+	checksum = leader_checksum(&leader_end);
+	leader.checksum = checksum;
+	leader_end.checksum = cpu_to_le32(checksum);
 
 	memcpy(wbuf, &leader_end, sizeof(struct leader_record));
 	memcpy(wbuf+LEADER_RECORD_MAX, bitmap, HOSTID_BITMAP_SIZE);
@@ -666,6 +692,7 @@ int delta_lease_release(struct task *task,
 	struct leader_record leader;
 	struct leader_record leader_end;
 	uint64_t host_id;
+	uint32_t checksum;
 	int rv;
 
 	if (!leader_last)
@@ -678,9 +705,16 @@ int delta_lease_release(struct task *task,
 
 	memcpy(&leader, leader_last, sizeof(struct leader_record));
 	leader.timestamp = LEASE_FREE;
-	leader.checksum = leader_checksum(&leader);
+	leader.checksum = 0; /* set below */
 
 	leader_record_out(&leader, &leader_end);
+
+	/*
+	 * N.B. must compute checksum after the data has been byte swapped.
+	 */
+	checksum = leader_checksum(&leader_end);
+	leader.checksum = checksum;
+	leader_end.checksum = cpu_to_le32(checksum);
 
 	rv = write_sector(disk, host_id - 1, (char *)&leader_end, sizeof(struct leader_record),
 			  task, sp->io_timeout, "delta_leader");
@@ -714,6 +748,7 @@ int delta_lease_init(struct task *task,
 	int iobuf_len;
 	int align_size;
 	int i, rv;
+	uint32_t checksum;
 
 	if (!max_hosts)
 		max_hosts = DEFAULT_MAX_HOSTS;
@@ -752,7 +787,7 @@ int delta_lease_init(struct task *task,
 		leader.timestamp = LEASE_FREE;
 		leader.io_timeout = io_timeout;
 		strncpy(leader.space_name, space_name, NAME_ID_SIZE);
-		leader.checksum = leader_checksum(&leader);
+		leader.checksum = 0; /* set below */
 
 		/* make the first record invalid so we can do a single atomic
 		   write below to commit the whole thing */
@@ -762,6 +797,13 @@ int delta_lease_init(struct task *task,
 		}
 
 		leader_record_out(&leader, &leader_end);
+
+		/*
+		 * N.B. must compute checksum after the data has been byte swapped.
+		 */
+		checksum = leader_checksum(&leader_end);
+		leader.checksum = checksum;
+		leader_end.checksum = cpu_to_le32(checksum);
 
 		memcpy(iobuf + (i * disk->sector_size), &leader_end, sizeof(struct leader_record));
 	}
@@ -773,7 +815,17 @@ int delta_lease_init(struct task *task,
 	/* commit the whole lockspace by making the first record valid */
 
 	leader_first.magic = DELTA_DISK_MAGIC;
+	leader_first.checksum = 0; /* set below */
+
 	leader_record_out(&leader_first, &leader_end);
+
+	/*
+	 * N.B. must compute checksum after the data has been byte swapped.
+	 */
+	checksum = leader_checksum(&leader_end);
+	leader_first.checksum = checksum;
+	leader_end.checksum = cpu_to_le32(checksum);
+
 	memcpy(iobuf, &leader_end, sizeof(struct leader_record));
 
 	rv = write_iobuf(disk->fd, disk->offset, iobuf, disk->sector_size, task, io_timeout);

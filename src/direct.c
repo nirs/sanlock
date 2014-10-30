@@ -400,6 +400,7 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 	struct request_record rr;
 	struct mode_block mb;
 	struct sync_disk sd;
+	struct paxos_dblock dblock;
 	char sname[NAME_ID_SIZE+1];
 	char rname[NAME_ID_SIZE+1];
 	uint64_t sector_nr;
@@ -521,6 +522,22 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 			for (i = 0; i < lr->num_hosts; i++) {
 				char *pd_end = data + ((2 + i) * sd.sector_size);
 				struct mode_block *mb_end = (struct mode_block *)(pd_end + MBLOCK_OFFSET);
+
+				if (force_mode > 1) {
+					paxos_dblock_in((struct paxos_dblock *)pd_end, &dblock);
+
+					if (dblock.mbal || dblock.inp || dblock.lver) {
+						printf("dblock[%04d] mbal %llu bal %llu inp %llu inp2 %llu inp3 %llu lver %llu sum %x\n",
+						       i,
+						       (unsigned long long)dblock.mbal,
+					               (unsigned long long)dblock.bal,
+					               (unsigned long long)dblock.inp,
+					               (unsigned long long)dblock.inp2,
+					               (unsigned long long)dblock.inp3,
+					               (unsigned long long)dblock.lver,
+					               dblock.checksum);
+					}
+				}
 
 				mode_block_in(mb_end, &mb);
 
