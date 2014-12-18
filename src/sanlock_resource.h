@@ -21,16 +21,33 @@
  */
 
 /* restrict flags */
-#define SANLK_RESTRICT_ALL	0x00000001
-#define SANLK_RESTRICT_SIGKILL	0x00000002
-#define SANLK_RESTRICT_SIGTERM	0x00000004
+#define SANLK_RESTRICT_ALL		0x00000001
+#define SANLK_RESTRICT_SIGKILL		0x00000002
+#define SANLK_RESTRICT_SIGTERM		0x00000004
 
 /* killpath flags */
-#define SANLK_KILLPATH_PID	0x00000001
+#define SANLK_KILLPATH_PID		0x00000001
 
-/* acquire flags */
-#define SANLK_ACQUIRE_LVB	0x00000001
-#define SANLK_ACQUIRE_ORPHAN	0x00000002
+/*
+ * acquire flags
+ *
+ * SANLK_ACQUIRE_LVB
+ * Enable the use of an LVB with the lock.
+ *
+ * SANLK_ACQUIRE_ORPHAN
+ * If the lock already exists as an orphan,
+ * then acquire it.  Otherwise, acquire a
+ * new lock as usual.
+ *
+ * SANLK_ACQUIRE_ORPHAN_ONLY
+ * If the lock already exists as an orphan,
+ * then acquire it.  Otherwise, do not acquire
+ * a lock at all and return -ENOENT.
+ */
+
+#define SANLK_ACQUIRE_LVB		0x00000001
+#define SANLK_ACQUIRE_ORPHAN		0x00000002
+#define SANLK_ACQUIRE_ORPHAN_ONLY	0x00000004
 
 /*
  * release flags

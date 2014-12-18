@@ -1318,12 +1318,19 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 	uint32_t new_num_hosts = 0;
 	int sh_retries = 0;
 	int live_count = 0;
+	int allow_orphan = 0;
+	int only_orphan = 0;
 	int rv;
 
 	if (token->acquire_flags & SANLK_RES_LVER)
 		acquire_lver = token->acquire_lver;
 	if (token->acquire_flags & SANLK_RES_NUM_HOSTS)
 		new_num_hosts = token->acquire_data32;
+
+	if (cmd_flags & (SANLK_ACQUIRE_ORPHAN | SANLK_ACQUIRE_ORPHAN_ONLY))
+		allow_orphan = 1;
+	if (cmd_flags & SANLK_ACQUIRE_ORPHAN_ONLY)
+		only_orphan = 1;
 
 	pthread_mutex_lock(&resource_mutex);
 
@@ -1368,7 +1375,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 	/* caller did not ask for orphan, but an orphan exists */
 
 	r = find_resource(token, &resources_orphan);
-	if (r && !(cmd_flags & SANLK_ACQUIRE_ORPHAN)) {
+	if (r && !allow_orphan) {
 		log_errot(token, "acquire_token found orphan");
 		pthread_mutex_unlock(&resource_mutex);
 		return -EUCLEAN;
@@ -1376,7 +1383,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 
 	/* caller asked for exclusive orphan, but a shared orphan exists */
 
-	if (r && (cmd_flags & SANLK_ACQUIRE_ORPHAN) && 
+	if (r && allow_orphan && 
 	    (r->flags & R_SHARED) && !(token->acquire_flags & SANLK_RES_SHARED)) {
 		log_errot(token, "acquire_token orphan is shared");
 		pthread_mutex_unlock(&resource_mutex);
@@ -1385,7 +1392,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 
 	/* caller asked for a shared orphan, but an exclusive orphan exists */
 
-	if (r && (cmd_flags & SANLK_ACQUIRE_ORPHAN) &&
+	if (r && allow_orphan &&
 	    !(r->flags & R_SHARED) && (token->acquire_flags & SANLK_RES_SHARED)) {
 		log_errot(token, "acquire_token orphan is exclusive");
 		pthread_mutex_unlock(&resource_mutex);
@@ -1394,7 +1401,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 
 	/* caller asked for shared orphan, and a shared orphan exists */
 
-	if (r && (cmd_flags & SANLK_ACQUIRE_ORPHAN) && 
+	if (r && allow_orphan && 
 	    (r->flags & R_SHARED) && (token->acquire_flags & SANLK_RES_SHARED)) {
 		log_token(token, "acquire_token adopt shared orphan");
 		token->resource = r;
@@ -1406,7 +1413,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 
 	/* caller asked for exclusive orphan, and an exclusive orphan exists */
 
-	if (r && (cmd_flags & SANLK_ACQUIRE_ORPHAN) &&
+	if (r && allow_orphan &&
 	    !(r->flags & R_SHARED) && !(token->acquire_flags & SANLK_RES_SHARED)) {
 		log_token(token, "acquire_token adopt orphan");
 		token->r.lver = r->leader.lver;
@@ -1426,6 +1433,13 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 		}
 		close_disks(token->disks, token->r.num_disks);
 		return SANLK_OK;
+	}
+
+	/* caller only wants to acquire an orphan */
+
+	if (cmd_flags & only_orphan) {
+		pthread_mutex_unlock(&resource_mutex);
+		return -ENOENT;
 	}
 
 	/*
