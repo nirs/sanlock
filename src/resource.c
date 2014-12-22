@@ -1408,6 +1408,16 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 		list_add(&token->list, &r->tokens);
 		list_move(&r->list, &resources_held);
 		pthread_mutex_unlock(&resource_mutex);
+
+		/* do this to initialize some token fields */
+		rv = open_disks(token->disks, token->r.num_disks);
+		if (rv < 0) {
+			/* TODO: what parts above need to be undone? */
+			log_errot(token, "acquire_token sh orphan open error %d", rv);
+			release_token_nodisk(task, token);
+			return rv;
+		}
+		close_disks(token->disks, token->r.num_disks);
 		return SANLK_OK;
 	}
 
