@@ -771,6 +771,7 @@ int do_rand(int argc, char *argv[])
 	printf("children running\n");
 
 	while (!prog_stop) {
+#if 0
 		/*
 		 * kill and replace a random pid
 		 */
@@ -799,6 +800,7 @@ int do_rand(int argc, char *argv[])
 		} else {
 			children[i] = pid;
 		}
+#endif
 
 #if 0
 		/*
