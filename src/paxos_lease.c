@@ -1475,7 +1475,7 @@ int paxos_lease_acquire(struct task *task,
 
 	if (cur_leader.owner_id == token->host_id &&
 	    cur_leader.owner_generation == token->host_generation) {
-		log_token(token, "paxos_acquire owner %llu %llu %llu is already local",
+		log_token(token, "paxos_acquire owner %llu %llu %llu is already local %llu %llu",
 			  (unsigned long long)cur_leader.owner_id,
 			  (unsigned long long)cur_leader.owner_generation,
 			  (unsigned long long)cur_leader.timestamp,
