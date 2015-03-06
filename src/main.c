@@ -1047,8 +1047,11 @@ static void process_cmd_thread_registered(int ci_in, struct sm_header *h_recv)
 			break;
 		}
 		if (ci_target < 0) {
-			log_error("cmd %d target pid %d not found",
-				  h_recv->cmd, h_recv->data2);
+			if (h_recv->cmd != SM_CMD_INQUIRE) {
+				/* inquire can be used to check if a pid exists */
+				log_error("cmd %d target pid %d not found",
+					  h_recv->cmd, h_recv->data2);
+			}
 			result = -ESRCH;
 			goto fail;
 		}
