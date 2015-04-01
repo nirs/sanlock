@@ -1017,8 +1017,11 @@ int sanlock_version(uint32_t flags, uint32_t *version, uint32_t *proto)
 		rv = -errno;
 		goto out;
 	}
-	if (rv != sizeof(h))
+
+	if (rv != sizeof(h)) {
+		rv = -1;
 		goto out;
+	}
 
 	if (proto)
 		*proto = h.version;
