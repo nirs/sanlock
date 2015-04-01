@@ -1008,25 +1008,30 @@ int sanlock_version(uint32_t flags, uint32_t *version, uint32_t *proto)
 
 	rv = send_header(fd, SM_CMD_VERSION, flags, 0, 0, 0);
 	if (rv < 0)
-		return rv;
+		goto out;
 
 	memset(&h, 0, sizeof(h));
 
 	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
-	if (rv < 0)
-		return -errno;
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
 	if (rv != sizeof(h))
-		return -1;
+		goto out;
 
 	if (proto)
 		*proto = h.version;
 
 	rv = (int)h.data;
 	if (rv < 0)
-		return rv;
+		goto out;
 
 	*version = h.data2;
-	return 0;
+	rv = 0;
+ out:
+	close(fd);
+	return rv;
 }
 
 int sanlock_killpath(int sock, uint32_t flags, const char *path, char *args)
