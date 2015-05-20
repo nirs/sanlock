@@ -1,0 +1,11 @@
+prefix=/usr
+exec_prefix=${prefix}
+includedir=${prefix}/include
+libdir=${exec_prefix}/lib64
+
+Name: libsanlock
+Description: The sanlock library
+Version: @VERSION@
+Cflags: -I${includedir}
+Libs: -L${libdir} -lpthread -lrt -laio -lblkid -luuid -lwdmd -lsanlock
+
