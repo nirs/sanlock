@@ -32,16 +32,18 @@ CFLAGS += -D_GNU_SOURCE \
 
 VER=$(shell cat ../VERSION)
 CFLAGS += -DVERSION=\"$(VER)\" -I../src -I../wdmd
+CFLAGS += -fPIE -DPIE
 
-LDFLAGS = -lsanlock -lwdmd
+LDFLAGS = -Wl,-z,now -Wl,-z,relro -pie
+LDADD = -lsanlock -lwdmd
 
 all: $(TARGET1) $(TARGET2)
 
 $(TARGET1): $(SOURCE1)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(SOURCE1) -o $@ -L. -L../src -L../wdmd
+	$(CC) $(CFLAGS) $(LDFLAGS) $(SOURCE1) $(LDADD) -o $@ -L. -L../src -L../wdmd
 
 $(TARGET2): $(SOURCE2)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(SOURCE2) -o $@ -L. -L../src -L../wdmd
+	$(CC) $(CFLAGS) $(LDFLAGS) $(SOURCE2) $(LDADD) -o $@ -L. -L../src -L../wdmd
 
 clean:
 	rm -f *.o *.so *.so.* $(TARGET1) $(TARGET2)
