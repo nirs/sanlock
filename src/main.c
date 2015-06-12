@@ -2229,6 +2229,126 @@ static int read_command_line(int argc, char *argv[])
 	return 0;
 }
 
+#define MAX_CONF_LINE 128
+
+static void get_val_int(char *line, int *val_out)
+{
+	char key[MAX_CONF_LINE];
+	char val[MAX_CONF_LINE];
+	int rv;
+
+	rv = sscanf(line, "%[^=]=%s", key, val);
+	if (rv != 2)
+		return;
+
+	*val_out = atoi(val);
+}
+
+static void get_val_str(char *line, char *val_out)
+{
+	char key[MAX_CONF_LINE];
+	char val[MAX_CONF_LINE];
+	int rv;
+
+	rv = sscanf(line, "%[^=]=%s", key, val);
+	if (rv != 2)
+		return;
+
+	strcpy(val_out, val);
+}
+
+static void read_config_file(void)
+{
+	FILE *file;
+	struct stat buf;
+	char line[MAX_CONF_LINE];
+	char str[MAX_CONF_LINE];
+	int i, val;
+
+	if (stat(SANLK_CONF_PATH, &buf) < 0) {
+		if (errno != ENOENT)
+			log_error("%s stat failed: %d", SANLK_CONF_PATH, errno);
+		return;
+	}
+
+	file = fopen(SANLK_CONF_PATH, "r");
+	if (!file)
+		return;
+
+	while (fgets(line, MAX_CONF_LINE, file)) {
+		if (line[0] == '#')
+			continue;
+		if (line[0] == '\n')
+			continue;
+
+		memset(str, 0, sizeof(str));
+
+		for (i = 0; i < MAX_CONF_LINE; i++) {
+			if (line[i] == ' ')
+				break;
+			if (line[i] == '=')
+				break;
+			if (line[i] == '\0')
+				break;
+			if (line[i] == '\n')
+				break;
+			if (line[i] == '\t')
+				break;
+			str[i] = line[i];
+		}
+
+		if (!strcmp(str, "quiet_fail")) {
+			get_val_int(line, &val);
+			com.quiet_fail = val;
+
+		} else if (!strcmp(str, "debug_renew")) {
+			get_val_int(line, &val);
+			com.debug_renew = val;
+
+		} else if (!strcmp(str, "logfile_priority")) {
+			get_val_int(line, &val);
+			log_logfile_priority = val;
+
+		} else if (!strcmp(str, "syslog_priority")) {
+			get_val_int(line, &val);
+			log_syslog_priority = val;
+
+		} else if (!strcmp(str, "use_watchdog")) {
+			get_val_int(line, &val);
+			com.use_watchdog = val;
+
+		} else if (!strcmp(str, "high_priority")) {
+			get_val_int(line, &val);
+			com.high_priority = val;
+
+		} else if (!strcmp(str, "mlock_level")) {
+			get_val_int(line, &val);
+			com.mlock_level = val;
+
+		} else if (!strcmp(str, "sh_retries")) {
+			get_val_int(line, &val);
+			com.sh_retries = val;
+
+		} else if (!strcmp(str, "uname")) {
+			memset(str, 0, sizeof(str));
+			get_val_str(line, str);
+			com.uid = user_to_uid(str);
+
+		} else if (!strcmp(str, "gname")) {
+			memset(str, 0, sizeof(str));
+			get_val_str(line, str);
+			com.gid = group_to_gid(str);
+
+		} else if (!strcmp(str, "our_host_name")) {
+			memset(str, 0, sizeof(str));
+			get_val_str(line, str);
+			strncpy(com.our_host_name, str, NAME_ID_SIZE);
+		}
+	}
+
+	fclose(file);
+}
+
 /* only used by do_client */
 static char *lsf_to_str(uint32_t flags)
 {
@@ -3082,6 +3202,13 @@ int main(int argc, char *argv[])
 	com.sh_retries = DEFAULT_SH_RETRIES;
 
 	memset(&main_task, 0, sizeof(main_task));
+
+	/*
+	 * read_config_file() overrides com default settings,
+	 * read_command_line() overrides com default settings and
+	 * config file settings.
+	 */
+	read_config_file();
 
 	rv = read_command_line(argc, argv);
 	if (rv < 0)

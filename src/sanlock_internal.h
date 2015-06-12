@@ -46,6 +46,7 @@
 #define SANLK_LOG_DIR "/var/log"
 #define SANLK_LOGFILE_NAME "sanlock.log"
 #define SANLK_LOCKFILE_NAME "sanlock.pid"
+#define SANLK_CONF_PATH "/etc/sanlock/sanlock.conf"
 
 #define DAEMON_NAME "sanlock"
 

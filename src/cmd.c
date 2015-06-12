@@ -2055,6 +2055,14 @@ static int print_state_daemon(char *str)
 
 	snprintf(str, SANLK_STATE_MAXSTR-1,
 		 "our_host_name=%s "
+		 "use_watchdog=%d "
+		 "high_priority=%d "
+		 "mlock_level=%d "
+		 "quiet_fail=%d "
+		 "debug_renew=%d "
+		 "gid=%d "
+		 "uid=%d "
+		 "sh_retries=%d "
 		 "use_aio=%d "
 		 "kill_grace_seconds=%d "
 		 "helper_pid=%d "
@@ -2067,6 +2075,14 @@ static int print_state_daemon(char *str)
 		 "version_hex=%08x "
 		 "smproto_hex=%08x",
 		 our_host_name_global,
+		 com.use_watchdog,
+		 com.high_priority,
+		 com.mlock_level,
+		 com.quiet_fail,
+		 com.debug_renew,
+		 com.gid,
+		 com.uid,
+		 com.sh_retries,
 		 main_task.use_aio,
 		 kill_grace_seconds,
 		 helper_pid,
