@@ -2337,11 +2337,13 @@ static void read_config_file(void)
 		} else if (!strcmp(str, "gname")) {
 			memset(str, 0, sizeof(str));
 			get_val_str(line, str);
+			com.gname = strdup(str);
 			com.gid = group_to_gid(str);
 
 		} else if (!strcmp(str, "our_host_name")) {
 			memset(str, 0, sizeof(str));
 			get_val_str(line, str);
+			com.uname = strdup(str);
 			strncpy(com.our_host_name, str, NAME_ID_SIZE);
 		}
 	}
