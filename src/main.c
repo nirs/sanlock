@@ -2332,6 +2332,7 @@ static void read_config_file(void)
 		} else if (!strcmp(str, "uname")) {
 			memset(str, 0, sizeof(str));
 			get_val_str(line, str);
+			com.uname = strdup(str);
 			com.uid = user_to_uid(str);
 
 		} else if (!strcmp(str, "gname")) {
@@ -2343,7 +2344,6 @@ static void read_config_file(void)
 		} else if (!strcmp(str, "our_host_name")) {
 			memset(str, 0, sizeof(str));
 			get_val_str(line, str);
-			com.uname = strdup(str);
 			strncpy(com.our_host_name, str, NAME_ID_SIZE);
 		}
 	}
