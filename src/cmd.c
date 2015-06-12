@@ -1863,7 +1863,6 @@ static void cmd_write_resource(struct task *task, struct cmd_args *ca)
  reply:
 	if (token)
 		free(token);
-	log_debug("cmd_write_resource %d,%d done %d", ca->ci_in, fd, result);
 
 	send_result(fd, &ca->header, result);
 	client_resume(ca->ci_in);
