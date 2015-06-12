@@ -1360,7 +1360,7 @@ static void cmd_inq_lockspace(struct cmd_args *ca)
  *
  * if (sp->killing_pids && all_pids_dead(sp) && all_tokens_released(sp)) {
  * 	sp->thread_stop = 1;
- * 	unlink_watchdog_file(sp);
+ * 	deactivate_watchdog(sp);
  * 	list_move(spaces_rem);
  * }
  *

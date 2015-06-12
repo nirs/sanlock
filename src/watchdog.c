@@ -39,8 +39,8 @@
 
 #include "../wdmd/wdmd.h"
 
-void update_watchdog_file(struct space *sp, uint64_t timestamp,
-			  int id_renewal_fail_seconds)
+void update_watchdog(struct space *sp, uint64_t timestamp,
+		     int id_renewal_fail_seconds)
 {
 	int rv;
 
@@ -53,13 +53,9 @@ void update_watchdog_file(struct space *sp, uint64_t timestamp,
 			  (unsigned long long)timestamp, rv);
 }
 
-int create_watchdog_file(struct space *sp, uint64_t timestamp,
-			 int id_renewal_fail_seconds)
+int connect_watchdog(struct space *sp)
 {
-	char name[WDMD_NAME_SIZE];
-	int test_interval, fire_timeout;
-	uint64_t last_keepalive;
-	int con, rv;
+	int con;
 
 	if (!com.use_watchdog)
 		return 0;
@@ -67,8 +63,22 @@ int create_watchdog_file(struct space *sp, uint64_t timestamp,
 	con = wdmd_connect();
 	if (con < 0) {
 		log_erros(sp, "wdmd_connect failed %d", con);
-		goto fail;
+		return -1;
 	}
+
+	return con;
+}
+
+int activate_watchdog(struct space *sp, uint64_t timestamp,
+		      int id_renewal_fail_seconds, int con)
+{
+	char name[WDMD_NAME_SIZE];
+	int test_interval, fire_timeout;
+	uint64_t last_keepalive;
+	int rv;
+
+	if (!com.use_watchdog)
+		return 0;
 
 	memset(name, 0, sizeof(name));
 
@@ -114,11 +124,10 @@ int create_watchdog_file(struct space *sp, uint64_t timestamp,
 	wdmd_refcount_clear(con);
  fail_close:
 	close(con);
- fail:
 	return -1;
 }
 
-void unlink_watchdog_file(struct space *sp)
+void deactivate_watchdog(struct space *sp)
 {
 	int rv;
 
@@ -129,7 +138,7 @@ void unlink_watchdog_file(struct space *sp)
 
 	rv = wdmd_test_live(sp->wd_fd, 0, 0);
 	if (rv < 0) {
-		log_erros(sp, "wdmd_test_live in unlink failed %d", rv);
+		log_erros(sp, "wdmd_test_live in deactivate failed %d", rv);
 
 		/* We really want this to succeed to avoid a reset, so retry
 	   	   after a short delay in case the problem was transient... */
@@ -138,13 +147,13 @@ void unlink_watchdog_file(struct space *sp)
 
 		rv = wdmd_test_live(sp->wd_fd, 0, 0);
 		if (rv < 0)
-			log_erros(sp, "wdmd_test_live in unlink 2 failed %d", rv);
+			log_erros(sp, "wdmd_test_live in deactivate 2 failed %d", rv);
 	}
 
 	wdmd_refcount_clear(sp->wd_fd);
 }
 
-void close_watchdog_file(struct space *sp)
+void close_watchdog(struct space *sp)
 {
 	if (!com.use_watchdog)
 		return;

@@ -552,6 +552,7 @@ static void *lockspace_thread(void *arg_in)
 	int acquire_result, delta_result, read_result;
 	int opened = 0;
 	int stop = 0;
+	int wd_con;
 
 	sp = (struct space *)arg_in;
 
@@ -588,6 +589,15 @@ static void *lockspace_thread(void *arg_in)
 		goto set_status;
 	}
 
+	/* Connect first so we can fail quickly if wdmd is not running. */
+	wd_con = connect_watchdog(sp);
+	if (wd_con < 0) {
+		log_erros(sp, "connect_watchdog failed %d", wd_con);
+		acquire_result = SANLK_WD_ERROR;
+		delta_result = -1;
+		goto set_status;
+	}
+
 	/*
 	 * acquire the delta lease
 	 */
@@ -608,11 +618,14 @@ static void *lockspace_thread(void *arg_in)
 	   before we allow any pid's to begin running */
 
 	if (delta_result == SANLK_OK) {
-		rv = create_watchdog_file(sp, last_success, id_renewal_fail_seconds);
+		rv = activate_watchdog(sp, last_success, id_renewal_fail_seconds, wd_con);
 		if (rv < 0) {
-			log_erros(sp, "create_watchdog failed %d", rv);
+			log_erros(sp, "activate_watchdog failed %d", rv);
 			acquire_result = SANLK_WD_ERROR;
 		}
+	} else {
+		if (com.use_watchdog)
+			close(wd_con);
 	}
 
  set_status:
@@ -704,7 +717,7 @@ static void *lockspace_thread(void *arg_in)
 		 */
 
 		if (delta_result == SANLK_OK && !sp->thread_stop)
-			update_watchdog_file(sp, last_success, id_renewal_fail_seconds);
+			update_watchdog(sp, last_success, id_renewal_fail_seconds);
 
 		pthread_mutex_unlock(&sp->mutex);
 
@@ -728,7 +741,7 @@ static void *lockspace_thread(void *arg_in)
 	/* watchdog unlink was done in main_loop when thread_stop was set, to
 	   get it done as quickly as possible in case the wd is about to fire. */
 
-	close_watchdog_file(sp);
+	close_watchdog(sp);
  out:
 	if (delta_result == SANLK_OK)
 		delta_lease_release(&task, sp, &sp->host_id_disk,
@@ -936,7 +949,7 @@ int add_lockspace_wait(struct space *sp)
 
 		pthread_mutex_lock(&sp->mutex);
 		sp->thread_stop = 1;
-		unlink_watchdog_file(sp);
+		deactivate_watchdog(sp);
 		pthread_mutex_unlock(&sp->mutex);
 		pthread_join(sp->thread, NULL);
 		rv = -1;
