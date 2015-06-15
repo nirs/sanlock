@@ -46,6 +46,11 @@
 #define DEFAULT_FIRE_TIMEOUT 60
 #define DEFAULT_HIGH_PRIORITY 1
 
+/*
+ * If the group name specified here, or specified on the
+ * command line is not found, then default to gid 0 (root).
+ */
+#define SOCKET_GNAME "sanlock"
 #define DEFAULT_SOCKET_GID 0
 #define DEFAULT_SOCKET_MODE (S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP)
 
@@ -57,6 +62,7 @@ static int high_priority = DEFAULT_HIGH_PRIORITY;
 static int daemon_quit;
 static int daemon_debug;
 static int socket_gid;
+static char *socket_gname = (char *)SOCKET_GNAME;
 static time_t last_keepalive;
 static time_t last_closeunclean;
 static char lockfile_path[PATH_MAX];
@@ -1462,8 +1468,7 @@ static int group_to_gid(char *arg)
 
 	gr = getgrnam(arg);
 	if (gr == NULL) {
-		log_error("group '%s' not found, "
-                          "using uid: %i", arg, DEFAULT_SOCKET_GID);
+		log_error("group '%s' not found, using socket gid: %i", arg, DEFAULT_SOCKET_GID);
 		return DEFAULT_SOCKET_GID;
 	}
 
@@ -1577,7 +1582,7 @@ int main(int argc, char *argv[])
 	            daemon_debug = 1;
 	            break;
 	        case 'G':
-	            socket_gid = group_to_gid(optarg);
+	            socket_gname = strdup(optarg);
 	            break;
 	        case 'H':
 	            high_priority = atoi(optarg);
@@ -1605,6 +1610,8 @@ int main(int argc, char *argv[])
 		else
 			exit(EXIT_SUCCESS);
 	}
+
+	socket_gid = group_to_gid(socket_gname);
 
 	if (!daemon_debug) {
 		if (daemon(0, 0) < 0) {
