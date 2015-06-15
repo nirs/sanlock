@@ -3198,10 +3198,20 @@ int main(int argc, char *argv[])
 	com.max_worker_threads = DEFAULT_MAX_WORKER_THREADS;
 	com.io_timeout_arg = DEFAULT_IO_TIMEOUT;
 	com.aio_arg = DEFAULT_USE_AIO;
-	com.uid = DEFAULT_SOCKET_UID;
-	com.gid = DEFAULT_SOCKET_GID;
 	com.pid = -1;
 	com.sh_retries = DEFAULT_SH_RETRIES;
+
+	if (getgrnam("sanlock") && getpwnam("sanlock")) {
+		com.uname = (char *)"sanlock";
+		com.gname = (char *)"sanlock";
+		com.uid = user_to_uid(com.uname);
+		com.gid = group_to_gid(com.uname);
+	} else {
+		com.uname = NULL;
+		com.gname = NULL;
+		com.uid = DEFAULT_SOCKET_UID;
+		com.gid = DEFAULT_SOCKET_GID;
+	}
 
 	memset(&main_task, 0, sizeof(main_task));
 
