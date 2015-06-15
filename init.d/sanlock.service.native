@@ -5,7 +5,7 @@ Wants=wdmd.service
 
 [Service]
 Type=forking
-ExecStart=/usr/sbin/sanlock daemon -U sanlock -G sanlock
+ExecStart=/usr/sbin/sanlock daemon
 SendSIGKILL=no
 
 [Install]
