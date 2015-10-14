@@ -43,11 +43,17 @@
  * If the lock already exists as an orphan,
  * then acquire it.  Otherwise, do not acquire
  * a lock at all and return -ENOENT.
+ *
+ * SANLK_ACQUIRE_OWNER_NOWAIT
+ * If the lock cannot be granted immediately
+ * because the owner's lease needs to time out, do
+ * not wait, but return -SANLK_ACQUIRE_OWNED_RETRY.
  */
 
 #define SANLK_ACQUIRE_LVB		0x00000001
 #define SANLK_ACQUIRE_ORPHAN		0x00000002
 #define SANLK_ACQUIRE_ORPHAN_ONLY	0x00000004
+#define SANLK_ACQUIRE_OWNER_NOWAIT	0x00000008
 
 /*
  * release flags

@@ -12,6 +12,7 @@
 #define PAXOS_ACQUIRE_FORCE		0x00000001
 #define PAXOS_ACQUIRE_QUIET_FAIL	0x00000002
 #define PAXOS_ACQUIRE_SHARED		0x00000004
+#define PAXOS_ACQUIRE_OWNER_NOWAIT	0x00000008
 
 uint32_t leader_checksum(struct leader_record *lr);
 

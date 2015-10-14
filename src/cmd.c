@@ -126,6 +126,7 @@ static const char *acquire_error_str(int error)
 	case SANLK_ACQUIRE_IDLIVE:
 	case SANLK_ACQUIRE_OWNED:
 	case SANLK_ACQUIRE_OTHER:
+	case SANLK_ACQUIRE_OWNED_RETRY:
 		return "lease owned by other host";
 
 	case SANLK_ACQUIRE_SHRETRY:
@@ -181,8 +182,8 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 
 	new_tokens_count = ca->header.data;
 
-	log_debug("cmd_acquire %d,%d,%d ci_in %d fd %d count %d",
-		  cl_ci, cl_fd, cl_pid, ca->ci_in, fd, new_tokens_count);
+	log_debug("cmd_acquire %d,%d,%d ci_in %d fd %d count %d flags %x",
+		  cl_ci, cl_fd, cl_pid, ca->ci_in, fd, new_tokens_count, ca->header.cmd_flags);
 
 	if (new_tokens_count > SANLK_MAX_RESOURCES) {
 		log_error("cmd_acquire %d,%d,%d new %d max %d",
@@ -396,6 +397,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 			case SANLK_ACQUIRE_IDLIVE:
 			case SANLK_ACQUIRE_OWNED:
 			case SANLK_ACQUIRE_OTHER:
+			case SANLK_ACQUIRE_OWNED_RETRY:
 				lvl = com.quiet_fail ? LOG_DEBUG : LOG_ERR;
 				break;
 			default:

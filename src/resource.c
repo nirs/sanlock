@@ -569,7 +569,7 @@ int res_get_lvb(struct sanlk_resource *res, char **lvb_out, int *lvblen)
 
 static int acquire_disk(struct task *task, struct token *token,
 			uint64_t acquire_lver, int new_num_hosts,
-			struct leader_record *leader)
+			int owner_nowait, struct leader_record *leader)
 {
 	struct leader_record leader_tmp;
 	int rv;
@@ -580,6 +580,9 @@ static int acquire_disk(struct task *task, struct token *token,
 
 	if (token->acquire_flags & SANLK_RES_SHARED)
 		flags |= PAXOS_ACQUIRE_SHARED;
+
+	if (owner_nowait)
+		flags |= PAXOS_ACQUIRE_OWNER_NOWAIT;
 
 	memset(&leader_tmp, 0, sizeof(leader_tmp));
 
@@ -1320,6 +1323,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 	int live_count = 0;
 	int allow_orphan = 0;
 	int only_orphan = 0;
+	int owner_nowait = 0;
 	int rv;
 
 	if (token->acquire_flags & SANLK_RES_LVER)
@@ -1331,6 +1335,8 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 		allow_orphan = 1;
 	if (cmd_flags & SANLK_ACQUIRE_ORPHAN_ONLY)
 		only_orphan = 1;
+	if (cmd_flags & SANLK_ACQUIRE_OWNER_NOWAIT)
+		owner_nowait = 1;
 
 	pthread_mutex_lock(&resource_mutex);
 
@@ -1493,7 +1499,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
  retry:
 	memset(&leader, 0, sizeof(struct leader_record));
 
-	rv = acquire_disk(task, token, acquire_lver, new_num_hosts, &leader);
+	rv = acquire_disk(task, token, acquire_lver, new_num_hosts, owner_nowait, &leader);
 
 	if (rv == SANLK_ACQUIRE_IDLIVE || rv == SANLK_ACQUIRE_OWNED || rv == SANLK_ACQUIRE_OTHER) {
 		/*

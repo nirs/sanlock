@@ -1661,6 +1661,15 @@ int paxos_lease_acquire(struct task *task,
 			goto run;
 		}
 
+		if (flags & PAXOS_ACQUIRE_OWNER_NOWAIT) {
+			log_token(token, "paxos_acquire owner %llu %llu %llu no wait",
+				  (unsigned long long)cur_leader.owner_id,
+				  (unsigned long long)cur_leader.owner_generation,
+				  (unsigned long long)cur_leader.timestamp);
+			error = SANLK_ACQUIRE_OWNED_RETRY;
+			goto out;
+		}
+
  skip_live_check:
 		/* TODO: test with sleep(2) here */
 		sleep(1);
