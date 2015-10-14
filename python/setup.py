@@ -11,6 +11,7 @@ sanlock = Extension(name='sanlock',
                     sources=['sanlock.c'],
                     include_dirs=['../src'],
                     library_dirs=['../src'],
+                    extra_link_args=['-fPIE', '-Wl,-z,relro,-z,now'],
                     libraries=sanlocklib)
 
 version = None
