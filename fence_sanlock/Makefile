@@ -32,13 +32,15 @@ CFLAGS += -D_GNU_SOURCE -g \
 
 VER=$(shell cat ../VERSION)
 CFLAGS += -DVERSION=\"$(VER)\" -I../src -I../wdmd
+CFLAGS += -fPIE -DPIE
 
-LDFLAGS = -lrt -laio -lblkid -lsanlock -lwdmd
+LDFLAGS = -Wl,-z,now -Wl,-z,relro -pie
+LDADD = -lrt -laio -lblkid -lsanlock -lwdmd
 
 all: $(TARGET1) $(TARGET2)
 
 $(TARGET1): $(SOURCE1)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(SOURCE1) -o $@ -L. -L../src -L../wdmd
+	$(CC) $(CFLAGS) $(LDFLAGS) $(SOURCE1) $(LDADD) -o $@ -L. -L../src -L../wdmd
 
 $(TARGET2): $(SOURCE2)
 	cat $(SOURCE2) | sed \
