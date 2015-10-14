@@ -1431,65 +1431,23 @@ static void setup_limits(void)
 
 static void setup_groups(void)
 {
-	int rv, i, j, h;
-	int pngroups, sngroups, ngroups_max;
-	gid_t *pgroup, *sgroup;
+	int rv;
 
 	if (!com.uname || !com.gname)
 		return;
 
-	ngroups_max = sysconf(_SC_NGROUPS_MAX);
-	if (ngroups_max < 0) {
-		log_error("cannot get the max number of groups %i", errno);
+	rv = initgroups(com.uname, com.gid);
+	if (rv < 0) {
+		log_error("error initializing groups errno %i", errno);
+	}
+}
+
+static void setup_uid_gid(void)
+{
+	int rv;
+
+	if (!com.uname || !com.gname)
 		return;
-	}
-
-	pgroup = malloc(ngroups_max * 2 * sizeof(gid_t));
-	if (!pgroup) {
-		log_error("cannot malloc the group list %i", errno);
-		exit(EXIT_FAILURE);
-	}
-
-	pngroups = getgroups(ngroups_max, pgroup);
-	if (pngroups < 0) {
-		log_error("cannot get the process groups %i", errno);
-		goto out;
-	}
-
-	sgroup = pgroup + ngroups_max;
-	sngroups = ngroups_max;
-
-	rv = getgrouplist(com.uname, com.gid, sgroup, &sngroups);
-	if (rv < 0) {
-		log_error("cannot get the user %s groups %i", com.uname, errno);
-		goto out;
-	}
-
-	for (i = 0, j = pngroups; i < sngroups; i++) {
-		if (j >= ngroups_max) {
-			log_error("too many groups for the user %s", com.uname);
-			break;
-		}
-
-		/* check if the groups is already present in the list */
-		for (h = 0; h < j; h++) {
-			if (pgroup[h] == sgroup[i]) {
-				goto skip_gid;
-			}
-		}
-
-		pgroup[j] = sgroup[i];
-		j++;
-
- skip_gid:
-		; /* skipping the gid because it's already present */
-	}
-
-	rv = setgroups(j, pgroup);
-	if (rv < 0) {
-		log_error("cannot set the user %s groups %i", com.uname, errno);
-		goto out;
-	}
 
 	rv = setgid(com.gid);
 	if (rv < 0) {
@@ -1509,9 +1467,6 @@ static void setup_groups(void)
 	if (rv < 0) {
 		log_error("cannot set dumpable process errno %i", errno);
 	}
-
- out:
-	free(pgroup);
 }
 
 static void setup_signals(void)
@@ -1660,9 +1615,12 @@ static int do_daemon(void)
 {
 	int fd, rv;
 
-	/* TODO: copy comprehensive daemonization method from libvirtd */
+
+	/* This can take a while so do it before forking. */
+	setup_groups();
 
 	if (!com.debug) {
+		/* TODO: copy comprehensive daemonization method from libvirtd */
 		if (daemon(0, 0) < 0) {
 			log_tool("cannot fork daemon\n");
 			exit(EXIT_FAILURE);
@@ -1699,7 +1657,7 @@ static int do_daemon(void)
 
 	setup_host_name();
 
-	setup_groups();
+	setup_uid_gid();
 
 	log_level(0, 0, NULL, LOG_WARNING, "sanlock daemon started %s host %s",
 		  VERSION, our_host_name_global);
