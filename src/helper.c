@@ -25,6 +25,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/prctl.h>
+#include <grp.h>
 
 #include "sanlock.h"
 #include "monotime.h"
@@ -158,6 +159,10 @@ int run_helper(int in_fd, int out_fd, int log_stderr)
 	memset(name, 0, sizeof(name));
 	sprintf(name, "%s", "sanlock-helper");
 	prctl(PR_SET_NAME, (unsigned long)name, 0, 0, 0);
+
+	rv = setgroups(0, NULL);
+	if (rv < 0)
+		log_debug("error clearing helper groups errno %i", errno);
 
 	memset(&pollfd, 0, sizeof(pollfd));
 	pollfd.fd = in_fd;
