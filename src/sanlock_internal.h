@@ -376,6 +376,7 @@ EXTERN int helper_kill_fd;
 EXTERN int helper_status_fd;
 EXTERN uint64_t helper_last_status;
 EXTERN uint32_t helper_full_count;
+EXTERN int efd;
 
 EXTERN struct list_head spaces;
 EXTERN struct list_head spaces_rem;

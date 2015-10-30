@@ -35,6 +35,7 @@
 #include <sys/utsname.h>
 #include <sys/resource.h>
 #include <uuid/uuid.h>
+#include <sys/eventfd.h>
 
 #define EXTERN
 #include "sanlock_internal.h"
@@ -190,8 +191,10 @@ static int client_alloc(void)
 {
 	int i;
 
+	/* pollfd is one element longer as we use an additional element for the
+	 * eventfd notification mechanism */
 	client = malloc(CLIENT_NALLOC * sizeof(struct client));
-	pollfd = malloc(CLIENT_NALLOC * sizeof(struct pollfd));
+	pollfd = malloc((CLIENT_NALLOC+1) * sizeof(struct pollfd));
 
 	if (!client || !pollfd) {
 		log_error("can't alloc for client or pollfd array");
@@ -360,6 +363,9 @@ void client_resume(int ci)
 		/* make poll() watch this connection */
 		pollfd[ci].fd = cl->fd;
 		pollfd[ci].events = POLLIN;
+
+		/* interrupt any poll() that might already be running */
+		eventfd_write(efd, 1);
 	}
  out:
 	pthread_mutex_unlock(&cl->mutex);
@@ -737,19 +743,29 @@ static int main_loop(void)
 	int i, rv, empty, check_all;
 	char *check_buf = NULL;
 	int check_buf_len = 0;
+	uint64_t ebuf;
 
 	gettimeofday(&last_check, NULL);
 	poll_timeout = STANDARD_CHECK_INTERVAL;
 	check_interval = STANDARD_CHECK_INTERVAL;
 
 	while (1) {
-		rv = poll(pollfd, client_maxi + 1, poll_timeout);
+		/* as well as the clients, check the eventfd */
+		pollfd[client_maxi+1].fd = efd;
+		pollfd[client_maxi+1].events = POLLIN;
+
+		rv = poll(pollfd, client_maxi + 2, poll_timeout);
 		if (rv == -1 && errno == EINTR)
 			continue;
 		if (rv < 0) {
 			/* not sure */
 		}
-		for (i = 0; i <= client_maxi; i++) {
+		for (i = 0; i <= client_maxi + 1; i++) {
+			if (pollfd[i].fd == efd && pollfd[i].revents & POLLIN) {
+				/* a client_resume completed */
+				eventfd_read(efd, &ebuf);
+				continue;
+			}
 			if (client[i].fd < 0)
 				continue;
 			if (pollfd[i].revents & POLLIN) {
@@ -1675,6 +1691,12 @@ static int do_daemon(void)
 	setup_token_manager();
 	if (rv < 0)
 		goto out_threads;
+
+	/* initialize global eventfd for client_resume notification */
+	if ((efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK)) == -1) {
+		log_error("couldn't create eventfd");
+		goto out_threads;
+	}
 
 	main_loop();
 
