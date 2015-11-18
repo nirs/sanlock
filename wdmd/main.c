@@ -1604,7 +1604,18 @@ int main(int argc, char *argv[])
 	}
 
 	if (do_probe) {
+		rv = setup_shm();
+		if (rv < 0) {
+			fprintf(stderr, "cannot probe watchdog devices while wdmd is in use.\n");
+			openlog("wdmd-probe", LOG_CONS | LOG_PID, LOG_DAEMON);
+			syslog(LOG_ERR, "cannot probe watchdog devices while wdmd is in use.\n");
+			exit(EXIT_FAILURE);
+		}
+
 		rv = probe_watchdog();
+
+		close_shm();
+
 		if (rv < 0)
 			exit(EXIT_FAILURE);
 		else
