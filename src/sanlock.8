@@ -870,6 +870,174 @@ using the ORPHAN flag (-O 1), or release the orphan lease using the ORPHAN
 flag (-O 1).  All orphan leases can be released by setting the lockspace
 name (-s lockspace_name) with no resource name.
 
+.SH INTERNALS
+
+.SS Disk Format
+
+.IP \[bu] 2
+This example uses 512 byte sectors.
+.IP \[bu] 2
+Each lockspace is 1MB.  It holds 2000 delta_leases, one per sector,
+supporting up to 2000 hosts.
+.IP \[bu] 2
+Each paxos_lease is 1MB.  It is used as a lease for one resource.
+.IP \[bu] 2
+The leader_record structure is used differently by each lease type.
+.IP \[bu] 2
+To display all leader_record fields, see sanlock direct read_leader.
+.IP \[bu] 2
+A lockspace is often followed on disk by the paxos_leases used within that
+lockspace, but this layout is not required.
+.IP \[bu] 2
+The request_record and host_id bitmap are used for requests/events.
+.IP \[bu] 2
+The mode_block contains the SHARED flag indicating a lease is held in the
+shared mode.
+.IP \[bu] 2
+In a lockspace, the host using host_id N writes to a single delta_lease in
+sector N-1.  No other hosts write to this sector.  All hosts read all
+lockspace sectors when renewing their own delta_lease, and are able to
+monitor renewals of all delta_leases.
+.IP \[bu] 2
+In a paxos_lease, each host has a dedicated sector it writes to,
+containing its own paxos_dblock and mode_block structures.  Its sector is
+based on its host_id; host_id 1 writes to the dblock/mode_block in sector
+2 of the paxos_lease.
+.IP \[bu] 2
+The paxos_dblock structures are used by the paxos_lease algorithm, and the
+result is written to the leader_record.
+
+.P
+
+.B 0x000000 lockspace foo:0:/path:0
+
+(There is no representation on disk of the lockspace in general, only the
+sequence of specific delta_leases which collectively represent the
+lockspace.)
+
+.B delta_lease foo:1:/path:0
+.nf
+0x000 0         leader_record         (sector 0, for host_id 1)
+                magic: 0x12212010 
+                space_name: foo
+                resource_name: host uuid/name
+                \.\.\.
+                host_id bitmap        (leader_record + 256)
+.fi
+
+.B delta_lease foo:2:/path:0
+.nf
+0x200 512       leader_record         (sector 1, for host_id 2)
+                magic: 0x12212010
+                space_name: foo
+                resource_name: host uuid/name
+                \.\.\.
+                host_id bitmap        (leader_record + 256)
+.fi
+
+.B delta_lease foo:3:/path:0
+.nf
+0x400 1024      leader_record         (sector 2, for host_id 3)
+                magic: 0x12212010
+                space_name: foo
+                resource_name: host uuid/name
+                \.\.\.
+                host_id bitmap        (leader_record + 256)
+.fi
+
+.B delta_lease foo:2000:/path:0
+.nf
+0xF9E00         leader_record         (sector 1999, for host_id 2000)
+                magic: 0x12212010
+                space_name: foo
+                resource_name: host uuid/name
+                \.\.\.
+                host_id bitmap        (leader_record + 256)
+.fi
+
+.B 0x100000 paxos_lease foo:example1:/path:1048576
+.nf
+0x000 0         leader_record         (sector 0)
+                magic: 0x06152010
+                space_name: foo
+                resource_name: example1
+
+0x200 512       request_record        (sector 1)
+                magic: 0x08292011
+
+0x400 1024      paxos_dblock          (sector 2, for host_id 1)
+0x480 1152      mode_block            (paxos_dblock + 128)
+
+0x600 1536      paxos_dblock          (sector 3, for host_id 2)
+0x680 1664      mode_block            (paxos_dblock + 128)
+
+0x800 2048      paxos_dblock          (sector 4, for host_id 3)
+0x880 2176      mode_block            (paxos_dblock + 128)
+
+0xFA200         paxos_dblock          (sector 2001, for host_id 2000)
+0xFA280         mode_block            (paxos_dblock + 128)
+.fi
+
+.B 0x200000 paxos_lease foo:example2:/path:2097152
+.nf
+0x000 0         leader_record         (sector 0)
+                magic: 0x06152010
+                space_name: foo
+                resource_name: example2
+
+0x200 512       request_record        (sector 1)
+                magic: 0x08292011
+
+0x400 1024      paxos_dblock          (sector 2, for host_id 1)
+0x480 1152      mode_block            (paxos_dblock + 128)
+
+0x600 1536      paxos_dblock          (sector 3, for host_id 2)
+0x680 1664      mode_block            (paxos_dblock + 128)
+
+0x800 2048      paxos_dblock          (sector 4, for host_id 3)
+0x880 2176      mode_block            (paxos_dblock + 128)
+
+0xFA200         paxos_dblock          (sector 2001, for host_id 2000)
+0xFA280         mode_block            (paxos_dblock + 128)
+.fi
+
+.SS Lease ownership
+
+Not shown in the leader_record structures above are the owner_id,
+owner_generation and timestamp fields.  These are the fields that define
+the lease owner.
+
+The delta_lease at sector N for host_id N+1 has leader_record.owner_id
+N+1.  The leader_record.owner_generation is incremented each time the
+delta_lease is acquired.  When a delta_lease is acquired, the
+leader_record.timestamp field is set to the time of the host and the
+leader_record.resource_name is set to the unique name of the host.  When
+the host renews the delta_lease, it writes a new leader_record.timestamp.
+When a host releases a delta_lease, it writes zero to
+leader_record.timestamp.
+
+When a host acquires a paxos_lease, it uses the host_id/generation value
+from the delta_lease it holds in the lockspace.  It uses this
+host_id/generation to identify itself in the paxos_dblock when running the
+paxos algorithm.  The result of the algorithm is the winning
+host_id/generation - the new owner of the paxos_lease.  The winning
+host_id/generation are written to the paxos_lease leader_record.owner_id
+and leader_record.owner_generation fields and leader_record.timestamp is
+set.  When a host releases a paxos_lease, it sets leader_record.timestamp
+to 0.
+
+When a paxos_lease is free (leader_record.timestamp is 0), multiple hosts
+may attempt to acquire it.  The paxos algorithm, using the paxos_dblock
+structures, will select only one of the hosts as the new owner, and that
+owner is written in the leader_record.  The paxos_lease will no longer be
+free (non-zero timestamp).  Other hosts will see this and will not attempt
+to acquire the paxos_lease until it is free again.
+
+If a paxos_lease is owned (non-zero timestamp), but the owner has not
+renewed its delta_lease for a specific length of time, then the owner
+value in the paxos_lease becomes expired, and other hosts will use the
+paxos algorithm to acquire the paxos_lease, and set a new owner.
+
 .SH SEE ALSO
 .BR wdmd (8)
 
