@@ -1577,7 +1577,12 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 
 		/* the token is kept, the paxos lease is released but with shared set */
 
+		token->flags |= T_WRITE_DBLOCK_MBLOCK_SH;
+
 		rv = release_disk(task, token, NULL, &leader);
+
+		token->flags &= T_WRITE_DBLOCK_MBLOCK_SH;
+
 		if (rv < 0) {
 			log_errot(token, "acquire_token sh release_disk error %d", rv);
 			r->flags &= ~R_SHARED;
