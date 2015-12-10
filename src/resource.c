@@ -296,8 +296,8 @@ void check_mode_block(struct token *token, uint64_t next_lver, int q, char *dblo
 	}
 }
 
-static int set_mode_block(struct task *task, struct token *token,
-			  uint64_t host_id, uint64_t gen, uint32_t flags)
+static int write_host_block(struct task *task, struct token *token,
+			    uint64_t host_id, uint64_t mb_gen, uint32_t mb_flags)
 {
 	struct sync_disk *disk;
 	struct mode_block mb;
@@ -319,21 +319,20 @@ static int set_mode_block(struct task *task, struct token *token,
 	if (rv)
 		return -ENOMEM;
 
+	memset(iobuf, 0, iobuf_len);
+
+	if (mb_gen || mb_flags) {
+		memset(&mb, 0, sizeof(mb));
+		mb.flags = mb_flags;
+		mb.generation = mb_gen;
+		mode_block_out(&mb, &mb_end);
+		memcpy(iobuf + MBLOCK_OFFSET, &mb_end, sizeof(struct mode_block));
+	}
+
 	for (d = 0; d < num_disks; d++) {
 		disk = &token->disks[d];
 
 		offset = disk->offset + ((2 + host_id - 1) * disk->sector_size);
-
-		rv = read_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout);
-		if (rv < 0)
-			break;
-
-		memset(&mb, 0, sizeof(mb));
-		mb.flags = flags;
-		mb.generation = gen;
-
-		mode_block_out(&mb, &mb_end);
-		memcpy(iobuf + MBLOCK_OFFSET, &mb_end, sizeof(struct mode_block));
 
 		rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout);
 		if (rv < 0)
@@ -341,16 +340,17 @@ static int set_mode_block(struct task *task, struct token *token,
 	}
 
 	if (rv < 0) {
-		log_errot(token, "set_mode_block host_id %llu flags %x gen %llu d %d rv %d",
-			  (unsigned long long)host_id, flags, (unsigned long long)gen, d, rv);
+		log_errot(token, "write_host_block host_id %llu flags %x gen %llu rv %d",
+			  (unsigned long long)host_id, mb_flags, (unsigned long long)mb_gen, rv);
 	} else {
-		log_token(token, "set_mode_block host_id %llu flags %x gen %llu",
-			  (unsigned long long)host_id, flags, (unsigned long long)gen);
+		log_token(token, "write_host_block host_id %llu flags %x gen %llu",
+			  (unsigned long long)host_id, mb_flags, (unsigned long long)mb_gen);
 	}
 
 	if (rv != SANLK_AIO_TIMEOUT)
 		free(iobuf);
 	return rv;
+
 }
 
 static int read_mode_block(struct task *task, struct token *token,
@@ -433,9 +433,9 @@ static int clear_dead_shared(struct task *task, struct token *token,
 			continue;
 		}
 
-		rv = set_mode_block(task, token, host_id, 0, 0);
+		rv = write_host_block(task, token, host_id, 0, 0);
 		if (rv < 0) {
-			log_errot(token, "clear_dead_shared host_id %llu set_mode_block %d",
+			log_errot(token, "clear_dead_shared host_id %llu write_host_block %d",
 				  (unsigned long long)host_id, rv);
 			return rv;
 		}
@@ -624,34 +624,56 @@ static int release_disk(struct task *task, struct token *token,
  * 2. perform on-disk operations to remove this host's ownership of the lease
  * 3. list_del and free the struct resource
  *
- * The on-disk operations in step 2 include five variations:
- * . skip all on-disk operations
- * . write zero mode block
- * . write zero leader record
- * . write zero mode block and write zero leader record
- * . write zero dblock and write zero leader record
+ * Normal cases:
  *
- * These on-disk variations are controlled by the following:
+ * 1. release ex lease
  *
- * - if the token indicates it's being released because the lockspace is
- *   failed/dead, then all on-disk operations are skipped.
+ * . zero our dblock values [see *]
+ *   (zeroing our mblock at the same time is ok because it's not used)
+ * . Use paxos_lease_release to set LEASE_FREE in leader_record.
+ * . (If r->leader is zero, it implies that the on-disk lease was never
+ *   acquired, so all on-disk operations are skipped.)
  *
- * - if r->leader is zero, it implies that the on-disk lease was never
- *   acquired, so all on-disk operations are skipped.
+ * 2. release sh lease (R_SHARED is set in r_flags)
  *
- * - if the caller has specified nodisk, then all on-disk operations are
- *   skipped.
+ * . As a shared lease holder we do not own the leader, so no
+ *   change to the leader is needed.
+ * . zero our mblock values (our SHARED flag)
+ *   (zeroing our dblock at the same time is ok because it's not used)
  *
- * - if R_SHARED is set, then only the host's mode_block is zeroed.
+ * Unusual cases:
  *
- * - if R_SHARED is not set, then the leader_record is released
- *   (involves reading it, verifying it's owned, then writing it)
+ * 3. skip all disk operations
  *
- * - if R_UNDO_SHARED is set, then the mode_block and leader_record
- *   are both cleared
+ * . "nodisk" is used when the caller only needs to remove the token (step 1),
+ *    i.e. on an error path prior to any disk operations having been started.
  *
- * - if R_ERASE_ALL is set, then the dblock and leader_record
- *   are both cleared
+ * . the token is being released because the lockspace is failed/dead,
+ *   so disk operations are skipped since they'll fail.
+ *
+ * . the token is being released after acquiring the lease failed,
+ *   e.g. it was owned by another host.
+ *
+ * 4. try to unwind from failed acquire of a shared lease (R_UNDO_SHARED)
+ *
+ * . A disk operation failed while trying to acquire a shared lease,
+ *   so we want to back out and leave the lease unowned.  This means
+ *   ensuring that our mblock does not have SHARED set and that we
+ *   don't own the leader.
+ * . zero our mblock values
+ * . zero our dblock values [see *]
+ * . Use paxos_lease_release to set LEASE_FREE in leader_record.
+ *
+ * 5. try to unwind from failed acquire (R_ERASE_ALL)
+ *
+ * . A disk operation failed at some point while changing a lease,
+ *   and we want to clear all ownership/state we have in the lease.
+ * . zero our mblock values
+ * . zero our dblock values [see * and **]
+ * . Use paxos_lease_release to set LEASE_FREE in leader_record.
+ *
+ * (4 and 5 are basically the same and should be combined)
+ *
  *
  * Error handling:
  *
@@ -660,7 +682,23 @@ static int release_disk(struct task *task, struct token *token,
  * The resource_thread will retry the on-disk operations until they succeed,
  * then free the resource.
  *
- * For ERASE_ALL we don't want another host running the ballot to select
+ * [*] Reason for clearing our dblock when releasing an ex/owned lease:
+ * If we are releasing this lease very quickly after acquiring it,
+ * there's a chance that another host was running the same acquire
+ * ballot that we were and also committed us as the owner of this
+ * lease, writing our inp values to the leader after we did ourself.
+ * That leader write from the other host may happen after the leader
+ * write we will do here releasing ownership.  So the release we do
+ * here may be clobbered and lost.  The result is that we own the lease
+ * on disk, but don't know it, so it won't be released unless we happen
+ * to acquire and release it again.  The solution is that we clear our
+ * dblock in addition to clearing the leader record.  Other hosts can
+ * then check our dblock to see if we really do own the lease.  If the
+ * leader says we own the lease, but our dblock is cleared, then our
+ * leader write in release was clobbered, and other hosts will run a
+ * ballot to set a new owner.
+ *
+ * [**] For ERASE_ALL we don't want another host running the ballot to select
  * our dblock values and commit them, making us the owner after we've aborted
  * the acquire.  So, we clear our dblock values first to prevent that from
  * happening from this point forward.  However, another host contending for the
@@ -691,8 +729,10 @@ static int _release_token(struct task *task, struct token *token,
 	struct resource *r = token->resource;
 	uint64_t lver;
 	uint32_t r_flags = 0;
+	int retry_async = 0;
 	int last_token = 0;
-	int rv = 0;
+	int ret = SANLK_OK;
+	int rv;
 
 	/* We keep r on the resources_rem list while doing the actual release 
 	   on disk so another acquire for the same resource will see it on
@@ -727,31 +767,45 @@ static int _release_token(struct task *task, struct token *token,
 	if (token->space_dead) {
 		/* don't bother trying disk op which will probably timeout */
 		close_disks(token->disks, token->r.num_disks);
-		rv = SANLK_OK;
 		goto out;
 	}
 
-	if (nodisk) {
-		rv = SANLK_OK;
+	if (nodisk)
 		goto out;
-	}
 
 	if (!opened) {
 		rv = open_disks_fd(token->disks, token->r.num_disks);
 		if (rv < 0) {
 			log_errot(token, "release_token open error %d", rv);
+			ret = rv;
 			goto out;
 		}
 	}
 
+	log_token(token, "release_token r_flags %x lver %llu,
+		  r_flags, (unsigned long long)lver);
+
+	/*
+	 * In all cases we want to (or can) clear both dblock and mblock.
+	 *
+	 * Cases where we want to release ownership of the leader:
+	 * . releasing ex lease !(r_flags & R_SHARED)
+	 * . R_UNDO_SHARED
+	 * . R_ERASE_ALL
+	 *
+	 * Cases where we don't want to release ownership of the leader:
+	 * . releasing sh lease: (r_flags & R_SHARED)
+	 */
+
 	if (r_flags & R_ERASE_ALL) {
-		rv = paxos_erase_dblock(task, token, token->host_id);
+		rv = write_host_block(task, token, token->host_id, 0, 0);
 		if (rv < 0) {
-			log_errot(token, "release_token erase_dblock error %d r_flags %x",
-				  rv, r_flags);
-			goto out_close;
+			log_errot(token, "release_token erase all write_host_block %d", rv);
+			ret = rv;
 		}
-		log_token(token, "release_token erase dblock done");
+
+		if (rv == SANLK_AIO_TIMEOUT)
+			retry_async = 1;
 
 		/* Even when acquire did not get far enough to get a copy of the
 		   leader (!lver), we still want to try to release the leader
@@ -762,32 +816,59 @@ static int _release_token(struct task *task, struct token *token,
 		else
 			rv = paxos_lease_release(task, token, NULL, &r->leader, &leader);
 
+		if (rv < 0)
+			ret = rv;
+
+		if (rv == SANLK_AIO_TIMEOUT)
+			retry_async = 1;
+
 		/* want to see this result in sanlock.log but not worry people with error */
 		log_level(0, token->token_id, NULL, LOG_WARNING,
-			  "release_token erase leader lver %llu rv %d",
+			  "release_token erase all leader lver %llu rv %d",
 			  (unsigned long long)lver, rv);
 
-		goto out_close;
-	}
-
-	if ((r_flags & R_SHARED) || (r_flags & R_UNDO_SHARED)) {
-		rv = set_mode_block(task, token, token->host_id, 0, 0);
+	} else if (r_flags & R_UNDO_SHARED) {
+		rv = write_host_block(task, token, token->host_id, 0, 0);
 		if (rv < 0) {
-			log_errot(token, "release_token set_mode_block error %d r_flags %x",
-				  rv, r_flags);
-			goto out_close;
+			log_errot(token, "release_token undo shared write_host_block %d", rv);
+			ret = rv;
 		}
-	}
 
-	if (!lver) {
-		/* zero lver means acquire did not get to the point of writing a leader,
-		   so we don't need to release the lease on disk. */
-		close_disks(token->disks, token->r.num_disks);
-		rv = SANLK_OK;
-		goto out;
-	}
+		if (rv == SANLK_AIO_TIMEOUT)
+			retry_async = 1;
 
-	if (!(r_flags & R_SHARED) || (r_flags & R_UNDO_SHARED)) {
+		rv = release_disk(task, token, resrename, &r->leader);
+		if (rv < 0) {
+			log_errot(token, "release_token undo shared release leader %d", rv);
+			ret = rv;
+		}
+
+		if (rv == SANLK_AIO_TIMEOUT)
+			retry_async = 1;
+
+	} else if (r_flags & R_SHARED) {
+		/* normal release of sh lease */
+
+		rv = write_host_block(task, token, token->host_id, 0, 0);
+		if (rv < 0) {
+			log_errot(token, "release_token shared write_host_block %d", rv);
+			ret = rv;
+		}
+
+		if (rv == SANLK_AIO_TIMEOUT)
+			retry_async = 1;
+
+	} else {
+		/* normal release of ex lease */
+
+		if (!lver) {
+			/* zero lver means acquire did not get to the point of writing a leader,
+			   so we don't need to release the lease on disk. */
+			close_disks(token->disks, token->r.num_disks);
+			ret = SANLK_OK;
+			goto out;
+		}
+
 		if (r_flags & R_LVB_WRITE_RELEASE) {
 			rv = write_lvb_block(task, r, token);
 			if (!rv)
@@ -797,20 +878,35 @@ static int _release_token(struct task *task, struct token *token,
 			/* do we want to give more effort to writing lvb? */
 		}
 
+		/* Failure here is not a big deal and can be ignored. */
+		rv = write_host_block(task, token, token->host_id, 0, 0);
+		if (rv < 0)
+			log_errot(token, "release_token write_host_block %d", rv);
+
 		rv = release_disk(task, token, resrename, &r->leader);
 		if (rv < 0) {
-			log_errot(token, "release_token disk error %d r_flags %x lver %llu",
-				  rv, r_flags, (unsigned long long)lver);
-			goto out_close;
+			log_errot(token, "release_token release leader %d", rv);
+			ret = rv;
 		}
+
+		if (rv == SANLK_AIO_TIMEOUT)
+			retry_async = 1;
 	}
 
-	log_token(token, "release_token done %d r_flags %x t_flags %x", rv, r->flags, token->flags);
-
- out_close:
 	close_disks(token->disks, token->r.num_disks);
-
  out:
+	if (!retry_async) {
+		if (ret != SANLK_OK)
+			log_token(token, "release_token error %d r_flags %x", ret, r_flags);
+		else
+			log_token(token, "release_token done r_flags %x", ret, r_flags);
+		pthread_mutex_lock(&resource_mutex);
+		list_del(&r->list);
+		pthread_mutex_unlock(&resource_mutex);
+		free_resource(r);
+		return ret;
+	}
+
 	/*
 	 * If a transient i/o error prevented the release on disk,
 	 * then handle this like an async release; set R_THREAD_RELEASE,
@@ -819,19 +915,12 @@ static int _release_token(struct task *task, struct token *token,
 	 * disk, preventing others from acquiring it.
 	 */
 
+	log_errot(token, "release_token timeout r_flags %x", r_flags);
 	pthread_mutex_lock(&resource_mutex);
-	if (rv == SANLK_AIO_TIMEOUT) {
-		r->flags |= R_THREAD_RELEASE;
-		r->release_token_id = token->token_id;
-	} else {
-		list_del(&r->list);
-	}
+	r->flags |= R_THREAD_RELEASE;
+	r->release_token_id = token->token_id;
 	pthread_mutex_unlock(&resource_mutex);
-
-	if (rv != SANLK_AIO_TIMEOUT)
-		free_resource(r);
-
-	return rv;
+	return SANLK_AIO_TIMEOUT;
 }
 
 static int release_token_nodisk(struct task *task, struct token *token)
@@ -1006,8 +1095,7 @@ static int convert_sh2ex_token(struct task *task, struct resource *r, struct tok
 {
 	struct leader_record leader;
 	int live_count = 0;
-	int fail_count = 0;
-	int undo_dblock = 0;
+	int retries;
 	int error;
 	int rv;
 
@@ -1033,12 +1121,15 @@ static int convert_sh2ex_token(struct task *task, struct resource *r, struct tok
 	if (rv < 0) {
 		log_errot(token, "convert_sh2ex acquire error %d t_flags %x", rv, token->flags);
 
-		/* If we might own the lease, then we need to do on-disk release
-		   of owner and dblock.  Keep token and SH mblock. */
+		/* If the acquire failed before anything important was written,
+		   then this RETRACT flag will not be set, and there is nothing
+		   to undo/cleanup; we can simply return an error.  Otherwise,
+		   the acquire failed part way through, and we need to try to
+		   clean up our state on disk.  Do on-disk release of owner.
+		   Keep token and SH mblock. */
 
 		if (token->flags & T_RETRACT_PAXOS) {
 			token->flags &= ~T_RETRACT_PAXOS;
-			undo_dblock = 1;
 			error = rv;
 			goto fail;
 		}
@@ -1071,10 +1162,12 @@ static int convert_sh2ex_token(struct task *task, struct resource *r, struct tok
 
 	if (live_count) {
 		/*
-		 * A live host with a sh lock exists.  The token is kept, the
-		 * lease owner is released.
+		 * The convert fails because a live host with a sh lock exists.
+		 * The token/lease is kept shared, the lease owner is released.
+		 * Our SHARED mblock bit is still set on disk because
+		 * T_WRITE_DBLOCK_MBLOCK_SH kept it set during acquire,
+		 * so we only need to release the lease owner.
 		 */
-
 		rv = release_disk(task, token, NULL, &leader);
 		if (rv < 0) {
 			log_errot(token, "convert_sh2ex release_disk error %d", rv);
@@ -1088,27 +1181,14 @@ static int convert_sh2ex_token(struct task *task, struct resource *r, struct tok
 	}
 
  do_mb:
-	rv = set_mode_block(task, token, token->host_id, token->host_generation, 0);
+	rv = write_host_block(task, token, token->host_id, 0, 0);
 	if (rv < 0) {
-		log_errot(token, "convert_sh2ex set_mode_block error %d %d", rv, fail_count);
+		log_errot(token, "convert_sh2ex write_host_block error %d", rv);
 
-		/* We have the ex lease, so return success.  We just need to clear
-		   our SH mblock.  We retry a couple times, and then set ERASE_ALL
-		   so that when the token is later released, both owner and mblock will
-		   be cleared. */
-		   
-		if ((rv == SANLK_AIO_TIMEOUT) && (fail_count < 2)) {
-			fail_count++;
-			sleep(1);
-			goto do_mb;
-		}
-
-		if (rv < 0 && (rv != SANLK_AIO_TIMEOUT)) {
-			error = rv;
-			goto fail;
-		}
-
-		r->flags |= R_ERASE_ALL;
+		/* We have the ex lease, so return success.  We just failed to
+		   clear our SH mblock.  When we later release this lease,
+		   the release includes clearing the dblock/mblock, so there's
+		   not really anything we need to do. */
 	}
 
 	/* TODO: clean up the duplication of stuff among: t, t->r, r, r->r */
@@ -1140,38 +1220,19 @@ static int convert_sh2ex_token(struct task *task, struct resource *r, struct tok
 	 * lockspace/leases should be considered invalid.
 	 */
 
-	fail_count++;
-
 	if (token->space_dead)
 		return error;
 
-	if (undo_dblock) {
-		token->flags |= T_WRITE_DBLOCK_MBLOCK_SH;
-
-		rv = paxos_erase_dblock(task, token, token->host_id);
-
-		token->flags &= ~T_WRITE_DBLOCK_MBLOCK_SH;
-
-		if ((rv == SANLK_AIO_TIMEOUT) && (fail_count < token->io_timeout)) {
-			log_errot(token, "convert_sh2ex fail %d undo dblock timeout", fail_count);
-			sleep(fail_count);
-			goto fail;
-		} else if (rv < 0) {
-			log_errot(token, "convert_sh2ex fail %d undo dblock error %d", fail_count, rv);
-			r->flags |= R_ERASE_ALL;
-			return error;
-		}
-
-		undo_dblock = 0;
-	}
-
+	retries = 0;
+ retry:
 	rv = paxos_lease_release(task, token, NULL, leader.lver ? &leader : NULL, &leader);
-	if ((rv == SANLK_AIO_TIMEOUT) && (fail_count < token->io_timeout)) {
-		log_errot(token, "convert_sh2ex fail %d undo owner timeout", fail_count);
-		sleep(fail_count);
-		goto fail;
+	if ((rv == SANLK_AIO_TIMEOUT) && (retries < 3)) {
+		retries++;
+		log_errot(token, "convert_sh2ex fail %d undo owner timeout", retries);
+		sleep(token->io_timeout);
+		goto retry;
 	} else if (rv < 0) {
-		log_errot(token, "convert_sh2ex fail %d undo owner error %d", fail_count, rv);
+		log_errot(token, "convert_sh2ex fail %d undo owner error %d", retries, rv);
 		r->flags |= R_ERASE_ALL;
 		return error;
 	}
@@ -1193,9 +1254,9 @@ static int convert_ex2sh_token(struct task *task, struct resource *r, struct tok
 	if (r->flags & R_LVB_WRITE_RELEASE)
 		write_lvb_block(task, r, token);
 
-	rv = set_mode_block(task, token, token->host_id, token->host_generation, MBLOCK_SHARED);
+	rv = write_host_block(task, token, token->host_id, token->host_generation, MBLOCK_SHARED);
 	if (rv < 0) {
-		log_errot(token, "convert_ex2sh set_mode_block error %d", rv);
+		log_errot(token, "convert_ex2sh write_host_block error %d", rv);
 		return rv;
 	}
 
@@ -1565,10 +1626,9 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 	 */
 
 	if (token->acquire_flags & SANLK_RES_SHARED) {
-		rv = set_mode_block(task, token, token->host_id,
-				    token->host_generation, MBLOCK_SHARED);
+		rv = write_host_block(task, token, token->host_id, token->host_generation, MBLOCK_SHARED);
 		if (rv < 0) {
-			log_errot(token, "acquire_token sh set_mode_block error %d", rv);
+			log_errot(token, "acquire_token sh write_host_block error %d", rv);
 			r->flags &= ~R_SHARED;
 			r->flags |= R_UNDO_SHARED;
 			release_token_opened(task, token);
@@ -1576,13 +1636,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 		}
 
 		/* the token is kept, the paxos lease is released but with shared set */
-
-		token->flags |= T_WRITE_DBLOCK_MBLOCK_SH;
-
 		rv = release_disk(task, token, NULL, &leader);
-
-		token->flags &= T_WRITE_DBLOCK_MBLOCK_SH;
-
 		if (rv < 0) {
 			log_errot(token, "acquire_token sh release_disk error %d", rv);
 			r->flags &= ~R_SHARED;
@@ -1902,7 +1956,10 @@ static void resource_thread_release(struct task *task, struct resource *r, struc
 	struct leader_record leader;
 	struct space_info spi;
 	uint32_t r_flags;
-	int rv = 0;
+	int retry_async = 0;
+	int rv;
+
+	r_flags = r->flags;
 
 	rv = open_disks_fd(token->disks, token->r.num_disks);
 	if (rv < 0) {
@@ -1915,20 +1972,25 @@ static void resource_thread_release(struct task *task, struct resource *r, struc
 
 	rv = lockspace_info(token->r.lockspace_name, &spi);
 	if (rv < 0 || spi.killing_pids) {
+		log_token(token, "release async info %d %d", rv, spi.killing_pids);
 		rv = -1;
 		goto out_close;
 	}
 
-	r_flags = r->flags;
+	/*
+	 * See comments in _release_token.
+	 * FIXME: avoid duplicating all this from _release_token.
+	 */
+
+	log_token(token, "release async r_flags %x, r_flags);
 
 	if (r_flags & R_ERASE_ALL) {
-		rv = paxos_erase_dblock(task, token, token->host_id);
-		if (rv < 0) {
-			log_errot(token, "release async erase_dblock error %d r_flags %x",
-				  rv, r_flags);
-			goto out_close;
-		}
-		log_token(token, "release async erase dblock done");
+		rv = write_host_block(task, token, token->host_id, 0, 0);
+		if (rv < 0)
+			log_errot(token, "release async erase all write_host_block %d", rv);
+
+		if (rv == SANLK_AIO_TIMEOUT)
+			retry_async = 1;
 
 		/* Even when acquire did not get far enough to get a copy of the
 		   leader (!lver), we still want to try to release the leader
@@ -1939,56 +2001,80 @@ static void resource_thread_release(struct task *task, struct resource *r, struc
 		else
 			rv = paxos_lease_release(task, token, NULL, &r->leader, &leader);
 
+		if (rv == SANLK_AIO_TIMEOUT)
+			retry_async = 1;
+
 		/* want to see this result in sanlock.log but not worry people with error */
 		log_level(0, token->token_id, NULL, LOG_WARNING,
-			  "release async erase leader lver %llu rv %d",
+			  "release async erase all leader lver %llu rv %d",
 			  (unsigned long long)r->leader.lver, rv);
 
-		goto out_close;
-	}
+	} else if (r_flags & R_UNDO_SHARED) {
+		rv = write_host_block(task, token, token->host_id, 0, 0);
+		if (rv < 0)
+			log_errot(token, "release async undo shared write_host_block %d", rv);
 
-	if ((r_flags & R_SHARED) || (r_flags & R_UNDO_SHARED)) {
-		rv = set_mode_block(task, token, token->host_id, 0, 0);
-		if (rv < 0) {
-			log_errot(token, "release async set_mode_block error %d r_flags %x",
-				  rv, r_flags);
-			goto out_close;
-		}
-	}
+		if (rv == SANLK_AIO_TIMEOUT)
+			retry_async = 1;
 
-	if (!(r_flags & R_SHARED) || (r_flags & R_UNDO_SHARED)) {
+		rv = release_disk(task, token, NULL, &r->leader);
+		if (rv < 0)
+			log_errot(token, "release async undo shared release leader %d", rv);
+
+		if (rv == SANLK_AIO_TIMEOUT)
+			retry_async = 1;
+
+	} else if (r_flags & R_SHARED) {
+		/* normal release of sh lease */
+
+		rv = write_host_block(task, token, token->host_id, 0, 0);
+		if (rv < 0)
+			log_errot(token, "release async shared write_host_block %d", rv);
+
+		if (rv == SANLK_AIO_TIMEOUT)
+			retry_async = 1;
+	} else {
+		/* normal release of ex lease */
+
 		if (r_flags & R_LVB_WRITE_RELEASE) {
 			rv = write_lvb_block(task, r, token);
 			if (!rv)
 				r->flags &= ~R_LVB_WRITE_RELEASE;
 			else
 				log_errot(token, "release async write_lvb error %d", rv);
+			/* do we want to give more effort to writing lvb? */
 		}
+
+		/* Failure here is not a big deal and can be ignored. */
+		rv = write_host_block(task, token, token->host_id, 0, 0);
+		if (rv < 0)
+			log_errot(token, "release async write_host_block %d", rv);
 
 		rv = release_disk(task, token, NULL, &r->leader);
-		if (rv < 0) {
-			log_errot(token, "release async disk error %d r_flags %x lver %llu",
-				  rv, r_flags, (unsigned long long)r->leader.lver);
-			goto out_close;
-		}
-	}
+		if (rv < 0)
+			log_errot(token, "release async release leader %d", rv);
 
-	log_token(token, "release async done %d r_flags %x", rv, r_flags);
+		if (rv == SANLK_AIO_TIMEOUT)
+			retry_async = 1;
+	}
 
  out_close:
 	close_disks(token->disks, token->r.num_disks);
-
  out:
-	pthread_mutex_lock(&resource_mutex);
-	if (rv == SANLK_AIO_TIMEOUT) {
-		r->flags |= R_THREAD_RELEASE;
-	} else {
+	if (!retry_async) {
+		log_token(token, "release async done r_flags %x", r_flags);
+		pthread_mutex_lock(&resource_mutex);
 		list_del(&r->list);
-	}
-	pthread_mutex_unlock(&resource_mutex);
-
-	if (rv != SANLK_AIO_TIMEOUT)
+		pthread_mutex_unlock(&resource_mutex);
 		free_resource(r);
+		return;
+	}
+
+	/* Keep the resource on the list to keep trying. */
+	log_token(token, "release async timeout r_flags %x", r_flags);
+	pthread_mutex_lock(&resource_mutex);
+	r->flags |= R_THREAD_RELEASE;
+	pthread_mutex_unlock(&resource_mutex);
 }
 
 static void resource_thread_examine(struct task *task, struct token *tt, int pid, uint64_t lver)

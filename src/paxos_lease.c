@@ -1934,24 +1934,6 @@ int paxos_lease_release(struct task *task,
 	struct leader_record *last;
 	int error;
 
-	/*
-	 * If we are releasing this lease very quickly after acquiring it,
-	 * there's a chance that another host was running the same acquire
-	 * ballot that we were and also committed us as the owner of this
-	 * lease, writing our inp values to the leader after we did ourself.
-	 * That leader write from the other host may happen after the leader
-	 * write we will do here releasing ownership.  So the release we do
-	 * here may be clobbered and lost.  The result is that we own the lease
-	 * on disk, but don't know it, so it won't be released unless we happen
-	 * to acquire and release it again.  The solution is that we clear our
-	 * dblock in addition to clearing the leader record.  Other hosts can
-	 * then check our dblock to see if we really do own the lease.  If the
-	 * leader says we own the lease, but our dblock is cleared, then our
-	 * leader write in release was clobbered, and other hosts will run a
-	 * ballot to set a new owner.
-	 */
-	paxos_erase_dblock(task, token, token->host_id);
-
 	error = paxos_lease_leader_read(task, token, &leader, "paxos_release");
 	if (error < 0) {
 		log_errot(token, "paxos_release leader_read error %d", error);
