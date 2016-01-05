@@ -1805,7 +1805,7 @@ static void print_usage(void)
 	printf("\n");
 	printf("sanlock daemon [options]\n");
 	printf("  -D            no fork and print all logging to stderr\n");
-	printf("  -Q 0|1        quiet error messages for common lock contention (0)\n");
+	printf("  -Q 0|1        quiet error messages for common lock contention (%d)\n", DEFAULT_QUIET_FAIL);
 	printf("  -R 0|1        renewal debugging, log debug info about renewals (0)\n");
 	printf("  -L <pri>      write logging at priority level and up to logfile (3 LOG_ERR)\n");
 	printf("                (use -1 for none)\n");
@@ -3180,6 +3180,7 @@ int main(int argc, char *argv[])
 	com.aio_arg = DEFAULT_USE_AIO;
 	com.pid = -1;
 	com.sh_retries = DEFAULT_SH_RETRIES;
+	com.quiet_fail = DEFAULT_QUIET_FAIL;
 
 	if (getgrnam("sanlock") && getpwnam("sanlock")) {
 		com.uname = (char *)"sanlock";

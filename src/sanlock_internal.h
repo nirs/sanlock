@@ -281,6 +281,7 @@ EXTERN struct client *client;
 #define DEFAULT_MIN_WORKER_THREADS 2
 #define DEFAULT_MAX_WORKER_THREADS 8
 #define DEFAULT_SH_RETRIES 8
+#define DEFAULT_QUIET_FAIL 1
 
 struct command_line {
 	int type;				/* COM_ */
