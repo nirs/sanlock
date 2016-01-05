@@ -782,7 +782,7 @@ static int _release_token(struct task *task, struct token *token,
 		}
 	}
 
-	log_token(token, "release_token r_flags %x lver %llu,
+	log_token(token, "release_token r_flags %x lver %llu",
 		  r_flags, (unsigned long long)lver);
 
 	/*
@@ -899,7 +899,7 @@ static int _release_token(struct task *task, struct token *token,
 		if (ret != SANLK_OK)
 			log_token(token, "release_token error %d r_flags %x", ret, r_flags);
 		else
-			log_token(token, "release_token done r_flags %x", ret, r_flags);
+			log_token(token, "release_token done r_flags %x", r_flags);
 		pthread_mutex_lock(&resource_mutex);
 		list_del(&r->list);
 		pthread_mutex_unlock(&resource_mutex);
@@ -1982,7 +1982,7 @@ static void resource_thread_release(struct task *task, struct resource *r, struc
 	 * FIXME: avoid duplicating all this from _release_token.
 	 */
 
-	log_token(token, "release async r_flags %x, r_flags);
+	log_token(token, "release async r_flags %x", r_flags);
 
 	if (r_flags & R_ERASE_ALL) {
 		rv = write_host_block(task, token, token->host_id, 0, 0);
