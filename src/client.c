@@ -1272,7 +1272,8 @@ int sanlock_convert(int sock, int pid, uint32_t flags, struct sanlk_resource *re
 
 	rv = recv_result(fd);
  out:
-	close(fd);
+	if (sock == -1)
+		close(fd);
 	return rv;
 }
 
