@@ -1116,6 +1116,15 @@ static void cmd_set_lvb(struct task *task GNUC_UNUSED, struct cmd_args *ca)
 
 	lvblen = ca->header.length - sizeof(struct sm_header) - sizeof(struct sanlk_resource);
 
+	/* 4096 is the max sector size we handle, it is compared
+	   against the actual 512/4K sector size in res_set_lvb. */
+
+	if (lvblen > 4096) {
+		log_error("cmd_set_lvb %d,%d lvblen %d too big", ca->ci_in, fd, lvblen);
+		result = -E2BIG;
+		goto reply;
+	}
+
 	lvb = malloc(lvblen);
 	if (!lvb) {
 		result = -ENOMEM;
@@ -1124,11 +1133,16 @@ static void cmd_set_lvb(struct task *task GNUC_UNUSED, struct cmd_args *ca)
 
 	rv = recv(fd, lvb, lvblen, MSG_WAITALL);
 	if (rv != lvblen) {
+		log_error("cmd_set_lvb %d,%d recv lvblen %d lvb %d %d",
+			  ca->ci_in, fd, lvblen, rv, errno);
 		result = -ENOTCONN;
 		goto reply;
 	}
 
 	result = res_set_lvb(&res, lvb, lvblen);
+
+	log_debug("cmd_set_lvb ci %d fd %d result %d res %s:%s",
+		  ca->ci_in, fd, result, res.lockspace_name, res.name);
  reply:
 	if (lvb)
 		free(lvb);
@@ -1157,6 +1171,9 @@ static void cmd_get_lvb(struct task *task GNUC_UNUSED, struct cmd_args *ca)
 	lvblen = ca->header.data2;
 
 	result = res_get_lvb(&res, &lvb, &lvblen);
+
+	log_debug("cmd_get_lvb ci %d fd %d result %d res %s:%s",
+		  ca->ci_in, fd, result, res.lockspace_name, res.name);
  reply:
 	memcpy(&h, &ca->header, sizeof(struct sm_header));
 	h.version = SM_PROTO;

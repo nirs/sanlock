@@ -1420,7 +1420,7 @@ int sanlock_set_lvb(uint32_t flags, struct sanlk_resource *res, char *lvb, int l
 
 	rv = send(fd, res, sizeof(struct sanlk_resource), 0);
 	if (rv < 0) {
-		rv = -1;
+		rv = -errno;
 		goto out;
 	}
 
