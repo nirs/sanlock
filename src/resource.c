@@ -1141,14 +1141,19 @@ static int convert_sh2ex_token(struct task *task, struct resource *r, struct tok
 	token->r.lver = leader.lver;
 
 	/* paxos_lease_acquire set token->shared_count to the number of
-	   SHARED mode blocks it found */
-
-	if (!token->shared_count) {
-		/* no other SHARED mode blocks found */
-		goto do_mb;
-	}
+	   SHARED mode blocks it found.  It should find at least 1 for
+	   our own shared mode block. */
 
 	log_token(token, "convert_sh2ex shared_count %d", token->shared_count);
+
+	if (token->shared_count == 1)
+		goto do_mb;
+
+	if (!token->shared_count) {
+		/* should never happen */
+		log_errot(token, "convert_sh2ex zero shared_count");
+		goto do_mb;
+	}
 
 	rv = clear_dead_shared(task, token, leader.num_hosts, &live_count);
 	if (rv < 0) {
