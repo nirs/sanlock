@@ -2325,6 +2325,12 @@ static void read_config_file(void)
 			memset(str, 0, sizeof(str));
 			get_val_str(line, str);
 			strncpy(com.our_host_name, str, NAME_ID_SIZE);
+
+		} else if (!strcmp(str, "renewal_read_extend_sec")) {
+			/* zero is a valid setting so we need the _set field to say it's set */
+			get_val_int(line, &val);
+			com.renewal_read_extend_sec_set = 1;
+			com.renewal_read_extend_sec = val;
 		}
 	}
 
@@ -3181,6 +3187,8 @@ int main(int argc, char *argv[])
 	com.pid = -1;
 	com.sh_retries = DEFAULT_SH_RETRIES;
 	com.quiet_fail = DEFAULT_QUIET_FAIL;
+	com.renewal_read_extend_sec_set = 0;
+	com.renewal_read_extend_sec = 0;
 
 	if (getgrnam("sanlock") && getpwnam("sanlock")) {
 		com.uname = (char *)"sanlock";

@@ -474,6 +474,7 @@ int delta_lease_renew(struct task *task,
 	char **p_wbuf;
 	char *wbuf;
 	uint32_t checksum;
+	uint32_t reap_timeout_msec;
 	uint64_t host_id, id_offset, new_ts, now;
 	int rv, iobuf_len, sector_size;
 
@@ -516,9 +517,18 @@ int delta_lease_renew(struct task *task,
 			goto skip_reap;
 		}
 
-		/* only wait .5 sec when trying to reap a prev io */
+		log_space(sp, "delta_renew begin reap");
+
+		if (!sp->renewal_read_extend_sec) {
+			/* only wait .5 sec when trying to reap a prev io to clear it */
+			reap_timeout_msec = 500;
+		} else {
+			/* effectively continue/extend the read phase from the previous renewal */
+			reap_timeout_msec = sp->renewal_read_extend_sec * 1000;
+		}
+
 		rv = read_iobuf_reap(disk->fd, disk->offset,
-				     task->iobuf, iobuf_len, task, 500000000);
+				     task->iobuf, iobuf_len, task, reap_timeout_msec);
 
 		log_space(sp, "delta_renew reap %d", rv);
 

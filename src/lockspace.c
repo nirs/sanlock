@@ -811,6 +811,11 @@ int add_lockspace_start(struct sanlk_lockspace *ls, uint32_t io_timeout, struct 
 	sp->set_bitmap_seconds = calc_set_bitmap_seconds(io_timeout);
 	pthread_mutex_init(&sp->mutex, NULL);
 
+	if (com.renewal_read_extend_sec_set)
+		sp->renewal_read_extend_sec = com.renewal_read_extend_sec;
+	else
+		sp->renewal_read_extend_sec = io_timeout;
+
 	for (i = 0; i < MAX_EVENT_FDS; i++)
 		sp->event_fds[i] = -1;
 

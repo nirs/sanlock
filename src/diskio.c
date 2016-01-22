@@ -780,7 +780,7 @@ int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
    task->read_iobuf_timeout_aicb . */
 
 int read_iobuf_reap(int fd, uint64_t offset, char *iobuf, int iobuf_len,
-		    struct task *task, int ioto)
+		    struct task *task, uint32_t ioto_msec)
 {
 	struct timespec ts;
 	struct aicb *aicb;
@@ -805,7 +805,8 @@ int read_iobuf_reap(int fd, uint64_t offset, char *iobuf, int iobuf_len,
 		return -EINVAL;
 
 	memset(&ts, 0, sizeof(struct timespec));
-	ts.tv_nsec = ioto;
+	ts.tv_sec = ioto_msec / 1000;
+	ts.tv_nsec = (ioto_msec % 1000) * 1000000;
  retry:
 	memset(&event, 0, sizeof(event));
 

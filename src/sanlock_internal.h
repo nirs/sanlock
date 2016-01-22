@@ -178,6 +178,7 @@ struct space {
 	uint32_t set_bitmap_seconds;
 	uint32_t flags; /* SP_ */
 	uint32_t used_retries;
+	uint32_t renewal_read_extend_sec; /* defaults to io_timeout */
 	int align_size;
 	int renew_fail;
 	int space_dead;
@@ -319,6 +320,8 @@ struct command_line {
 	int res_count;
 	int sh_retries;
 	uint32_t force_mode;
+	int renewal_read_extend_sec_set; /* 1 if renewal_read_extend_sec is configured */
+	uint32_t renewal_read_extend_sec;
 	char our_host_name[SANLK_NAME_LEN+1];
 	char *file_path;
 	char *dump_path;
