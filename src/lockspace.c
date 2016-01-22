@@ -547,12 +547,16 @@ static void *lockspace_thread(void *arg_in)
 	struct space *sp;
 	struct leader_record leader;
 	uint64_t delta_begin, last_success = 0;
+	int log_renewal_level = -1;
 	int rv, delta_length, renewal_interval = 0;
 	int id_renewal_seconds, id_renewal_fail_seconds;
 	int acquire_result, delta_result, read_result;
 	int opened = 0;
 	int stop = 0;
 	int wd_con;
+
+	if (com.debug_renew)
+		log_renewal_level = LOG_DEBUG;
 
 	sp = (struct space *)arg_in;
 
@@ -652,7 +656,6 @@ static void *lockspace_thread(void *arg_in)
 		if (stop)
 			break;
 
-
 		/*
 		 * wait between each renewal
 		 */
@@ -681,6 +684,7 @@ static void *lockspace_thread(void *arg_in)
 		delta_result = delta_lease_renew(&task, sp, &sp->host_id_disk,
 						 sp->space_name, bitmap, &extra,
 						 delta_result, &read_result,
+						 log_renewal_level,
 						 &leader, &leader);
 		delta_length = monotime() - delta_begin;
 
@@ -732,9 +736,11 @@ static void *lockspace_thread(void *arg_in)
 		} else if (delta_length > id_renewal_seconds) {
 			log_erros(sp, "renewed %llu delta_length %d too long",
 				  (unsigned long long)last_success, delta_length);
-		} else if (com.debug_renew) {
-			log_space(sp, "renewed %llu delta_length %d interval %d",
-				  (unsigned long long)last_success, delta_length, renewal_interval);
+		} else {
+			if (com.debug_renew) {
+				log_space(sp, "renewed %llu delta_length %d interval %d",
+					  (unsigned long long)last_success, delta_length, renewal_interval);
+			}
 		}
 	}
 

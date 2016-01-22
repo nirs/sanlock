@@ -251,6 +251,7 @@ static int do_delta_action(int action,
 				       NULL,
 				       -1,
 				       &read_result,
+				       0,
 				       &leader,
 				       &leader);
 		break;

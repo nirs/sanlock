@@ -464,6 +464,7 @@ int delta_lease_renew(struct task *task,
 		      struct delta_extra *extra,
 		      int prev_result,
 		      int *read_result,
+		      int log_renewal_level,
 		      struct leader_record *leader_last,
 		      struct leader_record *leader_ret)
 {
@@ -473,7 +474,7 @@ int delta_lease_renew(struct task *task,
 	char **p_wbuf;
 	char *wbuf;
 	uint32_t checksum;
-	uint64_t host_id, id_offset, new_ts;
+	uint64_t host_id, id_offset, new_ts, now;
 	int rv, iobuf_len, sector_size;
 
 	if (!leader_last) {
@@ -569,14 +570,21 @@ int delta_lease_renew(struct task *task,
 		}
 	}
 
+	if (log_renewal_level != -1)
+		log_level(sp->space_id, 0, NULL, log_renewal_level, "delta_renew begin read");
+
 	rv = read_iobuf(disk->fd, disk->offset, task->iobuf, iobuf_len, task, sp->io_timeout);
 	if (rv) {
 		/* the next time delta_lease_renew() is called, prev_result
 		   will be this rv.  If this rv is SANLK_AIO_TIMEOUT, we'll
 		   try to reap the event */
 
-		log_erros(sp, "delta_renew read rv %d offset %llu %s",
-			  rv, (unsigned long long)disk->offset, disk->path);
+		if (rv == SANLK_AIO_TIMEOUT)
+			log_erros(sp, "delta_renew read timeout %u sec offset %llu %s",
+				  sp->io_timeout, (unsigned long long)disk->offset, disk->path);
+		else
+			log_erros(sp, "delta_renew read rv %d offset %llu %s",
+				  rv, (unsigned long long)disk->offset, disk->path);
 		return rv;
 	}
 
@@ -625,9 +633,11 @@ int delta_lease_renew(struct task *task,
 
 	new_ts = monotime();
 
-	if (leader.timestamp >= new_ts) {
+	if (log_renewal_level != -1)
+		log_level(sp->space_id, 0, NULL, log_renewal_level, "delta_renew begin write for new ts %llu", (unsigned long long)new_ts);
+
+	if (leader.timestamp >= new_ts)
 		log_erros(sp, "delta_renew timestamp too small");
-	}
 
 	leader.timestamp = new_ts;
 	leader.checksum = 0; /* set below */
@@ -670,10 +680,17 @@ int delta_lease_renew(struct task *task,
 	if (rv != SANLK_AIO_TIMEOUT)
 		free(wbuf);
 
+	now = monotime();
+
 	if (rv < 0) {
-		log_erros(sp, "delta_renew write error %d", rv);
+		log_erros(sp, "delta_renew write time %llu error %d",
+			  (unsigned long long)(now - new_ts), rv);
 		return rv;
 	}
+
+	if (now - new_ts >= sp->io_timeout)
+		log_erros(sp, "delta_renew long write time %llu sec",
+			  (unsigned long long)(now - new_ts));
 
 	/* the paper shows doing a delay and another read here, but it seems
 	   unnecessary since we do the same at the beginning of the next renewal */

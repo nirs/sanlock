@@ -347,9 +347,17 @@ static struct aicb *find_callback_slot(struct task *task, int ioto)
 		struct iocb *ev_iocb = event.obj;
 		struct aicb *ev_aicb = container_of(ev_iocb, struct aicb, iocb);
 		int op = ev_iocb ? ev_iocb->aio_lio_opcode : -1;
+		const char *op_str;
 
-		log_taskw(task, "aio collect %d %p:%p:%p result %ld:%ld old free",
-			  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
+		if (op == IO_CMD_PREAD)
+			op_str = "RD";
+		else if (op == IO_CMD_PWRITE)
+			op_str = "WR";
+		else
+			op_str = "UK";
+
+		log_taskw(task, "aio collect %s %p:%p:%p result %ld:%ld old free",
+			  op_str, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 		ev_aicb->used = 0;
 		free(ev_aicb->buf);
 		ev_aicb->buf = NULL;
@@ -373,6 +381,7 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 	struct aicb *aicb;
 	struct iocb *iocb;
 	struct io_event event;
+	const char *op_str;
 	int rv;
 
 	if (!ioto) {
@@ -426,24 +435,31 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 		struct aicb *ev_aicb = container_of(ev_iocb, struct aicb, iocb);
 		int op = ev_iocb ? ev_iocb->aio_lio_opcode : -1;
 
+		if (op == IO_CMD_PREAD)
+			op_str = "RD";
+		else if (op == IO_CMD_PWRITE)
+			op_str = "WR";
+		else
+			op_str = "UK";
+
 		ev_aicb->used = 0;
 
 		if (ev_iocb != iocb) {
-			log_taskw(task, "aio collect %d %p:%p:%p result %ld:%ld other free",
-				  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
+			log_taskw(task, "aio collect %s %p:%p:%p result %ld:%ld other free",
+				  op_str, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 			free(ev_aicb->buf);
 			ev_aicb->buf = NULL;
 			goto retry;
 		}
 		if ((int)event.res < 0) {
-			log_taskw(task, "aio collect %d %p:%p:%p result %ld:%ld match res",
-				  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
+			log_taskw(task, "aio collect %s %p:%p:%p result %ld:%ld match res",
+				  op_str, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 			rv = event.res;
 			goto out;
 		}
 		if (event.res != len) {
-			log_taskw(task, "aio collect %d %p:%p:%p result %ld:%ld match len %d",
-				  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2, len);
+			log_taskw(task, "aio collect %s %p:%p:%p result %ld:%ld match len %d",
+				  op_str, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2, len);
 			rv = -EMSGSIZE;
 			goto out;
 		}
@@ -466,8 +482,15 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 
 	task->to_count++;
 
-	log_taskw(task, "aio timeout %d %p:%p:%p ioto %d to_count %d",
-		  cmd, aicb, iocb, buf, ioto, task->to_count);
+	if (cmd == IO_CMD_PREAD)
+		op_str = "RD";
+	else if (cmd == IO_CMD_PWRITE)
+		op_str = "WR";
+	else
+		op_str = "UK";
+
+	log_taskw(task, "aio timeout %s %p:%p:%p ioto %d to_count %d",
+		  op_str, aicb, iocb, buf, ioto, task->to_count);
 
 	rv = io_cancel(task->aio_ctx, iocb, &event);
 	if (!rv) {
@@ -798,31 +821,39 @@ int read_iobuf_reap(int fd, uint64_t offset, char *iobuf, int iobuf_len,
 		struct iocb *ev_iocb = event.obj;
 		struct aicb *ev_aicb = container_of(ev_iocb, struct aicb, iocb);
 		int op = ev_iocb ? ev_iocb->aio_lio_opcode : -1;
+		const char *op_str;
+
+		if (op == IO_CMD_PREAD)
+			op_str = "RD";
+		else if (op == IO_CMD_PWRITE)
+			op_str = "WR";
+		else
+			op_str = "UK";
 
 		ev_aicb->used = 0;
 
 		if (ev_iocb != iocb) {
-			log_taskw(task, "aio collect %d %p:%p:%p result %ld:%ld other free r",
-				  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
+			log_taskw(task, "aio collect %s %p:%p:%p result %ld:%ld other free r",
+				  op_str, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 			free(ev_aicb->buf);
 			ev_aicb->buf = NULL;
 			goto retry;
 		}
 		if ((int)event.res < 0) {
-			log_taskw(task, "aio collect %d %p:%p:%p result %ld:%ld match res r",
-				  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
+			log_taskw(task, "aio collect %s %p:%p:%p result %ld:%ld match res r",
+				  op_str, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 			rv = event.res;
 			goto out;
 		}
 		if (event.res != iobuf_len) {
-			log_taskw(task, "aio collect %d %p:%p:%p result %ld:%ld match len %d r",
-				  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2, iobuf_len);
+			log_taskw(task, "aio collect %s %p:%p:%p result %ld:%ld match len %d r",
+				  op_str, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2, iobuf_len);
 			rv = -EMSGSIZE;
 			goto out;
 		}
 
-		log_taskw(task, "aio collect %d %p:%p:%p result %ld:%ld match reap",
-			  op, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
+		log_taskw(task, "aio collect %s %p:%p:%p result %ld:%ld match reap",
+			  op_str, ev_aicb, ev_iocb, ev_aicb->buf, event.res, event.res2);
 
 		rv = 0;
 		goto out;
