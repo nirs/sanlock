@@ -68,7 +68,9 @@ void close_task_aio(struct task *task)
 	struct timespec ts;
 	struct io_event event;
 	uint64_t last_warn;
-	int rv, i, used, warn;
+	uint64_t begin;
+	uint64_t now;
+	int rv, i, used, lvl;
 
 	if (!task->use_aio)
 		goto skip_aio;
@@ -77,16 +79,19 @@ void close_task_aio(struct task *task)
 	ts.tv_sec = DEFAULT_IO_TIMEOUT;
 
 	last_warn = time(NULL);
+	begin = last_warn;
 
 	/* wait for all outstanding aio to complete before
 	   destroying aio context, freeing iocb and buffers */
 
 	while (1) {
-		warn = 0;
+		now = time(NULL);
 
-		if (time(NULL) - last_warn >= DEFAULT_IO_TIMEOUT) {
-			last_warn = time(NULL);
-			warn = 1;
+		if (now - last_warn >= (DEFAULT_IO_TIMEOUT * 6)) {
+			last_warn = now;
+			lvl = LOG_ERR;
+		} else {
+			lvl = LOG_DEBUG;
 		}
 
 		used = 0;
@@ -96,13 +101,14 @@ void close_task_aio(struct task *task)
 				continue;
 			used++;
 
-			if (!warn)
-				continue;
-			log_taske(task, "close_task_aio %d %p busy",
+			log_level(0, 0, task->name, lvl, "close_task_aio %d %p busy",
 				  i, &task->callbacks[i]);
 		}
 
 		if (!used)
+			break;
+
+		if (now - begin >= 120)
 			break;
 
 		memset(&event, 0, sizeof(event));
@@ -127,7 +133,14 @@ void close_task_aio(struct task *task)
 			ev_aicb->buf = NULL;
 		}
 	}
+
+	if (used)
+		log_taskd(task, "close_task_aio destroy %d incomplete ops", used);
+
 	io_destroy(task->aio_ctx);
+
+	if (used)
+		log_taske(task, "close_task_aio destroyed %d incomplete ops", used);
 
 	if (task->iobuf)
 		free(task->iobuf);
