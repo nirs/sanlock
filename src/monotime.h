@@ -10,5 +10,6 @@
 #define	__MONOTIME_H__
 
 uint64_t monotime(void);
+void ts_diff(struct timespec *begin, struct timespec *end, struct timespec *diff);
 
 #endif

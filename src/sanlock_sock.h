@@ -54,6 +54,7 @@ enum {
 	SM_CMD_END_EVENT         = 31,
 	SM_CMD_SET_EVENT         = 32,
 	SM_CMD_SET_CONFIG        = 33,
+	SM_CMD_RENEWAL           = 34,
 };
 
 #define SM_CB_GET_EVENT 1
@@ -76,6 +77,7 @@ struct sm_header {
 #define SANLK_STATE_LOCKSPACE   3
 #define SANLK_STATE_RESOURCE    4
 #define SANLK_STATE_HOST	5
+#define SANLK_STATE_RENEWAL	6
 
 struct sanlk_state {
 	uint32_t type; /* SANLK_STATE_ */

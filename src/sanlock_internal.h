@@ -161,6 +161,14 @@ struct host_status {
 	char owner_name[NAME_ID_SIZE];
 };
 
+struct renewal_history {
+	uint64_t timestamp;
+	int read_ms;
+	int write_ms;
+	int next_timeouts;
+	int next_errors;
+};
+
 /* The max number of connections that can get events for a lockspace. */
 #define MAX_EVENT_FDS 32
 
@@ -193,6 +201,10 @@ struct space {
 	pthread_mutex_t mutex; /* protects lease_status, thread_stop  */
 	struct lease_status lease_status;
 	struct host_status host_status[DEFAULT_MAX_HOSTS];
+	struct renewal_history *renewal_history;
+	int renewal_history_size;
+	int renewal_history_next;
+	int renewal_history_prev;
 };
 
 /* Update lockspace_info() to copy any fields from struct space
@@ -283,6 +295,7 @@ EXTERN struct client *client;
 #define DEFAULT_MAX_WORKER_THREADS 8
 #define DEFAULT_SH_RETRIES 8
 #define DEFAULT_QUIET_FAIL 1
+#define DEFAULT_RENEWAL_HISTORY_SIZE 180 /* about 1 hour with 20 sec renewal interval */
 
 struct command_line {
 	int type;				/* COM_ */
@@ -320,6 +333,7 @@ struct command_line {
 	int res_count;
 	int sh_retries;
 	uint32_t force_mode;
+	int renewal_history_size;
 	int renewal_read_extend_sec_set; /* 1 if renewal_read_extend_sec is configured */
 	uint32_t renewal_read_extend_sec;
 	char our_host_name[SANLK_NAME_LEN+1];
@@ -367,6 +381,7 @@ enum {
 	ACT_SET_EVENT,
 	ACT_SET_CONFIG,
 	ACT_WRITE_LEADER,
+	ACT_RENEWAL,
 };
 
 EXTERN int external_shutdown;

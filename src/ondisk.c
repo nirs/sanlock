@@ -11,6 +11,7 @@
 #include <byteswap.h>
 #include <inttypes.h>
 #include <unistd.h>
+#include <time.h>
 
 #include "sanlock_internal.h"
 #include "ondisk.h"

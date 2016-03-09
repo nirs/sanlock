@@ -19,3 +19,14 @@ uint64_t monotime(void)
 
 	return ts.tv_sec;
 }
+
+void ts_diff(struct timespec *begin, struct timespec *end, struct timespec *diff)
+{
+	if ((end->tv_nsec - begin->tv_nsec) < 0) {
+		diff->tv_sec = end->tv_sec - begin->tv_sec - 1;
+		diff->tv_nsec = end->tv_nsec - begin->tv_nsec + 1000000000;
+	} else {
+		diff->tv_sec = end->tv_sec - begin->tv_sec;
+		diff->tv_nsec = end->tv_nsec - begin->tv_nsec;
+	}
+}

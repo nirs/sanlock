@@ -375,12 +375,13 @@ static struct aicb *find_callback_slot(struct task *task, int ioto)
  */
 
 static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
-			struct task *task, int ioto, int cmd)
+			struct task *task, int ioto, int cmd, int *ms)
 {
 	struct timespec ts;
 	struct aicb *aicb;
 	struct iocb *iocb;
 	struct io_event event;
+	struct timespec begin, end, diff;
 	const char *op_str;
 	int rv;
 
@@ -403,6 +404,9 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 	iocb->u.c.buf = buf;
 	iocb->u.c.nbytes = len;
 	iocb->u.c.offset = offset;
+
+	if (ms)
+		clock_gettime(CLOCK_MONOTONIC_RAW, &begin);
 
 	rv = io_submit(task->aio_ctx, 1, &iocb);
 	if (rv < 0) {
@@ -434,6 +438,12 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 		struct iocb *ev_iocb = event.obj;
 		struct aicb *ev_aicb = container_of(ev_iocb, struct aicb, iocb);
 		int op = ev_iocb ? ev_iocb->aio_lio_opcode : -1;
+
+		if (ms) {
+			clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+			ts_diff(&begin, &end, &diff);
+			*ms = (diff.tv_sec * 1000) + (diff.tv_nsec / 1000000);
+		}
 
 		if (op == IO_CMD_PREAD)
 			op_str = "RD";
@@ -508,15 +518,15 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 }
 
 static int do_write_aio_linux(int fd, uint64_t offset, char *buf, int len,
-			      struct task *task, int ioto)
+			      struct task *task, int ioto, int *wr_ms)
 {
-	return do_linux_aio(fd, offset, buf, len, task, ioto, IO_CMD_PWRITE);
+	return do_linux_aio(fd, offset, buf, len, task, ioto, IO_CMD_PWRITE, wr_ms);
 }
 
 static int do_read_aio_linux(int fd, uint64_t offset, char *buf, int len,
-			     struct task *task, int ioto)
+			     struct task *task, int ioto, int *rd_ms)
 {
-	return do_linux_aio(fd, offset, buf, len, task, ioto, IO_CMD_PREAD);
+	return do_linux_aio(fd, offset, buf, len, task, ioto, IO_CMD_PREAD, rd_ms);
 }
 
 static int do_write_aio_posix(int fd, uint64_t offset, char *buf, int len,
@@ -621,10 +631,10 @@ static int do_read_aio_posix(int fd, uint64_t offset, char *buf, int len,
 /* write aligned io buffer */
 
 int write_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len,
-		struct task *task, int ioto)
+		struct task *task, int ioto, int *wr_ms)
 {
 	if (task && task->use_aio == 1)
-		return do_write_aio_linux(fd, offset, iobuf, iobuf_len, task, ioto);
+		return do_write_aio_linux(fd, offset, iobuf, iobuf_len, task, ioto, wr_ms);
 	else if (task && task->use_aio == 2)
 		return do_write_aio_posix(fd, offset, iobuf, iobuf_len, task, ioto);
 	else
@@ -659,7 +669,7 @@ static int _write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 	memset(iobuf, 0, iobuf_len);
 	memcpy(iobuf, data, data_len);
 
-	rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len, task, ioto);
+	rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len, task, ioto, NULL);
 	if (rv < 0) {
 		log_error("write_sectors %s offset %llu rv %d %s",
 			  blktype, (unsigned long long)offset, rv, disk->path);
@@ -715,10 +725,10 @@ int write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 /* read aligned io buffer */
 
 int read_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len,
-	       struct task *task, int ioto)
+	       struct task *task, int ioto, int *rd_ms)
 {
 	if (task && task->use_aio == 1)
-		return do_read_aio_linux(fd, offset, iobuf, iobuf_len, task, ioto);
+		return do_read_aio_linux(fd, offset, iobuf, iobuf_len, task, ioto, rd_ms);
 	else if (task && task->use_aio == 2)
 		return do_read_aio_posix(fd, offset, iobuf, iobuf_len, task, ioto);
 	else
@@ -761,7 +771,7 @@ int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 
 	memset(iobuf, 0, iobuf_len);
 
-	rv = read_iobuf(disk->fd, offset, iobuf, iobuf_len, task, ioto);
+	rv = read_iobuf(disk->fd, offset, iobuf, iobuf_len, task, ioto, NULL);
 	if (!rv) {
 		memcpy(data, iobuf, data_len);
 	} else {

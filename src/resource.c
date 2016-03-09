@@ -334,7 +334,7 @@ static int write_host_block(struct task *task, struct token *token,
 
 		offset = disk->offset + ((2 + host_id - 1) * disk->sector_size);
 
-		rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout);
+		rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout, NULL);
 		if (rv < 0)
 			break;
 	}
@@ -382,7 +382,7 @@ static int read_mode_block(struct task *task, struct token *token,
 
 		offset = disk->offset + ((2 + host_id - 1) * disk->sector_size);
 
-		rv = read_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout);
+		rv = read_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout, NULL);
 		if (rv < 0)
 			break;
 
@@ -469,7 +469,7 @@ static int read_lvb_block(struct task *task, struct token *token)
 	if (!r->lvb)
 		return 0;
 
-	rv = read_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout);
+	rv = read_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout, NULL);
 
 	return rv;
 }
@@ -489,7 +489,7 @@ static int write_lvb_block(struct task *task, struct resource *r, struct token *
 	if (!r->lvb)
 		return 0;
 
-	rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout);
+	rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout, NULL);
 
 	return rv;
 }

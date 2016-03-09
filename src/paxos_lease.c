@@ -181,7 +181,7 @@ static int write_dblock_mblock_sh(struct task *task,
 	memcpy(iobuf, (char *)&pd_end, sizeof(struct paxos_dblock));
 	memcpy(iobuf + MBLOCK_OFFSET, (char *)&mb_end, sizeof(struct mode_block));
 
-	rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout);
+	rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout, NULL);
 
 	if (rv < 0) {
 		log_errot(token, "write_dblock_mblock_sh host_id %llu gen %llu rv %d",
@@ -513,7 +513,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 			continue;
 		memset(iobuf[d], 0, iobuf_len);
 
-		rv = read_iobuf(disk->fd, disk->offset, iobuf[d], iobuf_len, task, token->io_timeout);
+		rv = read_iobuf(disk->fd, disk->offset, iobuf[d], iobuf_len, task, token->io_timeout, NULL);
 		if (rv == SANLK_AIO_TIMEOUT)
 			iobuf[d] = NULL;
 		if (rv < 0)
@@ -667,7 +667,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 			continue;
 		memset(iobuf[d], 0, iobuf_len);
 
-		rv = read_iobuf(disk->fd, disk->offset, iobuf[d], iobuf_len, task, token->io_timeout);
+		rv = read_iobuf(disk->fd, disk->offset, iobuf[d], iobuf_len, task, token->io_timeout, NULL);
 		if (rv == SANLK_AIO_TIMEOUT)
 			iobuf[d] = NULL;
 		if (rv < 0)
@@ -954,7 +954,7 @@ int paxos_read_buf(struct task *task,
 
 	memset(iobuf, 0, iobuf_len);
 
-	rv = read_iobuf(disk->fd, disk->offset, iobuf, iobuf_len, task, token->io_timeout);
+	rv = read_iobuf(disk->fd, disk->offset, iobuf, iobuf_len, task, token->io_timeout, NULL);
 
 	*buf_out = iobuf;
 
@@ -1141,7 +1141,7 @@ static int _lease_read_one(struct task *task,
 
 	memset(iobuf, 0, iobuf_len);
 
-	rv = read_iobuf(disk->fd, disk->offset, iobuf, iobuf_len, task, token->io_timeout);
+	rv = read_iobuf(disk->fd, disk->offset, iobuf, iobuf_len, task, token->io_timeout, NULL);
 	if (rv < 0)
 		goto out;
 
@@ -2101,7 +2101,7 @@ int paxos_lease_init(struct task *task,
 
 	for (d = 0; d < token->r.num_disks; d++) {
 		rv = write_iobuf(token->disks[d].fd, token->disks[d].offset,
-				 iobuf, iobuf_len, task, token->io_timeout);
+				 iobuf, iobuf_len, task, token->io_timeout, NULL);
 
 		if (rv == SANLK_AIO_TIMEOUT)
 			aio_timeout = 1;

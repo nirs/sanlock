@@ -1218,6 +1218,7 @@ static void process_connection(int ci)
 	case SM_CMD_SHUTDOWN:
 	case SM_CMD_STATUS:
 	case SM_CMD_HOST_STATUS:
+	case SM_CMD_RENEWAL:
 	case SM_CMD_LOG_DUMP:
 	case SM_CMD_GET_LOCKSPACES:
 	case SM_CMD_GET_HOSTS:
@@ -1807,6 +1808,7 @@ static void print_usage(void)
 	printf("  -D            no fork and print all logging to stderr\n");
 	printf("  -Q 0|1        quiet error messages for common lock contention (%d)\n", DEFAULT_QUIET_FAIL);
 	printf("  -R 0|1        renewal debugging, log debug info about renewals (0)\n");
+	printf("  -H <num>      renewal history size (%d)\n", DEFAULT_RENEWAL_HISTORY_SIZE);
 	printf("  -L <pri>      write logging at priority level and up to logfile (3 LOG_ERR)\n");
 	printf("                (use -1 for none)\n");
 	printf("  -S <pri>      write logging at priority level and up to syslog (3 LOG_ERR)\n");
@@ -1827,6 +1829,7 @@ static void print_usage(void)
 	printf("sanlock client status [-D] [-o p|s]\n");
 	printf("sanlock client gets [-h 0|1]\n");
 	printf("sanlock client host_status -s LOCKSPACE [-D]\n");
+	printf("sanlock client renewal -s LOCKSPACE\n");
 	printf("sanlock client set_event -s LOCKSPACE -i <host_id> [-g gen] -e <event> -d <data>\n");
 	printf("sanlock client set_config -s LOCKSPACE [-u 0|1] [-O 0|1]\n");
 	printf("sanlock client log_dump\n");
@@ -1935,6 +1938,8 @@ static int read_command_line(int argc, char *argv[])
 			com.action = ACT_STATUS;
 		else if (!strcmp(act, "host_status"))
 			com.action = ACT_HOST_STATUS;
+		else if (!strcmp(act, "renewal"))
+			com.action = ACT_RENEWAL;
 		else if (!strcmp(act, "gets"))
 			com.action = ACT_GETS;
 		else if (!strcmp(act, "log_dump"))
@@ -2050,6 +2055,9 @@ static int read_command_line(int argc, char *argv[])
 			break;
 		case 'R':
 			com.debug_renew = atoi(optionarg);
+			break;
+		case 'H':
+			com.renewal_history_size = atoi(optionarg);
 			break;
 		case 'L':
 			log_logfile_priority = atoi(optionarg);
@@ -2331,6 +2339,10 @@ static void read_config_file(void)
 			get_val_int(line, &val);
 			com.renewal_read_extend_sec_set = 1;
 			com.renewal_read_extend_sec = val;
+
+		} else if (!strcmp(str, "renewal_history_size")) {
+			get_val_int(line, &val);
+			com.renewal_history_size = val;
 		}
 	}
 
@@ -2569,6 +2581,10 @@ static int do_client(void)
 
 	case ACT_HOST_STATUS:
 		rv = sanlock_host_status(com.debug, com.lockspace.name);
+		break;
+
+	case ACT_RENEWAL:
+		rv = sanlock_renewal(com.lockspace.name);
 		break;
 
 	case ACT_GETS:
@@ -3189,6 +3205,7 @@ int main(int argc, char *argv[])
 	com.quiet_fail = DEFAULT_QUIET_FAIL;
 	com.renewal_read_extend_sec_set = 0;
 	com.renewal_read_extend_sec = 0;
+	com.renewal_history_size = DEFAULT_RENEWAL_HISTORY_SIZE;
 
 	if (getgrnam("sanlock") && getpwnam("sanlock")) {
 		com.uname = (char *)"sanlock";

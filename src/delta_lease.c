@@ -466,13 +466,15 @@ int delta_lease_renew(struct task *task,
 		      int *read_result,
 		      int log_renewal_level,
 		      struct leader_record *leader_last,
-		      struct leader_record *leader_ret)
+		      struct leader_record *leader_ret,
+		      int *rd_ms, int *wr_ms)
 {
 	struct leader_record leader;
 	struct leader_record leader_end;
 	char **p_iobuf;
 	char **p_wbuf;
 	char *wbuf;
+	struct timespec begin, end, diff;
 	uint32_t checksum;
 	uint32_t reap_timeout_msec;
 	uint64_t host_id, id_offset, new_ts, now;
@@ -482,6 +484,9 @@ int delta_lease_renew(struct task *task,
 		log_erros(sp, "delta_renew no leader_last");
 		return -EINVAL;
 	}
+
+	*rd_ms = -1;
+	*wr_ms = -1;
 
 	*read_result = SANLK_ERROR;
 
@@ -527,12 +532,19 @@ int delta_lease_renew(struct task *task,
 			reap_timeout_msec = sp->renewal_read_extend_sec * 1000;
 		}
 
+		clock_gettime(CLOCK_MONOTONIC_RAW, &begin);
+
 		rv = read_iobuf_reap(disk->fd, disk->offset,
 				     task->iobuf, iobuf_len, task, reap_timeout_msec);
 
 		log_space(sp, "delta_renew reap %d", rv);
 
 		if (!rv) {
+			/* read time for this renewal is the io_timeout length
+			   for the previous read plus the time spent in reap. */
+			clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+			ts_diff(&begin, &end, &diff);
+			*rd_ms = (diff.tv_sec * 1000) + (diff.tv_nsec / 1000000) + (sp->io_timeout * 1000);
 			task->read_iobuf_timeout_aicb = NULL;
 			goto read_done;
 		}
@@ -583,7 +595,7 @@ int delta_lease_renew(struct task *task,
 	if (log_renewal_level != -1)
 		log_level(sp->space_id, 0, NULL, log_renewal_level, "delta_renew begin read");
 
-	rv = read_iobuf(disk->fd, disk->offset, task->iobuf, iobuf_len, task, sp->io_timeout);
+	rv = read_iobuf(disk->fd, disk->offset, task->iobuf, iobuf_len, task, sp->io_timeout, rd_ms);
 	if (rv) {
 		/* the next time delta_lease_renew() is called, prev_result
 		   will be this rv.  If this rv is SANLK_AIO_TIMEOUT, we'll
@@ -685,7 +697,7 @@ int delta_lease_renew(struct task *task,
 	   retrying unnecessarily would probably be counter productive. */
 
 	rv = write_iobuf(disk->fd, disk->offset+id_offset, wbuf, sector_size, task,
-			 calc_host_dead_seconds(sp->io_timeout));
+			 calc_host_dead_seconds(sp->io_timeout), wr_ms);
 
 	if (rv != SANLK_AIO_TIMEOUT)
 		free(wbuf);
@@ -835,7 +847,7 @@ int delta_lease_init(struct task *task,
 		memcpy(iobuf + (i * disk->sector_size), &leader_end, sizeof(struct leader_record));
 	}
 
-	rv = write_iobuf(disk->fd, disk->offset, iobuf, iobuf_len, task, io_timeout);
+	rv = write_iobuf(disk->fd, disk->offset, iobuf, iobuf_len, task, io_timeout, NULL);
 	if (rv < 0)
 		goto out;
 
@@ -855,7 +867,7 @@ int delta_lease_init(struct task *task,
 
 	memcpy(iobuf, &leader_end, sizeof(struct leader_record));
 
-	rv = write_iobuf(disk->fd, disk->offset, iobuf, disk->sector_size, task, io_timeout);
+	rv = write_iobuf(disk->fd, disk->offset, iobuf, disk->sector_size, task, io_timeout, NULL);
  out:
 	if (rv != SANLK_AIO_TIMEOUT)
 		free(iobuf);

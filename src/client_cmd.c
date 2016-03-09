@@ -585,6 +585,60 @@ int sanlock_host_status(int debug, char *lockspace_name)
 	return 0;
 }
 
+int sanlock_renewal(char *lockspace_name)
+{
+	struct sm_header h;
+	struct sanlk_state st;
+	struct sanlk_lockspace lockspace;
+	char str[SANLK_STATE_MAXSTR];
+	int fd, rv;
+
+	if (!lockspace_name || !lockspace_name[0])
+		return -1;
+
+	fd = send_command(SM_CMD_RENEWAL, 0);
+	if (fd < 0)
+		return fd;
+
+	memset(&lockspace, 0, sizeof(lockspace));
+	snprintf(lockspace.name, SANLK_NAME_LEN, "%s", lockspace_name);
+
+	rv = send(fd, &lockspace, sizeof(lockspace), 0);
+	if (rv < 0)
+		goto out;
+
+	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+	if (rv != sizeof(h)) {
+		rv = -1;
+		goto out;
+	}
+
+	while (1) {
+		rv = recv(fd, &st, sizeof(st), MSG_WAITALL);
+		if (!rv)
+			break;
+		if (rv != sizeof(st))
+			break;
+
+		if (st.str_len) {
+			rv = recv(fd, str, st.str_len, MSG_WAITALL);
+			if (rv != st.str_len)
+				break;
+		}
+
+		printf("%s\n", str);
+	}
+
+	rv = h.data;
+ out:
+	close(fd);
+	return rv;
+}
+
 int sanlock_log_dump(int max_size)
 {
 	struct sm_header h;
