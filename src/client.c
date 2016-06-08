@@ -78,11 +78,35 @@ static int send_header(int sock, int cmd, uint32_t cmd_flags, int datalen,
 	header.data = data;
 	header.data2 = data2;
 
+retry:
 	rv = send(sock, (void *) &header, sizeof(header), 0);
+	if (rv == -1 && errno == EINTR)
+		goto retry;
+
 	if (rv < 0)
 		return -errno;
 
 	return 0;
+}
+
+static ssize_t send_data(int sockfd, const void *buf, size_t len, int flags)
+{
+	ssize_t rv;
+retry:
+	rv = send(sockfd, buf, len, flags);
+	if (rv == -1 && errno == EINTR)
+		goto retry;
+	return rv;
+}
+
+static ssize_t recv_data(int sockfd, void *buf, size_t len, int flags)
+{
+	ssize_t rv;
+retry:
+	rv = recv(sockfd, buf, len, flags);
+	if (rv == -1 && errno == EINTR)
+		goto retry;
+	return rv;
 }
 
 int send_command(int cmd, uint32_t data);
@@ -110,8 +134,10 @@ static int recv_result(int fd)
 	int rv;
 
 	memset(&h, 0, sizeof(h));
-
+retry:
 	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	if (rv == -1 && errno == EINTR)
+		goto retry;
 	if (rv < 0)
 		return -errno;
 	if (rv != sizeof(h))
@@ -132,7 +158,7 @@ static int cmd_lockspace(int cmd, struct sanlk_lockspace *ls, uint32_t flags, ui
 	if (rv < 0)
 		goto out;
 
-	rv = send(fd, (void *)ls, sizeof(struct sanlk_lockspace), 0);
+	rv = send_data(fd, (void *)ls, sizeof(struct sanlk_lockspace), 0);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -183,7 +209,7 @@ int sanlock_get_lockspaces(struct sanlk_lockspace **lss, int *lss_count,
 
 	memset(&h, 0, sizeof(h));
 
-	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	rv = recv_data(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -213,7 +239,7 @@ int sanlock_get_lockspaces(struct sanlk_lockspace **lss, int *lss_count,
 	ls = lsbuf;
 
 	for (i = 0; i < recv_count; i++) {
-		ret = recv(fd, ls, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+		ret = recv_data(fd, ls, sizeof(struct sanlk_lockspace), MSG_WAITALL);
 		if (ret < 0) {
 			rv = -errno;
 			free(lsbuf);
@@ -261,7 +287,7 @@ int sanlock_get_hosts(const char *ls_name, uint64_t host_id,
 	if (rv < 0)
 		goto out;
 
-	rv = send(fd, &ls, sizeof(struct sanlk_lockspace), 0);
+	rv = send_data(fd, &ls, sizeof(struct sanlk_lockspace), 0);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -271,7 +297,7 @@ int sanlock_get_hosts(const char *ls_name, uint64_t host_id,
 
 	memset(&h, 0, sizeof(h));
 
-	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	rv = recv_data(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -301,7 +327,7 @@ int sanlock_get_hosts(const char *ls_name, uint64_t host_id,
 	hs = hsbuf;
 
 	for (i = 0; i < recv_count; i++) {
-		ret = recv(fd, hs, sizeof(struct sanlk_host), MSG_WAITALL);
+		ret = recv_data(fd, hs, sizeof(struct sanlk_host), MSG_WAITALL);
 		if (ret < 0) {
 			rv = -errno;
 			free(hsbuf);
@@ -345,7 +371,7 @@ int sanlock_set_config(const char *ls_name, uint32_t flags, uint32_t cmd, GNUC_U
 	if (rv < 0)
 		goto out;
 
-	rv = send(fd, &ls, sizeof(ls), 0);
+	rv = send_data(fd, &ls, sizeof(ls), 0);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -353,7 +379,7 @@ int sanlock_set_config(const char *ls_name, uint32_t flags, uint32_t cmd, GNUC_U
 
 	memset(&h, 0, sizeof(h));
 
-	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	rv = recv_data(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -382,7 +408,7 @@ int sanlock_align(struct sanlk_disk *disk)
 	if (rv < 0)
 		goto out;
 
-	rv = send(fd, (void *)disk, sizeof(struct sanlk_disk), 0);
+	rv = send_data(fd, (void *)disk, sizeof(struct sanlk_disk), 0);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -412,7 +438,7 @@ int sanlock_read_lockspace(struct sanlk_lockspace *ls, uint32_t flags, uint32_t 
 	if (rv < 0)
 		goto out;
 
-	rv = send(fd, ls, sizeof(struct sanlk_lockspace), 0);
+	rv = send_data(fd, ls, sizeof(struct sanlk_lockspace), 0);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -422,7 +448,7 @@ int sanlock_read_lockspace(struct sanlk_lockspace *ls, uint32_t flags, uint32_t 
 
 	memset(&h, 0, sizeof(h));
 
-	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	rv = recv_data(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -437,7 +463,7 @@ int sanlock_read_lockspace(struct sanlk_lockspace *ls, uint32_t flags, uint32_t 
 	if (rv < 0)
 		goto out;
 
-	rv = recv(fd, ls, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+	rv = recv_data(fd, ls, sizeof(struct sanlk_lockspace), MSG_WAITALL);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -475,13 +501,13 @@ int sanlock_read_resource(struct sanlk_resource *res, uint32_t flags)
 	if (rv < 0)
 		goto out;
 
-	rv = send(fd, res, sizeof(struct sanlk_resource), 0);
+	rv = send_data(fd, res, sizeof(struct sanlk_resource), 0);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
 	}
 
-	rv = send(fd, res->disks, sizeof(struct sanlk_disk) * res->num_disks, 0);
+	rv = send_data(fd, res->disks, sizeof(struct sanlk_disk) * res->num_disks, 0);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -491,7 +517,7 @@ int sanlock_read_resource(struct sanlk_resource *res, uint32_t flags)
 
 	memset(&h, 0, sizeof(h));
 
-	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	rv = recv_data(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -506,7 +532,7 @@ int sanlock_read_resource(struct sanlk_resource *res, uint32_t flags)
 	if (rv < 0)
 		goto out;
 
-	rv = recv(fd, res, sizeof(struct sanlk_resource), MSG_WAITALL);
+	rv = recv_data(fd, res, sizeof(struct sanlk_resource), MSG_WAITALL);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -541,7 +567,7 @@ int sanlock_write_lockspace(struct sanlk_lockspace *ls, int max_hosts,
 	if (rv < 0)
 		goto out;
 
-	rv = send(fd, ls, sizeof(struct sanlk_lockspace), 0);
+	rv = send_data(fd, ls, sizeof(struct sanlk_lockspace), 0);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -573,13 +599,13 @@ int sanlock_write_resource(struct sanlk_resource *res,
 	if (rv < 0)
 		goto out;
 
-	rv = send(fd, res, sizeof(struct sanlk_resource), 0);
+	rv = send_data(fd, res, sizeof(struct sanlk_resource), 0);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
 	}
 
-	rv = send(fd, res->disks, sizeof(struct sanlk_disk) * res->num_disks, 0);
+	rv = send_data(fd, res->disks, sizeof(struct sanlk_disk) * res->num_disks, 0);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -613,13 +639,13 @@ int sanlock_read_resource_owners(struct sanlk_resource *res, uint32_t flags,
 	if (rv < 0)
 		goto out;
 
-	rv = send(fd, res, sizeof(struct sanlk_resource), 0);
+	rv = send_data(fd, res, sizeof(struct sanlk_resource), 0);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
 	}
 
-	rv = send(fd, res->disks, sizeof(struct sanlk_disk) * res->num_disks, 0);
+	rv = send_data(fd, res->disks, sizeof(struct sanlk_disk) * res->num_disks, 0);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -629,7 +655,7 @@ int sanlock_read_resource_owners(struct sanlk_resource *res, uint32_t flags,
 
 	memset(&h, 0, sizeof(h));
 
-	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	rv = recv_data(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -644,7 +670,7 @@ int sanlock_read_resource_owners(struct sanlk_resource *res, uint32_t flags,
 	if (rv < 0)
 		goto out;
 
-	rv = recv(fd, res, sizeof(struct sanlk_resource), MSG_WAITALL);
+	rv = recv_data(fd, res, sizeof(struct sanlk_resource), MSG_WAITALL);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -670,7 +696,7 @@ int sanlock_read_resource_owners(struct sanlk_resource *res, uint32_t flags,
 	hs = hsbuf;
 
 	for (i = 0; i < recv_count; i++) {
-		ret = recv(fd, hs, sizeof(struct sanlk_host), MSG_WAITALL);
+		ret = recv_data(fd, hs, sizeof(struct sanlk_host), MSG_WAITALL);
 		if (ret < 0) {
 			rv = -errno;
 			free(hsbuf);
@@ -774,17 +800,17 @@ int sanlock_reg_event(const char *ls_name, struct sanlk_host_event *he, uint32_t
 	if (rv < 0)
 		goto fail;
 
-	rv = send(reg_fd, &ls, sizeof(ls), 0);
+	rv = send_data(reg_fd, &ls, sizeof(ls), 0);
 	if (rv < 0)
 		goto fail;
 
-	rv = send(reg_fd, &ev, sizeof(ev), 0);
+	rv = send_data(reg_fd, &ev, sizeof(ev), 0);
 	if (rv < 0)
 		goto fail;
 
 	memset(&h, 0, sizeof(h));
 
-	rv = recv(reg_fd, &h, sizeof(h), MSG_WAITALL);
+	rv = recv_data(reg_fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv < 0) {
 		rv = -errno;
 		goto fail;
@@ -821,7 +847,7 @@ int sanlock_end_event(int reg_fd, const char *ls_name, uint32_t flags)
 	 * check if they have been unregistered.
 	 */
 
-	rv = send(reg_fd, &end, sizeof(end), 0);
+	rv = send_data(reg_fd, &end, sizeof(end), 0);
 	if (rv < 0) {
 		close(reg_fd);
 		return -EALREADY;
@@ -848,13 +874,13 @@ int sanlock_end_event(int reg_fd, const char *ls_name, uint32_t flags)
 	if (rv < 0)
 		goto out;
 
-	rv = send(fd, &ls, sizeof(ls), 0);
+	rv = send_data(fd, &ls, sizeof(ls), 0);
 	if (rv < 0)
 		goto out;
 
 	memset(&h, 0, sizeof(h));
 
-	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	rv = recv_data(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -897,13 +923,13 @@ int sanlock_set_event(const char *ls_name, struct sanlk_host_event *he, uint32_t
 	if (rv < 0)
 		goto out;
 
-	rv = send(fd, &ls, sizeof(ls), 0);
+	rv = send_data(fd, &ls, sizeof(ls), 0);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
 	}
 
-	rv = send(fd, he, sizeof(struct sanlk_host_event), 0);
+	rv = send_data(fd, he, sizeof(struct sanlk_host_event), 0);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -911,7 +937,7 @@ int sanlock_set_event(const char *ls_name, struct sanlk_host_event *he, uint32_t
 
 	memset(&h, 0, sizeof(h));
 
-	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	rv = recv_data(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -940,7 +966,7 @@ int sanlock_get_event(int reg_fd, GNUC_UNUSED uint32_t flags, struct sanlk_host_
 	 * get events until we return -EAGAIN to indicate there are no more.
 	 */
 
-	rv = recv(reg_fd, &cb, sizeof(cb), MSG_DONTWAIT);
+	rv = recv_data(reg_fd, &cb, sizeof(cb), MSG_DONTWAIT);
 	if (rv < 0)
 		return -errno;
 
@@ -1012,7 +1038,7 @@ int sanlock_version(uint32_t flags, uint32_t *version, uint32_t *proto)
 
 	memset(&h, 0, sizeof(h));
 
-	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	rv = recv_data(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -1055,13 +1081,13 @@ int sanlock_killpath(int sock, uint32_t flags, const char *path, char *args)
 	if (rv < 0)
 		return rv;
 
-	rv = send(sock, path_max, SANLK_HELPER_PATH_LEN, 0);
+	rv = send_data(sock, path_max, SANLK_HELPER_PATH_LEN, 0);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
 	}
 
-	rv = send(sock, args_max, SANLK_HELPER_ARGS_LEN, 0);
+	rv = send_data(sock, args_max, SANLK_HELPER_ARGS_LEN, 0);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -1125,27 +1151,27 @@ int sanlock_acquire(int sock, int pid, uint32_t flags, int res_count,
 
 	for (i = 0; i < res_count; i++) {
 		res = res_args[i];
-		rv = send(fd, res, sizeof(struct sanlk_resource), 0);
+		rv = send_data(fd, res, sizeof(struct sanlk_resource), 0);
 		if (rv < 0) {
 			rv = -1;
 			goto out;
 		}
 
-		rv = send(fd, res->disks, sizeof(struct sanlk_disk) * res->num_disks, 0);
+		rv = send_data(fd, res->disks, sizeof(struct sanlk_disk) * res->num_disks, 0);
 		if (rv < 0) {
 			rv = -1;
 			goto out;
 		}
 	}
 
-	rv = send(fd, &opt, sizeof(struct sanlk_options), 0);
+	rv = send_data(fd, &opt, sizeof(struct sanlk_options), 0);
 	if (rv < 0) {
 		rv = -1;
 		goto out;
 	}
 
 	if (opt.len) {
-		rv = send(fd, opt_in->str, opt.len, 0);
+		rv = send_data(fd, opt_in->str, opt.len, 0);
 		if (rv < 0) {
 			rv = -1;
 			goto out;
@@ -1196,7 +1222,7 @@ int sanlock_inquire(int sock, int pid, uint32_t flags, int *res_count,
 
 	memset(&h, 0, sizeof(h));
 
-	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	rv = recv_data(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv != sizeof(h)) {
 		rv = -1;
 		goto out;
@@ -1214,7 +1240,7 @@ int sanlock_inquire(int sock, int pid, uint32_t flags, int *res_count,
 		goto out;
 	}
 
-	rv = recv(fd, reply_data, len, MSG_WAITALL);
+	rv = recv_data(fd, reply_data, len, MSG_WAITALL);
 	if (rv != len) {
 		free(reply_data);
 		rv = -1;
@@ -1264,7 +1290,7 @@ int sanlock_convert(int sock, int pid, uint32_t flags, struct sanlk_resource *re
 	if (rv < 0)
 		goto out;
 
-	rv = send(fd, res, sizeof(struct sanlk_resource), 0);
+	rv = send_data(fd, res, sizeof(struct sanlk_resource), 0);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -1310,7 +1336,7 @@ int sanlock_release(int sock, int pid, uint32_t flags, int res_count,
 		goto out;
 
 	for (i = 0; i < res_count; i++) {
-		rv = send(fd, res_args[i], sizeof(struct sanlk_resource), 0);
+		rv = send_data(fd, res_args[i], sizeof(struct sanlk_resource), 0);
 		if (rv < 0) {
 			rv = -1;
 			goto out;
@@ -1343,13 +1369,13 @@ int sanlock_request(uint32_t flags, uint32_t force_mode,
 	if (rv < 0)
 		goto out;
 
-	rv = send(fd, res, sizeof(struct sanlk_resource), 0);
+	rv = send_data(fd, res, sizeof(struct sanlk_resource), 0);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
 	}
 
-	rv = send(fd, res->disks, sizeof(struct sanlk_disk) * res->num_disks, 0);
+	rv = send_data(fd, res->disks, sizeof(struct sanlk_disk) * res->num_disks, 0);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -1388,7 +1414,7 @@ int sanlock_examine(uint32_t flags, struct sanlk_lockspace *ls,
 	if (rv < 0)
 		goto out;
 
-	rv = send(fd, data, datalen, 0);
+	rv = send_data(fd, data, datalen, 0);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
@@ -1418,13 +1444,13 @@ int sanlock_set_lvb(uint32_t flags, struct sanlk_resource *res, char *lvb, int l
 	if (rv < 0)
 		return rv;
 
-	rv = send(fd, res, sizeof(struct sanlk_resource), 0);
+	rv = send_data(fd, res, sizeof(struct sanlk_resource), 0);
 	if (rv < 0) {
 		rv = -errno;
 		goto out;
 	}
 
-	rv = send(fd, lvb, lvblen, 0);
+	rv = send_data(fd, lvb, lvblen, 0);
 	if (rv < 0) {
 		rv = -1;
 		goto out;
@@ -1456,7 +1482,7 @@ int sanlock_get_lvb(uint32_t flags, struct sanlk_resource *res, char *lvb, int l
 	if (rv < 0)
 		return rv;
 
-	rv = send(fd, res, sizeof(struct sanlk_resource), 0);
+	rv = send_data(fd, res, sizeof(struct sanlk_resource), 0);
 	if (rv < 0) {
 		rv = -1;
 		goto out;
@@ -1466,7 +1492,7 @@ int sanlock_get_lvb(uint32_t flags, struct sanlk_resource *res, char *lvb, int l
 
 	memset(&h, 0, sizeof(h));
 
-	rv = recv(fd, &h, sizeof(h), MSG_WAITALL);
+	rv = recv_data(fd, &h, sizeof(h), MSG_WAITALL);
 	if (rv != sizeof(h)) {
 		rv = -1;
 		goto out;
@@ -1484,7 +1510,7 @@ int sanlock_get_lvb(uint32_t flags, struct sanlk_resource *res, char *lvb, int l
 		goto out;
 	}
 
-	rv = recv(fd, reply_data, len, MSG_WAITALL);
+	rv = recv_data(fd, reply_data, len, MSG_WAITALL);
 	if (rv != len) {
 		free(reply_data);
 		rv = -1;
