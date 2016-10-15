@@ -754,7 +754,7 @@ the single sector of a delta lease, or the first sector of a paxos lease.
 ./"
 
 .BI "sanlock direct dump" " path" \
-\fR[\fP\fB:\fP\fIoffset\fP\fR]\fP
+\fR[\fP\fB:\fP\fIoffset\fP\fR[\fP\fB:\fP\fIsize\fP\fR]]\fP
 
 Read disk sectors and print leader records for delta or paxos leases.  Add
 -f 1 to print the request record values for paxos leases, and host_ids set

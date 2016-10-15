@@ -407,16 +407,23 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 	char sname[NAME_ID_SIZE+1];
 	char rname[NAME_ID_SIZE+1];
 	uint64_t sector_nr;
+	uint64_t dump_size = 0;
+	uint64_t end_sector_nr;
 	int sector_count, datalen, align_size;
 	int i, rv, b;
 
 	memset(&sd, 0, sizeof(struct sync_disk));
 
+	/* /path[:<offset>[:<size>]] */
 	colon = strstr(dump_path, ":");
 	if (colon) {
 		off_str = colon + 1;
 		*colon = '\0';
 		sd.offset = atoll(off_str);
+
+		colon = strstr(off_str, ":");
+		if (colon)
+			dump_size = atoll(colon + 1);
 	}
 
 	strncpy(sd.path, dump_path, SANLK_PATH_LEN);
@@ -455,8 +462,9 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 	printf("\n");
 
 	sector_nr = 0;
+	end_sector_nr = dump_size / sd.sector_size;
 
-	while (1) {
+	while (end_sector_nr == 0 || sector_nr < end_sector_nr) {
 		memset(sname, 0, sizeof(rname));
 		memset(rname, 0, sizeof(rname));
 		memset(data, 0, sd.sector_size);
@@ -551,7 +559,8 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 				printf("%04u %04llu SH\n", i+1, (unsigned long long)mb.generation);
 			}
 		} else {
-			break;
+			if (end_sector_nr == 0)
+				break;
 		}
 
 		sector_nr += sector_count;

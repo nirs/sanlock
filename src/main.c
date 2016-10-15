@@ -1851,7 +1851,7 @@ static void print_usage(void)
 	printf("sanlock direct <action> [-a 0|1] [-o 0|1]\n");
 	printf("sanlock direct init -s LOCKSPACE | -r RESOURCE\n");
 	printf("sanlock direct read_leader -s LOCKSPACE | -r RESOURCE\n");
-	printf("sanlock direct dump <path>[:<offset>]\n");
+	printf("sanlock direct dump <path>[:<offset>[:<size>]]\n");
 	printf("\n");
 	printf("LOCKSPACE = <lockspace_name>:<host_id>:<path>:<offset>\n");
 	printf("  <lockspace_name>	name of lockspace\n");
