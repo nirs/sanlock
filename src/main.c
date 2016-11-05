@@ -73,6 +73,7 @@ struct thread_pool {
 
 /* priorities are LOG_* from syslog.h */
 int log_logfile_priority = LOG_WARNING;
+int log_logfile_use_utc = 0;
 int log_syslog_priority = LOG_ERR;
 int log_stderr_priority = -1; /* -D sets this to LOG_DEBUG */
 
@@ -2296,6 +2297,10 @@ static void read_config_file(void)
 		} else if (!strcmp(str, "logfile_priority")) {
 			get_val_int(line, &val);
 			log_logfile_priority = val;
+
+		} else if (!strcmp(str, "logfile_use_utc")) {
+			get_val_int(line, &val);
+			log_logfile_use_utc = val;
 
 		} else if (!strcmp(str, "syslog_priority")) {
 			get_val_int(line, &val);

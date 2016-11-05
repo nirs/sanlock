@@ -58,6 +58,7 @@ static char logfile_path[PATH_MAX];
 static FILE *logfile_fp;
 
 extern int log_logfile_priority;
+extern int log_logfile_use_utc;
 extern int log_syslog_priority;
 extern int log_stderr_priority;
 
@@ -138,9 +139,14 @@ void log_level(uint32_t space_id, uint32_t token_id, char *name_in, int level, c
 	pthread_mutex_lock(&log_mutex);
 
 	gettimeofday(&cur_time, NULL);
-	localtime_r(&cur_time.tv_sec, &time_info);
+
+    if (log_logfile_use_utc)
+	    gmtime_r(&cur_time.tv_sec, &time_info);
+    else
+	    localtime_r(&cur_time.tv_sec, &time_info);
+
 	ret = strftime(log_str + pos, len - pos,
-		       "%Y-%m-%d %H:%M:%S%z ", &time_info);
+		       "%Y-%m-%d %H:%M:%S ", &time_info);
 	pos += ret;
 
 	tid = syscall(SYS_gettid);
