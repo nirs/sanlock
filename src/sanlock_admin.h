@@ -20,6 +20,9 @@
 /* inq flags */
 #define SANLK_INQ_WAIT		0x00000001
 
+/* write flags */
+#define SANLK_WRITE_CLEAR	0x00000001 /* subsequent read will return error */
+
 /* sanlk_lockspace.flags returned by get */
 #define SANLK_LSF_ADD		0x00000001
 #define SANLK_LSF_REM		0x00000002
@@ -219,6 +222,9 @@ int sanlock_read_lockspace(struct sanlk_lockspace *ls,
  *
  * use max_hosts = 0 for default value
  * use num_hosts = 0 for default value
+ *
+ * Set flag SANLK_WRITE_CLEAR to cause a subsequent read_resource
+ * to return an error.
  */
 
 int sanlock_write_resource(struct sanlk_resource *res,

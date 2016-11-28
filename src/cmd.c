@@ -139,7 +139,6 @@ static const char *acquire_error_str(int error)
 		return "lease io error";
 
 	case SANLK_LEADER_DIFF:
-	case SANLK_LEADER_MAGIC:
 	case SANLK_LEADER_VERSION:
 	case SANLK_LEADER_SECTORSIZE:
 	case SANLK_LEADER_LOCKSPACE:
@@ -147,6 +146,9 @@ static const char *acquire_error_str(int error)
 	case SANLK_LEADER_NUMHOSTS:
 	case SANLK_LEADER_CHECKSUM:
 		return "lease data invalid";
+
+	case SANLK_LEADER_MAGIC:
+		return "lease not found";
 
 	default:
 		return "";
@@ -1805,6 +1807,7 @@ static void cmd_write_resource(struct task *task, struct cmd_args *ca)
 	struct sanlk_resource res;
 	int token_len, disks_len;
 	int num_hosts, max_hosts;
+	int write_clear = 0;
 	int j, fd, rv, result;
 
 	fd = client[ca->ci_in].fd;
@@ -1868,6 +1871,9 @@ static void cmd_write_resource(struct task *task, struct cmd_args *ca)
 	num_hosts = ca->header.data;
 	max_hosts = ca->header.data2;
 
+	if (ca->header.cmd_flags & SANLK_WRITE_CLEAR)
+		write_clear = 1;
+
 	rv = open_disks(token->disks, token->r.num_disks);
 	if (rv < 0) {
 		result = rv;
@@ -1876,7 +1882,7 @@ static void cmd_write_resource(struct task *task, struct cmd_args *ca)
 
 	token->io_timeout = DEFAULT_IO_TIMEOUT;
 
-	result = paxos_lease_init(task, token, num_hosts, max_hosts);
+	result = paxos_lease_init(task, token, num_hosts, max_hosts, write_clear);
 
 	close_disks(token->disks, token->r.num_disks);
  reply:

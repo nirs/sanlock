@@ -17,6 +17,7 @@
 #define EXTERN
 #include "sanlock_internal.h"
 #include "sanlock_direct.h"
+#include "sanlock_admin.h"
 #include "diskio.h"
 #include "direct.h"
 #include "task.h"
@@ -101,14 +102,15 @@ int sanlock_direct_write_lockspace(struct sanlk_lockspace *ls, int max_hosts,
 
 int sanlock_direct_write_resource(struct sanlk_resource *res,
                                   int max_hosts, int num_hosts,
-				  uint32_t flags GNUC_UNUSED)
+				  uint32_t flags)
 {
 	struct task task;
 	int rv;
 
 	setup_task_lib(&task, 1);
 
-	rv = direct_write_resource(&task, res, max_hosts, num_hosts);
+	rv = direct_write_resource(&task, res, max_hosts, num_hosts,
+				   (flags & SANLK_WRITE_CLEAR) ? 1 : 0);
 
 	close_task_aio(&task);
 
@@ -127,7 +129,7 @@ int sanlock_direct_init(struct sanlk_lockspace *ls,
 	if (ls)
 		rv = direct_write_lockspace(&task, ls, max_hosts, 0);
 	else
-		rv = direct_write_resource(&task, res, max_hosts, num_hosts);
+		rv = direct_write_resource(&task, res, max_hosts, num_hosts, 0);
 
 	close_task_aio(&task);
 

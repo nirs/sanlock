@@ -817,6 +817,9 @@ static int verify_leader(struct token *token,
 	struct leader_record leader_rr;
 	int result, rv;
 
+	if (lr->magic == PAXOS_DISK_CLEAR)
+		return SANLK_LEADER_MAGIC;
+
 	if (lr->magic != PAXOS_DISK_MAGIC) {
 		log_errot(token, "verify_leader wrong magic %x %s",
 			  lr->magic, disk->path);
@@ -2023,7 +2026,7 @@ int paxos_lease_release(struct task *task,
 
 int paxos_lease_init(struct task *task,
 		     struct token *token,
-		     int num_hosts, int max_hosts)
+		     int num_hosts, int max_hosts, int write_clear)
 {
 	char *iobuf, **p_iobuf;
 	struct leader_record leader;
@@ -2071,12 +2074,19 @@ int paxos_lease_init(struct task *task,
 	memset(iobuf, 0, iobuf_len);
 
 	memset(&leader, 0, sizeof(leader));
-	leader.magic = PAXOS_DISK_MAGIC;
+
+	if (write_clear) {
+		leader.magic = PAXOS_DISK_CLEAR;
+		leader.write_timestamp = monotime();
+	} else {
+		leader.magic = PAXOS_DISK_MAGIC;
+	}
+
+	leader.timestamp = LEASE_FREE;
 	leader.version = PAXOS_DISK_VERSION_MAJOR | PAXOS_DISK_VERSION_MINOR;
 	leader.sector_size = sector_size;
 	leader.num_hosts = num_hosts;
 	leader.max_hosts = max_hosts;
-	leader.timestamp = LEASE_FREE;
 	strncpy(leader.space_name, token->r.lockspace_name, NAME_ID_SIZE);
 	strncpy(leader.resource_name, token->r.name, NAME_ID_SIZE);
 	leader.checksum = 0; /* set after leader_record_out */

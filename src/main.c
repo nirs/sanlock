@@ -1835,7 +1835,7 @@ static void print_usage(void)
 	printf("sanlock client set_config -s LOCKSPACE [-u 0|1] [-O 0|1]\n");
 	printf("sanlock client log_dump\n");
 	printf("sanlock client shutdown [-f 0|1] [-w 0|1]\n");
-	printf("sanlock client init -s LOCKSPACE | -r RESOURCE\n");
+	printf("sanlock client init -s LOCKSPACE | -r RESOURCE [-z 0|1]\n");
 	printf("sanlock client read -s LOCKSPACE | -r RESOURCE\n");
 	printf("sanlock client align -s LOCKSPACE\n");
 	printf("sanlock client add_lockspace -s LOCKSPACE\n");
@@ -2160,6 +2160,9 @@ static int read_command_line(int argc, char *argv[])
 		case 'u':
 			com.used_set = 1;
 			com.used = atoi(optionarg);
+			break;
+		case 'z':
+			com.clear_arg = 1;
 			break;
 
 		case 'c':
@@ -2761,7 +2764,8 @@ static int do_client(void)
 		else
 			rv = sanlock_write_resource(com.res_args[0],
 						    com.max_hosts,
-						    com.num_hosts, 0);
+						    com.num_hosts,
+						    com.clear_arg ? SANLK_WRITE_CLEAR : 0);
 		log_tool("init done %d", rv);
 		break;
 
@@ -3047,7 +3051,7 @@ static int do_direct_init(void)
 		}
 
 		rv = direct_write_resource(&main_task, com.res_args[0],
-					   com.max_hosts, com.num_hosts);
+					   com.max_hosts, com.num_hosts, com.clear_arg);
 	}
 
 	log_tool("init done %d", rv);

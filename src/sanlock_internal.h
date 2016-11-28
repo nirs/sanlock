@@ -318,6 +318,7 @@ struct command_line {
 	int used_set;
 	int used;
 	int all;
+	int clear_arg;
 	char *uname;			/* -U */
 	int uid;				/* -U */
 	char *gname;			/* -G */

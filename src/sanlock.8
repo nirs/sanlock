@@ -724,7 +724,8 @@ options require 1MB of space.  The host_id in the LOCKSPACE string is not
 relevant to initialization, so the value is ignored.  (The default of 2000
 host_ids can be changed for special cases using the -n num_hosts and -m
 max_hosts options.)  With -s, the -o option specifies the io timeout to be
-written in the host_id leases.
+written in the host_id leases.  With -r, the -z 1 option invalidates the
+resource lease on disk so it cannot be used until reinitialized normally.
 
 .BR "sanlock direct read_leader -s" " LOCKSPACE"
 .br
