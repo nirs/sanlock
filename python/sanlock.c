@@ -551,25 +551,29 @@ exit_fail:
 
 /* write_resource */
 PyDoc_STRVAR(pydoc_write_resource, "\
-write_resource(lockspace, resource, disks, max_hosts=0, num_hosts=0)\n\
+write_resource(lockspace, resource, disks, max_hosts=0, num_hosts=0, \
+clear=False)\n\
 Initialize a device to be used as sanlock resource.\n\
-The disks must be in the format: [(path, offset), ... ]");
+The disks must be in the format: [(path, offset), ... ].\n\
+If clear is True, the resource is cleared so subsequent read will\n\
+return an error.");
 
 static PyObject *
 py_write_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, max_hosts = 0, num_hosts = 0;
+    int rv, max_hosts = 0, num_hosts = 0, clear = 0;
     const char *lockspace, *resource;
     struct sanlk_resource *rs;
     PyObject *disks;
+    uint32_t flags = 0;
 
     static char *kwlist[] = {"lockspace", "resource", "disks", "max_hosts",
-                                "num_hosts", NULL};
+                                "num_hosts", "clear", NULL};
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|ii",
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|iii",
         kwlist, &lockspace, &resource, &PyList_Type, &disks, &max_hosts,
-        &num_hosts)) {
+        &num_hosts, &clear)) {
         return NULL;
     }
 
@@ -582,9 +586,13 @@ py_write_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
     strncpy(rs->lockspace_name, lockspace, SANLK_NAME_LEN);
     strncpy(rs->name, resource, SANLK_NAME_LEN);
 
+    if (clear) {
+        flags |= SANLK_WRITE_CLEAR;
+    }
+
     /* init sanlock resource (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_write_resource(rs, max_hosts, num_hosts, 0);
+    rv = sanlock_write_resource(rs, max_hosts, num_hosts, flags);
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
