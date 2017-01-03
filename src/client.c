@@ -32,6 +32,7 @@
 #include "sanlock_resource.h"
 #include "sanlock_admin.h"
 #include "sanlock_sock.h"
+#include "sanlock_rv.h"
 
 #ifndef GNUC_UNUSED
 #define GNUC_UNUSED __attribute__((__unused__))
@@ -1996,5 +1997,81 @@ int sanlock_str_to_lockspace(char *str, struct sanlk_lockspace *ls)
 		ls->host_id_disk.offset = atoll(offset);
 
 	return 0;
+}
+
+const char *sanlock_strerror(int rv)
+{
+	switch (rv) {
+	case SANLK_ERROR:
+		return "General error";
+	case SANLK_AIO_TIMEOUT:
+		return "IO timeout";
+	case SANLK_WD_ERROR:
+		return "Watchdog device error";
+	case SANLK_DBLOCK_READ:
+		return "Lease read error in dblock";
+	case SANLK_DBLOCK_WRITE:
+		return "Lease write error in dblock";
+	case SANLK_DBLOCK_MBAL:
+		return "Lease was acquired by another host in current ballot";
+	case SANLK_DBLOCK_CHECKSUM:
+		return "Lease checksum error in dblock";
+	case SANLK_LEADER_READ:
+		return "Lease read error in leader";
+	case SANLK_LEADER_WRITE:
+		return "Lease write error in leader";
+	case SANLK_LEADER_DIFF:
+		return "Lease read inconsistent";
+	case SANLK_LEADER_MAGIC:
+		return "Lease does not exist on storage";
+	case SANLK_LEADER_VERSION:
+		return "Lease format version on storage is not recognized";
+	case SANLK_LEADER_SECTORSIZE:
+		return "Lease sector size is inconsistent";
+	case SANLK_LEADER_LOCKSPACE:
+		return "Lease lockspace name is incorrect";
+	case SANLK_LEADER_RESOURCE:
+		return "Lease resource name is incorrect";
+	case SANLK_LEADER_NUMHOSTS:
+		return "Lease num_hosts is incorrect";
+	case SANLK_LEADER_CHECKSUM:
+		return "Lease checksum error in leader";
+	case SANLK_ACQUIRE_LVER:
+		return "Lease leader version is unmatching";
+	case SANLK_ACQUIRE_LOCKSPACE:
+		return "Lease lockspace is not found";
+	case SANLK_ACQUIRE_IDDISK:
+		return "Lease lockspace disk cannot be opened";
+	case SANLK_ACQUIRE_IDLIVE:
+		return "Lease is held by another host";
+	case SANLK_ACQUIRE_OWNED:
+		return "Lease was acquired by another host in other ballot";
+	case SANLK_ACQUIRE_OTHER:
+		return "Lease was acquired by another host in local commit";
+	case SANLK_ACQUIRE_SHRETRY:
+		return "Lease is held by another host for shared acquire";
+	case SANLK_ACQUIRE_OWNED_RETRY:
+		return "Lease is owned by another host";
+	case SANLK_RELEASE_LVER:
+		return "Lease release version is incorrect";
+	case SANLK_RELEASE_OWNER:
+		return "Lease release owner is incorrect";
+	case SANLK_RENEW_OWNER:
+		return "Lease renew owner is incorrect";
+	case SANLK_RENEW_DIFF:
+		return "Lease renew data has changed";
+	case SANLK_HOSTID_BUSY:
+		return "Lease host ID is being used by another host";
+	case SANLK_REQUEST_MAGIC:
+		return "Lease request block has invalid data";
+	case SANLK_REQUEST_VERSION:
+		return "Lease request block has invalid version";
+	case SANLK_REQUEST_OLD:
+		return "Lease request has newer lease version";
+	case SANLK_REQUEST_LVER:
+		return "Lease request block has newer version";
+	default:
+		return "Unknown error";
+	};
 }
 

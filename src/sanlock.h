@@ -138,4 +138,6 @@ struct sanlk_host_event {
 size_t sanlock_path_export(char *dst, const char *src, size_t dstlen);
 size_t sanlock_path_import(char *dst, const char *src, size_t dstlen);
 
+const char *sanlock_strerror(int rv);
+
 #endif
