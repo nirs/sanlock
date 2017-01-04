@@ -54,7 +54,7 @@ __set_exception(int en, char *msg)
         en = -en;
         err_name = strerror(en);
     } else {
-        err_name = "Sanlock exception";
+        err_name = sanlock_strerror(en);
     }
 
     exc_tuple = Py_BuildValue("(iss)", en, msg, err_name);
