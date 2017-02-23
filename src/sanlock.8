@@ -563,6 +563,7 @@ added or removed.  Add -h 1 to also show hosts in each lockspace.
 .BR "sanlock client renewal -s" " LOCKSPACE"
 
 Print a history of renewals with timing details.
+See the Renewal history section below.
 
 .B sanlock client log_dump
 
@@ -874,6 +875,64 @@ on an orphan list.  Another local process can acquire an orphan lease
 using the ORPHAN flag (-O 1), or release the orphan lease using the ORPHAN
 flag (-O 1).  All orphan leases can be released by setting the lockspace
 name (-s lockspace_name) with no resource name.
+
+.P
+
+.SS Renewal history
+
+sanlock saves a limited history of lease renewal information in each lockspace.
+See sanlock.conf renewal_history_size to set the amount of history or to
+disable (set to 0).
+
+IO times are measured in delta lease renewal (each delta lease renewal
+includes one read and one write).
+
+For each successful renewal, a record is saved that includes:
+.IP \[bu] 2
+the timestamp written in the delta lease by the renewal
+.IP \[bu] 2
+the time in milliseconds taken by the delta lease read
+.IP \[bu] 2
+the time in milliseconds taken by the delta lease write
+
+.P
+ 
+Also counted and recorded are the number io timeouts and
+other io errors that occur between successful renewals.
+
+Two consecutive successful renewals would be recorded as:
+.br
+.nf
+timestamp=5332 read_ms=482 write_ms=5525 next_timeouts=0 next_errors=0
+timestamp=5353 read_ms=99 write_ms=3161 next_timeouts=0 next_errors=0
+.fi
+
+Those fields are:
+    
+.IP \[bu] 2
+timestamp is the value written into the delta lease during
+that renewal.
+
+.IP \[bu] 2
+read_ms/write_ms are the milliseconds taken for the renewal
+read/write ios.
+    
+.IP \[bu] 2
+next_timeouts are the number of io timeouts that occured
+after the renewal recorded on that line, and before the next
+successful renewal on the following line.
+
+.IP \[bu] 2
+next_errors are the number of io errors (not timeouts) that
+occured after renewal recorded on that line, and before the
+next successful renewal on the following line.
+    
+.P
+
+The command 'sanlock client renewal -s lockspace_name' reports
+the full history of renewals saved by sanlock, which by default
+is 180 records, about 1 hour of history when using a 20 second
+renewal interval for a 10 second io timeout.
 
 .SH INTERNALS
 
