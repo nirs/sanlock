@@ -1,8 +1,6 @@
 See https://pagure.io/sanlock
 
-See sanlock(8) at sanlock.git/src/sanlock.8
-
-See wdmd(8) at sanlock.git/wdmd/wdmd.8
+From sanlock(8) at sanlock.git/src/sanlock.8
 
 ```
 SANLOCK(8)                  System Manager's Manual                 SANLOCK(8)
@@ -914,3 +912,103 @@ SEE ALSO
 
                                   2015-01-23                        SANLOCK(8)
 ```
+
+From wdmd(8) at sanlock.git/wdmd/wdmd.8
+
+```
+WDMD(8)                     System Manager's Manual                    WDMD(8)
+
+NAME
+       wdmd - watchdog multiplexing daemon
+
+SYNOPSIS
+       wdmd [OPTIONS]
+
+DESCRIPTION
+       This daemon opens /dev/watchdog and allows multiple independent sources
+       to detmermine whether each KEEPALIVE is done.  Every test interval  (10
+       seconds),  the  daemon  tests  each  source.   If  any  test fails, the
+       KEEPALIVE is not done.  In a standard configuration, the watchdog timer
+       will  reset  the  system  if no KEEPALIVE is done for 60 seconds ("fire
+       timeout").  This means that if a single test fails 5-6  times  in  row,
+       the  watchdog  will  fire  and  reset  the  system.  With multiple test
+       sources, fewer separate failures back to back can also cause  a  reset,
+       e.g.
+
+       T seconds, P pass, F fail
+       T00: test1 P, test2 P, test3 P: KEEPALIVE done
+       T10: test1 F, test2 F, test3 P: KEEPALIVE skipped
+       T20: test1 F, test2 P, test3 P: KEEPALIVE skipped
+       T30: test1 P, test2 F, test3 P: KEEPALIVE skipped
+       T40: test1 P, test2 P, test3 F: KEEPALIVE skipped
+       T50: test1 F, test2 F, test3 P: KEEPALIVE skipped
+       T60: test1 P, test2 F, test3 P: KEEPALIVE skipped
+       T60: watchdog fires, system resets
+
+       (Depending  on timings, the system may be reset sometime shortly before
+       T60, and the tests at T60 would not be run.)
+
+       A crucial aspect to the design and function of wdmd is that if any sin‐
+       gle  source  does  not pass tests for the fire timeout, the watchdog is
+       guaranteed to fire, regardless of whether other sources on  the  system
+       have passed or failed.  A spurious reset due to the combined effects of
+       multiple failing tests as shown above, is an accepted side effect.
+
+       The wdmd init script will load the softdog module if no other  watchdog
+       module has been loaded.
+
+       wdmd  cannot be used on the system with any other program that needs to
+       open /dev/watchdog, e.g. watchdog(8).
+
+   Test Source: clients
+       Using libwdmd, programs connect to wdmd via a  unix  socket,  and  send
+       regular messages to wdmd to update an expiry time for their connection.
+       Every test interval, wdmd will check if the expiry time for  a  connec‐
+       tion has been reached.  If so, the test for that client fails.
+
+   Test Source: scripts
+       wdmd  will run scripts from a designated directory every test interval.
+       If a script exits with 0, the test is considered a success, otherwise a
+       failure.  If a script does not exit by the end of the test interval, it
+       is considered a failure.
+
+OPTIONS
+       --version, -V
+                Print version.
+
+       --help, -h
+                Print usage.
+
+       --dump, -d
+                Print debug information from the daemon.
+
+       --probe, -p
+                Print path of functional watchdog device.  Exit code  0  indi‐
+                cates a functional  device  was  found.  Exit code 1 indicates
+                a functional device was not found.
+
+       -D
+                Enable debugging to stderr and don't fork.
+
+       -H 0|1
+                Enable (1) or disable (0) high priority features such as real‐
+                time scheduling priority and mlockall.
+
+       -G name
+                Group ownership for the socket.
+
+       -S 0|1
+                Enable (1) or disable (0) script tests.
+
+       -s path
+                Path to scripts dir.
+
+       -k num
+                Kill unfinished scripts after num seconds.
+
+       -w path
+                The path to the watchdog device to try first.
+
+                                  2011-08-01                           WDMD(8)
+```
+
