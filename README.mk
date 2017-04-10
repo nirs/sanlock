@@ -1,5 +1,7 @@
 See https://pagure.io/sanlock
 
+Mailing list https://lists.fedorahosted.org/admin/lists/sanlock-devel.lists.fedorahosted.org/
+
 From sanlock(8) at sanlock.git/src/sanlock.8
 
 ```
