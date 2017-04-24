@@ -1,3 +1,5 @@
+import pwd
+import grp
 import os
 import time
 import signal
@@ -18,6 +20,7 @@ def main():
     fd, disk = tempfile.mkstemp()
     os.close(fd)
 
+    os.chown(disk, pwd.getpwnam("sanlock").pw_uid, grp.getgrnam("sanlock").gr_gid)
     offset = sanlock.get_alignment(disk)
 
     SNLK_DISKS = [(disk, offset)]
