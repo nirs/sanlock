@@ -2664,7 +2664,7 @@ static int do_client(void)
 	case ACT_ACQUIRE:
 		log_tool("acquire pid %d", com.pid);
 		flags |= com.orphan ? SANLK_ACQUIRE_ORPHAN : 0;
-		rv = sanlock_acquire(-1, com.pid, 0, com.res_count, com.res_args, NULL);
+		rv = sanlock_acquire(-1, com.pid, flags, com.res_count, com.res_args, NULL);
 		log_tool("acquire done %d", rv);
 		break;
 
