@@ -1857,13 +1857,13 @@ static void print_usage(void)
 	printf("LOCKSPACE = <lockspace_name>:<host_id>:<path>:<offset>\n");
 	printf("  <lockspace_name>	name of lockspace\n");
 	printf("  <host_id>		local host identifier in lockspace\n");
-	printf("  <path>		disk to storage reserved for leases\n");
+	printf("  <path>		path to storage reserved for leases\n");
 	printf("  <offset>		offset on path (bytes)\n");
 	printf("\n");
 	printf("RESOURCE = <lockspace_name>:<resource_name>:<path>:<offset>[:<lver>]\n");
 	printf("  <lockspace_name>	name of lockspace\n");
 	printf("  <resource_name>	name of resource\n");
-	printf("  <path>		disk to storage reserved for leases\n");
+	printf("  <path>		path to storage reserved for leases\n");
 	printf("  <offset>		offset on path (bytes)\n");
 	printf("  <lver>                optional leader version or SH for shared lease\n");
 	printf("\n");
