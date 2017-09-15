@@ -405,9 +405,9 @@ Use a unique host_id on each host.
 
 .nf
 host1:
-# sanlock client add_lockspace -s test:1/dev/vg/leases:0
+# sanlock client add_lockspace -s test:1:/dev/vg/leases:0
 host2:
-# sanlock client add_lockspace -s test:2/dev/vg/leases:0
+# sanlock client add_lockspace -s test:2:/dev/vg/leases:0
 .fi
 
 .IP 6. 4
@@ -462,9 +462,9 @@ Leave the lockspace for the application.
 
 .nf
 host1:
-# sanlock client rem_lockspace -s test:1/dev/vg/leases:0
+# sanlock client rem_lockspace -s test:1:/dev/vg/leases:0
 host2:
-# sanlock client rem_lockspace -s test:2/dev/vg/leases:0
+# sanlock client rem_lockspace -s test:2:/dev/vg/leases:0
 .fi
 
 .IP 11. 4

@@ -350,9 +350,9 @@ DESCRIPTION
            Use a unique host_id on each host.
 
            host1:
-           # sanlock client add_lockspace -s test:1/dev/vg/leases:0
+           # sanlock client add_lockspace -s test:1:/dev/vg/leases:0
            host2:
-           # sanlock client add_lockspace -s test:2/dev/vg/leases:0
+           # sanlock client add_lockspace -s test:2:/dev/vg/leases:0
 
        6.  Create two resources for the application (from one host).
 
@@ -393,9 +393,9 @@ DESCRIPTION
        10. Leave the lockspace for the application.
 
            host1:
-           # sanlock client rem_lockspace -s test:1/dev/vg/leases:0
+           # sanlock client rem_lockspace -s test:1:/dev/vg/leases:0
            host2:
-           # sanlock client rem_lockspace -s test:2/dev/vg/leases:0
+           # sanlock client rem_lockspace -s test:2:/dev/vg/leases:0
 
        11. Stop sanlock on all hosts.
 
