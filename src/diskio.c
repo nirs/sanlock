@@ -124,7 +124,12 @@ int open_disks_fd(struct sync_disk *disks, int num_disks)
 		fd = open(disk->path, O_RDWR | O_DIRECT | O_SYNC, 0);
 		if (fd < 0) {
 			rv = -errno;
-			log_error("open error %d %s", fd, disk->path);
+			if (rv == -EACCES) {
+				log_error("open error %d EACCES: no permission to open %s", rv, disk->path);
+				log_error("check that daemon user %s %d group %s %d has access to disk or file.",
+					  com.uname, com.uid, com.gname, com.gid);
+			} else
+				log_error("open error %d %s", fd, disk->path);
 			continue;
 		}
 
@@ -159,7 +164,12 @@ int open_disk(struct sync_disk *disk)
 	fd = open(disk->path, O_RDWR | O_DIRECT | O_SYNC, 0);
 	if (fd < 0) {
 		rv = -errno;
-		log_error("open error %d %s", rv, disk->path);
+		if (rv == -EACCES) {
+			log_error("open error %d EACCES: no permission to open %s", rv, disk->path);
+			log_error("check that daemon user %s %d group %s %d has access to disk or file.",
+				  com.uname, com.uid, com.gname, com.gid);
+		} else
+			log_error("open error %d %s", rv, disk->path);
 		goto fail;
 	}
 
