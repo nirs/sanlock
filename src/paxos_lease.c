@@ -52,7 +52,7 @@ uint32_t leader_checksum(struct leader_record *lr)
 	return crc32c((uint32_t)~1, (uint8_t *)lr, LEADER_CHECKSUM_LEN);
 }
 
-static uint32_t dblock_checksum(struct paxos_dblock *pd)
+uint32_t dblock_checksum(struct paxos_dblock *pd)
 {
 	return crc32c((uint32_t)~1, (uint8_t *)pd, DBLOCK_CHECKSUM_LEN);
 }
@@ -765,6 +765,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 			  (unsigned long long)next_lver, error);
 	}
 
+	memcpy(dblock_out, &dblock, sizeof(struct paxos_dblock));
 	return error;
 }
 
@@ -1396,6 +1397,7 @@ int paxos_lease_acquire(struct task *task,
 			struct token *token,
 			uint32_t flags,
 		        struct leader_record *leader_ret,
+			struct paxos_dblock *dblock_ret,
 		        uint64_t acquire_lver,
 		        int new_num_hosts)
 {
@@ -1881,6 +1883,7 @@ int paxos_lease_acquire(struct task *task,
 		  (unsigned long long)new_leader.timestamp);
 
 	memcpy(leader_ret, &new_leader, sizeof(struct leader_record));
+	memcpy(dblock_ret, &dblock, sizeof(struct paxos_dblock));
 	error = SANLK_OK;
 
  out:

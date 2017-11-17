@@ -297,13 +297,16 @@ void check_mode_block(struct token *token, uint64_t next_lver, int q, char *dblo
 }
 
 static int write_host_block(struct task *task, struct token *token,
-			    uint64_t host_id, uint64_t mb_gen, uint32_t mb_flags)
+			    uint64_t host_id, uint64_t mb_gen, uint32_t mb_flags,
+			    struct paxos_dblock *pd)
 {
 	struct sync_disk *disk;
 	struct mode_block mb;
 	struct mode_block mb_end;
+	struct paxos_dblock pd_end;
 	char *iobuf, **p_iobuf;
 	uint64_t offset;
+	uint32_t checksum;
 	int num_disks = token->r.num_disks;
 	int iobuf_len, rv, d;
 
@@ -320,6 +323,20 @@ static int write_host_block(struct task *task, struct token *token,
 		return -ENOMEM;
 
 	memset(iobuf, 0, iobuf_len);
+
+	/*
+	 * When writing our mode block, we need to keep our dblock
+	 * values intact because other hosts may be running the
+	 * paxos algorithm and these values need to remain intact
+	 * for them to reach the correct result.
+	 */
+	if (pd) {
+		paxos_dblock_out(pd, &pd_end);
+		checksum = dblock_checksum(&pd_end);
+		pd->checksum = checksum;
+		pd_end.checksum = cpu_to_le32(checksum);
+		memcpy(iobuf, (char *)&pd_end, sizeof(struct paxos_dblock));
+	}
 
 	if (mb_gen || mb_flags) {
 		memset(&mb, 0, sizeof(mb));
@@ -350,7 +367,6 @@ static int write_host_block(struct task *task, struct token *token,
 	if (rv != SANLK_AIO_TIMEOUT)
 		free(iobuf);
 	return rv;
-
 }
 
 static int read_mode_block(struct task *task, struct token *token,
@@ -433,7 +449,7 @@ static int clear_dead_shared(struct task *task, struct token *token,
 			continue;
 		}
 
-		rv = write_host_block(task, token, host_id, 0, 0);
+		rv = write_host_block(task, token, host_id, 0, 0, NULL);
 		if (rv < 0) {
 			log_errot(token, "clear_dead_shared host_id %llu write_host_block %d",
 				  (unsigned long long)host_id, rv);
@@ -569,7 +585,8 @@ int res_get_lvb(struct sanlk_resource *res, char **lvb_out, int *lvblen)
 
 static int acquire_disk(struct task *task, struct token *token,
 			uint64_t acquire_lver, int new_num_hosts,
-			int owner_nowait, struct leader_record *leader)
+			int owner_nowait, struct leader_record *leader,
+			struct paxos_dblock *dblock)
 {
 	struct leader_record leader_tmp;
 	int rv;
@@ -586,8 +603,8 @@ static int acquire_disk(struct task *task, struct token *token,
 
 	memset(&leader_tmp, 0, sizeof(leader_tmp));
 
-	rv = paxos_lease_acquire(task, token, flags, &leader_tmp, acquire_lver,
-				 new_num_hosts);
+	rv = paxos_lease_acquire(task, token, flags, &leader_tmp, dblock,
+				 acquire_lver, new_num_hosts);
 
 	log_token(token, "acquire_disk rv %d lver %llu at %llu", rv,
 		  (unsigned long long)leader_tmp.lver,
@@ -798,7 +815,7 @@ static int _release_token(struct task *task, struct token *token,
 	 */
 
 	if (r_flags & R_ERASE_ALL) {
-		rv = write_host_block(task, token, token->host_id, 0, 0);
+		rv = write_host_block(task, token, token->host_id, 0, 0, NULL);
 		if (rv < 0) {
 			log_errot(token, "release_token erase all write_host_block %d", rv);
 			ret = rv;
@@ -828,7 +845,7 @@ static int _release_token(struct task *task, struct token *token,
 			  (unsigned long long)lver, rv);
 
 	} else if (r_flags & R_UNDO_SHARED) {
-		rv = write_host_block(task, token, token->host_id, 0, 0);
+		rv = write_host_block(task, token, token->host_id, 0, 0, NULL);
 		if (rv < 0) {
 			log_errot(token, "release_token undo shared write_host_block %d", rv);
 			ret = rv;
@@ -849,7 +866,7 @@ static int _release_token(struct task *task, struct token *token,
 	} else if (r_flags & R_SHARED) {
 		/* normal release of sh lease */
 
-		rv = write_host_block(task, token, token->host_id, 0, 0);
+		rv = write_host_block(task, token, token->host_id, 0, 0, NULL);
 		if (rv < 0) {
 			log_errot(token, "release_token shared write_host_block %d", rv);
 			ret = rv;
@@ -879,7 +896,7 @@ static int _release_token(struct task *task, struct token *token,
 		}
 
 		/* Failure here is not a big deal and can be ignored. */
-		rv = write_host_block(task, token, token->host_id, 0, 0);
+		rv = write_host_block(task, token, token->host_id, 0, 0, NULL);
 		if (rv < 0)
 			log_errot(token, "release_token write_host_block %d", rv);
 
@@ -1094,6 +1111,7 @@ static struct resource *new_resource(struct token *token)
 static int convert_sh2ex_token(struct task *task, struct resource *r, struct token *token)
 {
 	struct leader_record leader;
+	struct paxos_dblock dblock;
 	int live_count = 0;
 	int retries;
 	int error;
@@ -1114,7 +1132,7 @@ static int convert_sh2ex_token(struct task *task, struct resource *r, struct tok
 
 	token->flags |= T_WRITE_DBLOCK_MBLOCK_SH;
 
-	rv = paxos_lease_acquire(task, token, 0, &leader, 0, 0);
+	rv = paxos_lease_acquire(task, token, 0, &leader, &dblock, 0, 0);
 
 	token->flags &= ~T_WRITE_DBLOCK_MBLOCK_SH;
 
@@ -1186,7 +1204,7 @@ static int convert_sh2ex_token(struct task *task, struct resource *r, struct tok
 	}
 
  do_mb:
-	rv = write_host_block(task, token, token->host_id, 0, 0);
+	rv = write_host_block(task, token, token->host_id, 0, 0, &dblock);
 	if (rv < 0) {
 		log_errot(token, "convert_sh2ex write_host_block error %d", rv);
 
@@ -1259,7 +1277,8 @@ static int convert_ex2sh_token(struct task *task, struct resource *r, struct tok
 	if (r->flags & R_LVB_WRITE_RELEASE)
 		write_lvb_block(task, r, token);
 
-	rv = write_host_block(task, token, token->host_id, token->host_generation, MBLOCK_SHARED);
+	/* FIXME: preserve dblock */
+	rv = write_host_block(task, token, token->host_id, token->host_generation, MBLOCK_SHARED, NULL);
 	if (rv < 0) {
 		log_errot(token, "convert_ex2sh write_host_block error %d", rv);
 		return rv;
@@ -1382,6 +1401,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 		  char *killpath, char *killargs)
 {
 	struct leader_record leader;
+	struct paxos_dblock dblock;
 	struct resource *r;
 	uint64_t acquire_lver = 0;
 	uint32_t new_num_hosts = 0;
@@ -1565,7 +1585,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
  retry:
 	memset(&leader, 0, sizeof(struct leader_record));
 
-	rv = acquire_disk(task, token, acquire_lver, new_num_hosts, owner_nowait, &leader);
+	rv = acquire_disk(task, token, acquire_lver, new_num_hosts, owner_nowait, &leader, &dblock);
 
 	if (rv == SANLK_ACQUIRE_IDLIVE || rv == SANLK_ACQUIRE_OWNED || rv == SANLK_ACQUIRE_OTHER) {
 		/*
@@ -1631,7 +1651,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 	 */
 
 	if (token->acquire_flags & SANLK_RES_SHARED) {
-		rv = write_host_block(task, token, token->host_id, token->host_generation, MBLOCK_SHARED);
+		rv = write_host_block(task, token, token->host_id, token->host_generation, MBLOCK_SHARED, &dblock);
 		if (rv < 0) {
 			log_errot(token, "acquire_token sh write_host_block error %d", rv);
 			r->flags &= ~R_SHARED;
@@ -1990,7 +2010,7 @@ static void resource_thread_release(struct task *task, struct resource *r, struc
 	log_token(token, "release async r_flags %x", r_flags);
 
 	if (r_flags & R_ERASE_ALL) {
-		rv = write_host_block(task, token, token->host_id, 0, 0);
+		rv = write_host_block(task, token, token->host_id, 0, 0, NULL);
 		if (rv < 0)
 			log_errot(token, "release async erase all write_host_block %d", rv);
 
@@ -2015,7 +2035,7 @@ static void resource_thread_release(struct task *task, struct resource *r, struc
 			  (unsigned long long)r->leader.lver, rv);
 
 	} else if (r_flags & R_UNDO_SHARED) {
-		rv = write_host_block(task, token, token->host_id, 0, 0);
+		rv = write_host_block(task, token, token->host_id, 0, 0, NULL);
 		if (rv < 0)
 			log_errot(token, "release async undo shared write_host_block %d", rv);
 
@@ -2032,7 +2052,7 @@ static void resource_thread_release(struct task *task, struct resource *r, struc
 	} else if (r_flags & R_SHARED) {
 		/* normal release of sh lease */
 
-		rv = write_host_block(task, token, token->host_id, 0, 0);
+		rv = write_host_block(task, token, token->host_id, 0, 0, NULL);
 		if (rv < 0)
 			log_errot(token, "release async shared write_host_block %d", rv);
 
@@ -2051,7 +2071,7 @@ static void resource_thread_release(struct task *task, struct resource *r, struc
 		}
 
 		/* Failure here is not a big deal and can be ignored. */
-		rv = write_host_block(task, token, token->host_id, 0, 0);
+		rv = write_host_block(task, token, token->host_id, 0, 0, NULL);
 		if (rv < 0)
 			log_errot(token, "release async write_host_block %d", rv);
 

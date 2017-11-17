@@ -80,6 +80,7 @@ static int do_paxos_action(int action, struct task *task, int io_timeout, struct
 {
 	struct token *token;
 	struct leader_record leader;
+	struct paxos_dblock dblock;
 	int disks_len, token_len;
 	int j, rv = 0;
 
@@ -123,7 +124,7 @@ static int do_paxos_action(int action, struct task *task, int io_timeout, struct
 		token->host_id = local_host_id;
 		token->host_generation = local_host_generation;
 
-		rv = paxos_lease_acquire(task, token, 0, leader_ret, 0, num_hosts);
+		rv = paxos_lease_acquire(task, token, 0, leader_ret, &dblock, 0, num_hosts);
 		break;
 
 	case ACT_RELEASE:
