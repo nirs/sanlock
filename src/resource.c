@@ -654,6 +654,9 @@ static int acquire_disk(struct task *task, struct token *token,
 	if (com.quiet_fail)
 		flags |= PAXOS_ACQUIRE_QUIET_FAIL;
 
+	if (com.paxos_debug_all)
+		flags |= PAXOS_ACQUIRE_DEBUG_ALL;
+
 	if (token->acquire_flags & SANLK_RES_SHARED)
 		flags |= PAXOS_ACQUIRE_SHARED;
 

@@ -2014,6 +2014,8 @@ const char *sanlock_strerror(int rv)
 		return "Lease write error in dblock";
 	case SANLK_DBLOCK_MBAL:
 		return "Lease was acquired by another host in current ballot";
+	case SANLK_DBLOCK_LVER:
+		return "Lease was acquired by another host in new ballot";
 	case SANLK_DBLOCK_CHECKSUM:
 		return "Lease checksum error in dblock";
 	case SANLK_LEADER_READ:
@@ -2036,8 +2038,6 @@ const char *sanlock_strerror(int rv)
 		return "Lease num_hosts is incorrect";
 	case SANLK_LEADER_CHECKSUM:
 		return "Lease checksum error in leader";
-	case SANLK_ACQUIRE_LVER:
-		return "Lease leader version is unmatching";
 	case SANLK_ACQUIRE_LOCKSPACE:
 		return "Lease lockspace is not found";
 	case SANLK_ACQUIRE_IDDISK:

@@ -35,6 +35,22 @@
 uint32_t crc32c(uint32_t crc, uint8_t *data, size_t length);
 int get_rand(int a, int b);
 
+/*
+ * BK_DEBUG_SIZE:  size of buffer to hold ballot debug info,
+ *                 this can't be larger than LOG_STR_LEN 512
+ * BK_STR_SIZE:    the max length of a dblock string for one host
+ * BK_DEBUG_COUNT: the max number of hosts for which we'll copy
+ *                 dblock info
+ *
+ * BK_DEBUG_COUNT * BK_STR_SIZE + extra debug text that comes before
+ * the dblock info needs to be less than BK_DEBUG_SIZE.
+ * Be very careful about increasing BK_DEBUG_COUNT because the use
+ * of strncat depends on it.
+ */
+#define BK_DEBUG_SIZE 512
+#define BK_DEBUG_COUNT 4
+#define BK_STR_SIZE 80
+
 static uint32_t roundup_power_of_two(uint32_t val)
 {
 	val--;
@@ -427,10 +443,13 @@ static int verify_dblock(struct token *token, struct paxos_dblock *pd, uint32_t 
  *                                           host1 fail
  */
 
-static int run_ballot(struct task *task, struct token *token, int num_hosts,
-		      uint64_t next_lver, uint64_t our_mbal,
+static int run_ballot(struct task *task, struct token *token, uint32_t flags,
+		      int num_hosts, uint64_t next_lver, uint64_t our_mbal,
 		      struct paxos_dblock *dblock_out)
 {
+	char bk_debug[BK_DEBUG_SIZE];
+	char bk_str[BK_STR_SIZE];
+	int bk_debug_count;
 	struct paxos_dblock dblock;
 	struct paxos_dblock bk_in;
 	struct paxos_dblock bk_max;
@@ -477,7 +496,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 	 * component is greater than dblock[p].mbal."
 	 */
 
-	log_token(token, "ballot %llu phase1 mbal %llu",
+	log_token(token, "ballot %llu phase1 write mbal %llu",
 		  (unsigned long long)next_lver,
 		  (unsigned long long)our_mbal);
 
@@ -491,6 +510,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 	num_writes = 0;
 
 	for (d = 0; d < num_disks; d++) {
+		/* acquire io: write 1 */
 		rv = write_dblock(task, token, &token->disks[d], token->host_id, &dblock);
 		if (rv < 0)
 			continue;
@@ -504,6 +524,9 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 		goto out;
 	}
 
+	memset(bk_debug, 0, sizeof(bk_debug));
+	bk_debug_count = 0;
+
 	num_reads = 0;
 
 	for (d = 0; d < num_disks; d++) {
@@ -513,6 +536,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 			continue;
 		memset(iobuf[d], 0, iobuf_len);
 
+		/* acquire io: read 2 */
 		rv = read_iobuf(disk->fd, disk->offset, iobuf[d], iobuf_len, task, token->io_timeout, NULL);
 		if (rv == SANLK_AIO_TIMEOUT)
 			iobuf[d] = NULL;
@@ -528,6 +552,28 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 			paxos_dblock_in(bk_end, &bk_in);
 			bk = &bk_in;
 
+			if (bk_in.mbal && ((flags & PAXOS_ACQUIRE_DEBUG_ALL) || (bk_in.lver >= dblock.lver))) {
+				if (bk_debug_count >= BK_DEBUG_COUNT) {
+					log_token(token, "ballot %llu phase1 read %s",
+						  (unsigned long long)next_lver, bk_debug);
+					memset(bk_debug, 0, sizeof(bk_debug));
+					bk_debug_count = 0;
+				}
+
+				memset(bk_str, 0, sizeof(bk_str));
+				snprintf(bk_str, BK_STR_SIZE, "%d:%llu:%llu:%llu:%llu:%llu:%llu:%x,", q,
+					 (unsigned long long)bk_in.mbal,
+					 (unsigned long long)bk_in.bal,
+					 (unsigned long long)bk_in.inp,
+					 (unsigned long long)bk_in.inp2,
+					 (unsigned long long)bk_in.inp3,
+					 (unsigned long long)bk_in.lver,
+					 bk_in.flags);
+				bk_str[BK_STR_SIZE-1] = '\0';
+				strncat(bk_debug, bk_str, BK_STR_SIZE-1);
+				bk_debug_count++;
+			}
+
 			rv = verify_dblock(token, bk, checksum);
 			if (rv < 0)
 				continue;
@@ -538,10 +584,26 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 				continue;
 
 			if (bk->lver > dblock.lver) {
-				/* I don't think this should happen */
-				log_errot(token, "ballot %llu larger1 lver[%d] %llu",
+				log_level(0, token->token_id, NULL, LOG_WARNING,
+					  "ballot %llu abort1 larger lver in bk[%d] %llu:%llu:%llu:%llu:%llu:%llu "
+					  "our dblock %llu:%llu:%llu:%llu:%llu:%llu",
 					  (unsigned long long)next_lver, q,
-					  (unsigned long long)bk->lver);
+					  (unsigned long long)bk->mbal,
+					  (unsigned long long)bk->bal,
+					  (unsigned long long)bk->inp,
+					  (unsigned long long)bk->inp2,
+					  (unsigned long long)bk->inp3,
+					  (unsigned long long)bk->lver,
+					  (unsigned long long)dblock.mbal,
+					  (unsigned long long)dblock.bal,
+					  (unsigned long long)dblock.inp,
+					  (unsigned long long)dblock.inp2,
+					  (unsigned long long)dblock.inp3,
+					  (unsigned long long)dblock.lver);
+
+				log_token(token, "ballot %llu phase1 read %s",
+					  (unsigned long long)next_lver, bk_debug);
+
 				error = SANLK_DBLOCK_LVER;
 				goto out;
 			}
@@ -549,10 +611,26 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 			/* see "It aborts the ballot" in comment above */
 
 			if (bk->mbal > dblock.mbal) {
-				log_errot(token, "ballot %llu abort1 mbal %llu mbal[%d] %llu",
-					  (unsigned long long)next_lver,
-					  (unsigned long long)our_mbal, q,
-					  (unsigned long long)bk->mbal);
+				log_level(0, token->token_id, NULL, LOG_WARNING,
+					  "ballot %llu abort1 larger mbal in bk[%d] %llu:%llu:%llu:%llu:%llu:%llu "
+					  "our dblock %llu:%llu:%llu:%llu:%llu:%llu",
+					  (unsigned long long)next_lver, q,
+					  (unsigned long long)bk->mbal,
+					  (unsigned long long)bk->bal,
+					  (unsigned long long)bk->inp,
+					  (unsigned long long)bk->inp2,
+					  (unsigned long long)bk->inp3,
+					  (unsigned long long)bk->lver,
+					  (unsigned long long)dblock.mbal,
+					  (unsigned long long)dblock.bal,
+					  (unsigned long long)dblock.inp,
+					  (unsigned long long)dblock.inp2,
+					  (unsigned long long)dblock.inp3,
+					  (unsigned long long)dblock.lver);
+
+				log_token(token, "ballot %llu phase1 read %s",
+					  (unsigned long long)next_lver, bk_debug);
+
 				error = SANLK_DBLOCK_MBAL;
 				goto out;
 			}
@@ -575,6 +653,9 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 			}
 		}
 	}
+
+	log_token(token, "ballot %llu phase1 read %s",
+		  (unsigned long long)next_lver, bk_debug);
 
 	if (!majority_disks(num_disks, num_reads)) {
 		log_errot(token, "ballot %llu dblock read error %d",
@@ -614,8 +695,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 	dblock.checksum = 0; /* set after paxos_dblock_out */
 
 	if (bk_max.inp) {
-		/* not a problem, but interesting to see, so use log_error */
-		log_errot(token, "ballot %llu choose bk_max[%d] lver %llu mbal %llu bal %llu inp %llu %llu %llu",
+		log_token(token, "ballot %llu choose bk_max[%d] lver %llu mbal %llu bal %llu inp %llu %llu %llu",
 			  (unsigned long long)next_lver, q_max,
 			  (unsigned long long)bk_max.lver,
 			  (unsigned long long)bk_max.mbal,
@@ -634,7 +714,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 
 	phase2 = 1;
 
-	log_token(token, "ballot %llu phase2 bal %llu inp %llu %llu %llu q_max %d",
+	log_token(token, "ballot %llu phase2 write bal %llu inp %llu %llu %llu q_max %d",
 		  (unsigned long long)dblock.lver,
 		  (unsigned long long)dblock.bal,
 		  (unsigned long long)dblock.inp,
@@ -645,6 +725,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 	num_writes = 0;
 
 	for (d = 0; d < num_disks; d++) {
+		/* acquire io: write 2 */
 		rv = write_dblock(task, token, &token->disks[d], token->host_id, &dblock);
 		if (rv < 0)
 			continue;
@@ -658,6 +739,9 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 		goto out;
 	}
 
+	memset(bk_debug, 0, sizeof(bk_debug));
+	bk_debug_count = 0;
+
 	num_reads = 0;
 
 	for (d = 0; d < num_disks; d++) {
@@ -667,6 +751,7 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 			continue;
 		memset(iobuf[d], 0, iobuf_len);
 
+		/* acquire io: read 3 */
 		rv = read_iobuf(disk->fd, disk->offset, iobuf[d], iobuf_len, task, token->io_timeout, NULL);
 		if (rv == SANLK_AIO_TIMEOUT)
 			iobuf[d] = NULL;
@@ -681,6 +766,28 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 
 			paxos_dblock_in(bk_end, &bk_in);
 			bk = &bk_in;
+
+			if (bk->mbal && ((flags & PAXOS_ACQUIRE_DEBUG_ALL) || (bk->lver >= dblock.lver))) {
+				if (bk_debug_count >= BK_DEBUG_COUNT) {
+					log_token(token, "ballot %llu phase2 read %s",
+						  (unsigned long long)next_lver, bk_debug);
+					memset(bk_debug, 0, sizeof(bk_debug));
+					bk_debug_count = 0;
+				}
+
+				memset(bk_str, 0, sizeof(bk_str));
+				snprintf(bk_str, BK_STR_SIZE, "%d:%llu:%llu:%llu:%llu:%llu:%llu:%x,", q,
+					 (unsigned long long)bk->mbal,
+					 (unsigned long long)bk->bal,
+					 (unsigned long long)bk->inp,
+					 (unsigned long long)bk->inp2,
+					 (unsigned long long)bk->inp3,
+					 (unsigned long long)bk->lver,
+					 bk->flags);
+				bk_str[BK_STR_SIZE-1] = '\0';
+				strncat(bk_debug, bk_str, BK_STR_SIZE-1);
+				bk_debug_count++;
+			}
 
 			rv = verify_dblock(token, bk, checksum);
 			if (rv < 0)
@@ -698,22 +805,26 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 				 * also be caught the the bk->mbal > dblock.mbal condition
 				 * below.
 				 */
-				log_errot(token, "ballot %llu larger2 lver[%d] %llu dblock %llu",
-					  (unsigned long long)next_lver, q,
-					  (unsigned long long)bk->lver,
-					  (unsigned long long)dblock.lver);
-				log_errot(token, "ballot %llu larger2 mbal[%d] %llu dblock %llu",
+				log_level(0, token->token_id, NULL, LOG_WARNING,
+					  "ballot %llu abort2 larger lver in bk[%d] %llu:%llu:%llu:%llu:%llu:%llu "
+					  "our dblock %llu:%llu:%llu:%llu:%llu:%llu",
 					  (unsigned long long)next_lver, q,
 					  (unsigned long long)bk->mbal,
-					  (unsigned long long)dblock.mbal);
-				log_errot(token, "ballot %llu larger2 inp[%d] %llu %llu %llu dblock %llu %llu %llu",
-					  (unsigned long long)next_lver, q,
+					  (unsigned long long)bk->bal,
 					  (unsigned long long)bk->inp,
 					  (unsigned long long)bk->inp2,
 					  (unsigned long long)bk->inp3,
+					  (unsigned long long)bk->lver,
+					  (unsigned long long)dblock.mbal,
+					  (unsigned long long)dblock.bal,
 					  (unsigned long long)dblock.inp,
 					  (unsigned long long)dblock.inp2,
-					  (unsigned long long)dblock.inp3);
+					  (unsigned long long)dblock.inp3,
+					  (unsigned long long)dblock.lver);
+
+				log_token(token, "ballot %llu phase2 read %s",
+					  (unsigned long long)next_lver, bk_debug);
+
 				error = SANLK_DBLOCK_LVER;
 				goto out;
 			}
@@ -721,15 +832,34 @@ static int run_ballot(struct task *task, struct token *token, int num_hosts,
 			/* see "It aborts the ballot" in comment above */
 
 			if (bk->mbal > dblock.mbal) {
-				log_errot(token, "ballot %llu abort2 mbal %llu mbal[%d] %llu",
-					  (unsigned long long)next_lver,
-					  (unsigned long long)our_mbal, q,
-					  (unsigned long long)bk->mbal);
+				log_level(0, token->token_id, NULL, LOG_WARNING,
+					  "ballot %llu abort2 larger mbal in bk[%d] %llu:%llu:%llu:%llu:%llu:%llu "
+					  "our dblock %llu:%llu:%llu:%llu:%llu:%llu",
+					  (unsigned long long)next_lver, q,
+					  (unsigned long long)bk->mbal,
+					  (unsigned long long)bk->bal,
+					  (unsigned long long)bk->inp,
+					  (unsigned long long)bk->inp2,
+					  (unsigned long long)bk->inp3,
+					  (unsigned long long)bk->lver,
+					  (unsigned long long)dblock.mbal,
+					  (unsigned long long)dblock.bal,
+					  (unsigned long long)dblock.inp,
+					  (unsigned long long)dblock.inp2,
+					  (unsigned long long)dblock.inp3,
+					  (unsigned long long)dblock.lver);
+
+				log_token(token, "ballot %llu phase2 read %s",
+					  (unsigned long long)next_lver, bk_debug);
+
 				error = SANLK_DBLOCK_MBAL;
 				goto out;
 			}
 		}
 	}
+
+	log_token(token, "ballot %llu phase2 read %s",
+		  (unsigned long long)next_lver, bk_debug);
 
 	if (!majority_disks(num_disks, num_reads)) {
 		log_errot(token, "ballot %llu dblock read2 error %d",
@@ -1115,13 +1245,18 @@ int paxos_lease_leader_read(struct task *task,
 
 static int _lease_read_one(struct task *task,
 			   struct token *token,
+			   uint32_t flags,
 			   struct sync_disk *disk,
 			   struct leader_record *leader_ret,
 			   struct paxos_dblock *our_dblock,
 			   uint64_t *max_mbal,
 			   int *max_q,
-			   const char *caller)
+			   const char *caller,
+			   int log_bk_vals)
 {
+	char bk_debug[BK_DEBUG_SIZE];
+	char bk_str[BK_STR_SIZE];
+	int bk_debug_count;
 	struct leader_record leader_end;
 	struct paxos_dblock our_dblock_end;
 	struct paxos_dblock bk;
@@ -1162,12 +1297,38 @@ static int _lease_read_one(struct task *task,
 	if (rv < 0)
 		goto out;
 
+	memset(bk_debug, 0, sizeof(bk_debug));
+	bk_debug_count = 0;
+
 	for (q = 0; q < leader_ret->num_hosts; q++) {
 		bk_end = (struct paxos_dblock *)(iobuf + ((2 + q) * sector_size));
 
 		checksum = dblock_checksum(bk_end);
 
 		paxos_dblock_in(bk_end, &bk);
+
+		if (log_bk_vals && bk.mbal &&
+		    ((flags & PAXOS_ACQUIRE_DEBUG_ALL) || (bk.lver >= leader_ret->lver))) {
+			if (bk_debug_count >= BK_DEBUG_COUNT) {
+				log_token(token, "leader %llu dblocks %s",
+					  (unsigned long long)leader_ret->lver, bk_debug);
+				memset(bk_debug, 0, sizeof(bk_debug));
+				bk_debug_count = 0;
+			}
+
+			memset(bk_str, 0, sizeof(bk_str));
+			snprintf(bk_str, BK_STR_SIZE, "%d:%llu:%llu:%llu:%llu:%llu:%llu:%x,", q,
+				 (unsigned long long)bk.mbal,
+				 (unsigned long long)bk.bal,
+				 (unsigned long long)bk.inp,
+				 (unsigned long long)bk.inp2,
+				 (unsigned long long)bk.inp3,
+				 (unsigned long long)bk.lver,
+				 bk.flags);
+			bk_str[BK_STR_SIZE-1] = '\0';
+			strncat(bk_debug, bk_str, BK_STR_SIZE-1);
+			bk_debug_count++;
+		}
 
 		rv = verify_dblock(token, &bk, checksum);
 		if (rv < 0)
@@ -1181,6 +1342,14 @@ static int _lease_read_one(struct task *task,
 	*max_mbal = tmp_mbal;
 	*max_q = tmp_q;
 
+	if (log_bk_vals)
+		log_token(token, "leader %llu owner %llu %llu %llu dblocks %s",
+			  (unsigned long long)leader_ret->lver,
+			  (unsigned long long)leader_ret->owner_id,
+			  (unsigned long long)leader_ret->owner_generation,
+			  (unsigned long long)leader_ret->timestamp,
+			  bk_debug);
+
  out:
 	if (rv != SANLK_AIO_TIMEOUT)
 		free(iobuf);
@@ -1191,6 +1360,7 @@ static int _lease_read_one(struct task *task,
 
 static int _lease_read_num(struct task *task,
 			   struct token *token,
+			   uint32_t flags,
 			   struct leader_record *leader_ret,
 			   struct paxos_dblock *our_dblock,
 			   uint64_t *max_mbal,
@@ -1226,8 +1396,8 @@ static int _lease_read_num(struct task *task,
 	num_reads = 0;
 
 	for (d = 0; d < num_disks; d++) {
-		rv = _lease_read_one(task, token, &token->disks[d], &leader_one,
-				     &dblock_one, &mbal_one, &q_one, caller);
+		rv = _lease_read_one(task, token, flags, &token->disks[d], &leader_one,
+				     &dblock_one, &mbal_one, &q_one, caller, 0);
 		if (rv < 0)
 			continue;
 
@@ -1295,19 +1465,19 @@ static int _lease_read_num(struct task *task,
  * values from it.
  */
 
-static int paxos_lease_read(struct task *task, struct token *token,
+static int paxos_lease_read(struct task *task, struct token *token, uint32_t flags,
 			    struct leader_record *leader_ret,
-			    uint64_t *max_mbal, const char *caller)
+			    uint64_t *max_mbal, const char *caller, int log_bk_vals)
 {
 	struct paxos_dblock our_dblock;
 	int rv, q = -1;
 
 	if (token->r.num_disks > 1)
-		rv = _lease_read_num(task, token,
+		rv = _lease_read_num(task, token, flags,
 				     leader_ret, &our_dblock, max_mbal, &q, caller);
 	else
-		rv = _lease_read_one(task, token, &token->disks[0],
-				     leader_ret, &our_dblock, max_mbal, &q, caller);
+		rv = _lease_read_one(task, token, flags, &token->disks[0],
+				     leader_ret, &our_dblock, max_mbal, &q, caller, log_bk_vals);
 
 	if (rv == SANLK_OK)
 		log_token(token, "%s leader %llu owner %llu %llu %llu max mbal[%d] %llu "
@@ -1415,7 +1585,7 @@ int paxos_lease_acquire(struct task *task,
 	uint64_t max_mbal;
 	uint64_t num_mbal;
 	uint64_t our_mbal;
-	int copy_cur_leader = 0;
+	int copy_cur_leader;
 	int disk_open = 0;
 	int error, rv, us;
 	int other_io_timeout, other_host_dead_seconds;
@@ -1426,8 +1596,11 @@ int paxos_lease_acquire(struct task *task,
 		  flags, (unsigned long long)acquire_lver, new_num_hosts);
 
  restart:
+	memset(&tmp_leader, 0, sizeof(tmp_leader));
+	copy_cur_leader = 0;
 
-	error = paxos_lease_read(task, token, &cur_leader, &max_mbal, "paxos_acquire");
+	/* acquire io: read 1 */
+	error = paxos_lease_read(task, token, flags, &cur_leader, &max_mbal, "paxos_acquire", 1);
 	if (error < 0)
 		goto out;
 
@@ -1596,21 +1769,11 @@ int paxos_lease_acquire(struct task *task,
 
 		if ((host_id_leader.timestamp != last_timestamp) ||
 		    (hs.last_live && (hs.last_check == hs.last_live))) {
-			if (flags & PAXOS_ACQUIRE_QUIET_FAIL) {
-				log_token(token, "paxos_acquire owner %llu "
-					  "delta %llu %llu %llu alive",
-					  (unsigned long long)cur_leader.owner_id,
-					  (unsigned long long)host_id_leader.owner_id,
-					  (unsigned long long)host_id_leader.owner_generation,
-					  (unsigned long long)host_id_leader.timestamp);
-			} else {
-				log_errot(token, "paxos_acquire owner %llu "
-					  "delta %llu %llu %llu alive",
-					  (unsigned long long)cur_leader.owner_id,
-					  (unsigned long long)host_id_leader.owner_id,
-					  (unsigned long long)host_id_leader.owner_generation,
-					  (unsigned long long)host_id_leader.timestamp);
-			}
+			log_token(token, "paxos_acquire owner %llu delta %llu %llu %llu alive",
+				  (unsigned long long)cur_leader.owner_id,
+				  (unsigned long long)host_id_leader.owner_id,
+				  (unsigned long long)host_id_leader.owner_generation,
+				  (unsigned long long)host_id_leader.timestamp);
 			memcpy(leader_ret, &cur_leader, sizeof(struct leader_record));
 
 			/* It's possible that the live owner has released the
@@ -1629,7 +1792,8 @@ int paxos_lease_acquire(struct task *task,
 						 cur_leader.owner_id, &owner_dblock);
 				if (!rv && (owner_dblock.flags & DBLOCK_FL_RELEASED)) {
 					/* not an error, but interesting to see */
-					log_errot(token, "paxos_acquire owner %llu %llu %llu writer %llu owner dblock released",
+					log_level(0, token->token_id, NULL, LOG_WARNING,
+						  "paxos_acquire owner %llu %llu %llu writer %llu owner dblock released",
 						  (unsigned long long)cur_leader.owner_id,
 						  (unsigned long long)cur_leader.owner_generation,
 						  (unsigned long long)cur_leader.timestamp,
@@ -1684,12 +1848,26 @@ int paxos_lease_acquire(struct task *task,
 			goto out;
 		}
 
+		/*
+		 * In this while loop we are waiting for an indication that the
+		 * current owner is alive or dead, but if we see the leader
+		 * owner change in the meantime, we'll restart the entire
+		 * process.
+		 */
+
 		error = paxos_lease_leader_read(task, token, &tmp_leader, "paxos_acquire");
 		if (error < 0)
 			goto out;
 
 		if (memcmp(&cur_leader, &tmp_leader, sizeof(struct leader_record))) {
-			log_token(token, "paxos_acquire restart leader changed");
+			log_token(token, "paxos_acquire restart leader changed1 from "
+				  "%llu %llu %llu to %llu %llu %llu",
+				  (unsigned long long)cur_leader.owner_id,
+				  (unsigned long long)cur_leader.owner_generation,
+				  (unsigned long long)cur_leader.timestamp,
+				  (unsigned long long)tmp_leader.owner_id,
+				  (unsigned long long)tmp_leader.owner_generation,
+				  (unsigned long long)tmp_leader.timestamp);
 			goto restart;
 		}
 	}
@@ -1730,6 +1908,7 @@ int paxos_lease_acquire(struct task *task,
 		copy_cur_leader = 0;
 		memcpy(&tmp_leader, &cur_leader, sizeof(struct leader_record));
 	} else {
+		/* acquire io: read 1 (for retry) */
 		error = paxos_lease_leader_read(task, token, &tmp_leader, "paxos_acquire");
 		if (error < 0)
 			goto out;
@@ -1743,9 +1922,10 @@ int paxos_lease_acquire(struct task *task,
 
 		if (tmp_leader.owner_id == token->host_id &&
 		    tmp_leader.owner_generation == token->host_generation) {
-			/* not a problem, but interesting to see, so use log_error */
+			/* not a problem, but interesting to see */
 
-			log_errot(token, "paxos_acquire %llu owner is our inp "
+			log_level(0, token->token_id, NULL, LOG_WARNING,
+				  "paxos_acquire %llu owner is our inp "
 				  "%llu %llu %llu commited by %llu",
 				  (unsigned long long)next_lver,
 				  (unsigned long long)tmp_leader.owner_id,
@@ -1756,9 +1936,10 @@ int paxos_lease_acquire(struct task *task,
 			memcpy(leader_ret, &tmp_leader, sizeof(struct leader_record));
 			error = SANLK_OK;
 		} else {
-			/* not a problem, but interesting to see, so use log_error */
+			/* not a problem, but interesting to see */
 
-			log_errot(token, "paxos_acquire %llu owner is %llu %llu %llu",
+			log_level(0, token->token_id, NULL, LOG_WARNING,
+				  "paxos_acquire %llu owner is %llu %llu %llu",
 				  (unsigned long long)next_lver,
 				  (unsigned long long)tmp_leader.owner_id,
 				  (unsigned long long)tmp_leader.owner_generation,
@@ -1778,9 +1959,13 @@ int paxos_lease_acquire(struct task *task,
 		 * next_lver is 65, but the current lver on disk is 66, causing us to
 		 * we fail in the larger1 check.)
 		 */
-		log_token(token, "paxos_acquire stale next_lver %llu now %llu owner %llu %llu %llu",
+		log_token(token, "paxos_acquire %llu restart new lver %llu from "
+			  "%llu %llu %llu to %llu %llu %llu",
 			  (unsigned long long)next_lver,
 			  (unsigned long long)tmp_leader.lver,
+			  (unsigned long long)cur_leader.owner_id,
+			  (unsigned long long)cur_leader.owner_generation,
+			  (unsigned long long)cur_leader.timestamp,
 			  (unsigned long long)tmp_leader.owner_id,
 			  (unsigned long long)tmp_leader.owner_generation,
 			  (unsigned long long)tmp_leader.timestamp);
@@ -1788,21 +1973,26 @@ int paxos_lease_acquire(struct task *task,
 	}
 
 	if (memcmp(&cur_leader, &tmp_leader, sizeof(struct leader_record))) {
-		/* I don't think this should ever happen. */
-		log_errot(token, "paxos_acquire restart leader changed2");
+		log_token(token, "paxos_acquire %llu restart leader changed2 from "
+			  "%llu %llu %llu to %llu %llu %llu",
+			  (unsigned long long)next_lver,
+			  (unsigned long long)cur_leader.owner_id,
+			  (unsigned long long)cur_leader.owner_generation,
+			  (unsigned long long)cur_leader.timestamp,
+			  (unsigned long long)tmp_leader.owner_id,
+			  (unsigned long long)tmp_leader.owner_generation,
+			  (unsigned long long)tmp_leader.timestamp);
 		goto restart;
 	}
 
-	error = run_ballot(task, token, cur_leader.num_hosts, next_lver, our_mbal,
-			   &dblock);
+	error = run_ballot(task, token, flags, cur_leader.num_hosts, next_lver, our_mbal, &dblock);
 
 	if ((error == SANLK_DBLOCK_MBAL) || (error == SANLK_DBLOCK_LVER)) {
 		us = get_rand(0, 1000000);
 		if (us < 0)
 			us = token->host_id * 100;
 
-		/* not a problem, but interesting to see, so use log_error */
-		log_errot(token, "paxos_acquire %llu retry delay %d us",
+		log_token(token, "paxos_acquire %llu retry delay %d us",
 			  (unsigned long long)next_lver, us);
 
 		usleep(us);
@@ -1858,14 +2048,15 @@ int paxos_lease_acquire(struct task *task,
 	}
 
 	if (new_leader.owner_id != token->host_id) {
-		/* not a problem, but interesting to see, so use log_error */
+		/* not a problem, but interesting to see */
 
 		/* It's possible that we commit an outdated owner id/gen here.
 		   If we go back to the top and retry, we may find that the
 		   owner host_id is alive but with a newer generation, and
 		   we'd be able to get the lease by running the ballot again. */
 
-		log_errot(token, "ballot %llu commit other owner %llu %llu %llu",
+		log_level(0, token->token_id, NULL, LOG_WARNING,
+			  "ballot %llu commit other owner %llu %llu %llu",
 			  (unsigned long long)new_leader.lver,
 			  (unsigned long long)new_leader.owner_id,
 			  (unsigned long long)new_leader.owner_generation,
@@ -1999,6 +2190,14 @@ int paxos_lease_release(struct task *task,
 		return 0;
 	}
 
+	/*
+	 * When we were the writer of our own leader record, then
+	 * releasing the lease includes both setting the REALEASED flag
+	 * in our dblock and clearing out timestamp in the leader.
+	 * When we reread the leader here in release, we should find
+	 * it the same as we last saw in acquire.
+	 */
+
 	if (leader.lver != last->lver) {
 		log_errot(token, "paxos_release other lver "
 			  "last lver %llu owner %llu %llu %llu writer %llu %llu %llu "
@@ -2038,7 +2237,6 @@ int paxos_lease_release(struct task *task,
 			  (unsigned long long)leader.write_id,
 			  (unsigned long long)leader.write_generation,
 			  (unsigned long long)leader.write_timestamp);
-
 		return SANLK_RELEASE_OWNER;
 	}
 
@@ -2061,7 +2259,6 @@ int paxos_lease_release(struct task *task,
 			  (unsigned long long)leader.write_id,
 			  (unsigned long long)leader.write_generation,
 			  (unsigned long long)leader.write_timestamp);
-
 		return SANLK_RELEASE_OWNER;
 	}
 

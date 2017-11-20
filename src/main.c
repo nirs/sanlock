@@ -2351,6 +2351,10 @@ static void read_config_file(void)
 		} else if (!strcmp(str, "renewal_history_size")) {
 			get_val_int(line, &val);
 			com.renewal_history_size = val;
+
+		} else if (!strcmp(str, "paxos_debug_all")) {
+			get_val_int(line, &val);
+			com.paxos_debug_all = val;
 		}
 	}
 
@@ -3215,6 +3219,7 @@ int main(int argc, char *argv[])
 	com.renewal_read_extend_sec_set = 0;
 	com.renewal_read_extend_sec = 0;
 	com.renewal_history_size = DEFAULT_RENEWAL_HISTORY_SIZE;
+	com.paxos_debug_all = 0;
 
 	if (getgrnam("sanlock") && getpwnam("sanlock")) {
 		com.uname = (char *)"sanlock";

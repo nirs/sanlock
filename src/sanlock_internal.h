@@ -304,6 +304,7 @@ struct command_line {
 	int debug;
 	int debug_renew;
 	int quiet_fail;
+	int paxos_debug_all;
 	int wait;
 	int use_watchdog;
 	int high_priority;		/* -h */
