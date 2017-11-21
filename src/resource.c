@@ -291,8 +291,9 @@ void check_mode_block(struct token *token, uint64_t next_lver, int q, char *dblo
 	if (mb.flags & MBLOCK_SHARED) {
 		set_id_bit(q + 1, token->shared_bitmap, NULL);
 		token->shared_count++;
-		log_token(token, "ballot %llu mode[%d] shared %d",
-			  (unsigned long long)next_lver, q, token->shared_count);
+		log_token(token, "ballot %llu mode[%d] shared %d gen %llu",
+			  (unsigned long long)next_lver, q, token->shared_count,
+			  (unsigned long long)mb.generation);
 	}
 }
 
@@ -370,14 +371,13 @@ static int write_host_block(struct task *task, struct token *token,
 }
 
 static int read_mode_block(struct task *task, struct token *token,
-			   uint64_t host_id, uint64_t *max_gen)
+			   uint64_t host_id, struct mode_block *mb_out)
 {
 	struct sync_disk *disk;
 	struct mode_block *mb_end;
 	struct mode_block mb;
 	char *iobuf, **p_iobuf;
 	uint64_t offset;
-	uint64_t max = 0;
 	int num_disks = token->r.num_disks;
 	int iobuf_len, rv, d;
 
@@ -406,24 +406,23 @@ static int read_mode_block(struct task *task, struct token *token,
 
 		mode_block_in(mb_end, &mb);
 
-		if (!(mb.flags & MBLOCK_SHARED))
-			continue;
+		memcpy(mb_out, &mb, sizeof(struct mode_block));
 
-		if (!max || mb.generation > max)
-			max = mb.generation;
+		/* FIXME: combine results for multi-disk case */
+		break;
 	}
 
 	if (rv != SANLK_AIO_TIMEOUT)
 		free(iobuf);
 
-	*max_gen = max;
 	return rv;
 }
 
 static int clear_dead_shared(struct task *task, struct token *token,
 			     int num_hosts, int *live_count)
 {
-	uint64_t host_id, max_gen = 0;
+	struct mode_block mb;
+	uint64_t host_id;
 	int i, rv = 0, live = 0;
 
 	for (i = 0; i < num_hosts; i++) {
@@ -435,16 +434,36 @@ static int clear_dead_shared(struct task *task, struct token *token,
 		if (!test_id_bit(host_id, token->shared_bitmap))
 			continue;
 
-		rv = read_mode_block(task, token, host_id, &max_gen);
+		memset(&mb, 0, sizeof(mb));
+
+		rv = read_mode_block(task, token, host_id, &mb);
 		if (rv < 0) {
 			log_errot(token, "clear_dead_shared read_mode_block %llu %d",
 				  (unsigned long long)host_id, rv);
 			return rv;
 		}
 
-		if (host_live(token->r.lockspace_name, host_id, max_gen)) {
+		log_token(token, "clear_dead_shared host_id %llu mode_block: flags %x gen %llu",
+			  (unsigned long long)host_id, mb.flags, (unsigned long long)mb.generation);
+
+		/*
+		 * We get to this function because we saw the shared flag during
+		 * paxos, but the holder of the shared lease may have dropped their
+		 * shared lease and cleared the mode_block since then.
+		 */
+		if (!(mb.flags & MBLOCK_SHARED))
+			continue;
+
+		if (!mb.generation) {
+			/* shouldn't happen; if the shared flag is set, the generation should also be set. */
+			log_errot(token, "clear_dead_shared host_id %llu mode_block: flags %x gen %llu",
+				  (unsigned long long)host_id, mb.flags, (unsigned long long)mb.generation);
+			continue;
+		}
+
+		if (host_live(token->r.lockspace_name, host_id, mb.generation)) {
 			log_token(token, "clear_dead_shared host_id %llu gen %llu alive",
-				  (unsigned long long)host_id, (unsigned long long)max_gen);
+				  (unsigned long long)host_id, (unsigned long long)mb.generation);
 			live++;
 			continue;
 		}
@@ -456,8 +475,12 @@ static int clear_dead_shared(struct task *task, struct token *token,
 			return rv;
 		}
 
-		log_token(token, "clear_dead_shared host_id %llu gen %llu dead and cleared",
-			  (unsigned long long)host_id, (unsigned long long)max_gen);
+		/*
+		 * not an error, just useful to have a record of when we clear a shared
+		 * lock that was left by a failed host.
+		 */
+		log_errot(token, "cleared shared lease for dead host_id %llu gen %llu",
+			  (unsigned long long)host_id, (unsigned long long)mb.generation);
 	}
 
 	*live_count = live;
