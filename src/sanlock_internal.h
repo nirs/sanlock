@@ -130,6 +130,7 @@ struct resource {
 	char killpath[SANLK_HELPER_PATH_LEN]; /* copied from client */
 	char killargs[SANLK_HELPER_ARGS_LEN]; /* copied from client */
 	struct leader_record leader; /* copy of last leader_record we wrote */
+	struct paxos_dblock dblock;  /* copy of last paxos_dblock we wrote */
 	struct sanlk_resource r;
 };
 

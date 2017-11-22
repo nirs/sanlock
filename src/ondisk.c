@@ -92,6 +92,7 @@ void paxos_dblock_in(struct paxos_dblock *end, struct paxos_dblock *pd)
 	pd->inp3     = le64_to_cpu(end->inp3);
 	pd->lver     = le64_to_cpu(end->lver);
 	pd->checksum = le32_to_cpu(end->checksum);
+	pd->flags    = le32_to_cpu(end->flags);
 }
 
 void paxos_dblock_out(struct paxos_dblock *pd, struct paxos_dblock *end)
@@ -104,6 +105,7 @@ void paxos_dblock_out(struct paxos_dblock *pd, struct paxos_dblock *end)
 	end->lver     = cpu_to_le64(pd->lver);
 	/* N.B. the checksum must be computed after the byte swapping */
 	/* paxos_dblock_out(pd, end); checksum = compute(end), end->checksum = cpu_to_le32(checksum); */
+	end->flags    = cpu_to_le32(pd->flags);
 }
 
 void mode_block_in(struct mode_block *end, struct mode_block *mb)

@@ -1627,9 +1627,9 @@ int paxos_lease_acquire(struct task *task,
 			if (cur_leader.write_id != cur_leader.owner_id) {
 				rv = read_dblock(task, token, &token->disks[0],
 						 cur_leader.owner_id, &owner_dblock);
-				if (!rv && !owner_dblock.lver) {
+				if (!rv && (owner_dblock.flags & DBLOCK_FL_RELEASED)) {
 					/* not an error, but interesting to see */
-					log_errot(token, "paxos_acquire owner %llu %llu %llu writer %llu owner dblock free",
+					log_errot(token, "paxos_acquire owner %llu %llu %llu writer %llu owner dblock released",
 						  (unsigned long long)cur_leader.owner_id,
 						  (unsigned long long)cur_leader.owner_generation,
 						  (unsigned long long)cur_leader.timestamp,
@@ -1956,28 +1956,68 @@ int paxos_lease_release(struct task *task,
 		last = leader_last;
 
 	if (leader.lver != last->lver) {
-		log_errot(token, "paxos_release %llu other lver %llu",
+		log_errot(token, "paxos_release other lver "
+			  "last lver %llu owner %llu %llu %llu writer %llu %llu %llu "
+			  "disk lver %llu owner %llu %llu %llu writer %llu %llu %llu",
 			  (unsigned long long)last->lver,
-			  (unsigned long long)leader.lver);
+			  (unsigned long long)last->owner_id,
+			  (unsigned long long)last->owner_generation,
+			  (unsigned long long)last->timestamp,
+			  (unsigned long long)last->write_id,
+			  (unsigned long long)last->write_generation,
+			  (unsigned long long)last->write_timestamp,
+			  (unsigned long long)leader.lver,
+			  (unsigned long long)leader.owner_id,
+			  (unsigned long long)leader.owner_generation,
+			  (unsigned long long)leader.timestamp,
+			  (unsigned long long)leader.write_id,
+			  (unsigned long long)leader.write_generation,
+			  (unsigned long long)leader.write_timestamp);
 		return SANLK_RELEASE_LVER;
 	}
 
 	if (leader.timestamp == LEASE_FREE) {
-		log_errot(token, "paxos_release %llu already free %llu %llu %llu",
+		log_errot(token, "paxos_release already free "
+			  "last lver %llu owner %llu %llu %llu writer %llu %llu %llu "
+			  "disk lver %llu owner %llu %llu %llu writer %llu %llu %llu",
 			  (unsigned long long)last->lver,
+			  (unsigned long long)last->owner_id,
+			  (unsigned long long)last->owner_generation,
+			  (unsigned long long)last->timestamp,
+			  (unsigned long long)last->write_id,
+			  (unsigned long long)last->write_generation,
+			  (unsigned long long)last->write_timestamp,
+			  (unsigned long long)leader.lver,
 			  (unsigned long long)leader.owner_id,
 			  (unsigned long long)leader.owner_generation,
-			  (unsigned long long)leader.timestamp);
+			  (unsigned long long)leader.timestamp,
+			  (unsigned long long)leader.write_id,
+			  (unsigned long long)leader.write_generation,
+			  (unsigned long long)leader.write_timestamp);
+
 		return SANLK_RELEASE_OWNER;
 	}
 
 	if (leader.owner_id != token->host_id ||
 	    leader.owner_generation != token->host_generation) {
-		log_errot(token, "paxos_release %llu other owner %llu %llu %llu",
+		log_errot(token, "paxos_release other owner "
+			  "last lver %llu owner %llu %llu %llu writer %llu %llu %llu "
+			  "disk lver %llu owner %llu %llu %llu writer %llu %llu %llu",
 			  (unsigned long long)last->lver,
+			  (unsigned long long)last->owner_id,
+			  (unsigned long long)last->owner_generation,
+			  (unsigned long long)last->timestamp,
+			  (unsigned long long)last->write_id,
+			  (unsigned long long)last->write_generation,
+			  (unsigned long long)last->write_timestamp,
+			  (unsigned long long)leader.lver,
 			  (unsigned long long)leader.owner_id,
 			  (unsigned long long)leader.owner_generation,
-			  (unsigned long long)leader.timestamp);
+			  (unsigned long long)leader.timestamp,
+			  (unsigned long long)leader.write_id,
+			  (unsigned long long)leader.write_generation,
+			  (unsigned long long)leader.write_timestamp);
+
 		return SANLK_RELEASE_OWNER;
 	}
 
@@ -1993,19 +2033,45 @@ int paxos_lease_release(struct task *task,
 		 * perfectly fine (use log_error since it's interesting
 		 * to see when this happens.)
 		 */
-		log_errot(token, "paxos_release %llu leader different "
-			  "write %llu %llu %llu vs %llu %llu %llu",
+		log_errot(token, "paxos_release different vals "
+			  "last lver %llu owner %llu %llu %llu writer %llu %llu %llu "
+			  "disk lver %llu owner %llu %llu %llu writer %llu %llu %llu",
 			  (unsigned long long)last->lver,
+			  (unsigned long long)last->owner_id,
+			  (unsigned long long)last->owner_generation,
+			  (unsigned long long)last->timestamp,
 			  (unsigned long long)last->write_id,
 			  (unsigned long long)last->write_generation,
 			  (unsigned long long)last->write_timestamp,
+			  (unsigned long long)leader.lver,
+			  (unsigned long long)leader.owner_id,
+			  (unsigned long long)leader.owner_generation,
+			  (unsigned long long)leader.timestamp,
 			  (unsigned long long)leader.write_id,
 			  (unsigned long long)leader.write_generation,
 			  (unsigned long long)leader.write_timestamp);
+
 		/*
 		log_leader_error(0, token, &token->disks[0], last, "paxos_release");
 		log_leader_error(0, token, &token->disks[0], &leader, "paxos_release");
 		*/
+
+		/*
+		 * If another host was the writer and committed us as the
+		 * owner, then we don't zero the leader record when we release,
+		 * we just release our dblock (by setting the release flag,
+		 * already done prior to calling paxos_lease_release).  This is
+		 * because other hosts will ignore our leader record if we were
+		 * not the writer once we release our dblock.  Those other
+		 * hosts will then run a ballot and commit/write a new leader.
+		 * If we are also zeroing the leader, that can race with
+		 * another host writing a new leader, and we could clobber the
+		 * new leader.
+		 */
+		if (leader.write_id != token->host_id) {
+			log_token(token, "paxos_release %llu skip leader write", (unsigned long long)last->lver);
+			return 0;
+		}
 	}
 
 	if (resrename)

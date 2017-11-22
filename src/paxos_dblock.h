@@ -12,6 +12,8 @@
 
 #define DBLOCK_CHECKSUM_LEN      48  /* ends before checksum field */
 
+#define DBLOCK_FL_RELEASED	0x00000001
+
 struct paxos_dblock {
 	uint64_t mbal;
 	uint64_t bal;
@@ -20,6 +22,12 @@ struct paxos_dblock {
 	uint64_t inp3;  /* host_id's timestamp */
 	uint64_t lver;
 	uint32_t checksum;
+	uint32_t flags; /* DBLOCK_FL_ */
 };
+
+/*
+ * This struct cannot grow any larger than MBLOCK_OFFSET (128)
+ * because the mode_block starts at that offset in the same sector.
+ */
 
 #endif
