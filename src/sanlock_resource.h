@@ -86,6 +86,15 @@
 #define SANLK_REL_ORPHAN	0x00000004
 
 /*
+ * convert flags
+ *
+ * SANLK_CONVERT_OWNER_NOWAIT
+ * Same as SANLK_ACQUIRE_OWNER_NOWAIT.
+ */
+
+#define SANLK_CONVERT_OWNER_NOWAIT	0x00000008 /* NB: value must match SANLK_ACQUIRE_OWNER_NOWAIT */
+
+/*
  * request flags
  *
  * SANLK_REQUEST_NEXT_LVER

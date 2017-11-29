@@ -1175,16 +1175,25 @@ static struct resource *new_resource(struct token *token)
 	return r;
 }
 
-static int convert_sh2ex_token(struct task *task, struct resource *r, struct token *token)
+static int convert_sh2ex_token(struct task *task, struct resource *r, struct token *token,
+			       uint32_t cmd_flags)
 {
 	struct leader_record leader;
 	struct paxos_dblock dblock;
+	uint32_t flags = 0;
 	int live_count = 0;
 	int retries;
 	int error;
 	int rv;
 
 	memset(&leader, 0, sizeof(leader));
+
+	if (cmd_flags & SANLK_CONVERT_OWNER_NOWAIT)
+		flags |= PAXOS_ACQUIRE_OWNER_NOWAIT;
+	if (com.quiet_fail)
+		flags |= PAXOS_ACQUIRE_QUIET_FAIL;
+	if (com.paxos_debug_all)
+		flags |= PAXOS_ACQUIRE_DEBUG_ALL;
 
 	/* paxos_lease_acquire modifies these token values, and we check them after */
 	token->shared_count = 0;
@@ -1199,12 +1208,12 @@ static int convert_sh2ex_token(struct task *task, struct resource *r, struct tok
 
 	token->flags |= T_WRITE_DBLOCK_MBLOCK_SH;
 
-	rv = paxos_lease_acquire(task, token, 0, &leader, &dblock, 0, 0);
+	rv = paxos_lease_acquire(task, token, flags, &leader, &dblock, 0, 0);
 
 	token->flags &= ~T_WRITE_DBLOCK_MBLOCK_SH;
 
 	if (rv < 0) {
-		log_errot(token, "convert_sh2ex acquire error %d t_flags %x", rv, token->flags);
+		log_token(token, "convert_sh2ex acquire error %d t_flags %x", rv, token->flags);
 
 		/* If the acquire failed before anything important was written,
 		   then this RETRACT flag will not be set, and there is nothing
@@ -1381,7 +1390,8 @@ static int convert_ex2sh_token(struct task *task, struct resource *r, struct tok
 	return SANLK_OK;
 }
 
-int convert_token(struct task *task, struct sanlk_resource *res, struct token *cl_token)
+int convert_token(struct task *task, struct sanlk_resource *res, struct token *cl_token,
+		  uint32_t cmd_flags)
 {
 	struct resource *r;
 	struct token *tk;
@@ -1451,7 +1461,7 @@ int convert_token(struct task *task, struct sanlk_resource *res, struct token *c
 	}
 
 	if (!(res->flags & SANLK_RES_SHARED)) {
-		rv = convert_sh2ex_token(task, r, token);
+		rv = convert_sh2ex_token(task, r, token, cmd_flags);
 	} else if (res->flags & SANLK_RES_SHARED) {
 		rv = convert_ex2sh_token(task, r, token);
 	} else {
@@ -1686,7 +1696,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 	}
 
 	if (rv < 0 && !(token->flags & T_RETRACT_PAXOS)) {
-		log_errot(token, "acquire_token disk error %d", rv);
+		log_token(token, "acquire_token disk error %d", rv);
 		r->flags &= ~R_SHARED;
 		/* zero r->leader means not owned and release will just close */
 		release_token_opened(task, token);

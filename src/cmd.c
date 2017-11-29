@@ -922,7 +922,7 @@ static void cmd_convert(struct task *task, struct cmd_args *ca)
 		goto cmd_done;
 	}
 
-	rv = convert_token(task, &res, token);
+	rv = convert_token(task, &res, token, ca->header.cmd_flags);
 	if (rv < 0)
 		result = rv;
 

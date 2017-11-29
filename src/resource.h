@@ -27,7 +27,7 @@ int resource_orphan_count(char *space_name);
 void check_mode_block(struct token *token, uint64_t next_lver, int q, char *dblock);
 
 /* locks resource_mutex */
-int convert_token(struct task *task, struct sanlk_resource *res, struct token *cl_token);
+int convert_token(struct task *task, struct sanlk_resource *res, struct token *cl_token, uint32_t cmd_flags);
 
 /* locks resource_mutex */
 int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
