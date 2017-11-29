@@ -1796,7 +1796,7 @@ int paxos_lease_acquire(struct task *task,
 	error = run_ballot(task, token, cur_leader.num_hosts, next_lver, our_mbal,
 			   &dblock);
 
-	if (error == SANLK_DBLOCK_MBAL) {
+	if ((error == SANLK_DBLOCK_MBAL) || (error == SANLK_DBLOCK_LVER)) {
 		us = get_rand(0, 1000000);
 		if (us < 0)
 			us = token->host_id * 100;
