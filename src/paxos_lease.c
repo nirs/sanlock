@@ -1955,6 +1955,50 @@ int paxos_lease_release(struct task *task,
 	else
 		last = leader_last;
 
+	/*
+	 * This will happen when two hosts finish the same ballot
+	 * successfully, the second commiting the same inp values
+	 * that the first did, as it should.  But the second will
+	 * write it's own write_id/gen/timestap, which will differ
+	 * from what the first host wrote.  So when the first host
+	 * rereads here in the release, it will find different
+	 * write_id/gen/timestamp from what it wrote.  This is
+	 * perfectly fine (use log warn since it's interesting
+	 * to see when this happens.)
+	 *
+	 * If another host was the writer and committed us as the
+	 * owner, then we don't zero the leader record when we release,
+	 * we just release our dblock (by setting the release flag,
+	 * already done prior to calling paxos_lease_release).  This is
+	 * because other hosts will ignore our leader record if we were
+	 * not the writer once we release our dblock.  Those other
+	 * hosts will then run a ballot and commit/write a new leader.
+	 * If we are also zeroing the leader, that can race with
+	 * another host writing a new leader, and we could clobber the
+	 * new leader.
+	 */
+	if (leader.write_id != token->host_id) {
+		log_level(0, token->token_id, NULL, LOG_WARNING,
+			  "paxos_release skip write "
+			  "last lver %llu owner %llu %llu %llu writer %llu %llu %llu "
+			  "disk lver %llu owner %llu %llu %llu writer %llu %llu %llu",
+			  (unsigned long long)last->lver,
+			  (unsigned long long)last->owner_id,
+			  (unsigned long long)last->owner_generation,
+			  (unsigned long long)last->timestamp,
+			  (unsigned long long)last->write_id,
+			  (unsigned long long)last->write_generation,
+			  (unsigned long long)last->write_timestamp,
+			  (unsigned long long)leader.lver,
+			  (unsigned long long)leader.owner_id,
+			  (unsigned long long)leader.owner_generation,
+			  (unsigned long long)leader.timestamp,
+			  (unsigned long long)leader.write_id,
+			  (unsigned long long)leader.write_generation,
+			  (unsigned long long)leader.write_timestamp);
+		return 0;
+	}
+
 	if (leader.lver != last->lver) {
 		log_errot(token, "paxos_release other lver "
 			  "last lver %llu owner %llu %llu %llu writer %llu %llu %llu "
@@ -2022,17 +2066,6 @@ int paxos_lease_release(struct task *task,
 	}
 
 	if (memcmp(&leader, last, sizeof(struct leader_record))) {
-		/*
-		 * This will happen when two hosts finish the same ballot
-		 * successfully, the second commiting the same inp values
-		 * that the first did, as it should.  But the second will
-		 * write it's own write_id/gen/timestap, which will differ
-		 * from what the first host wrote.  So when the first host
-		 * rereads here in the release, it will find different
-		 * write_id/gen/timestamp from what it wrote.  This is
-		 * perfectly fine (use log_error since it's interesting
-		 * to see when this happens.)
-		 */
 		log_errot(token, "paxos_release different vals "
 			  "last lver %llu owner %llu %llu %llu writer %llu %llu %llu "
 			  "disk lver %llu owner %llu %llu %llu writer %llu %llu %llu",
@@ -2050,28 +2083,7 @@ int paxos_lease_release(struct task *task,
 			  (unsigned long long)leader.write_id,
 			  (unsigned long long)leader.write_generation,
 			  (unsigned long long)leader.write_timestamp);
-
-		/*
-		log_leader_error(0, token, &token->disks[0], last, "paxos_release");
-		log_leader_error(0, token, &token->disks[0], &leader, "paxos_release");
-		*/
-
-		/*
-		 * If another host was the writer and committed us as the
-		 * owner, then we don't zero the leader record when we release,
-		 * we just release our dblock (by setting the release flag,
-		 * already done prior to calling paxos_lease_release).  This is
-		 * because other hosts will ignore our leader record if we were
-		 * not the writer once we release our dblock.  Those other
-		 * hosts will then run a ballot and commit/write a new leader.
-		 * If we are also zeroing the leader, that can race with
-		 * another host writing a new leader, and we could clobber the
-		 * new leader.
-		 */
-		if (leader.write_id != token->host_id) {
-			log_token(token, "paxos_release %llu skip leader write", (unsigned long long)last->lver);
-			return 0;
-		}
+		return SANLK_RELEASE_OWNER;
 	}
 
 	if (resrename)
