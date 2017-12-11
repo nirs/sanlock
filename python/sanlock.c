@@ -54,6 +54,7 @@ __set_exception(int en, char *msg)
         en = -en;
         err_name = strerror(en);
     } else {
+        /* Safe to call without releasing the GIL. */
         err_name = sanlock_strerror(en);
     }
 
@@ -213,7 +214,11 @@ py_register(PyObject *self __unused, PyObject *args)
 {
     int sanlockfd;
 
+    /* This sholdn't block, but we don't want to take any chance, as blocking
+     * hangs all threads in the caller process. */
+    Py_BEGIN_ALLOW_THREADS
     sanlockfd = sanlock_register();
+    Py_END_ALLOW_THREADS
 
     if (sanlockfd < 0) {
         __set_exception(sanlockfd, "Sanlock registration failed");
