@@ -583,11 +583,13 @@ exist (command fails).
 
 Tell the sanlock daemon to initialize a lockspace on disk.  The -o option
 can be used to specify the io timeout to be written in the host_id leases.
+The -Z option can be used to specify the sector size.
 (Also see sanlock direct init.)
 
 .BR "sanlock client init -r" " RESOURCE"
 
 Tell the sanlock daemon to initialize a resource lease on disk.
+The -Z option can be used to specify the sector size.
 (Also see sanlock direct init.)
 
 .BR "sanlock client read -s" " LOCKSPACE"
@@ -727,6 +729,8 @@ host_ids can be changed for special cases using the -n num_hosts and -m
 max_hosts options.)  With -s, the -o option specifies the io timeout to be
 written in the host_id leases.  With -r, the -z 1 option invalidates the
 resource lease on disk so it cannot be used until reinitialized normally.
+The -Z option can be used to specify the sector size (and corresponding
+1MB/8MB size.)
 
 .BR "sanlock direct read_leader -s" " LOCKSPACE"
 .br

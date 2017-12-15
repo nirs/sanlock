@@ -23,10 +23,6 @@
 /* write flags */
 #define SANLK_WRITE_CLEAR	0x00000001 /* subsequent read will return error */
 
-/* sanlk_lockspace.flags returned by get */
-#define SANLK_LSF_ADD		0x00000001
-#define SANLK_LSF_REM		0x00000002
-
 /* host status returned in low byte of sanlk_host.flags by get */
 #define SANLK_HOST_UNKNOWN 0x00000001
 #define SANLK_HOST_FREE    0x00000002
@@ -173,6 +169,38 @@ int sanlock_align(struct sanlk_disk *disk);
 int sanlock_init(struct sanlk_lockspace *ls,
 		 struct sanlk_resource *res,
 		 int max_hosts, int num_hosts);
+
+/*
+ * Alignment and sector size
+ *
+ * When ALIGN1M or ALIGN8M is set in sanlk_lockspace | sanlk_resource
+ * and passed to sanlock_write_lockspace() | sanlock_write_resource(),
+ * it causes sanlock to create 1M or 8M aligned (and sized) leases,
+ * which use 512 or 4K sector ios, respectively, for the lockspace | resource.
+ *
+ * (A lockspace and its associated resources will typically use the
+ * same align and sector size, but it's conceivable they would not, e.g.
+ * if the were placed on different storage with different sector sizes.)
+ *
+ * The ALIGN flag overrides sanlock's detection of sector size for disks,
+ * and overrides the default 512 sector assumption for files.
+ *
+ * sanlock_read_lockspace() | sanlock_read_resource() will return
+ * ALIGN1M or ALIGN8M to indicate the lockspace | resource alignment.
+ * These flags are returned whether or not they were passed to
+ * sanlock_write_lockspace() | sanlock_write_resource().
+ * (The ALIGN flag can be passed to sanlock_read_lockspace() to avoid
+ * an extra read to discover the sector size.)
+ *
+ * Prior to the addition of ALIGN flags, sanlock will return neither from
+ * read.  The alignment of the lockspace | resource can then be determined
+ * with sanlock_align().  After the addition of ALIGN flags, sanlock_align()
+ * no longer correctly indicates the alignment of the lockspace | resource.
+ *
+ * With the addition of ALIGN flags, sanlock_align() still reports the
+ * *default* alignment that sanlock will use for disks or files if an
+ * ALIGN flag is not passed to write.
+ */
 
 /*
  * write a lockspace to disk

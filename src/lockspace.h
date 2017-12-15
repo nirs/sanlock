@@ -21,7 +21,7 @@ int _lockspace_info(const char *space_name, struct space_info *spi);
 int lockspace_info(const char *space_name, struct space_info *spi);
 
 /* locks spaces_mutex */
-int lockspace_disk(char *space_name, struct sync_disk *disk);
+int lockspace_disk(char *space_name, struct sync_disk *disk, int *sector_size);
 
 /* locks spaces_mutex */
 int host_info(char *space_name, uint64_t host_id, struct host_status *hs_out);

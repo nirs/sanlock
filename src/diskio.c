@@ -393,6 +393,8 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 	struct io_event event;
 	struct timespec begin, end, diff;
 	const char *op_str;
+	const char *len_str;
+	char ms_str[8];
 	int rv;
 
 	if (!ioto) {
@@ -414,6 +416,27 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 	iocb->u.c.buf = buf;
 	iocb->u.c.nbytes = len;
 	iocb->u.c.offset = offset;
+
+	if (cmd == IO_CMD_PREAD)
+		op_str = "RD";
+	else if (cmd == IO_CMD_PWRITE)
+		op_str = "WR";
+	else
+		op_str = "UK";
+
+	if (com.debug_io_submit) {
+		if (len == ONEMB)
+			len_str = "1MB";
+		else if (len == (8 * ONEMB))
+			len_str = "8MB";
+		else
+			len_str = NULL;
+
+		if (len_str)
+			log_taskd(task, "%s %s at %llu", op_str, len_str, (unsigned long long)offset);
+		else
+			log_taskd(task, "%s %d at %llu", op_str, len, (unsigned long long)offset);
+	}
 
 	if (ms)
 		clock_gettime(CLOCK_MONOTONIC_RAW, &begin);
@@ -449,18 +472,18 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 		struct aicb *ev_aicb = container_of(ev_iocb, struct aicb, iocb);
 		int op = ev_iocb ? ev_iocb->aio_lio_opcode : -1;
 
-		if (ms) {
-			clock_gettime(CLOCK_MONOTONIC_RAW, &end);
-			ts_diff(&begin, &end, &diff);
-			*ms = (diff.tv_sec * 1000) + (diff.tv_nsec / 1000000);
-		}
-
 		if (op == IO_CMD_PREAD)
 			op_str = "RD";
 		else if (op == IO_CMD_PWRITE)
 			op_str = "WR";
 		else
 			op_str = "UK";
+
+		if (ms) {
+			clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+			ts_diff(&begin, &end, &diff);
+			*ms = (diff.tv_sec * 1000) + (diff.tv_nsec / 1000000);
+		}
 
 		ev_aicb->used = 0;
 
@@ -485,6 +508,28 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 		}
 
 		/* standard success case */
+
+		if (com.debug_io_complete) {
+			if (len == ONEMB)
+				len_str = "1MB";
+			else if (len == (8 * ONEMB))
+				len_str = "8MB";
+			else
+				len_str = NULL;
+
+			if (ms) {
+				memset(ms_str, 0, sizeof(ms_str));
+				snprintf(ms_str, 7, "%u", *ms);
+			}
+
+			if (len_str)
+				log_taskd(task, "%s %s at %llu done %s",
+					  op_str, len_str, (unsigned long long)offset, ms ? ms_str : "");
+			else
+				log_taskd(task, "%s %d at %llu done %s",
+					  op_str, len, (unsigned long long)offset, ms ? ms_str : "");
+		}
+
 		rv = 0;
 		goto out;
 	}
@@ -651,7 +696,7 @@ int write_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len,
 		return do_write(fd, offset, iobuf, iobuf_len, task);
 }
 
-static int _write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
+static int _write_sectors(const struct sync_disk *disk, int sector_size, uint64_t sector_nr,
 			  uint32_t sector_count GNUC_UNUSED,
 			  const char *data, int data_len, int iobuf_len,
 			  struct task *task, int ioto,
@@ -661,10 +706,7 @@ static int _write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 	uint64_t offset;
 	int rv;
 
-	if (!disk->sector_size)
-		return -EINVAL;
-
-	offset = disk->offset + (sector_nr * disk->sector_size);
+	offset = disk->offset + (sector_nr * sector_size);
 
 	p_iobuf = &iobuf;
 
@@ -696,12 +738,17 @@ static int _write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
    the start of the block device identified by disk->path,
    data_len must be <= sector_size */
 
-int write_sector(const struct sync_disk *disk, uint64_t sector_nr,
+int write_sector(const struct sync_disk *disk, int sector_size, uint64_t sector_nr,
 		 const char *data, int data_len,
 		 struct task *task, int ioto,
 		 const char *blktype)
 {
-	int iobuf_len = disk->sector_size;
+	int iobuf_len = sector_size;
+
+	if ((sector_size != 4096) && (sector_size != 512)) {
+		log_error("write_sector bad sector_size %d", sector_size);
+		return -EINVAL;
+	}
 
 	if (data_len > iobuf_len) {
 		log_error("write_sector %s data_len %d max %d %s",
@@ -709,26 +756,31 @@ int write_sector(const struct sync_disk *disk, uint64_t sector_nr,
 		return -1;
 	}
 
-	return _write_sectors(disk, sector_nr, 1, data, data_len,
+	return _write_sectors(disk, sector_size, sector_nr, 1, data, data_len,
 			      iobuf_len, task, ioto, blktype);
 }
 
 /* write multiple complete sectors, data_len must be multiple of sector size */
 
-int write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
+int write_sectors(const struct sync_disk *disk, int sector_size, uint64_t sector_nr,
 		  uint32_t sector_count, const char *data, int data_len,
 		  struct task *task, int ioto,
 		  const char *blktype)
 {
 	int iobuf_len = data_len;
 
-	if (data_len != sector_count * disk->sector_size) {
+	if ((sector_size != 4096) && (sector_size != 512)) {
+		log_error("write_sectors bad sector_size %d", sector_size);
+		return -EINVAL;
+	}
+
+	if (data_len != sector_count * sector_size) {
 		log_error("write_sectors %s data_len %d sector_count %d %s",
 			  blktype, data_len, sector_count, disk->path);
 		return -1;
 	}
 
-	return _write_sectors(disk, sector_nr, sector_count, data, data_len,
+	return _write_sectors(disk, sector_size, sector_nr, sector_count, data, data_len,
 			      iobuf_len, task, ioto, blktype);
 }
 
@@ -751,7 +803,7 @@ int read_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len,
    when reading multiple sectors, data_len will generally equal iobuf_len,
    but when reading one sector, data_len may be less than iobuf_len. */
 
-int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
+int read_sectors(const struct sync_disk *disk, int sector_size, uint64_t sector_nr,
 	 	 uint32_t sector_count, char *data, int data_len,
 		 struct task *task, int ioto,
 		 const char *blktype)
@@ -761,13 +813,13 @@ int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
 	int iobuf_len;
 	int rv;
 
-	if (!disk->sector_size) {
-		log_error("read_sectors %s zero sector_size", blktype);
+	if ((sector_size != 512) && (sector_size != 4096)) {
+		log_error("read_sectors %s bad sector_size %d", blktype, sector_size);
 		return -EINVAL;
 	}
 
-	iobuf_len = sector_count * disk->sector_size;
-	offset = disk->offset + (sector_nr * disk->sector_size);
+	iobuf_len = sector_count * sector_size;
+	offset = disk->offset + (sector_nr * sector_size);
 
 	p_iobuf = &iobuf;
 

@@ -23,6 +23,7 @@
 #include <sys/time.h>
 
 #include "sanlock_internal.h"
+#include "sanlock.h"
 #include "diskio.h"
 #include "ondisk.h"
 #include "direct.h"
@@ -102,14 +103,6 @@ static int verify_leader(struct sync_disk *disk,
 		goto fail;
 	}
 
-	if (lr->sector_size != disk->sector_size) {
-		log_error("verify_leader %llu wrong sector size %d %d %s",
-			  (unsigned long long)host_id,
-			  lr->sector_size, disk->sector_size, disk->path);
-		result = SANLK_LEADER_SECTORSIZE;
-		goto fail;
-	}
-
 	if (strncmp(lr->space_name, space_name, NAME_ID_SIZE)) {
 		log_error("verify_leader %llu wrong space name %.48s %.48s %s",
 			  (unsigned long long)host_id,
@@ -138,7 +131,7 @@ static int verify_leader(struct sync_disk *disk,
 
 	memset(&leader_end, 0, sizeof(leader_end));
 
-	rv = read_sectors(disk, host_id - 1, 1, (char *)&leader_end,
+	rv = read_sectors(disk, lr->sector_size, host_id - 1, 1, (char *)&leader_end,
 			  sizeof(struct leader_record),
 			  NULL, "delta_verify");
 	
@@ -155,6 +148,7 @@ static int verify_leader(struct sync_disk *disk,
 
 int delta_read_lockspace(struct task *task,
 			 struct sync_disk *disk,
+			 int sector_size,
 			 uint64_t host_id,
 			 struct sanlk_lockspace *ls,
 			 int io_timeout,
@@ -170,7 +164,7 @@ int delta_read_lockspace(struct task *task,
 
 	memset(&leader_end, 0, sizeof(struct leader_record));
 
-	rv = read_sectors(disk, host_id - 1, 1, (char *)&leader_end, sizeof(struct leader_record),
+	rv = read_sectors(disk, sector_size, host_id - 1, 1, (char *)&leader_end, sizeof(struct leader_record),
 			  task, io_timeout, "read_lockspace");
 	if (rv < 0)
 		return rv;
@@ -191,12 +185,52 @@ int delta_read_lockspace(struct task *task,
 		memcpy(ls->name, leader.space_name, SANLK_NAME_LEN);
 		ls->host_id = host_id;
 		*io_timeout_ret = leader.io_timeout;
+
+		if (leader.sector_size == 512)
+			ls->flags |= SANLK_LSF_ALIGN1M;
+		else if (leader.sector_size == 4096)
+			ls->flags |= SANLK_LSF_ALIGN8M;
 	}
 
 	return error;
 }
 
-int delta_lease_leader_read(struct task *task, int io_timeout,
+int delta_read_lockspace_sector_size(struct task *task,
+			 struct sync_disk *disk,
+			 int io_timeout,
+			 int *sector_size)
+{
+	struct leader_record leader_end;
+	struct leader_record leader;
+	int rv;
+
+	memset(&leader_end, 0, sizeof(struct leader_record));
+
+	/*
+	 * read the first 4k, which either includes one 4k delta lease or 8 512b
+	 * delta leases.  In either case, we only look at the initial leader
+	 * record to get to the sector size.
+	 */
+
+	rv = read_sectors(disk, 4096, 0, 1, (char *)&leader_end, sizeof(struct leader_record),
+			  task, io_timeout, "read_lockspace_sector_size");
+	if (rv < 0)
+		return rv;
+
+	leader_record_in(&leader_end, &leader);
+
+	if (leader.magic != DELTA_DISK_MAGIC)
+		return SANLK_LEADER_MAGIC;
+
+	if ((leader.version & 0xFFFF0000) != DELTA_DISK_VERSION_MAJOR)
+		return SANLK_LEADER_VERSION;
+
+	*sector_size = leader.sector_size;
+
+	return SANLK_OK;
+}
+
+int delta_lease_leader_read(struct task *task, int sector_size, int io_timeout,
 			    struct sync_disk *disk,
 			    char *space_name,
 			    uint64_t host_id,
@@ -208,12 +242,17 @@ int delta_lease_leader_read(struct task *task, int io_timeout,
 	uint32_t checksum;
 	int rv, error;
 
+	if (!sector_size) {
+		log_error("delta_lease_leader_read with zero sector_size %s", space_name);
+		return -EINVAL;
+	}
+
 	/* host_id N is block offset N-1 */
 
 	memset(&leader_end, 0, sizeof(struct leader_record));
 	memset(leader_ret, 0, sizeof(struct leader_record));
 
-	rv = read_sectors(disk, host_id - 1, 1, (char *)&leader_end, sizeof(struct leader_record),
+	rv = read_sectors(disk, sector_size, host_id - 1, 1, (char *)&leader_end, sizeof(struct leader_record),
 			  task, io_timeout, "delta_leader");
 	if (rv < 0)
 		return rv;
@@ -246,7 +285,7 @@ int delta_lease_leader_clobber(struct task *task, int io_timeout,
 
 	leader_record_out(leader, &leader_end);
 
-	rv = write_sector(disk, host_id - 1, (char *)&leader_end, sizeof(struct leader_record),
+	rv = write_sector(disk, leader->sector_size, host_id - 1, (char *)&leader_end, sizeof(struct leader_record),
 			  task, io_timeout, caller);
 	if (rv < 0)
 		return rv;
@@ -287,7 +326,7 @@ int delta_lease_acquire(struct task *task,
 	log_space(sp, "delta_acquire begin %.48s:%llu",
 		  sp->space_name, (unsigned long long)host_id);
 
-	error = delta_lease_leader_read(task, sp->io_timeout, disk, space_name, host_id, &leader,
+	error = delta_lease_leader_read(task, sp->sector_size, sp->io_timeout, disk, space_name, host_id, &leader,
 					"delta_acquire_begin");
 	if (error < 0) {
 		log_space(sp, "delta_acquire leader_read1 error %d", error);
@@ -363,7 +402,7 @@ int delta_lease_acquire(struct task *task,
 			sleep(1);
 		}
 
-		error = delta_lease_leader_read(task, sp->io_timeout, disk, space_name, host_id,
+		error = delta_lease_leader_read(task, sp->sector_size, sp->io_timeout, disk, space_name, host_id,
 						&leader, "delta_acquire_wait");
 		if (error < 0) {
 			log_space(sp, "delta_acquire leader_read2 error %d", error);
@@ -409,7 +448,7 @@ int delta_lease_acquire(struct task *task,
 	leader.checksum = checksum;
 	leader_end.checksum = cpu_to_le32(checksum);
 
-	rv = write_sector(disk, host_id - 1, (char *)&leader_end, sizeof(struct leader_record),
+	rv = write_sector(disk, sp->sector_size, host_id - 1, (char *)&leader_end, sizeof(struct leader_record),
 			  task, sp->io_timeout, "delta_leader");
 	if (rv < 0) {
 		log_space(sp, "delta_acquire write error %d", rv);
@@ -430,7 +469,7 @@ int delta_lease_acquire(struct task *task,
 		sleep(1);
 	}
 
-	error = delta_lease_leader_read(task, sp->io_timeout, disk, space_name, host_id, &leader,
+	error = delta_lease_leader_read(task, sp->sector_size, sp->io_timeout, disk, space_name, host_id, &leader,
 					"delta_acquire_check");
 	if (error < 0) {
 		log_space(sp, "delta_acquire leader_read3 error %d", error);
@@ -494,7 +533,7 @@ int delta_lease_renew(struct task *task,
 
 	iobuf_len = sp->align_size;
 
-	sector_size = disk->sector_size;
+	sector_size = sp->sector_size;
 
 	/* offset of our leader_record */
 	id_offset = (host_id - 1) * sector_size;
@@ -755,7 +794,7 @@ int delta_lease_release(struct task *task,
 	leader.checksum = checksum;
 	leader_end.checksum = cpu_to_le32(checksum);
 
-	rv = write_sector(disk, host_id - 1, (char *)&leader_end, sizeof(struct leader_record),
+	rv = write_sector(disk, sp->sector_size, host_id - 1, (char *)&leader_end, sizeof(struct leader_record),
 			  task, sp->io_timeout, "delta_leader");
 	if (rv < 0) {
 		log_space(sp, "delta_release write error %d", rv);
@@ -775,9 +814,9 @@ int delta_lease_release(struct task *task,
    block device disk->path */
 
 int delta_lease_init(struct task *task,
+		     struct sanlk_lockspace *ls,
 		     int io_timeout,
 		     struct sync_disk *disk,
-		     char *space_name,
 		     int max_hosts)
 {
 	struct leader_record leader_first;
@@ -785,6 +824,7 @@ int delta_lease_init(struct task *task,
 	struct leader_record leader;
 	char *iobuf, **p_iobuf;
 	int iobuf_len;
+	int sector_size;
 	int align_size;
 	int i, rv;
 	uint32_t checksum;
@@ -798,11 +838,16 @@ int delta_lease_init(struct task *task,
 	if (!io_timeout)
 		io_timeout = DEFAULT_IO_TIMEOUT;
 
-	align_size = direct_align(disk);
-	if (align_size < 0)
-		return align_size;
+	if (ls->flags & SANLK_LSF_ALIGN1M)
+		sector_size = 512;
+	else if (ls->flags & SANLK_LSF_ALIGN8M)
+		sector_size = 4096;
+	else
+		sector_size = disk->sector_size;
 
-	if (disk->sector_size * max_hosts > align_size)
+	align_size = sector_size_to_align_size(sector_size);
+
+	if (sector_size * max_hosts > align_size)
 		return -E2BIG;
 
 	iobuf_len = align_size;
@@ -821,11 +866,11 @@ int delta_lease_init(struct task *task,
 		memset(&leader, 0, sizeof(struct leader_record));
 		leader.magic = DELTA_DISK_MAGIC;
 		leader.version = DELTA_DISK_VERSION_MAJOR | DELTA_DISK_VERSION_MINOR;
-		leader.sector_size = disk->sector_size;
+		leader.sector_size = sector_size;
 		leader.max_hosts = 1;
 		leader.timestamp = LEASE_FREE;
 		leader.io_timeout = io_timeout;
-		strncpy(leader.space_name, space_name, NAME_ID_SIZE);
+		strncpy(leader.space_name, ls->name, NAME_ID_SIZE);
 		leader.checksum = 0; /* set below */
 
 		/* make the first record invalid so we can do a single atomic
@@ -844,7 +889,7 @@ int delta_lease_init(struct task *task,
 		leader.checksum = checksum;
 		leader_end.checksum = cpu_to_le32(checksum);
 
-		memcpy(iobuf + (i * disk->sector_size), &leader_end, sizeof(struct leader_record));
+		memcpy(iobuf + (i * sector_size), &leader_end, sizeof(struct leader_record));
 	}
 
 	rv = write_iobuf(disk->fd, disk->offset, iobuf, iobuf_len, task, io_timeout, NULL);
@@ -867,7 +912,7 @@ int delta_lease_init(struct task *task,
 
 	memcpy(iobuf, &leader_end, sizeof(struct leader_record));
 
-	rv = write_iobuf(disk->fd, disk->offset, iobuf, disk->sector_size, task, io_timeout, NULL);
+	rv = write_iobuf(disk->fd, disk->offset, iobuf, sector_size, task, io_timeout, NULL);
  out:
 	if (rv != SANLK_AIO_TIMEOUT)
 		free(iobuf);

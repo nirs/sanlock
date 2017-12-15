@@ -34,17 +34,17 @@ int read_iobuf_reap(int fd, uint64_t offset, char *iobuf, int iobuf_len,
  * for io, copy out of it for write, and free it
  */
 
-int write_sector(const struct sync_disk *disk, uint64_t sector_nr,
+int write_sector(const struct sync_disk *disk, int sector_size, uint64_t sector_nr,
 		 const char *data, int data_len,
 		 struct task *task, int ioto,
 		 const char *blktype);
 
-int write_sectors(const struct sync_disk *disk, uint64_t sector_nr,
+int write_sectors(const struct sync_disk *disk, int sector_size, uint64_t sector_nr,
 		  uint32_t sector_count, const char *data, int data_len,
 		  struct task *task, int ioto,
 		  const char *blktype);
 
-int read_sectors(const struct sync_disk *disk, uint64_t sector_nr,
+int read_sectors(const struct sync_disk *disk, int sector_size, uint64_t sector_nr,
 	 	 uint32_t sector_count, char *data, int data_len,
 		 struct task *task, int ioto,
 		 const char *blktype);

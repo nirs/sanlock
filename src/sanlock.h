@@ -84,10 +84,12 @@ struct sanlk_disk {
  * host if the lockspace lease is cleanly released.
  */
 
-#define SANLK_RES_LVER		0x1	/* lver field is set */
-#define SANLK_RES_NUM_HOSTS	0x2	/* data32 field is new num_hosts */
-#define SANLK_RES_SHARED	0x4
-#define SANLK_RES_PERSISTENT	0x8
+#define SANLK_RES_LVER		0x00000001	/* lver field is set */
+#define SANLK_RES_NUM_HOSTS	0x00000002	/* data32 field is new num_hosts */
+#define SANLK_RES_SHARED	0x00000004
+#define SANLK_RES_PERSISTENT	0x00000008
+#define SANLK_RES_ALIGN1M	0x00000010 /* uses 512 sectors */
+#define SANLK_RES_ALIGN8M	0x00000020 /* uses 4k sectors */
 
 struct sanlk_resource {
 	char lockspace_name[SANLK_NAME_LEN]; /* terminating \0 not required */
@@ -113,10 +115,17 @@ struct sanlk_options {
 	char str[0];
 };
 
+#define SANLK_LSF_ADD		0x00000001
+#define SANLK_LSF_REM		0x00000002
+
+/* make these values match the RES equivalent in case of typos */
+#define SANLK_LSF_ALIGN1M	0x00000010 /* uses 512 sectors */
+#define SANLK_LSF_ALIGN8M	0x00000020 /* uses 4k sectors */
+
 struct sanlk_lockspace {
 	char name[SANLK_NAME_LEN];
 	uint64_t host_id;
-	uint32_t flags;
+	uint32_t flags; /* SANLK_LSF_ */
 	struct sanlk_disk host_id_disk;
 };
 

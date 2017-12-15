@@ -32,6 +32,38 @@
 #include "delta_lease.h"
 #include "timeouts.h"
 
+static int direct_read_leader_sector_size(struct task *task, struct sync_disk *sd)
+{
+	struct leader_record *lr_end;
+	struct leader_record lr_in;
+	char *data;
+	int sector_size = 0;
+	int datalen;
+	int rv;
+
+	datalen = 4096;
+	data = malloc(datalen);
+
+	if (!data)
+		return 0;
+
+	memset(data, 0, datalen);
+
+	rv = read_sectors(sd, 4096, 0, 1, data, datalen, task, DEFAULT_IO_TIMEOUT, "read_sector_size");
+	if (rv < 0)
+		goto out;
+
+	lr_end = (struct leader_record *)data;
+
+	leader_record_in(lr_end, &lr_in);
+
+	if ((lr_in.magic == DELTA_DISK_MAGIC) || (lr_in.magic == PAXOS_DISK_MAGIC))
+		sector_size = lr_in.sector_size;
+ out:
+	free(data);
+	return sector_size;
+}
+
 /*
  * cli: sanlock direct init
  * cli: sanlock direct read_leader
@@ -81,6 +113,7 @@ static int do_paxos_action(int action, struct task *task, int io_timeout, struct
 	struct token *token;
 	struct leader_record leader;
 	struct paxos_dblock dblock;
+	int sector_size;
 	int disks_len, token_len;
 	int j, rv = 0;
 
@@ -117,10 +150,20 @@ static int do_paxos_action(int action, struct task *task, int io_timeout, struct
 
 	switch (action) {
 	case ACT_DIRECT_INIT:
+		sector_size = com.sector_size ? com.sector_size :
+			      token->disks[0].sector_size;
+		token->sector_size = sector_size;
+		token->align_size = sector_size_to_align_size(sector_size);
+
 		rv = paxos_lease_init(task, token, num_hosts, max_hosts, write_clear);
 		break;
 
 	case ACT_ACQUIRE:
+		sector_size = com.sector_size ? com.sector_size :
+			      direct_read_leader_sector_size(task, &token->disks[0]);
+		token->sector_size = sector_size;
+		token->align_size = sector_size_to_align_size(sector_size);
+
 		token->host_id = local_host_id;
 		token->host_generation = local_host_generation;
 
@@ -128,17 +171,34 @@ static int do_paxos_action(int action, struct task *task, int io_timeout, struct
 		break;
 
 	case ACT_RELEASE:
+		sector_size = com.sector_size ? com.sector_size : 4096;
+		token->sector_size = sector_size;
+		token->align_size = sector_size_to_align_size(sector_size);
+
 		rv = paxos_lease_leader_read(task, token, &leader, "direct_release");
 		if (rv < 0)
 			break;
+
+		sector_size = leader.sector_size;
+		token->sector_size = sector_size;
+		token->align_size = sector_size_to_align_size(sector_size);
+
 		rv = paxos_lease_release(task, token, NULL, &leader, leader_ret);
 		break;
 
 	case ACT_READ_LEADER:
+		sector_size = com.sector_size ? com.sector_size : 4096;
+		token->sector_size = sector_size;
+		token->align_size = sector_size_to_align_size(sector_size);
+
 		rv = paxos_lease_leader_read(task, token, &leader, "direct_read_leader");
 		break;
 
 	case ACT_WRITE_LEADER:
+		sector_size = leader_in->sector_size;
+		token->sector_size = sector_size;
+		token->align_size = sector_size_to_align_size(sector_size);
+
 		rv = paxos_lease_leader_clobber(task, token, leader_in, "direct_clobber");
 		break;
 	}
@@ -196,6 +256,7 @@ static int do_delta_action(int action,
 	struct sync_disk sd;
 	struct space space;
 	char bitmap[HOSTID_BITMAP_SIZE];
+	int sector_size;
 	int read_result, rv;
 	int rd_ms, wr_ms;
 
@@ -203,6 +264,8 @@ static int do_delta_action(int action,
 
 	if (!io_timeout)
 		io_timeout = DEFAULT_IO_TIMEOUT;
+
+	memset(&leader, 0, sizeof(leader));
 
 	/* for log_space in delta functions */
 	memset(&space, 0, sizeof(space));
@@ -224,10 +287,24 @@ static int do_delta_action(int action,
 
 	switch (action) {
 	case ACT_DIRECT_INIT:
-		rv = delta_lease_init(task, io_timeout, &sd, ls->name, max_hosts);
+		sector_size = com.sector_size ? com.sector_size : sd.sector_size;
+
+		if (sector_size == 512)
+			ls->flags |= SANLK_LSF_ALIGN1M;
+		else if (sector_size == 4096)
+			ls->flags |= SANLK_LSF_ALIGN8M;
+
+		rv = delta_lease_init(task, ls, io_timeout, &sd, max_hosts);
 		break;
 
 	case ACT_ACQUIRE_ID:
+		sector_size = direct_read_leader_sector_size(task, &sd);
+		if (!sector_size)
+			return rv;
+
+		space.sector_size = sector_size;
+		space.align_size = sector_size_to_align_size(sector_size);
+
 		rv = delta_lease_acquire(task, &space, &sd,
 					 ls->name,
 					 our_host_name,
@@ -235,13 +312,21 @@ static int do_delta_action(int action,
 					 &leader);
 		break;
 	case ACT_RENEW_ID:
-		rv = delta_lease_leader_read(task, io_timeout, &sd,
+		sector_size = direct_read_leader_sector_size(task, &sd);
+		if (!sector_size)
+			return rv;
+
+		space.sector_size = sector_size;
+		space.align_size = sector_size_to_align_size(sector_size);
+
+		rv = delta_lease_leader_read(task, sector_size, io_timeout, &sd,
 					     ls->name,
 					     ls->host_id,
 					     &leader,
 					     "direct_renew");
 		if (rv < 0)
 			return rv;
+
 		rv = delta_lease_renew(task, &space, &sd,
 				       ls->name,
 				       bitmap,
@@ -254,20 +339,32 @@ static int do_delta_action(int action,
 				       &rd_ms, &wr_ms);
 		break;
 	case ACT_RELEASE_ID:
-		rv = delta_lease_leader_read(task, io_timeout, &sd,
+		sector_size = direct_read_leader_sector_size(task, &sd);
+		if (!sector_size)
+			return rv;
+
+		space.sector_size = sector_size;
+		space.align_size = sector_size_to_align_size(leader.sector_size);
+
+		rv = delta_lease_leader_read(task, sector_size, io_timeout, &sd,
 					     ls->name,
 					     ls->host_id,
 					     &leader,
 					     "direct_release");
 		if (rv < 0)
 			return rv;
+
 		rv = delta_lease_release(task, &space, &sd,
 					 ls->name,
 					 &leader,
 					 &leader);
 		break;
 	case ACT_READ_LEADER:
-		rv = delta_lease_leader_read(task, io_timeout, &sd,
+		sector_size = direct_read_leader_sector_size(task, &sd);
+		if (!sector_size)
+			return rv;
+
+		rv = delta_lease_leader_read(task, sector_size, io_timeout, &sd,
 					     ls->name,
 					     ls->host_id,
 					     &leader,
@@ -411,7 +508,7 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 	uint64_t sector_nr;
 	uint64_t dump_size = 0;
 	uint64_t end_sector_nr;
-	int sector_count, datalen, align_size;
+	int sector_size, sector_count, datalen, align_size;
 	int i, rv, b;
 
 	memset(&sd, 0, sizeof(struct sync_disk));
@@ -435,19 +532,18 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 	if (rv < 0)
 		return -ENODEV;
 
-	rv = direct_align(&sd);
-	if (rv < 0)
-		goto out_close;
-
-	align_size = rv;
+	sector_size = com.sector_size ? com.sector_size :
+		      direct_read_leader_sector_size(task, &sd);
+	align_size = sector_size_to_align_size(sector_size);
+	sector_count = align_size / sector_size;
 	datalen = align_size;
-	sector_count = align_size / sd.sector_size;
 
 	data = malloc(datalen);
 	if (!data) {
 		rv = -ENOMEM;
 		goto out_close;
 	}
+	memset(data, 0, datalen);
 
 	printf("%8s %36s %48s %10s %4s %4s %s",
 	       "offset",
@@ -471,7 +567,7 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 		memset(rname, 0, sizeof(rname));
 		memset(data, 0, sd.sector_size);
 
-		rv = read_sectors(&sd, sector_nr, sector_count, data, datalen,
+		rv = read_sectors(&sd, sector_size, sector_nr, sector_count, data, datalen,
 				  task, DEFAULT_IO_TIMEOUT, "dump");
 
 		lr_end = (struct leader_record *)data;
@@ -481,7 +577,7 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 
 		if (lr->magic == DELTA_DISK_MAGIC) {
 			for (i = 0; i < sector_count; i++) {
-				lr_end = (struct leader_record *)(data + (i * sd.sector_size));
+				lr_end = (struct leader_record *)(data + (i * sector_size));
 
 				if (!lr_end->magic)
 					continue;
@@ -497,7 +593,7 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 				strncpy(rname, lr->resource_name, NAME_ID_SIZE);
 
 				printf("%08llu %36s %48s %010llu %04llu %04llu",
-					(unsigned long long)((sector_nr + i) * sd.sector_size),
+					(unsigned long long)((sector_nr + i) * sector_size),
 					sname, rname,
 					(unsigned long long)lr->timestamp,
 					(unsigned long long)lr->owner_id,
@@ -517,7 +613,7 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 			strncpy(rname, lr->resource_name, NAME_ID_SIZE);
 
 			printf("%08llu %36s %48s %010llu %04llu %04llu %llu",
-			       (unsigned long long)(sector_nr * sd.sector_size),
+			       (unsigned long long)(sector_nr * sector_size),
 			       sname, rname,
 			       (unsigned long long)lr->timestamp,
 			       (unsigned long long)lr->owner_id,
@@ -533,7 +629,7 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 			printf("\n");
 
 			for (i = 0; i < lr->num_hosts; i++) {
-				char *pd_end = data + ((2 + i) * sd.sector_size);
+				char *pd_end = data + ((2 + i) * sector_size);
 				struct mode_block *mb_end = (struct mode_block *)(pd_end + MBLOCK_OFFSET);
 
 				if (force_mode > 1) {
@@ -583,7 +679,7 @@ int direct_next_free(struct task *task, char *path)
 	struct leader_record lr;
 	struct sync_disk sd;
 	uint64_t sector_nr;
-	int sector_count, datalen, align_size;
+	int sector_size, sector_count, datalen, align_size;
 	int rv;
 
 	memset(&sd, 0, sizeof(struct sync_disk));
@@ -602,13 +698,13 @@ int direct_next_free(struct task *task, char *path)
 	if (rv < 0)
 		return -ENODEV;
 
-	rv = direct_align(&sd);
-	if (rv < 0)
-		goto out_close;
+	sector_size = direct_read_leader_sector_size(task, &sd);
+	if (!sector_size)
+		return -EINVAL;
 
-	align_size = rv;
-	datalen = sd.sector_size;
-	sector_count = align_size / sd.sector_size;
+	align_size = sector_size_to_align_size(sector_size);
+	sector_count = align_size / sector_size;
+	datalen = sector_size;
 
 	data = malloc(datalen);
 	if (!data) {
@@ -620,9 +716,9 @@ int direct_next_free(struct task *task, char *path)
 	rv = -ENOSPC;
 
 	while (1) {
-		memset(data, 0, sd.sector_size);
+		memset(data, 0, sector_size);
 
-		rv = read_sectors(&sd, sector_nr, 1, data, datalen,
+		rv = read_sectors(&sd, sector_size, sector_nr, 1, data, datalen,
 				  task, DEFAULT_IO_TIMEOUT, "next_free");
 
 		lr_end = (struct leader_record *)data;
@@ -630,7 +726,7 @@ int direct_next_free(struct task *task, char *path)
 		leader_record_in(lr_end, &lr);
 
 		if (lr.magic != DELTA_DISK_MAGIC && lr.magic != PAXOS_DISK_MAGIC) {
-			printf("%llu\n", (unsigned long long)(sector_nr * sd.sector_size));
+			printf("%llu\n", (unsigned long long)(sector_nr * sector_size));
 			rv = 0;
 			goto out_free;
 		}

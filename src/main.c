@@ -56,8 +56,6 @@
 #include "timeouts.h"
 #include "paxos_lease.h"
 
-#define ONEMB 1048576
-
 #define SIGRUNPATH 100 /* anything that's not SIGTERM/SIGKILL */
 
 struct thread_pool {
@@ -1835,7 +1833,7 @@ static void print_usage(void)
 	printf("sanlock client set_config -s LOCKSPACE [-u 0|1] [-O 0|1]\n");
 	printf("sanlock client log_dump\n");
 	printf("sanlock client shutdown [-f 0|1] [-w 0|1]\n");
-	printf("sanlock client init -s LOCKSPACE | -r RESOURCE [-z 0|1]\n");
+	printf("sanlock client init -s LOCKSPACE | -r RESOURCE [-z 0|1] [-Z 512|4096]\n");
 	printf("sanlock client read -s LOCKSPACE | -r RESOURCE\n");
 	printf("sanlock client align -s LOCKSPACE\n");
 	printf("sanlock client add_lockspace -s LOCKSPACE\n");
@@ -1849,7 +1847,7 @@ static void print_usage(void)
 	printf("sanlock client request -r RESOURCE -f <force_mode>\n");
 	printf("sanlock client examine -r RESOURCE | -s LOCKSPACE\n");
 	printf("\n");
-	printf("sanlock direct <action> [-a 0|1] [-o 0|1]\n");
+	printf("sanlock direct <action> [-a 0|1] [-o 0|1] [-Z 512|4096]\n");
 	printf("sanlock direct init -s LOCKSPACE | -r RESOURCE\n");
 	printf("sanlock direct read_leader -s LOCKSPACE | -r RESOURCE\n");
 	printf("sanlock direct dump <path>[:<offset>[:<size>]]\n");
@@ -2168,6 +2166,13 @@ static int read_command_line(int argc, char *argv[])
 		case 'c':
 			begin_command = 1;
 			break;
+
+		case 'Z':
+			com.sector_size = atoi(optionarg);
+			if ((com.sector_size != 512) && (com.sector_size != 4096))
+				com.sector_size = 0;
+			break;
+
 		default:
 			log_tool("unknown option: %c", optchar);
 			exit(EXIT_FAILURE);
@@ -2355,6 +2360,14 @@ static void read_config_file(void)
 		} else if (!strcmp(str, "paxos_debug_all")) {
 			get_val_int(line, &val);
 			com.paxos_debug_all = val;
+
+		} else if (!strcmp(str, "debug_io")) {
+			memset(str, 0, sizeof(str));
+			get_val_str(line, str);
+			if (strstr(str, "submit"))
+				com.debug_io_submit = 1;
+			if (strstr(str, "complete"))
+				com.debug_io_complete = 1;
 		}
 	}
 
@@ -2470,8 +2483,18 @@ static int do_client_read(void)
 	int rv, i, hss_count = 0;
 
 	if (com.lockspace.host_id_disk.path[0]) {
+		if (com.sector_size == 512)
+			com.lockspace.flags |= SANLK_LSF_ALIGN1M;
+		else if (com.sector_size == 4096)
+			com.lockspace.flags |= SANLK_LSF_ALIGN8M;
+
 		rv = sanlock_read_lockspace(&com.lockspace, 0, &io_timeout);
 	} else {
+		if (com.sector_size == 512)
+			com.res_args[0]->flags |= SANLK_RES_ALIGN1M;
+		else if (com.sector_size == 4096)
+			com.res_args[0]->flags |= SANLK_RES_ALIGN8M;
+
 		if (!com.get_hosts) {
 			rv = sanlock_read_resource(com.res_args[0], 0);
 		} else {
@@ -2761,15 +2784,27 @@ static int do_client(void)
 
 	case ACT_CLIENT_INIT:
 		log_tool("init");
-		if (com.lockspace.host_id_disk.path[0])
+		if (com.lockspace.host_id_disk.path[0]) {
+			if (com.sector_size == 512)
+				com.lockspace.flags |= SANLK_LSF_ALIGN1M;
+			else if (com.sector_size == 4096)
+				com.lockspace.flags |= SANLK_LSF_ALIGN8M;
+
 			rv = sanlock_write_lockspace(&com.lockspace,
 						     com.max_hosts, 0,
 						     com.io_timeout_arg);
-		else
+		} else {
+			if (com.sector_size == 512)
+				com.res_args[0]->flags |= SANLK_RES_ALIGN1M;
+			else if (com.sector_size == 4096)
+				com.res_args[0]->flags |= SANLK_RES_ALIGN8M;
+
 			rv = sanlock_write_resource(com.res_args[0],
 						    com.max_hosts,
 						    com.num_hosts,
 						    com.clear_arg ? SANLK_WRITE_CLEAR : 0);
+		}
+
 		log_tool("init done %d", rv);
 		break;
 

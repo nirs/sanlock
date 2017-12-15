@@ -104,6 +104,8 @@ int _lockspace_info(const char *space_name, struct space_info *spi)
 
 		spi->space_id = sp->space_id;
 		spi->io_timeout = sp->io_timeout;
+		spi->sector_size = sp->sector_size;
+		spi->align_size = sp->align_size;
 		spi->host_id = sp->host_id;
 		spi->host_generation = sp->host_generation;
 		spi->killing_pids = sp->killing_pids;
@@ -124,7 +126,7 @@ int lockspace_info(const char *space_name, struct space_info *spi)
 	return rv;
 }
 
-int lockspace_disk(char *space_name, struct sync_disk *disk)
+int lockspace_disk(char *space_name, struct sync_disk *disk, int *sector_size)
 {
 	struct space *sp;
 	int rv = -1;
@@ -135,6 +137,7 @@ int lockspace_disk(char *space_name, struct sync_disk *disk)
 			continue;
 
 		memcpy(disk, &sp->host_id_disk, sizeof(struct sync_disk));
+		*sector_size = sp->sector_size;
 		disk->fd = -1;
 		rv = 0;
 	}
@@ -287,14 +290,11 @@ void check_other_leases(struct space *sp, char *buf)
 	struct leader_record leader_in;
 	struct leader_record *leader_end;
 	struct leader_record *leader;
-	struct sync_disk *disk;
 	struct host_status *hs;
 	struct sanlk_host_event he;
 	char *bitmap;
 	uint64_t now;
 	int i, new;
-
-	disk = &sp->host_id_disk;
 
 	now = monotime();
 	new = 0;
@@ -306,7 +306,7 @@ void check_other_leases(struct space *sp, char *buf)
 		if (!hs->first_check)
 			hs->first_check = now;
 
-		leader_end = (struct leader_record *)(buf + (i * disk->sector_size));
+		leader_end = (struct leader_record *)(buf + (i * sp->sector_size));
 
 		leader_record_in(leader_end, &leader_in);
 		leader = &leader_in;
@@ -617,12 +617,26 @@ static void *lockspace_thread(void *arg_in)
 	}
 	opened = 1;
 
-	sp->align_size = direct_align(&sp->host_id_disk);
-	if (sp->align_size < 0) {
-		log_erros(sp, "direct_align error");
-		acquire_result = sp->align_size;
-		delta_result = -1;
-		goto set_status;
+	if (!sp->sector_size) {
+		int ss = 0;
+
+		rv = delta_read_lockspace_sector_size(&task, &sp->host_id_disk, sp->io_timeout, &ss);
+		if (rv < 0) {
+			log_erros(sp, "failed to read device to find sector size error %d %s", rv, sp->host_id_disk.path);
+			acquire_result = rv;
+			delta_result = -1;
+			goto set_status;
+		}
+
+		if ((ss != 512) && (ss != 4096)) {
+			log_erros(sp, "failed to get valid sector size %d %s", ss, sp->host_id_disk.path);
+			acquire_result = SANLK_LEADER_SECTORSIZE;
+			delta_result = -1;
+			goto set_status;
+		}
+
+		sp->sector_size = ss;
+		sp->align_size = sector_size_to_align_size(ss);
 	}
 
 	sp->lease_status.renewal_read_buf = malloc(sp->align_size);

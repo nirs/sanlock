@@ -108,8 +108,18 @@ int read_resource_owners(struct task *task, struct token *token,
 
 	disk = &token->disks[0];
 
-	/* we could in-line paxos_read_buf here like we do in read_mode_block */
+	/*
+	 * We don't know the sector_size of the resource until the leader
+	 * record has been read, so go with the larger size.
+	 */
 
+	if (!token->sector_size) {
+		token->sector_size = 4096;
+		token->align_size = sector_size_to_align_size(4096);
+	}
+
+	/* we could in-line paxos_read_buf here like we do in read_mode_block */
+ retry:
 	rv = paxos_read_buf(task, token, &lease_buf);
 	if (rv < 0) {
 		log_errot(token, "read_resource_owners read_buf rv %d", rv);
@@ -125,6 +135,18 @@ int read_resource_owners(struct task *task, struct token *token,
 
 	leader_record_in(&leader_end, &leader);
 
+	if ((token->sector_size == 512) && (leader.sector_size == 4096)) {
+		/* user flag was wrong */
+		token->sector_size = 4096;
+		token->align_size  = sector_size_to_align_size(4096);
+		free(lease_buf);
+		lease_buf = NULL;
+		goto retry;
+	}
+
+	token->sector_size = leader.sector_size;
+	token->align_size = sector_size_to_align_size(leader.sector_size);
+
 	rv = paxos_verify_leader(token, disk, &leader, checksum, "read_resource_owners");
 	if (rv < 0)
 		goto out;
@@ -135,7 +157,7 @@ int read_resource_owners(struct task *task, struct token *token,
 		host_count++;
 
 	for (i = 0; i < leader.num_hosts; i++) {
-		lease_buf_dblock = lease_buf + ((2 + i) * disk->sector_size);
+		lease_buf_dblock = lease_buf + ((2 + i) * token->sector_size);
 		mb_end = (struct mode_block *)(lease_buf_dblock + MBLOCK_OFFSET);
 
 		mode_block_in(mb_end, &mb);
@@ -187,7 +209,7 @@ int read_resource_owners(struct task *task, struct token *token,
 	}
 
 	for (i = 0; i < leader.num_hosts; i++) {
-		lease_buf_dblock = lease_buf + ((2 + i) * disk->sector_size);
+		lease_buf_dblock = lease_buf + ((2 + i) * token->sector_size);
 		mb_end = (struct mode_block *)(lease_buf_dblock + MBLOCK_OFFSET);
 
 		mode_block_in(mb_end, &mb);
@@ -313,7 +335,7 @@ static int write_host_block(struct task *task, struct token *token,
 
 	disk = &token->disks[0];
 
-	iobuf_len = disk->sector_size;
+	iobuf_len = token->sector_size;
 	if (!iobuf_len)
 		return -EINVAL;
 
@@ -350,7 +372,7 @@ static int write_host_block(struct task *task, struct token *token,
 	for (d = 0; d < num_disks; d++) {
 		disk = &token->disks[d];
 
-		offset = disk->offset + ((2 + host_id - 1) * disk->sector_size);
+		offset = disk->offset + ((2 + host_id - 1) * token->sector_size);
 
 		rv = write_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout, NULL);
 		if (rv < 0)
@@ -419,7 +441,7 @@ static int read_mode_block(struct task *task, struct token *token,
 
 	disk = &token->disks[0];
 
-	iobuf_len = disk->sector_size;
+	iobuf_len = token->sector_size;
 	if (!iobuf_len)
 		return -EINVAL;
 
@@ -432,7 +454,7 @@ static int read_mode_block(struct task *task, struct token *token,
 	for (d = 0; d < num_disks; d++) {
 		disk = &token->disks[d];
 
-		offset = disk->offset + ((2 + host_id - 1) * disk->sector_size);
+		offset = disk->offset + ((2 + host_id - 1) * token->sector_size);
 
 		rv = read_iobuf(disk->fd, offset, iobuf, iobuf_len, task, token->io_timeout, NULL);
 		if (rv < 0)
@@ -537,9 +559,9 @@ static int read_lvb_block(struct task *task, struct token *token)
 
 	r = token->resource;
 	disk = &token->disks[0];
-	iobuf_len = disk->sector_size;
+	iobuf_len = token->sector_size;
 	iobuf = r->lvb;
-	offset = disk->offset + (LVB_SECTOR * disk->sector_size);
+	offset = disk->offset + (LVB_SECTOR * token->sector_size);
 
 	if (!r->lvb)
 		return 0;
@@ -557,9 +579,9 @@ static int write_lvb_block(struct task *task, struct resource *r, struct token *
 	int iobuf_len, rv;
 
 	disk = &token->disks[0];
-	iobuf_len = disk->sector_size;
+	iobuf_len = token->sector_size;
 	iobuf = r->lvb;
-	offset = disk->offset + (LVB_SECTOR * disk->sector_size);
+	offset = disk->offset + (LVB_SECTOR * token->sector_size);
 
 	if (!r->lvb)
 		return 0;
@@ -1647,22 +1669,13 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 
 	copy_disks(&r->r.disks, &token->r.disks, token->r.num_disks);
 
-	if (cmd_flags & SANLK_ACQUIRE_LVB) {
-		char *iobuf, **p_iobuf;
-		p_iobuf = &iobuf;
-
-		rv = posix_memalign((void *)p_iobuf, getpagesize(), token->disks[0].sector_size);
-		if (rv)
-			log_errot(token, "acquire_token lvb size %d memalign error %d",
-				  token->disks[0].sector_size, rv);
-		else
-			r->lvb = iobuf;
-	}
-
  retry:
 	memset(&leader, 0, sizeof(struct leader_record));
 
 	rv = acquire_disk(task, token, acquire_lver, new_num_hosts, owner_nowait, &leader, &dblock);
+
+	/* token sector_size starts as ls sector_size, but can change in paxos acquire */
+	r->sector_size = token->sector_size;
 
 	if (rv == SANLK_ACQUIRE_IDLIVE || rv == SANLK_ACQUIRE_OWNED || rv == SANLK_ACQUIRE_OTHER) {
 		/*
@@ -1796,11 +1809,22 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 
  out:
 	if (cmd_flags & SANLK_ACQUIRE_LVB) {
-		rv = read_lvb_block(task, token);
-		if (rv < 0) {
-			/* TODO: we should probably notify the caller somehow about
-			   lvb read/write independent of the lease results. */
-			log_errot(token, "acquire_token read_lvb error %d", rv);
+		char *iobuf, **p_iobuf;
+		p_iobuf = &iobuf;
+
+		/* TODO: we should probably notify the caller somehow about
+		   lvb read/write independent of the lease results. */
+
+		rv = posix_memalign((void *)p_iobuf, getpagesize(), token->sector_size);
+		if (rv) {
+			log_errot(token, "acquire_token lvb size %d memalign error %d",
+				  token->sector_size, rv);
+		} else {
+			r->lvb = iobuf;
+
+			rv = read_lvb_block(task, token);
+			if (rv < 0)
+				log_errot(token, "acquire_token read_lvb error %d", rv);
 		}
 	}
 
@@ -1834,6 +1858,13 @@ int request_token(struct task *task, struct token *token, uint32_t force_mode,
 	rv = paxos_lease_leader_read(task, token, &leader, "request");
 	if (rv < 0)
 		goto out;
+
+	if (leader.sector_size != token->sector_size) {
+		/* token sector_size starts with lockspace sector_size,
+		   but it could be different. */
+		token->sector_size = leader.sector_size;
+		token->align_size = sector_size_to_align_size(leader.sector_size);
+	}
 
 	if (leader.timestamp == LEASE_FREE) {
 		*owner_id = 0;
@@ -2311,6 +2342,8 @@ static void *resource_thread(void *arg GNUC_UNUSED)
 			tt->host_generation = r->host_generation;
 			tt->token_id = r->release_token_id;
 			tt->io_timeout = r->io_timeout;
+			tt->sector_size = r->sector_size;
+			tt->align_size = sector_size_to_align_size(r->sector_size);
 			tt->resource = r;
 
 			/*
@@ -2346,6 +2379,8 @@ static void *resource_thread(void *arg GNUC_UNUSED)
 			tt->host_id = r->host_id;
 			tt->host_generation = r->host_generation;
 			tt->io_timeout = r->io_timeout;
+			tt->sector_size = r->sector_size;
+			tt->align_size = sector_size_to_align_size(r->sector_size);
 			pid = r->pid;
 			lver = r->leader.lver;
 

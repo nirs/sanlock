@@ -74,6 +74,9 @@ struct leader_record {
 #define HOSTID_BITMAP_OFFSET 256
 #define HOSTID_BITMAP_SIZE 256
 
+/* the request record is in the sector following the leader record
+   for a paxos lease. */
+
 #define REQ_DISK_MAGIC 0x08292011
 #define REQ_DISK_VERSION_MAJOR 0x00010000
 #define REQ_DISK_VERSION_MINOR 0x00000001

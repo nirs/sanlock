@@ -10,6 +10,10 @@
 #ifndef __PAXOS_DBLOCK_H__
 #define __PAXOS_DBLOCK_H__
 
+/* The first dblock (for host_id 1) is in the third sector of a paxos lease.
+   The first sector holds the leader record, and the second sector holds the
+   request record. */
+
 #define DBLOCK_CHECKSUM_LEN      48  /* ends before checksum field */
 
 #define DBLOCK_FL_RELEASED	0x00000001
