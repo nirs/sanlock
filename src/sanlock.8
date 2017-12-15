@@ -1107,6 +1107,93 @@ paxos algorithm to acquire the paxos_lease, and set a new owner.
 
 /etc/sanlock/sanlock.conf
 
+.IP \[bu] 2
+quiet_fail = 0
+.br
+See -Q
+
+.IP \[bu] 2
+debug_renew = 0
+.br
+See -R
+
+.IP \[bu] 2
+logfile_priority = 3
+.br
+See -L
+
+.IP \[bu] 2
+logfile_use_utc = 0
+.br
+Use UTC instead of local time in log messages.
+
+.IP \[bu] 2
+syslog_priority = 3
+.br
+See -S
+
+.IP \[bu] 2
+use_watchdog = 1
+.br
+See -w
+
+.IP \[bu] 2
+high_priority = 1
+.br
+See -h
+
+.IP \[bu] 2
+mlock_level = 1
+.br
+See -l
+
+.IP \[bu] 2
+sh_retries = 8
+.br
+The number of times to try acquiring a paxos lease when acquiring a shared
+lease when the paxos lease is held by another host acquiring a shared lease.
+
+.IP \[bu] 2
+uname = sanlock
+.br
+See -U
+
+.IP \[bu] 2
+gname = sanlock
+.br
+See -G
+
+.IP \[bu] 2
+our_host_name = <str>
+.br
+See -e
+
+.IP \[bu] 2
+renewal_read_extend_sec = <seconds>
+.br
+If a renewal read i/o times out, wait this many additional seconds for that
+read to complete at the start of the subsequent renewal attempt.  When not
+configured, sanlock waits for an additional io_timeout seconds for a previous
+timed out read to complete.
+
+.IP \[bu] 2
+renewal_history_size = 180
+.br
+See -H
+
+.IP \[bu] 2
+paxos_debug_all = 0
+.br
+Include all details in the paxos debug logging.
+
+.IP \[bu] 2
+debug_io = <str>
+.br
+Add debug logging for each i/o.  "submit" (no quotes) produces debug
+output at submission time, "complete" produces debug output at completion
+time, and "submit,complete" (no space) produces both.
+
+
 .SH SEE ALSO
 .BR wdmd (8)
 
