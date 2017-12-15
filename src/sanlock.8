@@ -363,10 +363,7 @@ Allocate shared storage for sanlock leases.
 This example assumes 512 byte sectors on the device, in which case the
 lockspace needs 1MB and each resource needs 1MB.
 
-.nf
-# vgcreate vg /dev/sdb
-# lvcreate -n leases -L 1GB vg
-.fi
+The example shared block device accessible to all hosts is /dev/leases.
 
 .IP 2. 4
 Start sanlock on all hosts.
@@ -395,7 +392,7 @@ Create a lockspace for the application (from one host).
 The lockspace is named "test".
 
 .nf
-# sanlock client init -s test:0:/dev/test/leases:0
+# sanlock client init -s test:0:/dev/leases:0
 .fi
 
 .IP 5. 4
@@ -405,9 +402,9 @@ Use a unique host_id on each host.
 
 .nf
 host1:
-# sanlock client add_lockspace -s test:1:/dev/vg/leases:0
+# sanlock client add_lockspace -s test:1:/dev/leases:0
 host2:
-# sanlock client add_lockspace -s test:2:/dev/vg/leases:0
+# sanlock client add_lockspace -s test:2:/dev/leases:0
 .fi
 
 .IP 6. 4
@@ -417,8 +414,8 @@ The resources are named "RA" and "RB".  Offsets are used on the same
 device as the lockspace.  Different LVs or files could also be used.
 
 .nf
-# sanlock client init -r test:RA:/dev/vg/leases:1048576
-# sanlock client init -r test:RB:/dev/vg/leases:2097152
+# sanlock client init -r test:RA:/dev/leases:1048576
+# sanlock client init -r test:RB:/dev/leases:2097152
 .fi
 
 .IP 7. 4
@@ -429,8 +426,8 @@ shared lease (SH) on the second resource.
 
 .nf
 # export P=`pidof sleep`
-# sanlock client acquire -r test:RA:/dev/vg/leases:1048576 -p $P
-# sanlock client acquire -r test:RB:/dev/vg/leases:2097152:SH -p $P
+# sanlock client acquire -r test:RA:/dev/leases:1048576 -p $P
+# sanlock client acquire -r test:RB:/dev/leases:2097152:SH -p $P
 .fi
 
 .IP 8. 4
@@ -442,8 +439,8 @@ succeed.
 
 .nf
 # export P=`pidof sleep`
-# sanlock client acquire -r test:RA:/dev/vg/leases:1048576 -p $P
-# sanlock client acquire -r test:RB:/dev/vg/leases:2097152:SH -p $P
+# sanlock client acquire -r test:RA:/dev/leases:1048576 -p $P
+# sanlock client acquire -r test:RB:/dev/leases:2097152:SH -p $P
 .fi
 
 .IP 9. 4
@@ -453,8 +450,8 @@ The sleep pid could also be killed, which will result in the sanlock
 daemon releasing its leases when it exits.
 
 .nf
-# sanlock client release -r test:RA:/dev/vg/leases:1048576 -p $P
-# sanlock client release -r test:RB:/dev/vg/leases:2097152 -p $P
+# sanlock client release -r test:RA:/dev/leases:1048576 -p $P
+# sanlock client release -r test:RB:/dev/leases:2097152 -p $P
 .fi
 
 .IP 10. 4
@@ -462,9 +459,9 @@ Leave the lockspace for the application.
 
 .nf
 host1:
-# sanlock client rem_lockspace -s test:1:/dev/vg/leases:0
+# sanlock client rem_lockspace -s test:1:/dev/leases:0
 host2:
-# sanlock client rem_lockspace -s test:2:/dev/vg/leases:0
+# sanlock client rem_lockspace -s test:2:/dev/leases:0
 .fi
 
 .IP 11. 4
