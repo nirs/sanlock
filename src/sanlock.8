@@ -1108,7 +1108,7 @@ paxos algorithm to acquire the paxos_lease, and set a new owner.
 /etc/sanlock/sanlock.conf
 
 .IP \[bu] 2
-quiet_fail = 0
+quiet_fail = 1
 .br
 See -Q
 
@@ -1118,7 +1118,7 @@ debug_renew = 0
 See -R
 
 .IP \[bu] 2
-logfile_priority = 3
+logfile_priority = 4
 .br
 See -L
 
@@ -1131,6 +1131,13 @@ Use UTC instead of local time in log messages.
 syslog_priority = 3
 .br
 See -S
+
+.IP \[bu] 2
+names_log_priority = 4
+.br
+Log resource names at this priority level (uses syslog priority numbers).
+If this is greater than or equal to logfile_priority, each requested resource
+name and location is recorded in sanlock.log.
 
 .IP \[bu] 2
 use_watchdog = 1

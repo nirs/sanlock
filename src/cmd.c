@@ -377,7 +377,8 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 			token->flags |= T_RESTRICT_SIGTERM;
 
 		/* save a record of what this token_id is for later debugging */
-		log_level(spi.space_id, token->token_id, NULL, LOG_WARNING,
+
+		log_level(spi.space_id, token->token_id, NULL, com.names_log_priority,
 			  "resource %.48s:%.48s:%.256s:%llu%s for %d,%d,%d",
 			  token->r.lockspace_name,
 			  token->r.name,

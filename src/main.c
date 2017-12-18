@@ -1808,7 +1808,7 @@ static void print_usage(void)
 	printf("  -Q 0|1        quiet error messages for common lock contention (%d)\n", DEFAULT_QUIET_FAIL);
 	printf("  -R 0|1        renewal debugging, log debug info about renewals (0)\n");
 	printf("  -H <num>      renewal history size (%d)\n", DEFAULT_RENEWAL_HISTORY_SIZE);
-	printf("  -L <pri>      write logging at priority level and up to logfile (3 LOG_ERR)\n");
+	printf("  -L <pri>      write logging at priority level and up to logfile (4 LOG_WARNING)\n");
 	printf("                (use -1 for none)\n");
 	printf("  -S <pri>      write logging at priority level and up to syslog (3 LOG_ERR)\n");
 	printf("                (use -1 for none)\n");
@@ -2313,6 +2313,10 @@ static void read_config_file(void)
 		} else if (!strcmp(str, "syslog_priority")) {
 			get_val_int(line, &val);
 			log_syslog_priority = val;
+
+		} else if (!strcmp(str, "names_log_priority")) {
+			get_val_int(line, &val);
+			com.names_log_priority = val;
 
 		} else if (!strcmp(str, "use_watchdog")) {
 			get_val_int(line, &val);
@@ -3245,6 +3249,7 @@ int main(int argc, char *argv[])
 	com.use_watchdog = DEFAULT_USE_WATCHDOG;
 	com.high_priority = DEFAULT_HIGH_PRIORITY;
 	com.mlock_level = DEFAULT_MLOCK_LEVEL;
+	com.names_log_priority = LOG_WARNING;
 	com.max_worker_threads = DEFAULT_MAX_WORKER_THREADS;
 	com.io_timeout_arg = DEFAULT_IO_TIMEOUT;
 	com.aio_arg = DEFAULT_USE_AIO;
