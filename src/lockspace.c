@@ -354,8 +354,7 @@ void check_other_leases(struct space *sp, char *buf)
 		if (!hs->lease_bad &&
 		    (strncmp(hs->owner_name, leader->resource_name, NAME_ID_SIZE) ||
 		     (hs->owner_generation != leader->owner_generation))) {
-			log_level(sp->space_id, 0, NULL, LOG_WARNING,
-				  "host %llu %llu %llu %.48s",
+			log_warns(sp, "host %llu %llu %llu %.48s",
 				  (unsigned long long)leader->owner_id,
 				  (unsigned long long)leader->owner_generation,
 				  (unsigned long long)leader->timestamp,
@@ -825,6 +824,7 @@ static void *lockspace_thread(void *arg_in)
 	 */
 
 	purge_resource_orphans(sp->space_name);
+	purge_resource_free(sp->space_name);
 
 	close_event_fds(sp);
 
@@ -958,8 +958,7 @@ int add_lockspace_start(struct sanlk_lockspace *ls, uint32_t io_timeout, struct 
 	pthread_mutex_unlock(&spaces_mutex);
 
 	/* save a record of what this space_id is for later debugging */
-	log_level(sp->space_id, 0, NULL, LOG_WARNING,
-		  "lockspace %.48s:%llu:%.256s:%llu",
+	log_warns(sp, "lockspace %.48s:%llu:%.256s:%llu",
 		  sp->space_name,
 		  (unsigned long long)sp->host_id,
 		  sp->host_id_disk.path,
@@ -1586,8 +1585,7 @@ int lockspace_set_event(struct sanlk_lockspace *ls, struct sanlk_host_event *he,
 	if ((now - sp->set_event_time < sp->set_bitmap_seconds) &&
 	    sp->host_event.event && he->event &&
 	    (sp->host_event.event != he->event)) {
-		log_level(sp->space_id, 0, NULL, LOG_WARNING,
-			  "event %llu %llu %llu %llu replaced by %llu %llu %llu %llu t %llu",
+		log_warns(sp, "event %llu %llu %llu %llu replaced by %llu %llu %llu %llu t %llu",
 			  (unsigned long long)sp->host_event.host_id,
 			  (unsigned long long)sp->host_event.generation,
 			  (unsigned long long)sp->host_event.event,

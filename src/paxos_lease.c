@@ -591,8 +591,7 @@ static int run_ballot(struct task *task, struct token *token, uint32_t flags,
 				continue;
 
 			if (bk->lver > dblock.lver) {
-				log_level(0, token->token_id, NULL, LOG_WARNING,
-					  "ballot %llu abort1 larger lver in bk[%d] %llu:%llu:%llu:%llu:%llu:%llu "
+				log_warnt(token, "ballot %llu abort1 larger lver in bk[%d] %llu:%llu:%llu:%llu:%llu:%llu "
 					  "our dblock %llu:%llu:%llu:%llu:%llu:%llu",
 					  (unsigned long long)next_lver, q,
 					  (unsigned long long)bk->mbal,
@@ -618,8 +617,7 @@ static int run_ballot(struct task *task, struct token *token, uint32_t flags,
 			/* see "It aborts the ballot" in comment above */
 
 			if (bk->mbal > dblock.mbal) {
-				log_level(0, token->token_id, NULL, LOG_WARNING,
-					  "ballot %llu abort1 larger mbal in bk[%d] %llu:%llu:%llu:%llu:%llu:%llu "
+				log_warnt(token, "ballot %llu abort1 larger mbal in bk[%d] %llu:%llu:%llu:%llu:%llu:%llu "
 					  "our dblock %llu:%llu:%llu:%llu:%llu:%llu",
 					  (unsigned long long)next_lver, q,
 					  (unsigned long long)bk->mbal,
@@ -812,8 +810,7 @@ static int run_ballot(struct task *task, struct token *token, uint32_t flags,
 				 * also be caught the the bk->mbal > dblock.mbal condition
 				 * below.
 				 */
-				log_level(0, token->token_id, NULL, LOG_WARNING,
-					  "ballot %llu abort2 larger lver in bk[%d] %llu:%llu:%llu:%llu:%llu:%llu "
+				log_warnt(token, "ballot %llu abort2 larger lver in bk[%d] %llu:%llu:%llu:%llu:%llu:%llu "
 					  "our dblock %llu:%llu:%llu:%llu:%llu:%llu",
 					  (unsigned long long)next_lver, q,
 					  (unsigned long long)bk->mbal,
@@ -839,8 +836,7 @@ static int run_ballot(struct task *task, struct token *token, uint32_t flags,
 			/* see "It aborts the ballot" in comment above */
 
 			if (bk->mbal > dblock.mbal) {
-				log_level(0, token->token_id, NULL, LOG_WARNING,
-					  "ballot %llu abort2 larger mbal in bk[%d] %llu:%llu:%llu:%llu:%llu:%llu "
+				log_warnt(token, "ballot %llu abort2 larger mbal in bk[%d] %llu:%llu:%llu:%llu:%llu:%llu "
 					  "our dblock %llu:%llu:%llu:%llu:%llu:%llu",
 					  (unsigned long long)next_lver, q,
 					  (unsigned long long)bk->mbal,
@@ -1835,8 +1831,7 @@ int paxos_lease_acquire(struct task *task,
 						 cur_leader.owner_id, &owner_dblock);
 				if (!rv && (owner_dblock.flags & DBLOCK_FL_RELEASED)) {
 					/* not an error, but interesting to see */
-					log_level(0, token->token_id, NULL, LOG_WARNING,
-						  "paxos_acquire owner %llu %llu %llu writer %llu owner dblock released",
+					log_warnt(token, "paxos_acquire owner %llu %llu %llu writer %llu owner dblock released",
 						  (unsigned long long)cur_leader.owner_id,
 						  (unsigned long long)cur_leader.owner_generation,
 						  (unsigned long long)cur_leader.timestamp,
@@ -1967,8 +1962,7 @@ int paxos_lease_acquire(struct task *task,
 		    tmp_leader.owner_generation == token->host_generation) {
 			/* not a problem, but interesting to see */
 
-			log_level(0, token->token_id, NULL, LOG_WARNING,
-				  "paxos_acquire %llu owner is our inp "
+			log_warnt(token, "paxos_acquire %llu owner is our inp "
 				  "%llu %llu %llu commited by %llu",
 				  (unsigned long long)next_lver,
 				  (unsigned long long)tmp_leader.owner_id,
@@ -1981,8 +1975,7 @@ int paxos_lease_acquire(struct task *task,
 		} else {
 			/* not a problem, but interesting to see */
 
-			log_level(0, token->token_id, NULL, LOG_WARNING,
-				  "paxos_acquire %llu owner is %llu %llu %llu",
+			log_warnt(token, "paxos_acquire %llu owner is %llu %llu %llu",
 				  (unsigned long long)next_lver,
 				  (unsigned long long)tmp_leader.owner_id,
 				  (unsigned long long)tmp_leader.owner_generation,
@@ -2098,8 +2091,7 @@ int paxos_lease_acquire(struct task *task,
 		   owner host_id is alive but with a newer generation, and
 		   we'd be able to get the lease by running the ballot again. */
 
-		log_level(0, token->token_id, NULL, LOG_WARNING,
-			  "ballot %llu commit other owner %llu %llu %llu",
+		log_warnt(token, "ballot %llu commit other owner %llu %llu %llu",
 			  (unsigned long long)new_leader.lver,
 			  (unsigned long long)new_leader.owner_id,
 			  (unsigned long long)new_leader.owner_generation,
@@ -2212,8 +2204,7 @@ int paxos_lease_release(struct task *task,
 	 * new leader.
 	 */
 	if (leader.write_id != token->host_id) {
-		log_level(0, token->token_id, NULL, LOG_WARNING,
-			  "paxos_release skip write "
+		log_warnt(token, "paxos_release skip write "
 			  "last lver %llu owner %llu %llu %llu writer %llu %llu %llu "
 			  "disk lver %llu owner %llu %llu %llu writer %llu %llu %llu",
 			  (unsigned long long)last->lver,

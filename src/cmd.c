@@ -367,6 +367,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 		}
 		token->host_id = spi.host_id;
 		token->host_generation = spi.host_generation;
+		token->space_id = spi.space_id;
 		token->pid = cl_pid;
 		token->io_timeout = spi.io_timeout;
 		token->sector_size = spi.sector_size;
@@ -376,16 +377,6 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 		if (cl->restricted & SANLK_RESTRICT_SIGTERM)
 			token->flags |= T_RESTRICT_SIGTERM;
 
-		/* save a record of what this token_id is for later debugging */
-
-		log_level(spi.space_id, token->token_id, NULL, com.names_log_priority,
-			  "resource %.48s:%.48s:%.256s:%llu%s for %d,%d,%d",
-			  token->r.lockspace_name,
-			  token->r.name,
-			  token->r.disks[0].path,
-			  (unsigned long long)token->r.disks[0].offset,
-			  (token->acquire_flags & SANLK_RES_SHARED) ? ":SH" : "",
-			  cl_ci, cl_fd, cl_pid);
 	}
 
 	for (i = 0; i < new_tokens_count; i++) {
@@ -408,9 +399,16 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
 			default:
 				lvl = LOG_ERR;
 			}
-			log_level(0, token->token_id, NULL, lvl,
-				  "cmd_acquire %d,%d,%d acquire_token %d %s",
-				  cl_ci, cl_fd, cl_pid, rv, acquire_error_str(rv));
+
+			if (token->res_id)
+				log_level(token->space_id, token->res_id, NULL, lvl,
+					  "cmd_acquire %d,%d,%d acquire_token %d %s",
+					  cl_ci, cl_fd, cl_pid, rv, acquire_error_str(rv));
+			else
+				log_level(token->space_id, 0, NULL, lvl,
+					  "cmd_acquire %d,%d,%d acquire_token %s %d %s",
+					  cl_ci, cl_fd, cl_pid,
+					  token->r.name, rv, acquire_error_str(rv));
 			result = rv;
 			goto done;
 		}
@@ -2262,11 +2260,15 @@ static int print_state_resource(struct resource *r, char *str, const char *list_
 		 "flags=%x "
 		 "sector_size=%d "
 		 "lver=%llu "
+		 "reused=%u "
+		 "res_id=%u "
 		 "token_id=%u",
 		 list_name,
 		 r->flags,
 		 r->sector_size,
 		 (unsigned long long)r->leader.lver,
+		 r->reused,
+		 r->res_id,
 		 token_id);
 
 	return strlen(str) + 1;

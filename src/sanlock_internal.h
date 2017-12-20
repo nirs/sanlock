@@ -91,6 +91,7 @@ struct token {
 	/* copied from the sp with r.lockspace_name */
 	uint64_t host_id;
 	uint64_t host_generation;
+	uint32_t space_id;
 	uint32_t io_timeout;
 
 	/* internal */
@@ -98,7 +99,8 @@ struct token {
 	struct resource *resource;
 	int pid;
 	uint32_t flags;  /* be careful to avoid using this from different threads */
-	uint32_t token_id; /* used to refer to this token instance in log messages */
+	uint32_t token_id;
+	uint32_t res_id;
 	int sector_size;
 	int align_size;
 	int space_dead; /* copied from sp->space_dead, set by main thread */
@@ -126,8 +128,9 @@ struct resource {
 	uint32_t io_timeout;
 	int pid;                     /* copied from token when ex */
 	int sector_size;
+	uint32_t res_id;
+	uint32_t reused;
 	uint32_t flags;
-	uint32_t release_token_id;   /* copy to temp token (tt) for log messages */
 	uint64_t thread_release_retry;
 	char *lvb;
 	char killpath[SANLK_HELPER_PATH_LEN]; /* copied from client */

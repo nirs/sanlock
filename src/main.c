@@ -551,7 +551,7 @@ static int client_using_space(struct client *cl, struct space *sp)
 			continue;
 
 		if (!cl->kill_count)
-			log_spoke(sp, token, "client_using_space pid %d", cl->pid);
+			log_token(token, "client_using_space pid %d", cl->pid);
 		if (sp->space_dead)
 			token->space_dead = sp->space_dead;
 		rv = 1;
@@ -865,7 +865,7 @@ static int main_loop(void)
 		}
 
 		free_lockspaces(0);
-		free_resources();
+		rem_resources();
 
 		gettimeofday(&now, NULL);
 		ms = time_diff(&last_check, &now);
@@ -1675,8 +1675,7 @@ static int do_daemon(void)
 
 	setup_uid_gid();
 
-	log_level(0, 0, NULL, LOG_WARNING, "sanlock daemon started %s host %s",
-		  VERSION, our_host_name_global);
+	log_warn("sanlock daemon started %s host %s", VERSION, our_host_name_global);
 
 	setup_priority();
 

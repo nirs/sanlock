@@ -23,11 +23,11 @@
 #include "task.h"
 #include "timeouts.h"
 
-void log_level(uint32_t space_id GNUC_UNUSED, uint32_t token_id GNUC_UNUSED,
+void log_level(uint32_t space_id GNUC_UNUSED, uint32_t res_id GNUC_UNUSED,
 	       char *name GNUC_UNUSED,
 	       int level GNUC_UNUSED, const char *fmt GNUC_UNUSED, ...);
 
-void log_level(uint32_t space_id GNUC_UNUSED, uint32_t token_id GNUC_UNUSED,
+void log_level(uint32_t space_id GNUC_UNUSED, uint32_t res_id GNUC_UNUSED,
 	       char *name GNUC_UNUSED,
 	       int level GNUC_UNUSED, const char *fmt GNUC_UNUSED, ...)
 {

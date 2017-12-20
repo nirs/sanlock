@@ -115,7 +115,7 @@ static void _log_save_ent(int level, int len)
  *    logfile and/or syslog (so callers don't block writing messages to files)
  */
 
-void log_level(uint32_t space_id, uint32_t token_id, char *name_in, int level, const char *fmt, ...)
+void log_level(uint32_t space_id, uint32_t res_id, char *name_in, int level, const char *fmt, ...)
 {
 	va_list ap;
 	char name[NAME_ID_SIZE + 1];
@@ -127,12 +127,12 @@ void log_level(uint32_t space_id, uint32_t token_id, char *name_in, int level, c
 
 	memset(name, 0, sizeof(name));
 
-	if (space_id && !token_id)
+	if (space_id && !res_id)
 		snprintf(name, NAME_ID_SIZE, "s%u ", space_id);
-	else if (!space_id && token_id)
-		snprintf(name, NAME_ID_SIZE, "r%u ", token_id);
-	else if (space_id && token_id)
-		snprintf(name, NAME_ID_SIZE, "s%u:r%u ", space_id, token_id);
+	else if (!space_id && res_id)
+		snprintf(name, NAME_ID_SIZE, "r%u ", res_id);
+	else if (space_id && res_id)
+		snprintf(name, NAME_ID_SIZE, "s%u:r%u ", space_id, res_id);
 	else if (name_in)
 		snprintf(name, NAME_ID_SIZE, "%.8s ", name_in);
 

@@ -44,6 +44,7 @@ static pthread_t resource_pt;
 static int resource_thread_stop;
 static int resource_thread_work;
 static int resource_thread_work_examine;
+static struct list_head resources_free;
 static struct list_head resources_held;
 static struct list_head resources_add;
 static struct list_head resources_rem;
@@ -51,13 +52,78 @@ static struct list_head resources_orphan;
 static pthread_mutex_t resource_mutex;
 static pthread_cond_t resource_cond;
 static struct list_head host_events;
+static int resources_free_count;
+static uint32_t resource_id_counter = 1;
 
+#define FREE_RES_COUNT 128
+
+/*
+ * There's not much advantage to saving resource structs and reusing them again
+ * when they are requested again.  One advantage can be that the res_id remains
+ * unchanged for frequently requested resources, so a new resource description
+ * isn't logged each time it's requested.  There may be some other
+ * optimizations that could be added.  We may want per-lockspace lists of
+ * resources, or purge free resources when lockspaces are removed.
+ */
 
 static void free_resource(struct resource *r)
 {
+	struct resource *rtmp = NULL;
+	struct resource *rmin = NULL;
+
 	if (r->lvb)
 		free(r->lvb);
-	free(r);
+
+	if (resources_free_count < FREE_RES_COUNT) {
+		resources_free_count++;
+		list_add(&r->list, &resources_free);
+		return;
+	}
+
+	/* the max are being saved, free the least used before saving this one */
+
+	list_for_each_entry_reverse(rtmp, &resources_free, list) {
+		if (!rtmp->reused) {
+			list_del(&rtmp->list);
+			free(rtmp);
+			goto out;
+		}
+
+		if (!rmin || (rtmp->reused < rmin->reused))
+			rmin = rtmp;
+	}
+
+	if (rmin) {
+		list_del(&rmin->list);
+		free(rmin);
+	}
+ out:
+	list_add(&r->list, &resources_free);
+}
+
+static struct resource *get_free_resource(struct token *token, int *token_matches)
+{
+	struct resource *r;
+
+	/* find a previous r that matches token */
+	list_for_each_entry(r, &resources_free, list) {
+		if (strcmp(r->r.lockspace_name, token->r.lockspace_name))
+			continue;
+		if (strcmp(r->r.name, token->r.name))
+			continue;
+		if (r->r.num_disks != token->r.num_disks)
+			continue;
+		if (strcmp(r->r.disks[0].path, token->r.disks[0].path))
+			continue;
+
+		*token_matches = 1;
+		resources_free_count--;
+		list_del(&r->list);
+		r->reused++;
+		return r;
+	}
+
+	return NULL;
 }
 
 /* N.B. the reporting function looks for the
@@ -81,10 +147,10 @@ void send_state_resources(int fd)
 	}
 
 	list_for_each_entry(r, &resources_rem, list)
-		send_state_resource(fd, r, "rem", r->pid, r->release_token_id);
+		send_state_resource(fd, r, "rem", r->pid, 0);
 
 	list_for_each_entry(r, &resources_orphan, list)
-		send_state_resource(fd, r, "orphan", r->pid, r->release_token_id);
+		send_state_resource(fd, r, "orphan", r->pid, 0);
 	pthread_mutex_unlock(&resource_mutex);
 }
 
@@ -929,8 +995,7 @@ static int _release_token(struct task *task, struct token *token,
 			retry_async = 1;
 
 		/* want to see this result in sanlock.log but not worry people with error */
-		log_level(0, token->token_id, NULL, LOG_WARNING,
-			  "release_token erase all leader lver %llu rv %d",
+		log_warnt(token, "release_token erase all leader lver %llu rv %d",
 			  (unsigned long long)lver, rv);
 
 	} else if (r_flags & R_UNDO_SHARED) {
@@ -1008,8 +1073,8 @@ static int _release_token(struct task *task, struct token *token,
 			log_token(token, "release_token done r_flags %x", r_flags);
 		pthread_mutex_lock(&resource_mutex);
 		list_del(&r->list);
-		pthread_mutex_unlock(&resource_mutex);
 		free_resource(r);
+		pthread_mutex_unlock(&resource_mutex);
 		return ret;
 	}
 
@@ -1024,7 +1089,6 @@ static int _release_token(struct task *task, struct token *token,
 	log_errot(token, "release_token timeout r_flags %x", r_flags);
 	pthread_mutex_lock(&resource_mutex);
 	r->flags |= R_THREAD_RELEASE;
-	r->release_token_id = token->token_id;
 	pthread_mutex_unlock(&resource_mutex);
 	return SANLK_AIO_TIMEOUT;
 }
@@ -1063,11 +1127,9 @@ void release_token_async(struct token *token)
 			list_del(&r->list);
 			free_resource(r);
 		} else if (token->acquire_flags & SANLK_RES_PERSISTENT) {
-			r->release_token_id = token->token_id;
 			list_move(&r->list, &resources_orphan);
 		} else {
 			r->flags |= R_THREAD_RELEASE;
-			r->release_token_id = token->token_id;
 			resource_thread_work = 1;
 			list_move(&r->list, &resources_rem);
 			pthread_cond_signal(&resource_cond);
@@ -1159,21 +1221,41 @@ static void copy_disks(void *dst, void *src, int num_disks)
 	}
 }
 
-static struct resource *new_resource(struct token *token)
+static struct resource *get_resource(struct token *token, int *new_id)
 {
 	struct resource *r;
+	int token_matches = 0;
+	uint32_t res_id = 0;
+	uint32_t reused = 0;
 	int disks_len, r_len;
 
 	disks_len = token->r.num_disks * sizeof(struct sync_disk);
 	r_len = sizeof(struct resource) + disks_len;
 
-	r = malloc(r_len);
-	if (!r)
-		return NULL;
+	r = get_free_resource(token, &token_matches);
+
+	if (r && token_matches) {
+		res_id = r->res_id;
+		reused = r->reused;
+		*new_id = 0;
+	} else if (r) {
+		res_id = resource_id_counter++;
+		*new_id = 1;
+	} else {
+		r = malloc(r_len);
+		if (!r)
+			return NULL;
+		res_id = resource_id_counter++;
+		*new_id = 1;
+	}
 
 	memset(r, 0, r_len);
-	memcpy(&r->r, &token->r, sizeof(struct sanlk_resource));
 
+	/* preserved from one use to the next */
+	r->res_id = res_id;
+	r->reused = reused;
+
+	memcpy(&r->r, &token->r, sizeof(struct sanlk_resource));
 	r->io_timeout = token->io_timeout;
 
 	/* disks copied after open_disks because open_disks sets sector_size
@@ -1509,6 +1591,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 	int allow_orphan = 0;
 	int only_orphan = 0;
 	int owner_nowait = 0;
+	int new_id = 0;
 	int rv;
 
 	if (token->acquire_flags & SANLK_RES_LVER)
@@ -1531,6 +1614,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 
 	r = find_resource(token, &resources_rem);
 	if (r) {
+		token->res_id = r->res_id;
 		if (!com.quiet_fail)
 			log_errot(token, "acquire_token resource being removed");
 		pthread_mutex_unlock(&resource_mutex);
@@ -1539,6 +1623,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 
 	r = find_resource(token, &resources_add);
 	if (r) {
+		token->res_id = r->res_id;
 		if (!com.quiet_fail)
 			log_errot(token, "acquire_token resource being added");
 		pthread_mutex_unlock(&resource_mutex);
@@ -1548,6 +1633,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 	r = find_resource(token, &resources_held);
 	if (r && (token->acquire_flags & SANLK_RES_SHARED) && (r->flags & R_SHARED)) {
 		/* multiple shared holders allowed */
+		token->res_id = r->res_id;
 		log_token(token, "acquire_token add shared");
 		copy_disks(&token->r.disks, &r->r.disks, token->r.num_disks);
 		token->resource = r;
@@ -1557,6 +1643,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 	}
 
 	if (r) {
+		token->res_id = r->res_id;
 		if (!com.quiet_fail)
 			log_errot(token, "acquire_token resource exists");
 		pthread_mutex_unlock(&resource_mutex);
@@ -1567,6 +1654,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 
 	r = find_resource(token, &resources_orphan);
 	if (r && !allow_orphan) {
+		token->res_id = r->res_id;
 		log_errot(token, "acquire_token found orphan");
 		pthread_mutex_unlock(&resource_mutex);
 		return -EUCLEAN;
@@ -1576,6 +1664,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 
 	if (r && allow_orphan && 
 	    (r->flags & R_SHARED) && !(token->acquire_flags & SANLK_RES_SHARED)) {
+		token->res_id = r->res_id;
 		log_errot(token, "acquire_token orphan is shared");
 		pthread_mutex_unlock(&resource_mutex);
 		return -EUCLEAN;
@@ -1585,6 +1674,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 
 	if (r && allow_orphan &&
 	    !(r->flags & R_SHARED) && (token->acquire_flags & SANLK_RES_SHARED)) {
+		token->res_id = r->res_id;
 		log_errot(token, "acquire_token orphan is exclusive");
 		pthread_mutex_unlock(&resource_mutex);
 		return -EUCLEAN;
@@ -1594,6 +1684,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 
 	if (r && allow_orphan && 
 	    (r->flags & R_SHARED) && (token->acquire_flags & SANLK_RES_SHARED)) {
+		token->res_id = r->res_id;
 		log_token(token, "acquire_token adopt shared orphan");
 		token->resource = r;
 		list_add(&token->list, &r->tokens);
@@ -1616,6 +1707,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 
 	if (r && allow_orphan &&
 	    !(r->flags & R_SHARED) && !(token->acquire_flags & SANLK_RES_SHARED)) {
+		token->res_id = r->res_id;
 		log_token(token, "acquire_token adopt orphan");
 		token->r.lver = r->leader.lver;
 		r->pid = token->pid;
@@ -1647,7 +1739,7 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 	 * The resource does not exist, so create it.
 	 */
 
-	r = new_resource(token);
+	r = get_resource(token, &new_id);
 	if (!r) {
 		pthread_mutex_unlock(&resource_mutex);
 		return -ENOMEM;
@@ -1657,8 +1749,18 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 	memcpy(r->killargs, killargs, SANLK_HELPER_ARGS_LEN);
 	list_add(&token->list, &r->tokens);
 	list_add(&r->list, &resources_add);
+	token->res_id = r->res_id;
 	token->resource = r;
 	pthread_mutex_unlock(&resource_mutex);
+
+	if (new_id) {
+		/* save a record of what this id is for later debugging */
+		log_warnt(token, "resource %.48s:%.48s:%.256s:%llu",
+			  token->r.lockspace_name,
+			  token->r.name,
+			  token->r.disks[0].path,
+			  (unsigned long long)token->r.disks[0].offset);
+	}
 
 	rv = open_disks(token->disks, token->r.num_disks);
 	if (rv < 0) {
@@ -2139,8 +2241,7 @@ static void resource_thread_release(struct task *task, struct resource *r, struc
 			retry_async = 1;
 
 		/* want to see this result in sanlock.log but not worry people with error */
-		log_level(0, token->token_id, NULL, LOG_WARNING,
-			  "release async erase all leader lver %llu rv %d",
+		log_warnt(token, "release async erase all leader lver %llu rv %d",
 			  (unsigned long long)r->leader.lver, rv);
 
 	} else if (r_flags & R_UNDO_SHARED) {
@@ -2199,8 +2300,8 @@ static void resource_thread_release(struct task *task, struct resource *r, struc
 		log_token(token, "release async done r_flags %x", r_flags);
 		pthread_mutex_lock(&resource_mutex);
 		list_del(&r->list);
-		pthread_mutex_unlock(&resource_mutex);
 		free_resource(r);
+		pthread_mutex_unlock(&resource_mutex);
 		return;
 	}
 
@@ -2340,7 +2441,7 @@ static void *resource_thread(void *arg GNUC_UNUSED)
 			copy_disks(&tt->r.disks, &r->r.disks, r->r.num_disks);
 			tt->host_id = r->host_id;
 			tt->host_generation = r->host_generation;
-			tt->token_id = r->release_token_id;
+			tt->res_id = r->res_id;
 			tt->io_timeout = r->io_timeout;
 			tt->sector_size = r->sector_size;
 			tt->align_size = sector_size_to_align_size(r->sector_size);
@@ -2430,19 +2531,30 @@ int release_orphan(struct sanlk_resource *res)
 	return count;
 }
 
-void purge_resource_orphans(char *space_name)
+static void purge_resource_list(struct list_head *head, char *space_name, const char *list_name)
 {
 	struct resource *r, *safe;
 
 	pthread_mutex_lock(&resource_mutex);
-	list_for_each_entry_safe(r, safe, &resources_orphan, list) {
+	list_for_each_entry_safe(r, safe, head, list) {
 		if (strncmp(r->r.lockspace_name, space_name, NAME_ID_SIZE))
 			continue;
-		log_debug("purge orphan %.48s:%.48s", r->r.lockspace_name, r->r.name);
+		if (list_name)
+			log_debug("purge %s %.48s:%.48s", list_name, r->r.lockspace_name, r->r.name);
 		list_del(&r->list);
-		free_resource(r);
+		free(r);
 	}
 	pthread_mutex_unlock(&resource_mutex);
+}
+
+void purge_resource_orphans(char *space_name)
+{
+	purge_resource_list(&resources_orphan, space_name, "orphan_list");
+}
+
+void purge_resource_free(char *space_name)
+{
+	purge_resource_list(&resources_free, space_name, "free_list");
 }
 
 /*
@@ -2452,7 +2564,7 @@ void purge_resource_orphans(char *space_name)
  * that had timed out previously and need to be retried.
  */
 
-void free_resources(void)
+void rem_resources(void)
 {
 	pthread_mutex_lock(&resource_mutex);
 	if (!list_empty(&resources_rem) && !resource_thread_work) {
@@ -2471,6 +2583,7 @@ int setup_token_manager(void)
 	INIT_LIST_HEAD(&resources_add);
 	INIT_LIST_HEAD(&resources_rem);
 	INIT_LIST_HEAD(&resources_held);
+	INIT_LIST_HEAD(&resources_free);
 	INIT_LIST_HEAD(&resources_orphan);
 	INIT_LIST_HEAD(&host_events);
 

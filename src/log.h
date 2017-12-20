@@ -24,7 +24,7 @@
  * it should be LOG_WARNING (goes only to sanlock.log)
  */
 
-void log_level(uint32_t space_id, uint32_t token_id, char *name_in, int level, const char *fmt, ...)
+void log_level(uint32_t space_id, uint32_t res_id, char *name_in, int level, const char *fmt, ...)
 	__attribute__((format(printf, 5, 6)));
 
 int setup_logging(void);
@@ -33,13 +33,15 @@ void copy_log_dump(char *buf, int *len);
 
 #define log_debug(fmt, args...)               log_level(0, 0, NULL, LOG_DEBUG, fmt, ##args)
 #define log_space(space, fmt, args...)        log_level(space->space_id, 0, NULL, LOG_DEBUG, fmt, ##args)
-#define log_token(token, fmt, args...)        log_level(0, token->token_id, NULL, LOG_DEBUG, fmt, ##args)
-#define log_spoke(space, token, fmt, args...) log_level(space->space_id, token->token_id, NULL, LOG_DEBUG, fmt, ##args)
+#define log_token(token, fmt, args...)        log_level(token->space_id, token->res_id, NULL, LOG_DEBUG, fmt, ##args)
+
+#define log_warn(fmt, args...)                log_level(0, 0, NULL, LOG_WARNING, fmt, ##args)
+#define log_warns(space, fmt, args...)        log_level(space->space_id, 0, NULL, LOG_WARNING, fmt, ##args)
+#define log_warnt(token, fmt, args...)        log_level(token->space_id, token->res_id, NULL, LOG_WARNING, fmt, ##args)
 
 #define log_error(fmt, args...)               log_level(0, 0, NULL, LOG_ERR, fmt, ##args)
 #define log_erros(space, fmt, args...)        log_level(space->space_id, 0, NULL, LOG_ERR, fmt, ##args)
-#define log_errot(token, fmt, args...)        log_level(0, token->token_id, NULL, LOG_ERR, fmt, ##args)
-#define log_errst(space, token, fmt, args...) log_level(space->space_id, token->token_id, NULL, LOG_ERR, fmt, ##args)
+#define log_errot(token, fmt, args...)        log_level(token->space_id, token->res_id, NULL, LOG_ERR, fmt, ##args)
 
 #define log_taske(task, fmt, args...)         log_level(0, 0, task->name, LOG_ERR, fmt, ##args)
 #define log_taskw(task, fmt, args...)         log_level(0, 0, task->name, LOG_WARNING, fmt, ##args)

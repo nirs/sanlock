@@ -60,13 +60,14 @@ int read_resource_owners(struct task *task, struct token *token,
                          char **send_buf, int *send_len, int *count);
 
 /* locks resource_mutex */
-void free_resources(void);
+void rem_resources(void);
 
 /* locks resource_mutex */
 int release_orphan(struct sanlk_resource *res);
 
 /* locks resource_mutex */
 void purge_resource_orphans(char *space_name);
+void purge_resource_free(char *space_name);
 
 /* locks resource_mutex */
 void add_host_event(uint32_t space_id, struct sanlk_host_event *he,
