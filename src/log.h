@@ -34,6 +34,8 @@ void copy_log_dump(char *buf, int *len);
 #define log_debug(fmt, args...)               log_level(0, 0, NULL, LOG_DEBUG, fmt, ##args)
 #define log_space(space, fmt, args...)        log_level(space->space_id, 0, NULL, LOG_DEBUG, fmt, ##args)
 #define log_token(token, fmt, args...)        log_level(token->space_id, token->res_id, NULL, LOG_DEBUG, fmt, ##args)
+#define log_sid(space_id, fmt, args...)       log_level(space_id, 0, NULL, LOG_DEBUG, fmt, ##args)
+#define log_rid(res_id, fmt, args...)         log_level(res_id, 0, NULL, LOG_DEBUG, fmt, ##args)
 
 #define log_warn(fmt, args...)                log_level(0, 0, NULL, LOG_WARNING, fmt, ##args)
 #define log_warns(space, fmt, args...)        log_level(space->space_id, 0, NULL, LOG_WARNING, fmt, ##args)

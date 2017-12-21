@@ -306,7 +306,7 @@ int read_resource_owners(struct task *task, struct token *token,
    enough knowledge to say it's safely dead (unless of course we find it is
    alive while waiting) */
 
-static int host_live(char *lockspace_name, uint64_t host_id, uint64_t gen)
+static int host_live(char *lockspace_name, uint32_t space_id, uint64_t host_id, uint64_t gen)
 {
 	struct host_status hs;
 	uint64_t now;
@@ -315,28 +315,28 @@ static int host_live(char *lockspace_name, uint64_t host_id, uint64_t gen)
 
 	rv = host_info(lockspace_name, host_id, &hs);
 	if (rv) {
-		log_debug("host_live %llu %llu yes host_info %d",
-			  (unsigned long long)host_id, (unsigned long long)gen, rv);
+		log_sid(space_id, "host_live %llu %llu yes host_info %d",
+			(unsigned long long)host_id, (unsigned long long)gen, rv);
 		return 1;
 	}
 
 	if (!hs.last_check) {
-		log_debug("host_live %llu %llu yes unchecked",
-			  (unsigned long long)host_id, (unsigned long long)gen);
+		log_sid(space_id, "host_live %llu %llu yes unchecked",
+			(unsigned long long)host_id, (unsigned long long)gen);
 		return 1;
 	}
 
 	/* the host_id lease is free, not being used */
 	if (!hs.timestamp) {
-		log_debug("host_live %llu %llu no lease free",
-			  (unsigned long long)host_id, (unsigned long long)gen);
+		log_sid(space_id, "host_live %llu %llu no lease free",
+			(unsigned long long)host_id, (unsigned long long)gen);
 		return 0;
 	}
 
 	if (hs.owner_generation > gen) {
-		log_debug("host_live %llu %llu no old gen %llu",
-			  (unsigned long long)host_id, (unsigned long long)gen,
-			  (unsigned long long)hs.owner_generation);
+		log_sid(space_id, "host_live %llu %llu no old gen %llu",
+			(unsigned long long)host_id, (unsigned long long)gen,
+			(unsigned long long)hs.owner_generation);
 		return 0;
 	}
 
@@ -346,23 +346,23 @@ static int host_live(char *lockspace_name, uint64_t host_id, uint64_t gen)
 	other_host_dead_seconds = calc_host_dead_seconds(other_io_timeout);
 
 	if (!hs.last_live && (now - hs.first_check > other_host_dead_seconds)) {
-		log_debug("host_live %llu %llu no first_check %llu",
-			  (unsigned long long)host_id, (unsigned long long)gen,
-			  (unsigned long long)hs.first_check);
+		log_sid(space_id, "host_live %llu %llu no first_check %llu",
+			(unsigned long long)host_id, (unsigned long long)gen,
+			(unsigned long long)hs.first_check);
 		return 0;
 	}
 
 	if (hs.last_live && (now - hs.last_live > other_host_dead_seconds)) {
-		log_debug("host_live %llu %llu no last_live %llu",
-			  (unsigned long long)host_id, (unsigned long long)gen,
-			  (unsigned long long)hs.last_live);
+		log_sid(space_id, "host_live %llu %llu no last_live %llu",
+			(unsigned long long)host_id, (unsigned long long)gen,
+			(unsigned long long)hs.last_live);
 		return 0;
 	}
 
-	log_debug("host_live %llu %llu yes recent first_check %llu last_live %llu",
-		  (unsigned long long)host_id, (unsigned long long)gen,
-		  (unsigned long long)hs.first_check,
-		  (unsigned long long)hs.last_live);
+	log_sid(space_id, "host_live %llu %llu yes recent first_check %llu last_live %llu",
+		(unsigned long long)host_id, (unsigned long long)gen,
+		(unsigned long long)hs.first_check,
+		(unsigned long long)hs.last_live);
 
 	return 1;
 }
@@ -585,7 +585,7 @@ static int clear_dead_shared(struct task *task, struct token *token,
 			continue;
 		}
 
-		if (host_live(token->r.lockspace_name, host_id, mb.generation)) {
+		if (host_live(token->r.lockspace_name, token->space_id, host_id, mb.generation)) {
 			log_token(token, "clear_dead_shared host_id %llu gen %llu alive",
 				  (unsigned long long)host_id, (unsigned long long)mb.generation);
 			live++;
@@ -2019,7 +2019,7 @@ int request_token(struct task *task, struct token *token, uint32_t force_mode,
  out:
 	close_disks(token->disks, token->r.num_disks);
 
-	log_debug("request_token rv %d owner %llu lver %llu mode %u",
+	log_token(token, "request_token rv %d owner %llu lver %llu mode %u",
 		  rv, (unsigned long long)*owner_id,
 		  (unsigned long long)req.lver, req.force_mode);
 
@@ -2050,7 +2050,7 @@ static int examine_token(struct task *task, struct token *token,
 
 	memcpy(req_out, &req, sizeof(struct request_record));
  out:
-	log_debug("examine_token rv %d lver %llu mode %u",
+	log_token(token, "examine_token rv %d lver %llu mode %u",
 		  rv, (unsigned long long)req.lver, req.force_mode);
 
 	return rv;
@@ -2081,7 +2081,7 @@ static void do_request(struct token *tt, int pid, uint32_t force_mode)
 		return;
 	}
 
-	log_debug("do_request %d flags %x %.48s:%.48s",
+	log_token(tt, "do_request %d flags %x %.48s:%.48s",
 		  pid, flags, tt->r.lockspace_name, tt->r.name);
 
 	if (helper_kill_fd == -1) {
@@ -2334,7 +2334,7 @@ static void resource_thread_examine(struct task *task, struct token *tt, int pid
 		return;
 
 	if (req.lver <= lver) {
-		log_debug("examine req lver %llu our lver %llu",
+		log_token(tt, "examine req lver %llu our lver %llu",
 			  (unsigned long long)req.lver, (unsigned long long)lver);
 		return;
 	}
@@ -2479,6 +2479,7 @@ static void *resource_thread(void *arg GNUC_UNUSED)
 			copy_disks(&tt->r.disks, &r->r.disks, r->r.num_disks);
 			tt->host_id = r->host_id;
 			tt->host_generation = r->host_generation;
+			tt->res_id = r->res_id;
 			tt->io_timeout = r->io_timeout;
 			tt->sector_size = r->sector_size;
 			tt->align_size = sector_size_to_align_size(r->sector_size);
