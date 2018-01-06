@@ -3,10 +3,12 @@ Test sanlock direct options.
 """
 
 import io
+import os
 import struct
 import subprocess
 
-SANLOCK = "src/sanlock"
+tests_dir = os.path.dirname(__file__)
+SANLOCK = os.path.join(tests_dir, os.pardir, "src", "sanlock")
 
 
 def test_init_lockspace(tmpdir):
