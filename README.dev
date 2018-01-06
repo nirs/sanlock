@@ -1,0 +1,20 @@
+How to test sanlock
+===================
+
+To run the python based tests, you need pytest. The best way to install a
+recent version is to use pip:
+
+    $ pip install pytest
+
+Before running the tests, you need to build sanlock and wdmd:
+
+    $ make -C wdmd
+    $ make -C src
+
+To use libsanlock.so and libwdmd.so from the source tree:
+
+    $ export LD_LIBRARY_PATH=$PWD/src:$PWD/wdmd
+
+To run the tests:
+
+    $ pytest

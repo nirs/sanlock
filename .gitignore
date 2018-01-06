@@ -15,3 +15,4 @@ tests/killpath
 tests/sanlk_client
 tests/sanlk_load
 tests/sanlk_path
+tests/__pycache__/
