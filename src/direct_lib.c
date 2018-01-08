@@ -33,6 +33,18 @@ void log_level(uint32_t space_id GNUC_UNUSED, uint32_t res_id GNUC_UNUSED,
 {
 }
 
+int lockspace_begin_rindex_op(char *space_name GNUC_UNUSED, int rindex_op GNUC_UNUSED, struct space_info *spi GNUC_UNUSED);
+int lockspace_begin_rindex_op(char *space_name GNUC_UNUSED, int rindex_op GNUC_UNUSED, struct space_info *spi GNUC_UNUSED)
+{
+	return -1;
+}
+
+int lockspace_clear_rindex_op(char *space_name GNUC_UNUSED);
+int lockspace_clear_rindex_op(char *space_name GNUC_UNUSED)
+{
+	return -1;
+}
+
 int lockspace_disk(char *space_name GNUC_UNUSED, struct sync_disk *disk GNUC_UNUSED);
 
 int lockspace_disk(char *space_name GNUC_UNUSED, struct sync_disk *disk GNUC_UNUSED)

@@ -335,6 +335,119 @@ int sanlock_test_resource_owners(struct sanlk_resource *res, uint32_t flags,
 				 struct sanlk_host *hosts, int hosts_count,
 				 uint32_t *test_flags);
 
+/*
+ * A resource index stores the disk locations (offsets) of resource leases.
+ * Using it is optional; an application can keep track of lease offsets
+ * without using the index.
+ *
+ * On disk, a resource index uses two alignment-sized regions.
+ * The first holds the records mapping resource names to offsets.
+ * The second holds a paxos lease that sanlock uses internally
+ * to protect updates to the index.  The caller chooses the disk
+ * location of the resource index (path and offset), and passes
+ * this as a parameter to all functions that use the index with
+ * struct sanlk_rindex.
+ *
+ * The resource index is followed on disk by the resource leases
+ * that it references.  So, using the index removes the ability of
+ * the application to place resource leases at any disk location.
+ * A caller would usually place the resource index after a lockspace
+ * struct on disk (not required.)
+ *
+ * The resource index and the following resource leases must all use
+ * the same align size/flag.
+ *
+ * The rindex specifies the lockspace name that the referenced resource
+ * leases are associated with.  This lockspace will also be used for
+ * the internal rindex paxos lease.
+ * sanlock must be a member of the lockspace to use the create/delete
+ * resource functions.
+ *
+ * format
+ * ------
+ * Initializes resource index at the specified offset and
+ * initializes an internal paxos lease in the following area.
+ * Set the ALIGN flag in sanlk_rindex corresponding to the desired
+ * sector size; the align size used for the rindex must match the
+ * align size used for resources.
+ *
+ * lookup
+ * ------
+ * Looks up a value in the resource index.  When a res name is set
+ * and *offset is 0, this searches for an entry with the matching
+ * name and if found sets the res lease offset.  When res name is not
+ * set and an *offset is not 0, this checks for an entry with the given
+ * res lease offset and if found sets the res name.  When name and
+ * offset or both unset, the first free entry is returned in offset.
+ * All resource lease offsets are relative to the start of the device.
+ * sanlock does not acquire the internal rindex paxos lease.
+ * (The offsets are the disk locations of the resource leases, not
+ * the disk locations of the rindex entries for the resource leases.)
+ *
+ * update
+ * ------
+ * Add or remove an rindex entry.  When adding, the rentry
+ * name and offset must both be set, and the index entry is
+ * set to indicate the named resource lease exists at the
+ * specified offset.  WHen removing, the rentry offset needs
+ * to be set, and the index entry for that offset is cleared.
+ * This is not generally used; the create/delete interfaces are
+ * the standard method for updating the index.
+ *
+ * create_resource
+ * ---------------
+ * Searches the index for a free resource lease area, initializes a new
+ * resource lease at that offset, and updates the index for
+ * the new lease.  Returns the offset of the new resource lease.
+ * sanlock holds the internal rindex paxos lease around the index
+ * lookup, resource init and index update.  The new lease is initialized
+ * before the index is updated, so the index will not reference
+ * an uninitialized area if the host fails during create_resource.
+ *
+ * delete_resource
+ * ---------------
+ * Updates the index to remove the entry for the named resource lease,
+ * and clears the resource lease at that offset.
+ * sanlock holds the internal rindex paxos lease around the
+ * index update and lease reinitialization.  If sanlock fails
+ * after the index update but before clearing the resource, a
+ * subsequent create will overwrite the uncleared resource.
+ *
+ * rebuild
+ * -------
+ * Rebuilds the rindex based on resource leases that are found.
+ * Reads each potential resource lease area to check if a
+ * resource lease exists at that offset.  If so, an rindex
+ * entry is added with that resource name and offset.
+ */
+
+/*
+ * generic rindex flags use lower 16 bits
+ * specific rindex function function use upper 16 bits
+ */
+#define SANLK_RX_NO_LOCKSPACE   0x000000001  /* don't use the lockspace */
+
+/* update_rindex flags */
+#define SANLK_RXUP_ADD     0x00010000
+#define SANLK_RXUP_REM     0x00020000
+
+int sanlock_format_rindex(struct sanlk_rindex *rx, uint32_t flags);
+
+int sanlock_update_rindex(struct sanlk_rindex *rx, uint32_t flags,
+			  struct sanlk_rentry *re);
+
+int sanlock_lookup_rindex(struct sanlk_rindex *rx, uint32_t flags,
+			  struct sanlk_rentry *re);
+
+int sanlock_rebuild_rindex(struct sanlk_rindex *rx, uint32_t flags);
+
+int sanlock_create_resource(struct sanlk_rindex *rx, uint32_t flags,
+			    struct sanlk_rentry *re,
+			    int max_hosts, int num_hosts);
+
+int sanlock_delete_resource(struct sanlk_rindex *rx, uint32_t flags,
+			    struct sanlk_rentry *re);
+
 int sanlock_version(uint32_t flags, uint32_t *version, uint32_t *proto);
 
 /*

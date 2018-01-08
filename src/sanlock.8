@@ -249,6 +249,62 @@ leases in the lockspace.
 
 .P
 
+.I Resource Index
+
+The resource index (rindex) is an optional sanlock feature that
+applications can use to keep track of resource lease offsets.  Without the
+rindex, an application must keep track of where its resource leases exist
+on disk and find available locations when creating new leases.
+
+The sanlock rindex uses two align-size areas on disk following the
+lockspace.  The first area holds rindex entries; each entry records a
+resource lease name and location.  The second area holds a private paxos
+lease, used by sanlock internally to protect rindex updates.
+
+The application creates the rindex on disk with the "format" function.
+Format is a disk-only operation and does not interact with the live
+lockspace, so it can be called without first calling add_lockspace.  The
+application needs to follow the convention of writing the lockspace at the
+start of the device (offset 0) and formatting the rindex immediately
+following the lockspace area (offset 1M/8M according to align size
+corresponding to the sector size.)  The application must use the ALIGN
+flag in format that corresponds to the same in the lockspace.
+
+To use the rindex, the application:
+
+.IP \[bu] 2
+Uses the "create" function to create a new resource lease on disk.  This
+takes the place of the write_resource function.  The create function
+requires the location of the rindex and the name of the new resource
+lease.  sanlock finds a free lease area, writes the new resource lease at
+that location, updates the rindex with the name:offset, and returns the
+offset to the caller.  The caller uses this offset when acquiring the
+resource lease.
+
+.IP \[bu]
+Uses the "delete" function to remove a resource disk on disk (also
+corresponding to the write_resource function.)  sanlock clears the
+resource lease and the rindex entry for it.  A subsequent call to create
+may use this same disk location for a different resource lease.
+
+.IP \[bu]
+Uses the "lookup" function to discover the offset of a resource lease
+given the resource lease name.  The caller would typically call this prior
+to acquiring the resource lease.
+
+.IP \[bu]
+Uses the "rebuild" function to recreate the rindex if it is damaged or
+becomes inconsistent.  This function scans the disk for resource leases
+and creates new rindex entries to match the leases it finds.
+
+.IP \[bu]
+The "update" function manipulates rindex entries directly and should not
+normally be used by the application.  In normal usage, the create and
+delete functions manipulate rindex entries.  Update is mainly useful for
+testing or repairs.
+
+.P
+
 .I Expiration
 
 .IP \[bu] 2
@@ -701,6 +757,34 @@ as the USED.
 .br
 \-O 0|1 Set (1) or clear (0) the USED_BY_ORPHANS flag.
 
+\fBsanlock client format -x\fP RINDEX
+
+Create a resource index on disk.
+
+\fBsanlock client create -x\fP RINDEX \fB-e\fP \fIresource_name\fP
+
+Create a new resource lease on disk, using the rindex to
+find a free offset.
+
+\fBsanlock client delete -x\fP RINDEX \fB-e\fP \fIresource_name\fP[:\fIoffset\fP]
+
+Delete an existing resource lease on disk.
+
+\fBsanlock client lookup -x\fP RINDEX \fB-e\fP \fIresource_name\fP
+
+Look up the offset of an existing resource lease by name on disk, using
+the rindex.  With no -e option, lookup returns the next free lease offset.
+If -e specifes both name and offset, the lookup verifies both are correct.
+
+\fBsanlock client update -x\fP RINDEX \fB-e\fP \fIresource_name\fP[:\fIoffset\fP] [\fB-z 0|1\fP]
+
+Add (-z 0) or remove (-z 1) an rindex entry on disk.
+
+\fBsanlock client rebuild -x\fP RINDEX
+
+Rebuild the rindex entries by scanning the disk for resource leases.
+
+
 .SS Direct Command
 
 .B "sanlock direct"
@@ -760,8 +844,21 @@ the single sector of a delta lease, or the first sector of a paxos lease.
 \fR[\fP\fB:\fP\fIoffset\fP\fR[\fP\fB:\fP\fIsize\fP\fR]]\fP
 
 Read disk sectors and print leader records for delta or paxos leases.  Add
--f 1 to print the request record values for paxos leases, and host_ids set
-in delta lease bitmaps.
+-f 1 to print the request record values for paxos leases, host_ids set
+in delta lease bitmaps, and rindex entries.
+
+\fBsanlock direct format -x\fP RINDEX
+.br
+\fBsanlock direct lookup -x\fP RINDEX \fB-e\fP \fIresource_name\fP
+.br
+\fBsanlock direct update -x\fP RINDEX \fB-e\fP \fIresource_name\fP[:\fIoffset\fP] [\fB-z 0|1\fP]
+.br
+\fBsanlock direct rebuild -x\fP RINDEX
+
+Access the resource index on disk without going through the sanlock
+daemon.  This precludes using the internal paxos lease to protect rindex
+modifications.  See client equivalents for descriptions.
+
 
 .SS
 LOCKSPACE option string
@@ -772,7 +869,7 @@ LOCKSPACE option string
 .br
 .IR host_id " local host identifier in lockspace"
 .br
-.IR path " path to storage reserved for leases"
+.IR path " path to storage to use for leases"
 .br
 .IR offset " offset on path (bytes)"
 .br
@@ -786,7 +883,7 @@ RESOURCE option string
 .br
 .IR resource_name " name of resource"
 .br
-.IR path " path to storage reserved for leases"
+.IR path " path to storage to use leases"
 .br
 .IR offset " offset on path (bytes)"
 
@@ -800,6 +897,18 @@ RESOURCE option string with suffix
 .BR \-r " " \fIlockspace_name\fP:\fIresource_name\fP:\fIpath\fP:\fIoffset\fP:SH
 .P
 SH indicates shared mode
+
+.SS
+RINDEX option string
+
+\fB\-x\fP \fIlockspace_name\fP:\fIpath\fP:\fIoffset\fP
+.P
+.IR lockspace_name " name of lockspace"
+.br
+.IR path " path to storage to use for leases"
+.br
+.IR offset " offset on path (bytes) of rindex"
+
 
 .SS Defaults
 

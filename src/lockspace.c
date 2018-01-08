@@ -91,6 +91,18 @@ static struct space *find_lockspace_id(uint32_t space_id)
 	return NULL;
 }
 
+static void _set_space_info(struct space *sp, struct space_info *spi)
+{
+	/* keep this in sync with any new fields added to struct space_info */
+	spi->space_id = sp->space_id;
+	spi->io_timeout = sp->io_timeout;
+	spi->sector_size = sp->sector_size;
+	spi->align_size = sp->align_size;
+	spi->host_id = sp->host_id;
+	spi->host_generation = sp->host_generation;
+	spi->killing_pids = sp->killing_pids;
+}
+
 int _lockspace_info(const char *space_name, struct space_info *spi)
 {
 	struct space *sp;
@@ -99,17 +111,7 @@ int _lockspace_info(const char *space_name, struct space_info *spi)
 		if (strncmp(sp->space_name, space_name, NAME_ID_SIZE))
 			continue;
 
-		/* keep this in sync with any new fields added to
-		   struct space_info */
-
-		spi->space_id = sp->space_id;
-		spi->io_timeout = sp->io_timeout;
-		spi->sector_size = sp->sector_size;
-		spi->align_size = sp->align_size;
-		spi->host_id = sp->host_id;
-		spi->host_generation = sp->host_generation;
-		spi->killing_pids = sp->killing_pids;
-
+		_set_space_info(sp, spi);
 		return 0;
 	}
 	return -1;
@@ -1109,6 +1111,13 @@ int rem_lockspace_start(struct sanlk_lockspace *ls, unsigned int *space_id)
 		goto out;
 	}
 
+	if (sp->rindex_op) {
+		log_space(sp, "rem_lockspace ignored for rindex_op %d", sp->rindex_op);
+		pthread_mutex_unlock(&spaces_mutex);
+		rv = -EBUSY;
+		goto out;
+	}
+
 	/*
 	 * Removal happens in a round about way:
 	 * - we set external_remove
@@ -1429,6 +1438,54 @@ int lockspace_set_config(struct sanlk_lockspace *ls, GNUC_UNUSED uint32_t flags,
 	return rv;
 }
 
+int lockspace_begin_rindex_op(char *space_name, int rindex_op, struct space_info *spi)
+{
+	struct space *sp;
+	int rv = 0;
+
+	pthread_mutex_lock(&spaces_mutex);
+	sp = _search_space(space_name, NULL, 0, &spaces, NULL, NULL, NULL);
+	if (!sp) {
+		rv = -ENOENT;
+		goto out;
+	}
+
+	/* space_dead and thread_stop are only set while
+	   spaces_mutex is held, so we don't need to lock sp->mutex */
+
+	if (sp->space_dead || sp->thread_stop) {
+		rv = -ENOSPC;
+		goto out;
+	}
+
+	if (sp->rindex_op) {
+		log_debug("being_rindex_op busy with %d", sp->rindex_op);
+		rv = -EBUSY;
+		goto out;
+	}
+
+	sp->rindex_op = rindex_op;
+	_set_space_info(sp, spi);
+out:
+	pthread_mutex_unlock(&spaces_mutex);
+	return rv;
+}
+
+int lockspace_clear_rindex_op(char *space_name)
+{
+	struct space *sp;
+	int rv = 0;
+
+	pthread_mutex_lock(&spaces_mutex);
+	sp = _search_space(space_name, NULL, 0, &spaces, NULL, NULL, NULL);
+	if (!sp)
+		rv = -ENOENT;
+	else
+		sp->rindex_op = 0;
+	pthread_mutex_unlock(&spaces_mutex);
+	return rv;
+}
+
 static int _clean_event_fds(struct space *sp)
 {
 	uint32_t end;
@@ -1694,6 +1751,78 @@ static int stop_lockspace_thread(struct space *sp, int wait)
 
 	return rv;
 }
+
+/*
+ * locking/lifetime rules for a struct space
+ *
+ * multiple factors:
+ * . spaces_mutex
+ * . sp->mutex
+ * . the specific thread: main daemon thread, lockspace thread, worker thread
+ *
+ * spaces, spaces_add, spaces_rem lists are protected by spaces_mutex
+ *
+ * sp->mutex protects info that is exchanged between the lockspace thread
+ * (for the sp) and the main thread.  This is primarily sp->thread_stop,
+ * and sp->lease_status (although it seems a couple other bits of info
+ * have been added over time that are communicated between the lockspace
+ * thread and the main thread).
+ *
+ * add_lockspace_start(), called by worker thread, creates sp,
+ * adds it to spaces_add list under spaces_mutex, creates lockspace_thread
+ * for the sp.
+ *
+ * lockspace_thread never has to worry about sp going away and can access
+ * sp directly any time.  The sp will not be freed until lockspace_thread
+ * has exited.
+ *
+ * The main thread never has to worry about sp going away, because the
+ * main thread is the only context in which sp structs are freed
+ * (and that only happens in free_lockspaces).
+ *
+ * add_lockspace_wait(), called by worker thread, can access sp directly
+ * because sp won't go away while it's on spaces_add.  Only add_lockspace_wait
+ * can do something with sp while it's on spaces_add.  _wait uses sp->mutex
+ * to exchange lease status with lockspace_thread.  Once the host_id lease
+ * is acquired, _wait moves sp from spaces_add to spaces under spaces_mutex.
+ * After sp is moved to spaces list, its lifetime is owned by the main thread.
+ *
+ * While sp is on spaces list, its lifetime is controlled by the main thread.
+ * Apart from lockspace_thread, any other thread, e.g. worker thread, must
+ * lock spaces_mutex, look up sp on spaces list, access sp fields, then unlock
+ * spaces_mutex.  After releasing spaces_mutex, it can't access sp struct
+ * because the main thread could dispose of it.  If the worker thread wants
+ * to look at info that's being updated by the lockspace_thread, it should
+ * also take sp->mutex before copying it.
+ *
+ * I currently see some violations of proper sp access that should be fixed.
+ * The bad pattern in each case is: lock spaces_mutex, find sp,
+ * unlock spaces_mutex, lock sp->mutex.  The sp could in theory go away between
+ * unlock spaces_mutex and lock sp->mutex.  (In practice this would
+ * likely never happen.)
+ *
+ * . worker_thread lockspace_set_event()
+ *   (reg_event and end_event are ok since they are called from
+ *   the main thread)
+ *
+ * . worker_thread host_status_set_bit() 
+ *
+ * . resource_thread send_event_callbacks() does the same.
+ *
+ * I'm not sure what the best solution would be: lock sp->mutex before
+ * unlocking spaces_mutex?  Do everything under spaces_mutex?  Add
+ * a simple ref count to sp for these cases of using sp from other
+ * threads?
+ *
+ * cmd_rem_lockspace() is run by a worker_thread.  rem_lockspace_start()
+ * locks spaces_mutex, finds sp, sets sp->external_remove, unlocks spaces_mutex.
+ * Then the main thread, which owns the sp structs, sees sp->external_remove,
+ * kills any pids using the sp, and when the sp is no longer used, it sets
+ * sp->thread_stop, and moves sp from spaces list to spaces_rem list.
+ * The main thread then runs free_lockspaces() which stops the lockspace_thread
+ * for sp's on spaces_rem.  When the lockspace_thread exits, the main thread
+ * then removes sp from spaces_rem and frees sp.
+ */
 
 void free_lockspaces(int wait)
 {

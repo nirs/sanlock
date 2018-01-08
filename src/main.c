@@ -1245,6 +1245,12 @@ static void process_connection(int ci)
 	case SM_CMD_GET_LVB:
 	case SM_CMD_SHUTDOWN_WAIT:
 	case SM_CMD_SET_EVENT:
+	case SM_CMD_FORMAT_RINDEX:
+	case SM_CMD_REBUILD_RINDEX:
+	case SM_CMD_UPDATE_RINDEX:
+	case SM_CMD_LOOKUP_RINDEX:
+	case SM_CMD_CREATE_RESOURCE:
+	case SM_CMD_DELETE_RESOURCE:
 		rv = client_suspend(ci);
 		if (rv < 0)
 			return;
@@ -1753,6 +1759,97 @@ static int group_to_gid(char *arg)
 	return gr->gr_gid;
 }
 
+static int parse_arg_rentry(char *str)
+{
+	char *name = NULL;
+	char *offset = NULL;
+
+	if (!str)
+		return -EINVAL;
+
+	/* "-r :1M" can be used to specify only an offset */
+	if (str[0] != ':')
+		name = str;
+
+	if ((offset = strchr(str, ':'))) {
+		uint64_t offnum;
+		char *m ;
+
+		*offset = '\0';
+		offset++;
+
+		if ((m = strchr(offset, 'M'))) {
+			*m = '\0';
+			offnum = atoll(offset) * 1024 * 1024;
+		} else {
+			offnum = atoll(offset);
+		}
+		com.rentry.offset = offnum;
+	}
+
+	if (name)
+		strncpy(com.rentry.name, name, SANLK_NAME_LEN);
+
+	return 0;
+}
+
+static int parse_arg_rindex(char *str)
+{
+	char *ls_name = NULL;
+	char *path = NULL;
+	char *offset = NULL;
+	int i;
+
+	if (!str)
+		return -EINVAL;
+
+	ls_name = &str[0];
+
+	for (i = 0; i < strlen(str); i++) {
+		if (str[i] == '\\') {
+			i++;
+			continue;
+		}
+
+		if (str[i] == ':') {
+			if (!path)
+				path = &str[i];
+			else if (!offset)
+				offset = &str[i];
+		}
+	}
+
+	if (path) {
+		*path = '\0';
+		path++;
+	}
+	if (offset) {
+		*offset= '\0';
+		offset++;
+	}
+
+	if (ls_name)
+		strncpy(com.rindex.lockspace_name, ls_name, SANLK_NAME_LEN);
+
+	if (path)
+		sanlock_path_import(com.rindex.disk.path, path, sizeof(com.rindex.disk.path));
+
+	if (offset) {
+		uint64_t offnum;
+		char *m ;
+
+		if ((m = strchr(offset, 'M'))) {
+			*m = '\0';
+			offnum = atoll(offset) * 1024 * 1024;
+		} else {
+			offnum = atoll(offset);
+		}
+		com.rindex.disk.offset = offnum;
+	}
+
+	return 0;
+}
+
 static int parse_arg_lockspace(char *arg)
 {
 	sanlock_str_to_lockspace(arg, &com.lockspace);
@@ -1860,11 +1957,21 @@ static void print_usage(void)
 	printf("sanlock client inquire -p <pid>\n");
 	printf("sanlock client request -r RESOURCE -f <force_mode>\n");
 	printf("sanlock client examine -r RESOURCE | -s LOCKSPACE\n");
+	printf("sanlock client format -x RINDEX\n");
+	printf("sanlock client create -x RINDEX -e <resource_name>\n");
+	printf("sanlock client delete -x RINDEX -e <resource_name>[:<offset>]\n");
+	printf("sanlock client lookup -x RINDEX [-e <resource_name>:<offset>]\n");
+	printf("sanlock client update -x RINDEX -e <resource_name>[:<offset>] [-z 0|1]\n");
+	printf("sanlock client rebuild -x RINDEX\n");
 	printf("\n");
 	printf("sanlock direct <action> [-a 0|1] [-o 0|1] [-Z 512|4096]\n");
 	printf("sanlock direct init -s LOCKSPACE | -r RESOURCE\n");
 	printf("sanlock direct read_leader -s LOCKSPACE | -r RESOURCE\n");
 	printf("sanlock direct dump <path>[:<offset>[:<size>]]\n");
+	printf("sanlock direct format -x RINDEX\n");
+	printf("sanlock direct lookup -x RINDEX [-e <resource_name>:<offset>]\n");
+	printf("sanlock direct update -x RINDEX -e <resource_name>[:<offset>] [-z 0|1]\n");
+	printf("sanlock direct rebuild -x RINDEX\n");
 	printf("\n");
 	printf("LOCKSPACE = <lockspace_name>:<host_id>:<path>:<offset>\n");
 	printf("  <lockspace_name>	name of lockspace\n");
@@ -1878,6 +1985,11 @@ static void print_usage(void)
 	printf("  <path>		path to storage reserved for leases\n");
 	printf("  <offset>		offset on path (bytes)\n");
 	printf("  <lver>                optional leader version or SH for shared lease\n");
+	printf("\n");
+	printf("RINDEX = <lockspace_name>:<path>:<offset>\n");
+	printf("  <lockspace_name>	name of lockspace\n");
+	printf("  <path>		path to storage reserved for leases\n");
+	printf("  <offset>		offset on path (bytes)\n");
 	printf("\n");
 	printf("Limits:\n");
 	printf("offset alignment with 512 byte sectors: %d (1MB)\n", 1024 * 1024);
@@ -1993,7 +2105,25 @@ static int read_command_line(int argc, char *argv[])
 			com.action = ACT_SET_EVENT;
 		else if (!strcmp(act, "set_config"))
 			com.action = ACT_SET_CONFIG;
-		else {
+		else if (!strcmp(act, "format")) {
+			com.action = ACT_FORMAT;
+			com.rindex_op = RX_OP_FORMAT;
+		} else if (!strcmp(act, "rebuild")) {
+			com.action = ACT_REBUILD;
+			com.rindex_op = RX_OP_REBUILD;
+		} else if (!strcmp(act, "create")) {
+			com.action = ACT_CREATE;
+			com.rindex_op = RX_OP_CREATE;
+		} else if (!strcmp(act, "delete")) {
+			com.action = ACT_DELETE;
+			com.rindex_op = RX_OP_DELETE;
+		} else if (!strcmp(act, "lookup")) {
+			com.action = ACT_LOOKUP;
+			com.rindex_op = RX_OP_LOOKUP;
+		} else if (!strcmp(act, "update")) {
+			com.action = ACT_UPDATE;
+			com.rindex_op = RX_OP_UPDATE;
+		} else {
 			log_tool("client action \"%s\" is unknown", act);
 			exit(EXIT_FAILURE);
 		}
@@ -2020,7 +2150,19 @@ static int read_command_line(int argc, char *argv[])
 			com.action = ACT_RELEASE_ID;
 		else if (!strcmp(act, "renew_id"))
 			com.action = ACT_RENEW_ID;
-		else {
+		else if (!strcmp(act, "format")) {
+			com.action = ACT_FORMAT;
+			com.rindex_op = RX_OP_FORMAT;
+		} else if (!strcmp(act, "rebuild")) {
+			com.action = ACT_REBUILD;
+			com.rindex_op = RX_OP_REBUILD;
+		} else if (!strcmp(act, "lookup")) {
+			com.action = ACT_LOOKUP;
+			com.rindex_op = RX_OP_LOOKUP;
+		} else if (!strcmp(act, "update")) {
+			com.action = ACT_UPDATE;
+			com.rindex_op = RX_OP_UPDATE;
+		} else {
 			log_tool("direct action \"%s\" is unknown", act);
 			exit(EXIT_FAILURE);
 		}
@@ -2130,8 +2272,12 @@ static int read_command_line(int argc, char *argv[])
 			com.he_data = strtoull(optionarg, NULL, 0);
 			break;
 		case 'e':
-			strncpy(com.our_host_name, optionarg, NAME_ID_SIZE);
-			com.he_event = strtoull(optionarg, NULL, 0);
+			if (com.rindex_op) {
+				parse_arg_rentry(optionarg);
+			} else {
+				strncpy(com.our_host_name, optionarg, NAME_ID_SIZE);
+				com.he_event = strtoull(optionarg, NULL, 0);
+			}
 			break;
 		case 'i':
 			com.host_id = strtoull(optionarg, NULL, 0);
@@ -2172,6 +2318,9 @@ static int read_command_line(int argc, char *argv[])
 		case 'u':
 			com.used_set = 1;
 			com.used = atoi(optionarg);
+			break;
+		case 'x':
+			parse_arg_rindex(optionarg);
 			break;
 		case 'z':
 			com.clear_arg = 1;
@@ -2862,6 +3011,49 @@ static int do_client(void)
 		log_tool("set_config done %d", rv);
 		break;
 
+	case ACT_FORMAT:
+		if (com.sector_size == 512)
+			com.rindex.flags |= SANLK_RIF_ALIGN1M;
+		else if (com.sector_size == 4096)
+			com.rindex.flags |= SANLK_RIF_ALIGN8M;
+
+		rv = sanlock_format_rindex(&com.rindex, 0);
+		log_tool("format done %d", rv);
+		break;
+
+	case ACT_REBUILD:
+		rv = sanlock_rebuild_rindex(&com.rindex, 0);
+		log_tool("rebuild done %d", rv);
+		break;
+
+	case ACT_CREATE:
+		rv = sanlock_create_resource(&com.rindex, 0, &com.rentry, 0, 0);
+		log_tool("create_resource done %d", rv);
+		if (!rv)
+			log_tool("offset %llu", (unsigned long long)com.rentry.offset);
+		break;
+
+	case ACT_DELETE:
+		rv = sanlock_delete_resource(&com.rindex, 0, &com.rentry);
+		log_tool("delete_resource done %d", rv);
+		break;
+
+	case ACT_LOOKUP:
+		rv = sanlock_lookup_rindex(&com.rindex, 0, &com.rentry);
+		log_tool("lookup done %d", rv);
+		if (!rv)
+			log_tool("name %s offset %llu",
+				  com.rentry.name[0] ? com.rentry.name : "-",
+				  (unsigned long long)com.rentry.offset);
+		break;
+
+	case ACT_UPDATE:
+		rv = sanlock_update_rindex(&com.rindex,
+					   com.clear_arg ? SANLK_RXUP_REM : SANLK_RXUP_ADD,
+					   &com.rentry);
+		log_tool("update done %d", rv);
+		break;
+
 	default:
 		log_tool("action not implemented");
 		rv = -1;
@@ -3122,6 +3314,7 @@ static int do_direct_init(void)
 static int do_direct(void)
 {
 	struct leader_record leader;
+	uint32_t cmd_flags = 0;
 	int rv;
 
 	/* we want a record of any out-of-band changes to disk */
@@ -3150,6 +3343,34 @@ static int do_direct(void)
 	
 	case ACT_WRITE_LEADER:
 		rv = do_direct_write_leader();
+		break;
+
+	case ACT_FORMAT:
+		rv = direct_rindex_format(&main_task, &com.rindex);
+		log_tool("format done %d", rv);
+		break;
+
+	case ACT_REBUILD:
+		rv = direct_rindex_rebuild(&main_task, &com.rindex, 0);
+		log_tool("rebuild done %d", rv);
+		break;
+
+	case ACT_LOOKUP:
+		rv = direct_rindex_lookup(&main_task, &com.rindex, &com.rentry, 0);
+		log_tool("lookup done %d", rv);
+		if (!rv)
+			log_tool("name %s offset %llu",
+				  com.rentry.name[0] ? com.rentry.name : "-",
+				  (unsigned long long)com.rentry.offset);
+		break;
+
+	case ACT_UPDATE:
+		if (com.clear_arg)
+			cmd_flags |= SANLK_RXUP_REM;
+		else
+			cmd_flags |= SANLK_RXUP_ADD;
+		rv = direct_rindex_update(&main_task, &com.rindex, &com.rentry, cmd_flags);
+		log_tool("update done %d", rv);
 		break;
 
 	case ACT_ACQUIRE:

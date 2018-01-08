@@ -28,6 +28,7 @@
 #include "leader.h"
 #include "paxos_dblock.h"
 #include "mode_block.h"
+#include "rindex_disk.h"
 #include "list.h"
 #include "monotime.h"
 
@@ -84,6 +85,7 @@ struct delta_extra {
 #define T_RESTRICT_SIGTERM	 0x00000002 /* inherited from client->restricted */
 #define T_RETRACT_PAXOS		 0x00000004
 #define T_WRITE_DBLOCK_MBLOCK_SH 0x00000008 /* make paxos layer include mb SHARED with dblock */
+#define T_CHECK_EXISTS		 0x00000010 /* make paxos layer not error if reading lease finds none */
 
 struct token {
 	/* values copied from acquire res arg */
@@ -113,6 +115,12 @@ struct token {
 
 	struct sync_disk *disks; /* shorthand, points to r.disks[0] */
 	struct sanlk_resource r;
+	/*
+	 * sanlk_resource must be the last element of token.
+	 * sanlk_resource ends with sanlk_disk disks[0],
+	 * and allocating a token allocates N sanlk_disk structs
+	 * after the token struct so they follow the sanlk_resource.
+	 */
 };
 
 #define R_SHARED     		0x00000001
@@ -198,6 +206,7 @@ struct space {
 	uint32_t flags; /* SP_ */
 	uint32_t used_retries;
 	uint32_t renewal_read_extend_sec; /* defaults to io_timeout */
+	uint32_t rindex_op;
 	int sector_size;
 	int align_size;
 	int renew_fail;
@@ -231,6 +240,13 @@ struct space_info {
 	int align_size;
 	int killing_pids;
 };
+
+#define RX_OP_FORMAT 1
+#define RX_OP_CREATE 2
+#define RX_OP_DELETE 3
+#define RX_OP_LOOKUP 4
+#define RX_OP_UPDATE 5
+#define RX_OP_REBUILD 6
 
 #define HOSTID_AIO_CB_SIZE 4
 #define WORKER_AIO_CB_SIZE 2
@@ -359,6 +375,9 @@ struct command_line {
 	char our_host_name[SANLK_NAME_LEN+1];
 	char *file_path;
 	char *dump_path;
+	int rindex_op;
+	struct sanlk_rentry rentry;		/* -e */
+	struct sanlk_rindex rindex;		/* -x RINDEX */
 	struct sanlk_lockspace lockspace;	/* -s LOCKSPACE */
 	struct sanlk_resource *res_args[SANLK_MAX_RESOURCES]; /* -r RESOURCE */
 };
@@ -402,6 +421,12 @@ enum {
 	ACT_SET_CONFIG,
 	ACT_WRITE_LEADER,
 	ACT_RENEWAL,
+	ACT_FORMAT,
+	ACT_CREATE,
+	ACT_DELETE,
+	ACT_LOOKUP,
+	ACT_UPDATE,
+	ACT_REBUILD,
 };
 
 EXTERN int external_shutdown;

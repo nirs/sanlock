@@ -20,6 +20,15 @@
  * "end" variables point to ondisk format (endian converted) structures.
  */
 
+void magic_in(char *end, uint32_t *magic)
+{
+	uint32_t magic_end;
+
+	memcpy(&magic_end, end, sizeof(uint32_t));
+
+	*magic = le32_to_cpu(magic_end);
+}
+
 void leader_record_in(struct leader_record *end, struct leader_record *lr)
 {
 	lr->magic            = le32_to_cpu(end->magic);
@@ -118,5 +127,45 @@ void mode_block_out(struct mode_block *mb, struct mode_block *end)
 {
 	end->flags      = cpu_to_le32(mb->flags);
 	end->generation = cpu_to_le64(mb->generation);
+}
+
+void rindex_header_in(struct rindex_header *end, struct rindex_header *rh)
+{
+	rh->magic		= le32_to_cpu(end->magic);
+	rh->version		= le32_to_cpu(end->version);
+	rh->flags		= le32_to_cpu(end->flags);
+	rh->sector_size		= le32_to_cpu(end->sector_size);
+	rh->max_resources	= le32_to_cpu(end->max_resources);
+	rh->unused		= le32_to_cpu(end->unused);
+	rh->rx_offset		= le64_to_cpu(end->rx_offset);
+	memcpy(rh->lockspace_name, end->lockspace_name, NAME_ID_SIZE);
+}
+
+void rindex_header_out(struct rindex_header *rh, struct rindex_header *end)
+{
+	end->magic		= cpu_to_le32(rh->magic);
+	end->version		= cpu_to_le32(rh->version);
+	end->flags		= cpu_to_le32(rh->flags);
+	end->sector_size	= cpu_to_le32(rh->sector_size);
+	end->max_resources	= cpu_to_le32(rh->max_resources);
+	end->unused		= cpu_to_le32(rh->unused);
+	end->rx_offset		= cpu_to_le64(rh->rx_offset);
+	memcpy(end->lockspace_name, rh->lockspace_name, NAME_ID_SIZE);
+}
+
+void rindex_entry_in(struct rindex_entry *end, struct rindex_entry *re)
+{
+	re->res_offset		= le64_to_cpu(end->res_offset);
+	re->flags		= le32_to_cpu(end->flags);
+	re->unused		= le32_to_cpu(end->unused);
+	memcpy(re->name, end->name, NAME_ID_SIZE);
+}
+
+void rindex_entry_out(struct rindex_entry *re, struct rindex_entry *end)
+{
+	end->res_offset		= cpu_to_le64(re->res_offset);
+	end->flags		= cpu_to_le32(re->flags);
+	end->unused		= cpu_to_le32(re->unused);
+	memcpy(end->name, re->name, NAME_ID_SIZE);
 }
 

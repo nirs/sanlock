@@ -1537,6 +1537,286 @@ int sanlock_get_lvb(uint32_t flags, struct sanlk_resource *res, char *lvb, int l
 	return rv;
 }
 
+int sanlock_format_rindex(struct sanlk_rindex *rx, uint32_t flags)
+{
+	int rv, fd;
+
+	if (!rx || !rx->lockspace_name[0] || !rx->disk.path[0])
+		return -EINVAL;
+
+	rv = connect_socket(&fd);
+	if (rv < 0)
+		return rv;
+
+	rv = send_header(fd, SM_CMD_FORMAT_RINDEX, flags,
+			 sizeof(struct sanlk_rindex), 0, 0);
+	if (rv < 0)
+		goto out;
+
+	rv = send_data(fd, rx, sizeof(struct sanlk_rindex), 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	rv = recv_result(fd);
+ out:
+	close(fd);
+	return rv;
+}
+
+int sanlock_rebuild_rindex(struct sanlk_rindex *rx, uint32_t flags)
+{
+	int rv, fd;
+
+	if (!rx || !rx->lockspace_name[0] || !rx->disk.path[0])
+		return -EINVAL;
+
+	rv = connect_socket(&fd);
+	if (rv < 0)
+		return rv;
+
+	rv = send_header(fd, SM_CMD_REBUILD_RINDEX, flags,
+			 sizeof(struct sanlk_rindex), 0, 0);
+	if (rv < 0)
+		goto out;
+
+	rv = send_data(fd, rx, sizeof(struct sanlk_rindex), 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	rv = recv_result(fd);
+ out:
+	close(fd);
+	return rv;
+}
+
+int sanlock_update_rindex(struct sanlk_rindex *rx, uint32_t flags,
+			  struct sanlk_rentry *re)
+{
+	struct sanlk_rentry re_recv;
+	int rv, fd;
+
+	memset(&re_recv, 0, sizeof(re_recv));
+
+	if (!rx || !rx->lockspace_name[0] || !rx->disk.path[0] || !re)
+		return -EINVAL;
+
+	rv = connect_socket(&fd);
+	if (rv < 0)
+		return rv;
+
+	rv = send_header(fd, SM_CMD_UPDATE_RINDEX, flags,
+			 sizeof(struct sanlk_rindex) +
+			 sizeof(struct sanlk_rentry),
+			 0, 0);
+	if (rv < 0)
+		goto out;
+
+	rv = send_data(fd, rx, sizeof(struct sanlk_rindex), 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	rv = send_data(fd, re, sizeof(struct sanlk_rentry), 0);
+	if (rv < 0) {
+		rv = -1;
+		goto out;
+	}
+
+	rv = recv_result(fd);
+	if (rv < 0)
+		goto out;
+
+	rv = recv_data(fd, &re_recv, sizeof(struct sanlk_rentry), MSG_WAITALL);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	if (rv != sizeof(struct sanlk_rentry)) {
+		rv = -1;
+		goto out;
+	}
+
+	memcpy(re, &re_recv, sizeof(struct sanlk_rentry));
+	rv = 0;
+ out:
+	close(fd);
+	return rv;
+}
+
+int sanlock_lookup_rindex(struct sanlk_rindex *rx, uint32_t flags,
+			  struct sanlk_rentry *re)
+{
+	struct sanlk_rentry re_recv;
+	int rv, fd;
+
+	memset(&re_recv, 0, sizeof(re_recv));
+
+	if (!rx || !rx->lockspace_name[0] || !rx->disk.path[0] || !re)
+		return -EINVAL;
+
+	rv = connect_socket(&fd);
+	if (rv < 0)
+		return rv;
+
+	rv = send_header(fd, SM_CMD_LOOKUP_RINDEX, flags,
+			 sizeof(struct sanlk_rindex) +
+			 sizeof(struct sanlk_resource),
+			 0, 0);
+	if (rv < 0)
+		goto out;
+
+	rv = send_data(fd, rx, sizeof(struct sanlk_rindex), 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	rv = send_data(fd, re, sizeof(struct sanlk_rentry), 0);
+	if (rv < 0) {
+		rv = -1;
+		goto out;
+	}
+
+	rv = recv_result(fd);
+	if (rv < 0)
+		goto out;
+
+	rv = recv_data(fd, &re_recv, sizeof(struct sanlk_rentry), MSG_WAITALL);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	if (rv != sizeof(struct sanlk_rentry)) {
+		rv = -1;
+		goto out;
+	}
+
+	memcpy(re, &re_recv, sizeof(struct sanlk_rentry));
+	rv = 0;
+ out:
+	close(fd);
+	return rv;
+}
+
+int sanlock_create_resource(struct sanlk_rindex *rx, uint32_t flags,
+			    struct sanlk_rentry *re,
+			    int max_hosts, int num_hosts)
+{
+	struct sanlk_rentry re_recv;
+	int rv, fd;
+
+	memset(&re_recv, 0, sizeof(re_recv));
+
+	if (!rx || !rx->lockspace_name[0] || !rx->disk.path[0] || !re)
+		return -EINVAL;
+
+	rv = connect_socket(&fd);
+	if (rv < 0)
+		return rv;
+
+	rv = send_header(fd, SM_CMD_CREATE_RESOURCE, flags,
+			 sizeof(struct sanlk_rindex) +
+			 sizeof(struct sanlk_rentry),
+			 max_hosts, num_hosts);
+	if (rv < 0)
+		goto out;
+
+	rv = send_data(fd, rx, sizeof(struct sanlk_rindex), 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	rv = send_data(fd, re, sizeof(struct sanlk_rentry), 0);
+	if (rv < 0) {
+		rv = -1;
+		goto out;
+	}
+
+	rv = recv_result(fd);
+	if (rv < 0)
+		goto out;
+
+	rv = recv_data(fd, &re_recv, sizeof(struct sanlk_rentry), MSG_WAITALL);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	if (rv != sizeof(struct sanlk_rentry)) {
+		rv = -1;
+		goto out;
+	}
+
+	memcpy(re, &re_recv, sizeof(struct sanlk_rentry));
+	rv = 0;
+ out:
+	close(fd);
+	return rv;
+}
+
+int sanlock_delete_resource(struct sanlk_rindex *rx, uint32_t flags,
+			    struct sanlk_rentry *re)
+{
+	struct sanlk_rentry re_recv;
+	int rv, fd;
+
+	memset(&re_recv, 0, sizeof(re_recv));
+
+	if (!rx || !rx->lockspace_name[0] || !rx->disk.path[0] || !re)
+		return -EINVAL;
+
+	rv = connect_socket(&fd);
+	if (rv < 0)
+		return rv;
+
+	rv = send_header(fd, SM_CMD_DELETE_RESOURCE, flags,
+			 sizeof(struct sanlk_rindex) +
+			 sizeof(struct sanlk_rentry),
+			 0, 0);
+	if (rv < 0)
+		goto out;
+
+	rv = send_data(fd, rx, sizeof(struct sanlk_rindex), 0);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	rv = send_data(fd, re, sizeof(struct sanlk_rentry), 0);
+	if (rv < 0) {
+		rv = -1;
+		goto out;
+	}
+
+	rv = recv_result(fd);
+	if (rv < 0)
+		goto out;
+
+	rv = recv_data(fd, &re_recv, sizeof(struct sanlk_rentry), MSG_WAITALL);
+	if (rv < 0) {
+		rv = -errno;
+		goto out;
+	}
+
+	if (rv != sizeof(struct sanlk_rentry)) {
+		rv = -1;
+		goto out;
+	}
+
+	rv = 0;
+ out:
+	close(fd);
+	return rv;
+}
+
 /*
  * src may have colons/spaces escaped (with backslash) or unescaped.
  * if unescaped colons/spaces are found, insert backslash before them.

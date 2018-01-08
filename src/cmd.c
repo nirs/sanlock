@@ -46,6 +46,7 @@
 #include "direct.h"
 #include "task.h"
 #include "cmd.h"
+#include "rindex.h"
 
 /* from main.c */
 void client_resume(int ci);
@@ -2027,6 +2028,118 @@ reply:
 	client_resume(ca->ci_in);
 }
 
+static void cmd_format_rindex(struct task *task, struct cmd_args *ca)
+{
+	struct sanlk_rindex ri;
+	int fd, rv, result;
+
+	fd = client[ca->ci_in].fd;
+
+	rv = recv(fd, &ri, sizeof(struct sanlk_rindex), MSG_WAITALL);
+	if (rv != sizeof(struct sanlk_rindex)) {
+		log_error("cmd_format_rindex %d,%d recv %d %d",
+			   ca->ci_in, fd, rv, errno);
+		result = -ENOTCONN;
+		goto reply;
+	}
+
+	log_debug("cmd_format_rindex %d,%d %.48s %s:%llu",
+		  ca->ci_in, fd, ri.lockspace_name,
+		  ri.disk.path,
+		  (unsigned long long)ri.disk.offset);
+
+	result = rindex_format(task, &ri);
+ reply:
+	log_debug("cmd_format_rindex %d,%d done %d", ca->ci_in, fd, result);
+
+	send_result(fd, &ca->header, result);
+	client_resume(ca->ci_in);
+}
+
+static void cmd_rebuild_rindex(struct task *task, struct cmd_args *ca)
+{
+	struct sanlk_rindex ri;
+	int fd, rv, result;
+
+	fd = client[ca->ci_in].fd;
+
+	rv = recv(fd, &ri, sizeof(struct sanlk_rindex), MSG_WAITALL);
+	if (rv != sizeof(struct sanlk_rindex)) {
+		log_error("cmd_rebuild_rindex %d,%d recv %d %d",
+			   ca->ci_in, fd, rv, errno);
+		result = -ENOTCONN;
+		goto reply;
+	}
+
+	log_debug("cmd_rebuild_rindex %d,%d %.48s %s:%llu",
+		  ca->ci_in, fd, ri.lockspace_name,
+		  ri.disk.path,
+		  (unsigned long long)ri.disk.offset);
+
+	result = rindex_rebuild(task, &ri, ca->header.cmd_flags);
+ reply:
+	log_debug("cmd_rebuild_rindex %d,%d done %d", ca->ci_in, fd, result);
+
+	send_result(fd, &ca->header, result);
+	client_resume(ca->ci_in);
+}
+
+static void rindex_op(struct task *task, struct cmd_args *ca, const char *cmd, int op)
+{
+	struct sanlk_rindex ri;
+	struct sanlk_rentry re;
+	struct sanlk_rentry re_ret;
+	struct sm_header h;
+	int fd, rv, result;
+
+	memset(&re_ret, 0, sizeof(re_ret));
+
+	fd = client[ca->ci_in].fd;
+
+	rv = recv(fd, &ri, sizeof(struct sanlk_rindex), MSG_WAITALL);
+	if (rv != sizeof(struct sanlk_rindex)) {
+		log_error("%s %d,%d recv %d %d", cmd, ca->ci_in, fd, rv, errno);
+		result = -ENOTCONN;
+		goto reply;
+	}
+
+	rv = recv(fd, &re, sizeof(struct sanlk_rentry), MSG_WAITALL);
+	if (rv != sizeof(struct sanlk_rentry)) {
+		log_error("%s %d,%d recv %d %d", cmd, ca->ci_in, fd, rv, errno);
+		result = -ENOTCONN;
+		goto reply;
+	}
+
+	log_debug("%s %d,%d %.48s %s:%llu", cmd,
+		  ca->ci_in, fd, ri.lockspace_name,
+		  ri.disk.path,
+		  (unsigned long long)ri.disk.offset);
+
+	if (op == RX_OP_LOOKUP)
+		result = rindex_lookup(task, &ri, &re, &re_ret, ca->header.cmd_flags);
+	else if (op == RX_OP_UPDATE)
+		result = rindex_update(task, &ri, &re, &re_ret, ca->header.cmd_flags);
+	else if (op == RX_OP_CREATE)
+		result = rindex_create(task, &ri, &re, &re_ret, ca->header.data, ca->header.data2);
+	else if (op == RX_OP_DELETE)
+		result = rindex_delete(task, &ri, &re, &re_ret);
+	else
+		result = -EINVAL;
+
+ reply:
+	log_debug("%s %d,%d done %d", cmd, ca->ci_in, fd, result);
+
+	memcpy(&h, &ca->header, sizeof(struct sm_header));
+	h.version = SM_PROTO;
+	h.data = result;
+	h.data2 = 0;
+	h.length = sizeof(h) + sizeof(re_ret);
+	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
+	send(fd, &re_ret, sizeof(re), MSG_NOSIGNAL);
+
+	client_resume(ca->ci_in);
+}
+
 void call_cmd_thread(struct task *task, struct cmd_args *ca)
 {
 	switch (ca->header.cmd) {
@@ -2093,6 +2206,24 @@ void call_cmd_thread(struct task *task, struct cmd_args *ca)
 		break;
 	case SM_CMD_SET_EVENT:
 		cmd_set_event(task, ca);
+		break;
+	case SM_CMD_FORMAT_RINDEX:
+		cmd_format_rindex(task, ca);
+		break;
+	case SM_CMD_REBUILD_RINDEX:
+		cmd_rebuild_rindex(task, ca);
+		break;
+	case SM_CMD_UPDATE_RINDEX:
+		rindex_op(task, ca, "cmd_update_rindex", RX_OP_UPDATE);
+		break;
+	case SM_CMD_LOOKUP_RINDEX:
+		rindex_op(task, ca, "cmd_lookup_rindex", RX_OP_LOOKUP);
+		break;
+	case SM_CMD_CREATE_RESOURCE:
+		rindex_op(task, ca, "cmd_create_resource", RX_OP_CREATE);
+		break;
+	case SM_CMD_DELETE_RESOURCE:
+		rindex_op(task, ca, "cmd_delete_resource", RX_OP_DELETE);
 		break;
 	};
 }

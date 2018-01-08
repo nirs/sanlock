@@ -104,6 +104,25 @@ struct sanlk_resource {
 	struct sanlk_disk disks[0];
 };
 
+/* make these values match the RES equivalent in case of typos */
+#define SANLK_RIF_ALIGN1M	0x00000010 /* uses 512 sectors */
+#define SANLK_RIF_ALIGN8M	0x00000020 /* uses 4k sectors */
+
+struct sanlk_rindex {
+	uint32_t flags;		/* SANLK_RIF_ */
+	uint32_t max_resources; /* the max res structs that will follow rindex */
+	uint64_t unused;
+	char lockspace_name[SANLK_NAME_LEN]; /* terminating \0 not required */
+	struct sanlk_disk disk; /* location of rindex */
+};
+
+struct sanlk_rentry {
+	char name[SANLK_NAME_LEN]; /* terminating \0 not required */
+	uint64_t offset;
+	uint32_t flags;
+	uint32_t unused;
+};
+
 /* command-specific command options (can include per resource data, but
    that requires the extra work of segmenting it by resource name) */
 

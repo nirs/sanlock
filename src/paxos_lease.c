@@ -1039,6 +1039,7 @@ int paxos_read_resource(struct task *task,
 {
 	struct leader_record leader;
 	uint32_t checksum;
+	int tmp_sector_size = 0;
 	int rv;
 
 	memset(&leader, 0, sizeof(struct leader_record));
@@ -1052,14 +1053,12 @@ int paxos_read_resource(struct task *task,
 	if (!token->sector_size) {
 		token->sector_size = 4096;
 		token->align_size = sector_size_to_align_size(4096);
+		tmp_sector_size = 1;
 	}
 
 	rv = read_leader(task, token, &token->disks[0], &leader, &checksum);
 	if (rv < 0)
 		return rv;
-
-	token->sector_size = leader.sector_size;
-	token->align_size = sector_size_to_align_size(leader.sector_size);
 
 	if (!res->lockspace_name[0])
 		memcpy(token->r.lockspace_name, leader.space_name, NAME_ID_SIZE);
@@ -1067,17 +1066,33 @@ int paxos_read_resource(struct task *task,
 	if (!res->name[0])
 		memcpy(token->r.name, leader.resource_name, NAME_ID_SIZE);
 
-	rv = verify_leader(token, &token->disks[0], &leader, checksum, "read_resource");
+	if (token->flags & T_CHECK_EXISTS) {
+		if (leader.magic != PAXOS_DISK_MAGIC)
+			rv = SANLK_LEADER_MAGIC;
+		else
+			rv = SANLK_OK;
+	} else {
+		rv = verify_leader(token, &token->disks[0], &leader, checksum, "read_resource");
+	}
 
 	if (rv == SANLK_OK) {
 		memcpy(res->lockspace_name, leader.space_name, NAME_ID_SIZE);
 		memcpy(res->name, leader.resource_name, NAME_ID_SIZE);
 		res->lver = leader.lver;
 
-		if (leader.sector_size == 512)
-			res->flags |= SANLK_RES_ALIGN1M;
-		else if (leader.sector_size == 4096)
-			res->flags |= SANLK_RES_ALIGN8M;
+		if ((leader.sector_size == 512) || (leader.sector_size == 4096)) {
+			token->sector_size = leader.sector_size;
+			token->align_size = sector_size_to_align_size(leader.sector_size);
+
+			if (leader.sector_size == 512)
+				res->flags |= SANLK_RES_ALIGN1M;
+			else if (leader.sector_size == 4096)
+				res->flags |= SANLK_RES_ALIGN8M;
+		} else if (tmp_sector_size) {
+			/* we don't know the correct value, so don't set any */
+			token->sector_size = 0;
+			token->align_size = 0;
+		}
 	}
 
 	return rv;

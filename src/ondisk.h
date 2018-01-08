@@ -35,6 +35,7 @@
 #define cpu_to_le64(x) (x)
 #endif
 
+void magic_in(char *end, uint32_t *magic);
 void leader_record_in(struct leader_record *end, struct leader_record *lr);
 void leader_record_out(struct leader_record *lr, struct leader_record *end);
 void request_record_in(struct request_record *end, struct request_record *rr);
@@ -43,5 +44,9 @@ void paxos_dblock_in(struct paxos_dblock *end, struct paxos_dblock *pd);
 void paxos_dblock_out(struct paxos_dblock *pd, struct paxos_dblock *end);
 void mode_block_in(struct mode_block *end, struct mode_block *mb);
 void mode_block_out(struct mode_block *mb, struct mode_block *end);
+void rindex_header_in(struct rindex_header *end, struct rindex_header *rh);
+void rindex_header_out(struct rindex_header *rh, struct rindex_header *end);
+void rindex_entry_in(struct rindex_entry *end, struct rindex_entry *re);
+void rindex_entry_out(struct rindex_entry *re, struct rindex_entry *end);
 
 #endif

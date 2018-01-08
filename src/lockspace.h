@@ -80,4 +80,7 @@ int send_event_callbacks(uint32_t space_id, uint64_t from_host_id, uint64_t from
 /* locks spaces_mutex, locks sp */
 int lockspace_set_config(struct sanlk_lockspace *ls, uint32_t flags, uint32_t cmd);
 
+int lockspace_begin_rindex_op(char *space_name, int rindex_op, struct space_info *spi);
+int lockspace_clear_rindex_op(char *space_name);
+
 #endif

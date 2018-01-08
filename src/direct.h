@@ -55,4 +55,12 @@ int direct_dump(struct task *task, char *dump_path, int force_mode);
 
 int direct_next_free(struct task *task, char *path);
 
+int direct_rindex_format(struct task *task, struct sanlk_rindex *ri);
+int direct_rindex_rebuild(struct task *task, struct sanlk_rindex *ri,
+			  uint32_t cmd_flags);
+int direct_rindex_lookup(struct task *task, struct sanlk_rindex *ri,
+                         struct sanlk_rentry *re, uint32_t cmd_flags);
+int direct_rindex_update(struct task *task, struct sanlk_rindex *ri,
+                         struct sanlk_rentry *re, uint32_t cmd_flags);
+
 #endif

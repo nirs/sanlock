@@ -53,7 +53,7 @@ static pthread_mutex_t resource_mutex;
 static pthread_cond_t resource_cond;
 static struct list_head host_events;
 static int resources_free_count;
-static uint32_t resource_id_counter = 1;
+static uint32_t resource_id_counter = 2; /* id 1 used for internal rindex lease */
 
 #define FREE_RES_COUNT 128
 

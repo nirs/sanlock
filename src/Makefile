@@ -33,6 +33,7 @@ CMD_SOURCE = \
 	task.c \
 	timeouts.c \
 	resource.c \
+	rindex.c \
 	watchdog.c \
 	monotime.c \
 	cmd.c \
@@ -48,6 +49,7 @@ LIB_ENTIRE_SOURCE = \
 	ondisk.c \
 	delta_lease.c \
 	paxos_lease.c \
+	rindex.c \
 	direct.c \
 	task.c \
 	timeouts.c \

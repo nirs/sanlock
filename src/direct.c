@@ -23,6 +23,7 @@
 #include <sys/time.h>
 
 #include "sanlock_internal.h"
+#include "sanlock_admin.h"
 #include "diskio.h"
 #include "ondisk.h"
 #include "log.h"
@@ -31,6 +32,7 @@
 #include "paxos_lease.h"
 #include "delta_lease.h"
 #include "timeouts.h"
+#include "rindex.h"
 
 static int direct_read_leader_sector_size(struct task *task, struct sync_disk *sd)
 {
@@ -496,6 +498,13 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 {
 	char *data, *bitmap;
 	char *colon, *off_str;
+	uint32_t magic;
+	struct rindex_header *rh_end;
+	struct rindex_header *rh;
+	struct rindex_header rh_in;
+	struct rindex_entry *re_end;
+	struct rindex_entry *re;
+	struct rindex_entry re_in;
 	struct leader_record *lr_end;
 	struct leader_record *lr;
 	struct leader_record lr_in;
@@ -509,7 +518,7 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 	uint64_t dump_size = 0;
 	uint64_t end_sector_nr;
 	int sector_size, sector_count, datalen, align_size;
-	int i, rv, b;
+	int i, j, rv, b;
 
 	memset(&sd, 0, sizeof(struct sync_disk));
 
@@ -570,12 +579,13 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 		rv = read_sectors(&sd, sector_size, sector_nr, sector_count, data, datalen,
 				  task, DEFAULT_IO_TIMEOUT, "dump");
 
-		lr_end = (struct leader_record *)data;
+		magic_in(data, &magic);
 
-		leader_record_in(lr_end, &lr_in);
-		lr = &lr_in;
+		if (magic == DELTA_DISK_MAGIC) {
+			lr_end = (struct leader_record *)data;
+			leader_record_in(lr_end, &lr_in);
+			lr = &lr_in;
 
-		if (lr->magic == DELTA_DISK_MAGIC) {
 			for (i = 0; i < sector_count; i++) {
 				lr_end = (struct leader_record *)(data + (i * sector_size));
 
@@ -608,7 +618,11 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 				}
 				printf("\n");
 			}
-		} else if (lr->magic == PAXOS_DISK_MAGIC) {
+		} else if (magic == PAXOS_DISK_MAGIC) {
+			lr_end = (struct leader_record *)data;
+			leader_record_in(lr_end, &lr_in);
+			lr = &lr_in;
+
 			strncpy(sname, lr->space_name, NAME_ID_SIZE);
 			strncpy(rname, lr->resource_name, NAME_ID_SIZE);
 
@@ -656,11 +670,47 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 				printf("                                                                                                          ");
 				printf("%04u %04llu SH\n", i+1, (unsigned long long)mb.generation);
 			}
+		} else if (magic == RINDEX_DISK_MAGIC) {
+			rh_end = (struct rindex_header *)data;
+			rindex_header_in(rh_end, &rh_in);
+			rh = &rh_in;
+
+			strncpy(sname, rh->lockspace_name, NAME_ID_SIZE);
+
+			printf("%08llu %36s rindex\n",
+			       (unsigned long long)(sector_nr * sector_size),
+			       sname);
+
+			if (!force_mode)
+				goto next;
+
+			/* i begins with 1 to skip the first sector of the rindex which holds the header */
+
+			for (i = 1; i < sector_count; i++) {
+				int entry_size = sizeof(struct rindex_entry);
+				int entries_per_sector = sector_size / entry_size;
+
+				for (j = 0; j < entries_per_sector; j++) {
+					re_end = (struct rindex_entry *)(data + (i * sector_size) + (j * entry_size));
+					rindex_entry_in(re_end, &re_in);
+					re = &re_in;
+
+					if (!re->res_offset && !re->name[0])
+						continue;
+
+					printf("%08llu %36s rentry %s %llu\n",
+			       			(unsigned long long)((sector_nr * sector_size) + (i * sector_size) + (j * entry_size)),
+			       			sname,
+						re->name, (unsigned long long)re->res_offset);
+				}
+			}
+
+
 		} else {
 			if (end_sector_nr == 0)
 				break;
 		}
-
+ next:
 		sector_nr += sector_count;
 	}
 
@@ -725,7 +775,7 @@ int direct_next_free(struct task *task, char *path)
 
 		leader_record_in(lr_end, &lr);
 
-		if (lr.magic != DELTA_DISK_MAGIC && lr.magic != PAXOS_DISK_MAGIC) {
+		if (lr.magic != DELTA_DISK_MAGIC && lr.magic != PAXOS_DISK_MAGIC && lr.magic != RINDEX_DISK_MAGIC) {
 			printf("%llu\n", (unsigned long long)(sector_nr * sector_size));
 			rv = 0;
 			goto out_free;
@@ -737,6 +787,46 @@ int direct_next_free(struct task *task, char *path)
 	free(data);
  out_close:
 	close_disks(&sd, 1);
+	return rv;
+}
+
+
+int direct_rindex_format(struct task *task, struct sanlk_rindex *ri)
+{
+	return rindex_format(task, ri);
+}
+
+int direct_rindex_rebuild(struct task *task, struct sanlk_rindex *ri,
+			  uint32_t cmd_flags)
+{
+	return rindex_rebuild(task, ri, cmd_flags | SANLK_RX_NO_LOCKSPACE);
+}
+
+int direct_rindex_lookup(struct task *task, struct sanlk_rindex *ri,
+			 struct sanlk_rentry *re, uint32_t cmd_flags)
+{
+	struct sanlk_rentry re_ret;
+	int rv;
+
+	rv = rindex_lookup(task, ri, re, &re_ret, cmd_flags | SANLK_RX_NO_LOCKSPACE);
+
+	if (!rv)
+		memcpy(re, &re_ret, sizeof(re_ret));
+
+	return rv;
+}
+
+int direct_rindex_update(struct task *task, struct sanlk_rindex *ri,
+			 struct sanlk_rentry *re, uint32_t cmd_flags)
+{
+	struct sanlk_rentry re_ret;
+	int rv;
+
+	rv = rindex_update(task, ri, re, &re_ret, cmd_flags | SANLK_RX_NO_LOCKSPACE);
+
+	if (!rv)
+		memcpy(re, &re_ret, sizeof(re_ret));
+
 	return rv;
 }
 
