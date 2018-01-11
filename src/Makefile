@@ -37,7 +37,8 @@ CMD_SOURCE = \
 	monotime.c \
 	cmd.c \
 	client_cmd.c \
-	sanlock_sock.c
+	sanlock_sock.c \
+	env.c
 
 LIB_ENTIRE_SOURCE = \
 	client.c \
@@ -51,11 +52,13 @@ LIB_ENTIRE_SOURCE = \
 	task.c \
 	timeouts.c \
 	direct_lib.c \
-	monotime.c
+	monotime.c \
+	env.c
 
 LIB_CLIENT_SOURCE = \
 	client.c \
-	sanlock_sock.c
+	sanlock_sock.c \
+	env.c
 
 LIBPC_ENTIRE_SOURCE = libsanlock.pc.in
 LIBPC_CLIENT_SOURCE = libsanlock_client.pc.in
