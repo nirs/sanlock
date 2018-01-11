@@ -45,6 +45,7 @@
 
 #define SANLOCK_RUN_DIR "SANLOCK_RUN_DIR"
 #define DEFAULT_RUN_DIR "/var/run/sanlock"
+#define SANLOCK_PRIVILEGED "SANLOCK_PRIVILEGED"
 
 #define SANLK_LOG_DIR "/var/log"
 #define SANLK_LOGFILE_NAME "sanlock.log"

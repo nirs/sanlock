@@ -88,6 +88,7 @@ static struct random_data rand_data;
 static char rand_state[32];
 static pthread_mutex_t rand_mutex = PTHREAD_MUTEX_INITIALIZER;
 static const char *run_dir = NULL;
+static int privileged = 1;
 
 static void close_helper(void)
 {
@@ -1428,6 +1429,9 @@ static void setup_limits(void)
 	int rv;
 	struct rlimit rlim = { .rlim_cur = -1, .rlim_max= -1 };
 
+	if (!privileged)
+		return;
+
 	rv = setrlimit(RLIMIT_MEMLOCK, &rlim);
 	if (rv < 0) {
 		log_error("cannot set the limits for memlock %i", errno);
@@ -1451,7 +1455,7 @@ static void setup_groups(void)
 {
 	int rv;
 
-	if (!com.uname || !com.gname)
+	if (!com.uname || !com.gname || !privileged)
 		return;
 
 	rv = initgroups(com.uname, com.gid);
@@ -1464,7 +1468,7 @@ static void setup_uid_gid(void)
 {
 	int rv;
 
-	if (!com.uname || !com.gname)
+	if (!com.uname || !com.gname || !privileged)
 		return;
 
 	rv = setgid(com.gid);
@@ -1634,6 +1638,7 @@ static int do_daemon(void)
 	int fd, rv;
 
 	run_dir = env_get(SANLOCK_RUN_DIR, DEFAULT_RUN_DIR);
+	privileged = env_get_bool(SANLOCK_PRIVILEGED, 1);
 
 	/* This can take a while so do it before forking. */
 	setup_groups();
@@ -1670,6 +1675,10 @@ static int do_daemon(void)
 
 	if (strcmp(run_dir, DEFAULT_RUN_DIR))
 		log_warn("Using non-standard run directory '%s'", run_dir);
+
+	if (!privileged)
+		log_warn("Running in unprivileged mode");
+
 
 	fd = lockfile(run_dir, SANLK_LOCKFILE_NAME, com.uid, com.gid);
 	if (fd < 0) {
