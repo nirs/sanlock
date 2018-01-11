@@ -25,7 +25,6 @@
 #include <sys/un.h>
 
 #include "sanlock_internal.h"
-#include "sanlock_sock.h"
 #include "log.h"
 #include "lockfile.h"
 
@@ -38,17 +37,17 @@ int lockfile(const char *dir, const char *name, int uid, int gid)
 	int fd, rv;
 
 	old_umask = umask(0022);
-	rv = mkdir(SANLK_RUN_DIR, 0775);
+	rv = mkdir(dir, 0775);
 	if (rv < 0 && errno != EEXIST) {
 		umask(old_umask);
 		return rv;
 	}
 	umask(old_umask);
 
-	rv = chown(SANLK_RUN_DIR, uid, gid);
+	rv = chown(dir, uid, gid);
 	if (rv < 0) {
 		log_error("lockfile chown error %s: %s",
-			  SANLK_RUN_DIR, strerror(errno));
+			  dir, strerror(errno));
 		return rv;
 	}
 
