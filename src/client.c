@@ -29,6 +29,7 @@
 #include <sys/un.h>
 
 #include "sanlock.h"
+#include "sanlock_internal.h"
 #include "sanlock_resource.h"
 #include "sanlock_admin.h"
 #include "sanlock_sock.h"

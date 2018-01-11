@@ -43,6 +43,7 @@
 
 #define COMMAND_MAX 4096
 
+#define SANLK_RUN_DIR "/var/run/sanlock"
 #define SANLK_LOG_DIR "/var/log"
 #define SANLK_LOGFILE_NAME "sanlock.log"
 #define SANLK_LOCKFILE_NAME "sanlock.pid"
