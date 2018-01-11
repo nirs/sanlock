@@ -55,6 +55,7 @@
 #include "helper.h"
 #include "timeouts.h"
 #include "paxos_lease.h"
+#include "env.h"
 
 #define SIGRUNPATH 100 /* anything that's not SIGTERM/SIGKILL */
 
@@ -86,6 +87,7 @@ static struct thread_pool pool;
 static struct random_data rand_data;
 static char rand_state[32];
 static pthread_mutex_t rand_mutex = PTHREAD_MUTEX_INITIALIZER;
+static const char *run_dir = NULL;
 
 static void close_helper(void)
 {
@@ -1290,7 +1292,7 @@ static int setup_listener(void)
 	struct sockaddr_un addr;
 	int rv, fd, ci;
 
-	rv = sanlock_socket_address(SANLK_RUN_DIR, &addr);
+	rv = sanlock_socket_address(run_dir, &addr);
 	if (rv < 0)
 		return rv;
 
@@ -1631,6 +1633,7 @@ static int do_daemon(void)
 {
 	int fd, rv;
 
+	run_dir = env_get(SANLOCK_RUN_DIR, DEFAULT_RUN_DIR);
 
 	/* This can take a while so do it before forking. */
 	setup_groups();
@@ -1665,7 +1668,10 @@ static int do_daemon(void)
 	setup_signals();
 	setup_logging();
 
-	fd = lockfile(SANLK_RUN_DIR, SANLK_LOCKFILE_NAME, com.uid, com.gid);
+	if (strcmp(run_dir, DEFAULT_RUN_DIR))
+		log_warn("Using non-standard run directory '%s'", run_dir);
+
+	fd = lockfile(run_dir, SANLK_LOCKFILE_NAME, com.uid, com.gid);
 	if (fd < 0) {
 		close_logging();
 		return fd;
@@ -1706,7 +1712,7 @@ static int do_daemon(void)
  out:
 	/* order reversed from setup so lockfile is last */
 	close_logging();
-	unlink_lockfile(fd, SANLK_RUN_DIR, SANLK_LOCKFILE_NAME);
+	unlink_lockfile(fd, run_dir, SANLK_LOCKFILE_NAME);
 	return rv;
 }
 

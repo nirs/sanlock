@@ -34,6 +34,7 @@
 #include "sanlock_admin.h"
 #include "sanlock_sock.h"
 #include "sanlock_rv.h"
+#include "env.h"
 
 #ifndef GNUC_UNUSED
 #define GNUC_UNUSED __attribute__((__unused__))
@@ -43,13 +44,17 @@ static int connect_socket(int *sock_fd)
 {
 	int rv, s;
 	struct sockaddr_un addr;
+	static const char *run_dir;
 
 	*sock_fd = -1;
 	s = socket(AF_LOCAL, SOCK_STREAM, 0);
 	if (s < 0)
 		return -errno;
 
-	rv = sanlock_socket_address(SANLK_RUN_DIR, &addr);
+	if (run_dir == NULL)
+		run_dir = env_get("SANLOCK_RUN_DIR", DEFAULT_RUN_DIR);
+
+	rv = sanlock_socket_address(run_dir, &addr);
 	if (rv < 0) {
 		close(s);
 		return rv;
