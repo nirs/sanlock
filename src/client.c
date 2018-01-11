@@ -48,7 +48,7 @@ static int connect_socket(int *sock_fd)
 	if (s < 0)
 		return -errno;
 
-	rv = sanlock_socket_address(&addr);
+	rv = sanlock_socket_address(SANLK_RUN_DIR, &addr);
 	if (rv < 0) {
 		close(s);
 		return rv;

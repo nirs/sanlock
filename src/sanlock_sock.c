@@ -18,12 +18,12 @@
 #include "sanlock.h"
 #include "sanlock_sock.h"
 
-int sanlock_socket_address(struct sockaddr_un *addr)
+int sanlock_socket_address(const char *dir, struct sockaddr_un *addr)
 {
 	memset(addr, 0, sizeof(struct sockaddr_un));
 	addr->sun_family = AF_LOCAL;
 	snprintf(addr->sun_path, sizeof(addr->sun_path) - 1, "%s/%s",
-		 SANLK_RUN_DIR, SANLK_SOCKET_NAME);
+		 dir, SANLK_SOCKET_NAME);
 	return 0;
 }
 

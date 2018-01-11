@@ -89,7 +89,7 @@ struct sanlk_state {
 	char str[0]; /* string of internal state */
 };
 
-int sanlock_socket_address(struct sockaddr_un *addr);
+int sanlock_socket_address(const char *dir, struct sockaddr_un *addr);
 
 struct event_cb {
 	struct sm_header h;

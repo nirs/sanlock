@@ -1290,7 +1290,7 @@ static int setup_listener(void)
 	struct sockaddr_un addr;
 	int rv, fd, ci;
 
-	rv = sanlock_socket_address(&addr);
+	rv = sanlock_socket_address(SANLK_RUN_DIR, &addr);
 	if (rv < 0)
 		return rv;
 
