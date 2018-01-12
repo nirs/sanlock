@@ -1721,7 +1721,7 @@ static int do_daemon(void)
  out:
 	/* order reversed from setup so lockfile is last */
 	close_logging();
-	unlink_lockfile(fd, run_dir, SANLK_LOCKFILE_NAME);
+	close(fd);
 	return rv;
 }
 

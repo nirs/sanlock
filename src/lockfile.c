@@ -101,13 +101,3 @@ int lockfile(const char *dir, const char *name, int uid, int gid)
 	close(fd);
 	return -1;
 }
-
-void unlink_lockfile(int fd, const char *dir, const char *name)
-{
-	char path[PATH_MAX];
-
-	snprintf(path, PATH_MAX, "%s/%s", dir, name);
-	unlink(path);
-	close(fd);
-}
-
