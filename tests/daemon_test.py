@@ -93,7 +93,7 @@ def test_single_instance(sanlock_daemon):
     except TimeoutExpired:
         p.kill()
         p.wait()
-    assert p.returncode == 255  # exit code -1
+    assert p.returncode == 1
 
 
 def test_start_after_kill():
@@ -106,6 +106,13 @@ def test_start_after_kill():
             p.kill()
             p.wait()
         assert p.returncode == -signal.SIGKILL
+
+
+def test_client_failure():
+    # No daemon is running, client must fail
+    with pytest.raises(subprocess.CalledProcessError) as e:
+        run(SANLOCK, "client", "status")
+    assert e.value.returncode == 1
 
 
 def test_init_lockspace(tmpdir, sanlock_daemon):

@@ -3314,6 +3314,6 @@ int main(int argc, char *argv[])
 		break;
 	};
  out:
-	return rv;
+	return rv == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
