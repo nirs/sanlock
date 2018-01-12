@@ -2,10 +2,13 @@
 Test sanlock client operations.
 """
 
+import errno
 import io
 import os
+import socket
 import struct
 import subprocess
+import time
 
 import pytest
 
@@ -15,6 +18,10 @@ SANLOCK = os.path.join(tests_dir, os.pardir, "src", "sanlock")
 ENV = dict(os.environ)
 ENV["SANLOCK_RUN_DIR"] = "/tmp/sanlock"
 ENV["SANLOCK_PRIVILEGED"] = "0"
+
+
+class TimeoutExpired(Exception):
+    """ Raised when timeout expired """
 
 
 def start_sanlock_daemon():
@@ -33,10 +40,31 @@ def start_sanlock_daemon():
     return subprocess.Popen(cmd, env=ENV)
 
 
-@pytest.fixture(scope="session")
+def wait_for_socket(timeout):
+    """ Wait until deamon is accepting connections """
+    deadline = time.time() + timeout
+    path = os.path.join(ENV["SANLOCK_RUN_DIR"], "sanlock.sock")
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        while True:
+            try:
+                s.connect(path)
+                return
+            except socket.error as e:
+                if e[0] not in (errno.ECONNREFUSED, errno.ENOENT):
+                    raise  # Unexpected error
+            if time.time() > deadline:
+                raise TimeoutExpired
+            time.sleep(0.05)
+    finally:
+        s.close()
+
+
+@pytest.fixture
 def sanlock_daemon():
     p = start_sanlock_daemon()
     try:
+        wait_for_socket(0.5)
         yield
     finally:
         p.terminate()
