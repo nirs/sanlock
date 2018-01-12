@@ -17,8 +17,7 @@ ENV["SANLOCK_RUN_DIR"] = "/tmp/sanlock"
 ENV["SANLOCK_PRIVILEGED"] = "0"
 
 
-@pytest.fixture(scope="session")
-def sanlock_daemon():
+def start_sanlock_daemon():
     cmd = [SANLOCK, "daemon",
            # no fork and print all logging to stderr
            "-D",
@@ -31,7 +30,12 @@ def sanlock_daemon():
            # run as current user instead of "sanlock"
            "-U", ENV["USER"],
            "-G", ENV["USER"]]
-    p = subprocess.Popen(cmd, env=ENV)
+    return subprocess.Popen(cmd, env=ENV)
+
+
+@pytest.fixture(scope="session")
+def sanlock_daemon():
+    p = start_sanlock_daemon()
     try:
         yield
     finally:
