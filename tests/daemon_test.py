@@ -5,6 +5,7 @@ Test sanlock client operations.
 import errno
 import io
 import os
+import signal
 import socket
 import struct
 import subprocess
@@ -60,6 +61,19 @@ def wait_for_socket(timeout):
         s.close()
 
 
+def wait_for_termination(p, timeout):
+    """
+    Wait until process terminates, or timeout expires.
+    """
+    deadline = time.time() + timeout
+    while True:
+        if p.poll() is not None:
+            return
+        if time.time() > deadline:
+            raise TimeoutExpired
+        time.sleep(0.05)
+
+
 @pytest.fixture
 def sanlock_daemon():
     p = start_sanlock_daemon()
@@ -69,6 +83,29 @@ def sanlock_daemon():
     finally:
         p.terminate()
         p.wait()
+
+
+def test_single_instance(sanlock_daemon):
+    # Starting another instance while the daemon must fail.
+    p = start_sanlock_daemon()
+    try:
+        wait_for_termination(p, 1.0)
+    except TimeoutExpired:
+        p.kill()
+        p.wait()
+    assert p.returncode == 255  # exit code -1
+
+
+def test_start_after_kill():
+    # After killing the daemon, next instance should be able to start.
+    for i in range(5):
+        p = start_sanlock_daemon()
+        try:
+            wait_for_socket(0.5)
+        finally:
+            p.kill()
+            p.wait()
+        assert p.returncode == -signal.SIGKILL
 
 
 def test_init_lockspace(tmpdir, sanlock_daemon):
