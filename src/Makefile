@@ -101,15 +101,15 @@ CMD_CFLAGS = $(CFLAGS) -fPIE -DPIE
 CMD_LDFLAGS += -Wl,-z,now -Wl,-z,relro -pie
 CMD_LDADD += -lpthread -luuid -lrt -laio -lblkid -lsanlock -L../wdmd -lwdmd
 
-LIB_ENTIRE_LDFLAGS += -lpthread -lrt -laio -lblkid -L../wdmd -lwdmd
 LIB_ENTIRE_LDFLAGS += -Wl,-z,relro -pie
+LIB_ENTIRE_LDADD += -lpthread -lrt -laio -lblkid -L../wdmd -lwdmd
 
 LIB_CLIENT_LDFLAGS += -Wl,-z,relro -pie
 
 all: $(LIBSO_ENTIRE_TARGET) $(LIBSO_CLIENT_TARGET) $(CMD_TARGET) $(LIBPC_ENTIRE_TARGET) $(LIBPC_CLIENT_TARGET)
 
 $(LIBSO_ENTIRE_TARGET): $(LIB_ENTIRE_SOURCE)
-	$(CC) $(CFLAGS) $(LIB_ENTIRE_LDFLAGS) -shared -fPIC -o $@ -Wl,-soname=$(LIB_ENTIRE_TARGET).so.$(SOMAJOR) $^
+	$(CC) $(CFLAGS) $(LIB_ENTIRE_LDFLAGS) -shared -fPIC -o $@ -Wl,-soname=$(LIB_ENTIRE_TARGET).so.$(SOMAJOR) $^ $(LIB_ENTIRE_LDADD)
 	ln -sf $(LIBSO_ENTIRE_TARGET) $(LIB_ENTIRE_TARGET).so
 	ln -sf $(LIBSO_ENTIRE_TARGET) $(LIB_ENTIRE_TARGET).so.$(SOMAJOR)
 
