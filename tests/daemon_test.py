@@ -12,20 +12,6 @@ import pytest
 from . import util
 
 
-@pytest.fixture
-def sanlock_daemon():
-    """
-    Run sanlock daemon during a test.
-    """
-    p = util.start_daemon()
-    try:
-        util.wait_for_daemon(0.5)
-        yield
-    finally:
-        p.terminate()
-        p.wait()
-
-
 def test_single_instance(sanlock_daemon):
     # Starting another instance while the daemon must fail.
     p = util.start_daemon()
