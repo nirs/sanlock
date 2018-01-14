@@ -6,10 +6,12 @@ recent version is to use pip:
 
     $ pip install pytest
 
-Before running the tests, you need to build sanlock and wdmd:
+Before running the tests, you need to build wdmd, sanlock, and sanlock
+python bindings:
 
     $ make -C wdmd
     $ make -C src
+    $ make -C python inplace
 
 Setup the environment for testing sanlock running sanlcok from source as
 current user:

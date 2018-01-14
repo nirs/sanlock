@@ -7,5 +7,6 @@ before_install:
 script:
     - make -C wdmd
     - make -C src
+    - make -C python inplace
     - source tests/env.sh
     - pytest
