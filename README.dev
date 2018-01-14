@@ -11,9 +11,10 @@ Before running the tests, you need to build sanlock and wdmd:
     $ make -C wdmd
     $ make -C src
 
-To use libsanlock.so and libwdmd.so from the source tree:
+Setup the environment for testing sanlock running sanlcok from source as
+current user:
 
-    $ export LD_LIBRARY_PATH=$PWD/src:$PWD/wdmd
+    $ source tests/env.sh
 
 To run the tests:
 

@@ -11,10 +11,6 @@ import time
 TESTDIR = os.path.dirname(__file__)
 SANLOCK = os.path.join(TESTDIR, os.pardir, "src", "sanlock")
 
-ENV = dict(os.environ)
-ENV["SANLOCK_RUN_DIR"] = "/tmp/sanlock"
-ENV["SANLOCK_PRIVILEGED"] = "0"
-
 
 class TimeoutExpired(Exception):
     """ Raised when timeout expired """
@@ -31,9 +27,9 @@ def start_daemon():
            # don't use high priority (RR) scheduling
            "-h", "0",
            # run as current user instead of "sanlock"
-           "-U", ENV["USER"],
-           "-G", ENV["USER"]]
-    return subprocess.Popen(cmd, env=ENV)
+           "-U", os.environ["USER"],
+           "-G", os.environ["USER"]]
+    return subprocess.Popen(cmd)
 
 
 def wait_for_daemon(timeout):
@@ -41,7 +37,7 @@ def wait_for_daemon(timeout):
     Wait until deamon is accepting connections
     """
     deadline = time.time() + timeout
-    path = os.path.join(ENV["SANLOCK_RUN_DIR"], "sanlock.sock")
+    path = os.path.join(os.environ["SANLOCK_RUN_DIR"], "sanlock.sock")
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         while True:
@@ -65,7 +61,7 @@ def sanlock(*args):
     """
     cmd = [SANLOCK]
     cmd.extend(args)
-    return subprocess.check_output(cmd, env=ENV)
+    return subprocess.check_output(cmd)
 
 
 def wait_for_termination(p, timeout):

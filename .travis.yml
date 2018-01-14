@@ -4,10 +4,8 @@ before_install:
     - sudo apt-get -qq update
     - sudo apt-get install -y make gcc libaio-dev libblkid-dev
 
-env:
-    - LD_LIBRARY_PATH=$PWD/src:$PWD/wdmd
-
 script:
     - make -C wdmd
     - make -C src
+    - source tests/env.sh
     - pytest
