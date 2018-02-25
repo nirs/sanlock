@@ -24,3 +24,20 @@ def test_init_lockspace(tmpdir):
         # TODO: check more stuff here...
 
     util.check_guard(str(path), size)
+
+
+def test_init_resource(tmpdir, sanlock_daemon):
+    path = tmpdir.join("resources")
+    size = 1024**2
+    util.create_file(str(path), size)
+
+    resource = "ls_name:res_name:%s:0" % path
+    util.sanlock("direct", "init", "-r", resource)
+
+    with io.open(str(path), "rb") as f:
+        magic, = struct.unpack("< I", f.read(4))
+        assert magic == constants.PAXOS_DISK_MAGIC
+
+        # TODO: check more stuff here...
+
+    util.check_guard(str(path), size)
