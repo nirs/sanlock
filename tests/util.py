@@ -6,6 +6,7 @@ import errno
 import io
 import os
 import socket
+import struct
 import subprocess
 import time
 
@@ -122,3 +123,17 @@ def check_guard(path, size, guard=b"X", guard_size=4096):
     with io.open(path, "rb") as f:
         f.seek(size)
         assert f.read() == guard * guard_size
+
+
+def check_rindex_entry(entry, name, offset=None, flags=None):
+    # See src/ondisk.c rindex_entry_in()
+    e_offset, e_flags, e_unused, e_name = struct.unpack("<Q L L 48s", entry)
+
+    padding = b"\0" * (48 - len(name))
+    assert e_name == name + padding
+
+    if offset is not None:
+        assert e_offset == offset
+
+    if flags is not None:
+        assert e_flags == flags
