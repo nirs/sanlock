@@ -7,6 +7,8 @@ import struct
 
 import sanlock
 
+from . import constants
+
 
 def test_write_lockspace(tmpdir, sanlock_daemon):
     path = tmpdir.join("lockspace")
@@ -18,7 +20,7 @@ def test_write_lockspace(tmpdir, sanlock_daemon):
 
     with io.open(str(path), "rb") as f:
         magic, = struct.unpack("< I", f.read(4))
-        assert magic == 0x12212010
+        assert magic == constants.DELTA_DISK_MAGIC
 
         # TODO: check more stuff here...
 

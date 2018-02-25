@@ -5,6 +5,7 @@ Test sanlock direct options.
 import io
 import struct
 
+from . import constants
 from . import util
 
 
@@ -19,7 +20,7 @@ def test_init_lockspace(tmpdir):
 
     with io.open(str(path), "rb") as f:
         magic, = struct.unpack("< I", f.read(4))
-        assert magic == 0x12212010
+        assert magic == constants.DELTA_DISK_MAGIC
 
         # TODO: check more stuff here...
 
