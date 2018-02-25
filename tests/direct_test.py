@@ -11,9 +11,8 @@ from . import util
 
 def test_init_lockspace(tmpdir):
     path = tmpdir.join("lockspace")
-    with io.open(str(path), "wb") as f:
-        # Poison with junk data.
-        f.write(b"x" * 1024**2 + b"X" * 512)
+    size = 1024**2
+    util.create_file(str(path), size)
 
     lockspace = "name:1:%s:0" % path
     util.sanlock("direct", "init", "-s", lockspace)
@@ -24,6 +23,4 @@ def test_init_lockspace(tmpdir):
 
         # TODO: check more stuff here...
 
-        # Do not modify data after the lockspace area.
-        f.seek(1024**2, io.SEEK_SET)
-        assert f.read(512) == b"X" * 512
+    util.check_guard(str(path), size)

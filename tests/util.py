@@ -3,6 +3,7 @@ Testing utilities
 """
 
 import errno
+import io
 import os
 import socket
 import subprocess
@@ -93,3 +94,31 @@ def wait_for_termination(p, timeout):
         if time.time() > deadline:
             raise TimeoutExpired
         time.sleep(0.05)
+
+
+def create_file(path, size, poison=b"x", guard=b"X", guard_size=4096):
+    """
+    Create file filled with poison byte.
+
+    To create an empty file, set poison to None.
+
+    If guard is set, add a guard area after the end of the file and fill it
+    with guard bytes. This allows testing that the code under test do not write
+    anything after the end of the file.
+    """
+    with io.open(path, "wb") as f:
+        f.truncate(size)
+        if poison:
+            f.write(poison * size)
+        if guard:
+            f.seek(size)
+            f.write(guard * 4096)
+
+
+def check_guard(path, size, guard=b"X", guard_size=4096):
+    """
+    Assert that a file ends with a guard area filled with guard bytes.
+    """
+    with io.open(path, "rb") as f:
+        f.seek(size)
+        assert f.read() == guard * guard_size

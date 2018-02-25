@@ -8,13 +8,13 @@ import struct
 import sanlock
 
 from . import constants
+from . import util
 
 
 def test_write_lockspace(tmpdir, sanlock_daemon):
     path = tmpdir.join("lockspace")
-    with io.open(str(path), "wb") as f:
-        # Poison with junk data.
-        f.write(b"x" * 1024**2 + b"X" * 512)
+    size = 1024**2
+    util.create_file(str(path), size)
 
     sanlock.write_lockspace("name", str(path), offset=0)
 
@@ -24,6 +24,4 @@ def test_write_lockspace(tmpdir, sanlock_daemon):
 
         # TODO: check more stuff here...
 
-        # Do not modify data after the lockspace area.
-        f.seek(1024**2, io.SEEK_SET)
-        assert f.read(512) == b"X" * 512
+    util.check_guard(str(path), size)
