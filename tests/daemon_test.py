@@ -5,7 +5,6 @@ Test sanlock client operations.
 import io
 import signal
 import struct
-import subprocess
 
 import pytest
 
@@ -38,7 +37,7 @@ def test_start_after_kill():
 
 def test_client_failure():
     # No daemon is running, client must fail
-    with pytest.raises(subprocess.CalledProcessError) as e:
+    with pytest.raises(util.CommandError) as e:
         util.sanlock("client", "status")
     assert e.value.returncode == 1
 

@@ -16,6 +16,20 @@ class TimeoutExpired(Exception):
     """ Raised when timeout expired """
 
 
+class CommandError(Exception):
+    msg = ("Command {self.cmd} failed with returncode={self.returncode}, "
+           "stdout={self.stdout!r}, stderr={self.stderr!r}")
+
+    def __init__(self, cmd, returncode, stdout, stderr):
+        self.cmd = cmd
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+    def __str__(self):
+        return self.msg.format(self=self)
+
+
 def start_daemon():
     cmd = [SANLOCK, "daemon",
            # no fork and print all logging to stderr
@@ -57,11 +71,15 @@ def wait_for_daemon(timeout):
 def sanlock(*args):
     """
     Run sanlock returning the process stdout, or raising
-    subprocess.CalledProcessError on failures.
+    util.CommandError on failures.
     """
     cmd = [SANLOCK]
     cmd.extend(args)
-    return subprocess.check_output(cmd)
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    out, err = p.communicate()
+    if p.returncode:
+        raise CommandError(cmd, p.returncode, out, err)
+    return out
 
 
 def wait_for_termination(p, timeout):
