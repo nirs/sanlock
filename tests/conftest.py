@@ -17,5 +17,7 @@ def sanlock_daemon():
         util.wait_for_daemon(0.5)
         yield
     finally:
-        p.terminate()
+        # Killing sanlock allows terminating without reomving the lockspace,
+        # which takes about 3 seconds, slowing down the tests.
+        p.kill()
         p.wait()
