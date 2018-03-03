@@ -584,7 +584,6 @@ int rindex_delete(struct task *task, struct sanlk_rindex *ri,
 	char *rindex_iobuf = NULL;
 	uint64_t res_offset = re->offset;
 	uint64_t ent_offset;
-	int entry_num;
 	int sector_size, align_size;
 	int rv;
 
@@ -620,8 +619,6 @@ int rindex_delete(struct task *task, struct sanlk_rindex *ri,
 
 	sector_size = rx.header.sector_size;
 	align_size = sector_size_to_align_size(sector_size);
-	entry_num = (res_offset - rx.disk->offset - (2 * align_size)) / align_size;
-	ent_offset = sector_size + (entry_num * sizeof(struct rindex_entry));
 
 	if (re->offset && (re->offset % align_size)) {
 		rv = SANLK_RINDEX_OFFSET;
@@ -642,7 +639,6 @@ int rindex_delete(struct task *task, struct sanlk_rindex *ri,
 		rv = -ENOMEM;
 		goto out_clear;
 	}
-	res_token->disks[0].offset = res_offset;
 
 	rv = paxos_lease_acquire(task, rx_token,
 			         PAXOS_ACQUIRE_OWNER_NOWAIT | PAXOS_ACQUIRE_QUIET_FAIL,
@@ -659,6 +655,14 @@ int rindex_delete(struct task *task, struct sanlk_rindex *ri,
 		goto out_lease;
 	}
 
+	/* find the entry */
+
+	rv = search_entries(&rx, rindex_iobuf, &ent_offset, &res_offset, 0, re->name);
+	if (rv < 0) {
+		log_error("rindex_delete failed to find entry '%s': %d", re->name, rv);
+		goto out_iobuf;
+	}
+
 	rv = update_rindex(task, &spi, &rx, rindex_iobuf, re, ent_offset, res_offset, 1);
 	if (rv < 0) {
 		log_error("rindex_delete failed to update rindex %d", rv);
@@ -666,6 +670,8 @@ int rindex_delete(struct task *task, struct sanlk_rindex *ri,
 	}
 
 	/* clear the paxos lease */
+
+	res_token->disks[0].offset = res_offset;
 
 	rv = paxos_lease_init(task, res_token, 0, 0, 1);
 	if (rv < 0) {
