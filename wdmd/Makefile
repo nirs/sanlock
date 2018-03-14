@@ -45,12 +45,12 @@ CFLAGS += -D_GNU_SOURCE -g -O2 \
 VER=$(shell cat ../VERSION)
 CFLAGS += -DVERSION=\"$(VER)\"
 
-CMD_LDFLAGS += -Wl,-z,now -Wl,-z,relro -pie
-CMD_LDADD += -lwdmd -lrt
+CMD_LDFLAGS = $(LDFLAGS) -Wl,-z,now -Wl,-z,relro
+CMD_LDADD = -lwdmd -lrt
 
-LIB_LDFLAGS += -Wl,-z,relro -pie
+LIB_LDFLAGS = $(LDFLAGS) -Wl,-z,relro
 
-TEST_LDFLAGS = -lwdmd
+TEST_LDFLAGS = $(LDFLAGS) -lwdmd
 
 
 all: $(SHLIB_TARGET) $(CMD_TARGET) $(TEST_TARGET)

@@ -34,7 +34,7 @@ VER=$(shell cat ../VERSION)
 CFLAGS += -DVERSION=\"$(VER)\" -I../src -I../wdmd
 CFLAGS += -fPIE -DPIE
 
-LDFLAGS = -Wl,-z,now -Wl,-z,relro -pie
+LDFLAGS += -Wl,-z,now -Wl,-z,relro
 LDADD = -lsanlock -lwdmd
 
 all: $(TARGET1) $(TARGET2)

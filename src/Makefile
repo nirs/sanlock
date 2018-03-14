@@ -99,24 +99,23 @@ VER=$(shell cat ../VERSION)
 CFLAGS += -DVERSION=\"$(VER)\"
 
 CMD_CFLAGS = $(CFLAGS) -fPIE -DPIE
+CMD_LDFLAGS = $(LDFLAGS) -Wl,-z,now -Wl,-z,relro
+CMD_LDADD = -lpthread -luuid -lrt -laio -lblkid -lsanlock -L../wdmd -lwdmd
 
-CMD_LDFLAGS += -Wl,-z,now -Wl,-z,relro -pie
-CMD_LDADD += -lpthread -luuid -lrt -laio -lblkid -lsanlock -L../wdmd -lwdmd
+LIB_ENTIRE_LDFLAGS = $(LDFLAGS) -Wl,-z,relro
+LIB_ENTIRE_LDADD = -lpthread -lrt -laio -lblkid -L../wdmd -lwdmd
 
-LIB_ENTIRE_LDFLAGS += -Wl,-z,relro -pie
-LIB_ENTIRE_LDADD += -lpthread -lrt -laio -lblkid -L../wdmd -lwdmd
-
-LIB_CLIENT_LDFLAGS += -Wl,-z,relro -pie
+LIB_CLIENT_LDFLAGS = $(LDFLAGS) -Wl,-z,relro
 
 all: $(LIBSO_ENTIRE_TARGET) $(LIBSO_CLIENT_TARGET) $(CMD_TARGET) $(LIBPC_ENTIRE_TARGET) $(LIBPC_CLIENT_TARGET)
 
 $(LIBSO_ENTIRE_TARGET): $(LIB_ENTIRE_SOURCE)
-	$(CC) $(CFLAGS) $(LIB_ENTIRE_LDFLAGS) -shared -fPIC -o $@ -Wl,-soname=$(LIB_ENTIRE_TARGET).so.$(SOMAJOR) $^ $(LIB_ENTIRE_LDADD)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(LIB_ENTIRE_LDFLAGS) -shared -fPIC -o $@ -Wl,-soname=$(LIB_ENTIRE_TARGET).so.$(SOMAJOR) $^ $(LIB_ENTIRE_LDADD)
 	ln -sf $(LIBSO_ENTIRE_TARGET) $(LIB_ENTIRE_TARGET).so
 	ln -sf $(LIBSO_ENTIRE_TARGET) $(LIB_ENTIRE_TARGET).so.$(SOMAJOR)
 
 $(LIBSO_CLIENT_TARGET): $(LIB_CLIENT_SOURCE)
-	$(CC) $(CFLAGS) $(LIB_CLIENT_LDFLAGS) -shared -fPIC -o $@ -Wl,-soname=$(LIB_CLIENT_TARGET).so.$(SOMAJOR) $^
+	$(CC) $(CFLAGS) $(LDFLAGS) $(LIB_CLIENT_LDFLAGS) -shared -fPIC -o $@ -Wl,-soname=$(LIB_CLIENT_TARGET).so.$(SOMAJOR) $^
 	ln -sf $(LIBSO_CLIENT_TARGET) $(LIB_CLIENT_TARGET).so
 	ln -sf $(LIBSO_CLIENT_TARGET) $(LIB_CLIENT_TARGET).so.$(SOMAJOR)
 
