@@ -65,22 +65,15 @@ LIB_CLIENT_SOURCE = \
 LIBPC_ENTIRE_SOURCE = libsanlock.pc.in
 LIBPC_CLIENT_SOURCE = libsanlock_client.pc.in
 
-OPTIMIZE_FLAG = -O2 -Wp,-D_FORTIFY_SOURCE=2
-ifeq ($(DEBUG), 1)
-   OPTIMIZE_FLAG = -O0
-   CFLAGS += -g
-endif
-
-
-
-CFLAGS += -D_GNU_SOURCE \
+CFLAGS += -D_GNU_SOURCE -O2 -ggdb \
 	-Wall \
 	-Wformat \
 	-Wformat-security \
 	-Wmissing-prototypes \
 	-Wnested-externs \
 	-Wpointer-arith \
-	-Wextra -Wshadow \
+	-Wextra \
+	-Wshadow \
 	-Wcast-align \
 	-Wwrite-strings \
 	-Waggregate-return \
@@ -88,34 +81,40 @@ CFLAGS += -D_GNU_SOURCE \
 	-Winline \
 	-Wredundant-decls \
 	-Wno-sign-compare \
+	-Wno-unused-parameter \
+	-Wp,-D_FORTIFY_SOURCE=2 \
 	-Wno-strict-overflow \
 	-fexceptions \
 	-fasynchronous-unwind-tables \
 	-fdiagnostics-show-option \
-	$(OPTIMIZE_FLAG) \
-	$(NULL)
+	-Wp,-D_GLIBCXX_ASSERTIONS \
+	-fstack-protector-strong \
+	-fstack-clash-protection \
+	-Wl,-z,now
 
 VER=$(shell cat ../VERSION)
 CFLAGS += -DVERSION=\"$(VER)\"
 
 CMD_CFLAGS = $(CFLAGS) -fPIE -DPIE
-CMD_LDFLAGS = $(LDFLAGS) -Wl,-z,now -Wl,-z,relro
+LIB_ENTIRE_CFLAGS = $(CFLAGS) -fPIC
+LIB_CLIENT_CFLAGS = $(CFLAGS) -fPIC
+
+CMD_LDFLAGS = $(LDFLAGS) -Wl,-z,relro -pie
+LIB_ENTIRE_LDFLAGS = $(LDFLAGS) -Wl,-z,relro -pie
+LIB_CLIENT_LDFLAGS = $(LDFLAGS) -Wl,-z,relro -pie
+
 CMD_LDADD = -lpthread -luuid -lrt -laio -lblkid -lsanlock -L../wdmd -lwdmd
-
-LIB_ENTIRE_LDFLAGS = $(LDFLAGS) -Wl,-z,relro
 LIB_ENTIRE_LDADD = -lpthread -lrt -laio -lblkid -L../wdmd -lwdmd
-
-LIB_CLIENT_LDFLAGS = $(LDFLAGS) -Wl,-z,relro
 
 all: $(LIBSO_ENTIRE_TARGET) $(LIBSO_CLIENT_TARGET) $(CMD_TARGET) $(LIBPC_ENTIRE_TARGET) $(LIBPC_CLIENT_TARGET)
 
 $(LIBSO_ENTIRE_TARGET): $(LIB_ENTIRE_SOURCE)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(LIB_ENTIRE_LDFLAGS) -shared -fPIC -o $@ -Wl,-soname=$(LIB_ENTIRE_TARGET).so.$(SOMAJOR) $^ $(LIB_ENTIRE_LDADD)
+	$(CC) $(LIB_ENTIRE_CFLAGS) $(LIB_ENTIRE_LDFLAGS) -shared -o $@ -Wl,-soname=$(LIB_ENTIRE_TARGET).so.$(SOMAJOR) $^ $(LIB_ENTIRE_LDADD)
 	ln -sf $(LIBSO_ENTIRE_TARGET) $(LIB_ENTIRE_TARGET).so
 	ln -sf $(LIBSO_ENTIRE_TARGET) $(LIB_ENTIRE_TARGET).so.$(SOMAJOR)
 
 $(LIBSO_CLIENT_TARGET): $(LIB_CLIENT_SOURCE)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(LIB_CLIENT_LDFLAGS) -shared -fPIC -o $@ -Wl,-soname=$(LIB_CLIENT_TARGET).so.$(SOMAJOR) $^
+	$(CC) $(LIB_CLIENT_CFLAGS) $(LIB_CLIENT_LDFLAGS) -shared -o $@ -Wl,-soname=$(LIB_CLIENT_TARGET).so.$(SOMAJOR) $^
 	ln -sf $(LIBSO_CLIENT_TARGET) $(LIB_CLIENT_TARGET).so
 	ln -sf $(LIBSO_CLIENT_TARGET) $(LIB_CLIENT_TARGET).so.$(SOMAJOR)
 
