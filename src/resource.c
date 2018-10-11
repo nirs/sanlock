@@ -1594,6 +1594,8 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 	int new_id = 0;
 	int rv;
 
+	memset(&dblock, 0, sizeof(dblock));
+
 	if (token->acquire_flags & SANLK_RES_LVER)
 		acquire_lver = token->acquire_lver;
 	if (token->acquire_flags & SANLK_RES_NUM_HOSTS)

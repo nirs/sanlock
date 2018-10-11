@@ -1986,6 +1986,7 @@ int paxos_lease_acquire(struct task *task,
 				  (unsigned long long)tmp_leader.write_id);
 
 			memcpy(leader_ret, &tmp_leader, sizeof(struct leader_record));
+			memcpy(dblock_ret, &dblock, sizeof(struct paxos_dblock));
 			error = SANLK_OK;
 		} else {
 			/* not a problem, but interesting to see */
