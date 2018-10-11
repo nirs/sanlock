@@ -418,9 +418,25 @@ static int write_host_block(struct task *task, struct token *token,
 	 * values intact because other hosts may be running the
 	 * paxos algorithm and these values need to remain intact
 	 * for them to reach the correct result.
+	 *
+	 * Be very careful that the latest/correct copy of our
+	 * dblock values are being used here.  A paxos ballot
+	 * can get confused/stuck if we write the wrong dblock
+	 * values.
 	 */
 	if (pd) {
-		paxos_dblock_out(pd, &pd_end);
+		if (pd->inp && (pd->inp != token->host_id)) {
+			/* This should never happen, sanity check. */
+			log_errot(token, "Ignore bad dblock while writing mblock %llu:%llu:%llu:%llu",
+				  (unsigned long long)pd->inp,
+				  (unsigned long long)pd->inp2,
+				  (unsigned long long)pd->inp3,
+				  (unsigned long long)pd->lver);
+			memset(pd, 0, sizeof(struct paxos_dblock));
+		} else {
+			paxos_dblock_out(pd, &pd_end);
+		}
+
 		checksum = dblock_checksum(&pd_end);
 		pd->checksum = checksum;
 		pd_end.checksum = cpu_to_le32(checksum);
