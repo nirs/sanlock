@@ -34,12 +34,12 @@
 #include "timeouts.h"
 #include "rindex.h"
 
-static int direct_read_leader_sector_size(struct task *task, struct sync_disk *sd)
+static int direct_read_leader_sizes(struct task *task, struct sync_disk *sd,
+				    int *sector_size, int *align_size)
 {
 	struct leader_record *lr_end;
 	struct leader_record lr_in;
 	char *data;
-	int sector_size = 0;
 	int datalen;
 	int rv;
 
@@ -47,23 +47,31 @@ static int direct_read_leader_sector_size(struct task *task, struct sync_disk *s
 	data = malloc(datalen);
 
 	if (!data)
-		return 0;
+		return -ENOMEM;
 
 	memset(data, 0, datalen);
 
 	rv = read_sectors(sd, 4096, 0, 1, data, datalen, task, DEFAULT_IO_TIMEOUT, "read_sector_size");
-	if (rv < 0)
-		goto out;
+	if (rv < 0) {
+		free(data);
+		return rv;
+	}
 
 	lr_end = (struct leader_record *)data;
 
 	leader_record_in(lr_end, &lr_in);
 
-	if ((lr_in.magic == DELTA_DISK_MAGIC) || (lr_in.magic == PAXOS_DISK_MAGIC))
-		sector_size = lr_in.sector_size;
- out:
 	free(data);
-	return sector_size;
+
+	if ((lr_in.magic == DELTA_DISK_MAGIC) || (lr_in.magic == PAXOS_DISK_MAGIC)) {
+		*sector_size = lr_in.sector_size;
+		*align_size = leader_align_size_from_flag(lr_in.flags);
+		if (!*align_size)
+			*align_size = sector_size_to_align_size_old(*sector_size);
+		return 0;
+	}
+
+	return -1;
 }
 
 /*
@@ -108,19 +116,25 @@ static int direct_read_leader_sector_size(struct task *task, struct sync_disk *s
  */
 
 static int do_paxos_action(int action, struct task *task, int io_timeout, struct sanlk_resource *res,
-			   int max_hosts, int num_hosts, int write_clear,
+			   int num_hosts, int write_clear,
 			   uint64_t local_host_id, uint64_t local_host_generation,
 			   struct leader_record *leader_in, struct leader_record *leader_ret)
 {
 	struct token *token;
 	struct leader_record leader;
 	struct paxos_dblock dblock;
-	int sector_size;
+	int sector_size = 0;
+	int align_size = 0;
+	int max_hosts = 0;
 	int disks_len, token_len;
 	int j, rv = 0;
 
 	if (!io_timeout)
 		io_timeout = DEFAULT_IO_TIMEOUT;
+
+	rv = sizes_from_flags(res->flags, &sector_size, &align_size, &max_hosts, "RES");
+	if (rv)
+		return -1;
 
 	disks_len = res->num_disks * sizeof(struct sync_disk);
 	token_len = sizeof(struct token) + disks_len;
@@ -134,6 +148,7 @@ static int do_paxos_action(int action, struct task *task, int io_timeout, struct
 	token->r.num_disks = res->num_disks;
 	memcpy(token->r.lockspace_name, res->lockspace_name, SANLK_NAME_LEN);
 	memcpy(token->r.name, res->name, SANLK_NAME_LEN);
+	token->r.flags = res->flags;
 
 	/* WARNING sync_disk == sanlk_disk */
 
@@ -144,62 +159,85 @@ static int do_paxos_action(int action, struct task *task, int io_timeout, struct
 		token->disks[j].fd = -1;
 	}
 
+
 	rv = open_disks(token->disks, token->r.num_disks);
 	if (rv < 0) {
 		free(token);
 		return rv;
 	}
 
+	if (!sector_size && com.sector_size)
+		sector_size = com.sector_size;
+
+	if (!align_size && com.align_size)
+		align_size = com.align_size;
+
 	switch (action) {
 	case ACT_DIRECT_INIT:
-		sector_size = com.sector_size ? com.sector_size :
-			      token->disks[0].sector_size;
-		token->sector_size = sector_size;
-		token->align_size = sector_size_to_align_size(sector_size);
+		/* paxos_lease_init looks at token->r.flags for sector/align flags */
 
-		rv = paxos_lease_init(task, token, num_hosts, max_hosts, write_clear);
+		rv = paxos_lease_init(task, token, num_hosts, write_clear);
 		break;
 
 	case ACT_ACQUIRE:
-		sector_size = com.sector_size ? com.sector_size :
-			      direct_read_leader_sector_size(task, &token->disks[0]);
+		if (!sector_size || !align_size) {
+			rv = direct_read_leader_sizes(task, &token->disks[0], &sector_size, &align_size);
+			if (rv < 0)
+				break;
+		}
 		token->sector_size = sector_size;
-		token->align_size = sector_size_to_align_size(sector_size);
+		token->align_size = align_size;
 
 		token->host_id = local_host_id;
 		token->host_generation = local_host_generation;
 
-		rv = paxos_lease_acquire(task, token, 0, leader_ret, &dblock, 0, num_hosts);
+		rv = paxos_lease_acquire(task, token, 0, leader_ret, &dblock, 0, 0);
 		break;
 
 	case ACT_RELEASE:
-		sector_size = com.sector_size ? com.sector_size : 4096;
+		if (!sector_size)
+			sector_size = 4096;
+		if (!align_size)
+			align_size = sector_size_to_align_size_old(sector_size);
+
 		token->sector_size = sector_size;
-		token->align_size = sector_size_to_align_size(sector_size);
+		token->align_size = align_size;
 
 		rv = paxos_lease_leader_read(task, token, &leader, "direct_release");
 		if (rv < 0)
 			break;
 
 		sector_size = leader.sector_size;
+		align_size = leader_align_size_from_flag(leader.flags);
+		if (!align_size)
+			align_size = sector_size_to_align_size_old(sector_size);
+
 		token->sector_size = sector_size;
-		token->align_size = sector_size_to_align_size(sector_size);
+		token->align_size = align_size;
 
 		rv = paxos_lease_release(task, token, NULL, &leader, leader_ret);
 		break;
 
 	case ACT_READ_LEADER:
-		sector_size = com.sector_size ? com.sector_size : 4096;
+		if (!sector_size)
+			sector_size = 4096;
+		if (!align_size)
+			align_size = sector_size_to_align_size_old(sector_size);
+
 		token->sector_size = sector_size;
-		token->align_size = sector_size_to_align_size(sector_size);
+		token->align_size = align_size;
 
 		rv = paxos_lease_leader_read(task, token, &leader, "direct_read_leader");
 		break;
 
 	case ACT_WRITE_LEADER:
 		sector_size = leader_in->sector_size;
+		align_size = leader_align_size_from_flag(leader_in->flags);
+		if (!align_size)
+			align_size = sector_size_to_align_size_old(sector_size);
+
 		token->sector_size = sector_size;
-		token->align_size = sector_size_to_align_size(sector_size);
+		token->align_size = align_size;
 
 		rv = paxos_lease_leader_clobber(task, token, leader_in, "direct_clobber");
 		break;
@@ -230,7 +268,7 @@ int direct_acquire(struct task *task, int io_timeout,
 		   struct leader_record *leader_ret)
 {
 	return do_paxos_action(ACT_ACQUIRE, task, io_timeout, res,
-			       -1, num_hosts, 0,
+			       num_hosts, 0,
 			       local_host_id, local_host_generation,
 			       NULL, leader_ret);
 }
@@ -240,7 +278,7 @@ int direct_release(struct task *task, int io_timeout,
 		   struct leader_record *leader_ret)
 {
 	return do_paxos_action(ACT_RELEASE, task, io_timeout, res,
-			       -1, -1, 0,
+			       0, 0,
 			       0, 0,
 			       NULL, leader_ret);
 }
@@ -249,7 +287,6 @@ static int do_delta_action(int action,
 			   struct task *task,
 			   int io_timeout,
 			   struct sanlk_lockspace *ls,
-			   int max_hosts,
 			   char *our_host_name,
 			   struct leader_record *leader_in,
 			   struct leader_record *leader_ret)
@@ -258,14 +295,21 @@ static int do_delta_action(int action,
 	struct sync_disk sd;
 	struct space space;
 	char bitmap[HOSTID_BITMAP_SIZE];
-	int sector_size;
-	int read_result, rv;
+	int sector_size = 0;
+	int align_size = 0;
+	int max_hosts = 0;
+	int read_result;
 	int rd_ms, wr_ms;
+	int rv;
 
 	memset(bitmap, 0, sizeof(bitmap));
 
 	if (!io_timeout)
 		io_timeout = DEFAULT_IO_TIMEOUT;
+
+	rv = sizes_from_flags(ls->flags, &sector_size, &align_size, &max_hosts, "LSF");
+	if (rv)
+		return -1;
 
 	memset(&leader, 0, sizeof(leader));
 
@@ -287,25 +331,28 @@ static int do_delta_action(int action,
 	if (rv < 0)
 		return -ENODEV;
 
+	if (!sector_size && com.sector_size)
+		sector_size = com.sector_size;
+
+	if (!align_size && com.align_size)
+		align_size = com.align_size;
+
 	switch (action) {
 	case ACT_DIRECT_INIT:
-		sector_size = com.sector_size ? com.sector_size : sd.sector_size;
+		/* delta_lease_init looks at ls->flags for sector/align sizses */
 
-		if (sector_size == 512)
-			ls->flags |= SANLK_LSF_ALIGN1M;
-		else if (sector_size == 4096)
-			ls->flags |= SANLK_LSF_ALIGN8M;
-
-		rv = delta_lease_init(task, ls, io_timeout, &sd, max_hosts);
+		rv = delta_lease_init(task, ls, io_timeout, &sd);
 		break;
 
 	case ACT_ACQUIRE_ID:
-		sector_size = direct_read_leader_sector_size(task, &sd);
-		if (!sector_size)
-			return rv;
+		if (!sector_size || !align_size) {
+			rv = direct_read_leader_sizes(task, &sd, &sector_size, &align_size);
+			if (rv < 0)
+				break;
+		}
 
 		space.sector_size = sector_size;
-		space.align_size = sector_size_to_align_size(sector_size);
+		space.align_size = align_size;
 
 		rv = delta_lease_acquire(task, &space, &sd,
 					 ls->name,
@@ -314,12 +361,14 @@ static int do_delta_action(int action,
 					 &leader);
 		break;
 	case ACT_RENEW_ID:
-		sector_size = direct_read_leader_sector_size(task, &sd);
-		if (!sector_size)
-			return rv;
+		if (!sector_size || !align_size) {
+			rv = direct_read_leader_sizes(task, &sd, &sector_size, &align_size);
+			if (rv < 0)
+				break;
+		}
 
 		space.sector_size = sector_size;
-		space.align_size = sector_size_to_align_size(sector_size);
+		space.align_size = align_size;
 
 		rv = delta_lease_leader_read(task, sector_size, io_timeout, &sd,
 					     ls->name,
@@ -341,12 +390,14 @@ static int do_delta_action(int action,
 				       &rd_ms, &wr_ms);
 		break;
 	case ACT_RELEASE_ID:
-		sector_size = direct_read_leader_sector_size(task, &sd);
-		if (!sector_size)
-			return rv;
+		if (!sector_size || !align_size) {
+			rv = direct_read_leader_sizes(task, &sd, &sector_size, &align_size);
+			if (rv < 0)
+				break;
+		}
 
 		space.sector_size = sector_size;
-		space.align_size = sector_size_to_align_size(leader.sector_size);
+		space.align_size = align_size;
 
 		rv = delta_lease_leader_read(task, sector_size, io_timeout, &sd,
 					     ls->name,
@@ -362,9 +413,11 @@ static int do_delta_action(int action,
 					 &leader);
 		break;
 	case ACT_READ_LEADER:
-		sector_size = direct_read_leader_sector_size(task, &sd);
-		if (!sector_size)
-			return rv;
+		if (!sector_size || !align_size) {
+			rv = direct_read_leader_sizes(task, &sd, &sector_size, &align_size);
+			if (rv < 0)
+				break;
+		}
 
 		rv = delta_lease_leader_read(task, sector_size, io_timeout, &sd,
 					     ls->name,
@@ -400,17 +453,17 @@ static int do_delta_action(int action,
 int direct_acquire_id(struct task *task, int io_timeout, struct sanlk_lockspace *ls,
 		      char *our_host_name)
 {
-	return do_delta_action(ACT_ACQUIRE_ID, task, io_timeout, ls, -1, our_host_name, NULL, NULL);
+	return do_delta_action(ACT_ACQUIRE_ID, task, io_timeout, ls, our_host_name, NULL, NULL);
 }
 
 int direct_release_id(struct task *task, int io_timeout, struct sanlk_lockspace *ls)
 {
-	return do_delta_action(ACT_RELEASE_ID, task, io_timeout, ls, -1, NULL, NULL, NULL);
+	return do_delta_action(ACT_RELEASE_ID, task, io_timeout, ls, NULL, NULL, NULL);
 }
 
 int direct_renew_id(struct task *task, int io_timeout, struct sanlk_lockspace *ls)
 {
-	return do_delta_action(ACT_RENEW_ID, task, io_timeout, ls, -1, NULL, NULL, NULL);
+	return do_delta_action(ACT_RENEW_ID, task, io_timeout, ls, NULL, NULL, NULL);
 }
 
 int direct_align(struct sync_disk *disk)
@@ -425,17 +478,16 @@ int direct_align(struct sync_disk *disk)
 
 /* io_timeout is written to leader record and used for the write call itself */
 int direct_write_lockspace(struct task *task, struct sanlk_lockspace *ls,
-			   int max_hosts, uint32_t io_timeout)
+			   uint32_t io_timeout)
 {
 	if (!ls)
 		return -1;
 
-	return do_delta_action(ACT_DIRECT_INIT, task, io_timeout, ls,
-			       max_hosts, NULL, NULL, NULL);
+	return do_delta_action(ACT_DIRECT_INIT, task, io_timeout, ls, NULL, NULL, NULL);
 }
 
 int direct_write_resource(struct task *task, struct sanlk_resource *res,
-			  int max_hosts, int num_hosts, int write_clear)
+			  int num_hosts, int write_clear)
 {
 	if (!res)
 		return -1;
@@ -447,7 +499,7 @@ int direct_write_resource(struct task *task, struct sanlk_resource *res,
 		return -ENODEV;
 
 	return do_paxos_action(ACT_DIRECT_INIT, task, 0, res,
-			       max_hosts, num_hosts, write_clear,
+			       num_hosts, write_clear,
 			       0, 0,
 			       NULL, NULL);
 }
@@ -461,11 +513,11 @@ int direct_read_leader(struct task *task,
 	int rv = -1;
 
 	if (ls && ls->host_id_disk.path[0])
-		rv = do_delta_action(ACT_READ_LEADER, task, io_timeout, ls, -1, NULL, NULL, leader_ret);
+		rv = do_delta_action(ACT_READ_LEADER, task, io_timeout, ls, NULL, NULL, leader_ret);
 
 	else if (res)
 		rv = do_paxos_action(ACT_READ_LEADER, task, io_timeout, res,
-				     -1, -1, 0,
+				     0, 0,
 				     0, 0,
 				     NULL, leader_ret);
 	return rv;
@@ -480,11 +532,11 @@ int direct_write_leader(struct task *task,
 	int rv = -1;
 
 	if (ls && ls->host_id_disk.path[0]) {
-		rv = do_delta_action(ACT_WRITE_LEADER, task, io_timeout, ls, -1, NULL, leader, NULL);
+		rv = do_delta_action(ACT_WRITE_LEADER, task, io_timeout, ls, NULL, leader, NULL);
 
 	} else if (res) {
 		rv = do_paxos_action(ACT_WRITE_LEADER, task, io_timeout, res,
-				     -1, -1, 0,
+				     0, 0,
 				     0, 0,
 				     leader, NULL);
 	}
@@ -517,7 +569,7 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 	uint64_t sector_nr;
 	uint64_t dump_size = 0;
 	uint64_t end_sector_nr;
-	int sector_size, sector_count, datalen, align_size;
+	int sector_size, sector_count, datalen, align_size, max_hosts;
 	int i, j, rv, b;
 
 	memset(&sd, 0, sizeof(struct sync_disk));
@@ -541,9 +593,19 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 	if (rv < 0)
 		return -ENODEV;
 
-	sector_size = com.sector_size ? com.sector_size :
-		      direct_read_leader_sector_size(task, &sd);
-	align_size = sector_size_to_align_size(sector_size);
+	if (com.sector_size)
+		sector_size = com.sector_size;
+        if (com.align_size)
+                align_size = com.align_size;
+
+	if (!sector_size || !align_size) {
+		rv = direct_read_leader_sizes(task, &sd, &sector_size, &align_size);
+		if (rv < 0)
+			return rv;
+	}
+
+	max_hosts = size_to_max_hosts(sector_size, align_size);
+
 	sector_count = align_size / sector_size;
 	datalen = align_size;
 
@@ -569,12 +631,12 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 	printf("\n");
 
 	sector_nr = 0;
-	end_sector_nr = dump_size / sd.sector_size;
+	end_sector_nr = dump_size / sector_size;
 
 	while (end_sector_nr == 0 || sector_nr < end_sector_nr) {
 		memset(sname, 0, sizeof(rname));
 		memset(rname, 0, sizeof(rname));
-		memset(data, 0, sd.sector_size);
+		memset(data, 0, sector_size);
 
 		rv = read_sectors(&sd, sector_size, sector_nr, sector_count, data, datalen,
 				  task, DEFAULT_IO_TIMEOUT, "dump");
@@ -611,7 +673,7 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 
 				if (force_mode) {
 					bitmap = (char *)lr_end + LEADER_RECORD_MAX;
-					for (b = 0; b < DEFAULT_MAX_HOSTS; b++) {
+					for (b = 0; b < max_hosts; b++) {
 						if (test_id_bit(b+1, bitmap))
 							printf(" %d", b+1);
 					}
@@ -677,9 +739,11 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 
 			strncpy(sname, rh->lockspace_name, NAME_ID_SIZE);
 
-			printf("%08llu %36s rindex\n",
+			printf("%08llu %36s rindex_header 0x%x %d %u %llu\n",
 			       (unsigned long long)(sector_nr * sector_size),
-			       sname);
+			       sname,
+			       rh->flags, rh->sector_size, rh->max_resources,
+			       (unsigned long long)rh->rx_offset);
 
 			if (!force_mode)
 				goto next;
@@ -748,11 +812,17 @@ int direct_next_free(struct task *task, char *path)
 	if (rv < 0)
 		return -ENODEV;
 
-	sector_size = direct_read_leader_sector_size(task, &sd);
-	if (!sector_size)
-		return -EINVAL;
+	if (com.sector_size)
+		sector_size = com.sector_size;
+        if (com.align_size)
+                align_size = com.align_size;
 
-	align_size = sector_size_to_align_size(sector_size);
+	if (!sector_size || !align_size) {
+		rv = direct_read_leader_sizes(task, &sd, &sector_size, &align_size);
+		if (rv < 0)
+			return rv;
+	}
+
 	sector_count = align_size / sector_size;
 	datalen = sector_size;
 

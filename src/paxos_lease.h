@@ -40,7 +40,7 @@ int paxos_lease_release(struct task *task,
 
 int paxos_lease_init(struct task *task,
 		     struct token *token,
-		     int num_hosts, int max_hosts, int write_clear);
+		     int num_hosts, int write_clear);
 
 int paxos_lease_request_read(struct task *task, struct token *token,
                              struct request_record *rr);

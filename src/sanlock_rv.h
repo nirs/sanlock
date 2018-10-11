@@ -38,6 +38,9 @@
 #define SANLK_LEADER_NUMHOSTS	-228
 #define SANLK_LEADER_CHECKSUM	-229
 
+#define SANLK_ADDLS_SIZES	-230
+#define SANLK_ADDLS_INVALID_HOSTID -231
+
 /* paxos_lease_acquire, paxos_lease_release */
 
 #define SANLK_ACQUIRE_LVER	-240

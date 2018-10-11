@@ -9,6 +9,8 @@
 #ifndef __DISKIO_H__
 #define __DISKIO_H__
 
+void offset_to_str(unsigned long long offset, int buflen, char *off_str);
+
 void close_disks(struct sync_disk *disks, int num_disks);
 int open_disk(struct sync_disk *disks);
 int open_disks(struct sync_disk *disks, int num_disks);

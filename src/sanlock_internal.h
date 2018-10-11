@@ -31,6 +31,7 @@
 #include "rindex_disk.h"
 #include "list.h"
 #include "monotime.h"
+#include "sizeflags.h"
 
 #include <libaio.h>
 
@@ -140,6 +141,7 @@ struct resource {
 	uint32_t io_timeout;
 	int pid;                     /* copied from token when ex */
 	int sector_size;
+	int align_size;
 	uint32_t res_id;
 	uint32_t reused;
 	uint32_t flags;
@@ -209,6 +211,7 @@ struct space {
 	uint32_t rindex_op;
 	int sector_size;
 	int align_size;
+	int max_hosts;
 	int renew_fail;
 	int space_dead;
 	int killing_pids;
@@ -354,6 +357,7 @@ struct command_line {
 	int all;
 	int clear_arg;
 	int sector_size;
+	int align_size;
 	char *uname;			/* -U */
 	int uid;				/* -U */
 	char *gname;			/* -G */
@@ -453,17 +457,6 @@ EXTERN uint8_t sanlock_version_minor;
 EXTERN uint8_t sanlock_version_patch;
 EXTERN uint8_t sanlock_version_build;
 EXTERN uint32_t sanlock_version_combined;
-
-#define ONEMB 1048576
-
-static inline int sector_size_to_align_size(int sector_size)
-{
-	if (sector_size == 512)
-		return ONEMB;
-	if (sector_size == 4096)
-		return 8 * ONEMB;
-	return 0;
-}
 
 #endif
 

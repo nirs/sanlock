@@ -88,8 +88,12 @@ struct sanlk_disk {
 #define SANLK_RES_NUM_HOSTS	0x00000002	/* data32 field is new num_hosts */
 #define SANLK_RES_SHARED	0x00000004
 #define SANLK_RES_PERSISTENT	0x00000008
-#define SANLK_RES_ALIGN1M	0x00000010 /* uses 512 sectors */
-#define SANLK_RES_ALIGN8M	0x00000020 /* uses 4k sectors */
+#define SANLK_RES_ALIGN1M	0x00000010
+#define SANLK_RES_ALIGN2M	0x00000020
+#define SANLK_RES_ALIGN4M	0x00000040
+#define SANLK_RES_ALIGN8M	0x00000080
+#define SANLK_RES_SECTOR512	0x00000100
+#define SANLK_RES_SECTOR4K	0x00000200
 
 struct sanlk_resource {
 	char lockspace_name[SANLK_NAME_LEN]; /* terminating \0 not required */
@@ -105,8 +109,12 @@ struct sanlk_resource {
 };
 
 /* make these values match the RES equivalent in case of typos */
-#define SANLK_RIF_ALIGN1M	0x00000010 /* uses 512 sectors */
-#define SANLK_RIF_ALIGN8M	0x00000020 /* uses 4k sectors */
+#define SANLK_RIF_ALIGN1M	0x00000010
+#define SANLK_RIF_ALIGN2M	0x00000020
+#define SANLK_RIF_ALIGN4M	0x00000040
+#define SANLK_RIF_ALIGN8M	0x00000080
+#define SANLK_RIF_SECTOR512	0x00000100
+#define SANLK_RIF_SECTOR4K	0x00000200
 
 struct sanlk_rindex {
 	uint32_t flags;		/* SANLK_RIF_ */
@@ -138,8 +146,12 @@ struct sanlk_options {
 #define SANLK_LSF_REM		0x00000002
 
 /* make these values match the RES equivalent in case of typos */
-#define SANLK_LSF_ALIGN1M	0x00000010 /* uses 512 sectors */
-#define SANLK_LSF_ALIGN8M	0x00000020 /* uses 4k sectors */
+#define SANLK_LSF_ALIGN1M	0x00000010
+#define SANLK_LSF_ALIGN2M	0x00000020
+#define SANLK_LSF_ALIGN4M	0x00000040
+#define SANLK_LSF_ALIGN8M	0x00000080
+#define SANLK_LSF_SECTOR512	0x00000100
+#define SANLK_LSF_SECTOR4K	0x00000200
 
 struct sanlk_lockspace {
 	char name[SANLK_NAME_LEN];

@@ -15,14 +15,22 @@
 
 #define NAME_ID_SIZE 48
 
+/*
+ * paxos minor version changes:
+ * 4: add ALIGN leader flags
+ *
+ * delta minor version changes:
+ * 4: add ALIGN leader flags
+ */
+
 #define PAXOS_DISK_MAGIC 0x06152010
 #define PAXOS_DISK_CLEAR 0x11282016
 #define PAXOS_DISK_VERSION_MAJOR 0x00060000
-#define PAXOS_DISK_VERSION_MINOR 0x00000003
+#define PAXOS_DISK_VERSION_MINOR 0x00000004
 
 #define DELTA_DISK_MAGIC 0x12212010
 #define DELTA_DISK_VERSION_MAJOR 0x00030000
-#define DELTA_DISK_VERSION_MINOR 0x00000003
+#define DELTA_DISK_VERSION_MINOR 0x00000004
 
 /* for all disk structures:
    uint64 aligned on 8 byte boundaries,
@@ -43,7 +51,13 @@
 #define LEADER_CHECKSUM_LEN 168
 #define LEASE_FREE 0
 
+/* leader_record flags */
 #define LFL_SHORT_HOLD 0x00000001
+/* skip ahead in flag numbers so these align flags match other defines */
+#define LFL_ALIGN_1M   0x00000010
+#define LFL_ALIGN_2M   0x00000020
+#define LFL_ALIGN_4M   0x00000040
+#define LFL_ALIGN_8M   0x00000080
 
 struct leader_record {
 	uint32_t magic;

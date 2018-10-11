@@ -2043,7 +2043,7 @@ static void print_usage(void)
 	printf("sanlock client set_config -s LOCKSPACE [-u 0|1] [-O 0|1]\n");
 	printf("sanlock client log_dump\n");
 	printf("sanlock client shutdown [-f 0|1] [-w 0|1]\n");
-	printf("sanlock client init -s LOCKSPACE | -r RESOURCE [-z 0|1] [-Z 512|4096]\n");
+	printf("sanlock client init -s LOCKSPACE | -r RESOURCE [-z 0|1] [-Z 512|4096 -A 1M|2M|4M|8M]\n");
 	printf("sanlock client read -s LOCKSPACE | -r RESOURCE\n");
 	printf("sanlock client align -s LOCKSPACE\n");
 	printf("sanlock client add_lockspace -s LOCKSPACE\n");
@@ -2056,18 +2056,18 @@ static void print_usage(void)
 	printf("sanlock client inquire -p <pid>\n");
 	printf("sanlock client request -r RESOURCE -f <force_mode>\n");
 	printf("sanlock client examine -r RESOURCE | -s LOCKSPACE\n");
-	printf("sanlock client format -x RINDEX\n");
+	printf("sanlock client format -x RINDEX [-Z 512|4096 -A 1M|2M|4M|8M]\n");
 	printf("sanlock client create -x RINDEX -e <resource_name>\n");
 	printf("sanlock client delete -x RINDEX -e <resource_name>[:<offset>]\n");
 	printf("sanlock client lookup -x RINDEX [-e <resource_name>:<offset>]\n");
 	printf("sanlock client update -x RINDEX -e <resource_name>[:<offset>] [-z 0|1]\n");
 	printf("sanlock client rebuild -x RINDEX\n");
 	printf("\n");
-	printf("sanlock direct <action> [-a 0|1] [-o 0|1] [-Z 512|4096]\n");
-	printf("sanlock direct init -s LOCKSPACE | -r RESOURCE\n");
+	printf("sanlock direct <action> [-a 0|1] [-o 0|1] [-Z 512|4096 -A 1M|2M|4M|8M]\n");
+	printf("sanlock direct init -s LOCKSPACE | -r RESOURCE [-Z 512|4096 -A 1M|2M|4M|8M]\n");
 	printf("sanlock direct read_leader -s LOCKSPACE | -r RESOURCE\n");
 	printf("sanlock direct dump <path>[:<offset>[:<size>]]\n");
-	printf("sanlock direct format -x RINDEX\n");
+	printf("sanlock direct format -x RINDEX [-Z 512|4096 -A 1M|2M|4M|8M]\n");
 	printf("sanlock direct lookup -x RINDEX [-e <resource_name>:<offset>]\n");
 	printf("sanlock direct update -x RINDEX -e <resource_name>[:<offset>] [-z 0|1]\n");
 	printf("sanlock direct rebuild -x RINDEX\n");
@@ -2091,11 +2091,10 @@ static void print_usage(void)
 	printf("  <offset>		offset on path (bytes)\n");
 	printf("\n");
 	printf("Limits:\n");
-	printf("offset alignment with 512 byte sectors: %d (1MB)\n", 1024 * 1024);
-	printf("offset alignment with 4096 byte sectors: %d (8MB)\n", 1024 * 1024 * 8);
+	printf("valid sector/align size combinations: 512/1M, 4K/1M, 4K/2M, 4K/4M, 4K/8M\n");
+	printf("maximum host_id for sector/align sizes: 2000, 250, 500, 1000, 2000\n");
 	printf("maximum name length for lockspaces and resources: %d\n", SANLK_NAME_LEN);
 	printf("maximum path length: %d\n", SANLK_PATH_LEN);
-	printf("maximum host_id: %d\n", DEFAULT_MAX_HOSTS);
 	printf("maximum client process connections: 1000\n"); /* NALLOC */
 	printf("\n");
 }
@@ -2429,10 +2428,19 @@ static int read_command_line(int argc, char *argv[])
 			begin_command = 1;
 			break;
 
+		case 'A':
+			if (!strcmp(optionarg, "1M"))
+				com.align_size = ALIGN_SIZE_1M;
+			else if (!strcmp(optionarg, "2M"))
+				com.align_size = ALIGN_SIZE_2M;
+			else if (!strcmp(optionarg, "4M"))
+				com.align_size = ALIGN_SIZE_4M;
+			else if (!strcmp(optionarg, "8M"))
+				com.align_size = ALIGN_SIZE_8M;
+			break;
+
 		case 'Z':
 			com.sector_size = atoi(optionarg);
-			if ((com.sector_size != 512) && (com.sector_size != 4096))
-				com.sector_size = 0;
 			break;
 
 		default:
@@ -2445,6 +2453,20 @@ static int read_command_line(int argc, char *argv[])
 			break;
 
 		i++;
+	}
+
+	if (!com.sector_size && !com.align_size) {
+	} else if (com.sector_size && !com.align_size) {
+	} else if (((com.sector_size == 512) && (com.align_size == ALIGN_SIZE_1M)) ||
+	    ((com.sector_size == 4096) && (com.align_size == ALIGN_SIZE_1M)) ||
+	    ((com.sector_size == 4096) && (com.align_size == ALIGN_SIZE_2M)) ||
+	    ((com.sector_size == 4096) && (com.align_size == ALIGN_SIZE_4M)) ||
+	    ((com.sector_size == 4096) && (com.align_size == ALIGN_SIZE_8M))) {
+	} else {
+		log_tool("Invalid sector_size/align_size combination (%d/%d)",
+			 com.sector_size, com.align_size);
+		log_tool("Use one of: 512/1M, 4096/1M, 4096/2M, 4096/4M, 4096/8M.");
+		return -EINVAL;
 	}
 
 	/*
@@ -2749,17 +2771,17 @@ static int do_client_read(void)
 	int rv, i, hss_count = 0;
 
 	if (com.lockspace.host_id_disk.path[0]) {
-		if (com.sector_size == 512)
-			com.lockspace.flags |= SANLK_LSF_ALIGN1M;
-		else if (com.sector_size == 4096)
-			com.lockspace.flags |= SANLK_LSF_ALIGN8M;
+		if (com.sector_size)
+			com.lockspace.flags |= sanlk_lsf_sector_size_to_flag(com.sector_size);
+		if (com.align_size)
+			com.lockspace.flags |= sanlk_lsf_align_size_to_flag(com.align_size);
 
 		rv = sanlock_read_lockspace(&com.lockspace, 0, &io_timeout);
 	} else {
-		if (com.sector_size == 512)
-			com.res_args[0]->flags |= SANLK_RES_ALIGN1M;
-		else if (com.sector_size == 4096)
-			com.res_args[0]->flags |= SANLK_RES_ALIGN8M;
+		if (com.sector_size)
+			com.res_args[0]->flags |= sanlk_res_sector_size_to_flag(com.sector_size);
+		if (com.align_size)
+			com.res_args[0]->flags |= sanlk_res_align_size_to_flag(com.align_size);
 
 		if (!com.get_hosts) {
 			rv = sanlock_read_resource(com.res_args[0], 0);
@@ -3051,19 +3073,19 @@ static int do_client(void)
 	case ACT_CLIENT_INIT:
 		log_tool("init");
 		if (com.lockspace.host_id_disk.path[0]) {
-			if (com.sector_size == 512)
-				com.lockspace.flags |= SANLK_LSF_ALIGN1M;
-			else if (com.sector_size == 4096)
-				com.lockspace.flags |= SANLK_LSF_ALIGN8M;
+			if (com.sector_size)
+				com.lockspace.flags |= sanlk_lsf_sector_size_to_flag(com.sector_size);
+			if (com.align_size)
+				com.lockspace.flags |= sanlk_lsf_align_size_to_flag(com.align_size);
 
 			rv = sanlock_write_lockspace(&com.lockspace,
 						     com.max_hosts, 0,
 						     com.io_timeout_arg);
 		} else {
-			if (com.sector_size == 512)
-				com.res_args[0]->flags |= SANLK_RES_ALIGN1M;
-			else if (com.sector_size == 4096)
-				com.res_args[0]->flags |= SANLK_RES_ALIGN8M;
+			if (com.sector_size)
+				com.res_args[0]->flags |= sanlk_res_sector_size_to_flag(com.sector_size);
+			if (com.align_size)
+				com.res_args[0]->flags |= sanlk_res_align_size_to_flag(com.align_size);
 
 			rv = sanlock_write_resource(com.res_args[0],
 						    com.max_hosts,
@@ -3105,16 +3127,16 @@ static int do_client(void)
 			config_cmd = com.used ? SANLK_CONFIG_USED :
 						SANLK_CONFIG_UNUSED;
 
-		log_tool("set_config %s %u", com.lockspace.name, config_cmd);
+		log_tool("set_config %.48s %u", com.lockspace.name, config_cmd);
 		rv = sanlock_set_config(com.lockspace.name, 0, config_cmd, NULL);
 		log_tool("set_config done %d", rv);
 		break;
 
 	case ACT_FORMAT:
-		if (com.sector_size == 512)
-			com.rindex.flags |= SANLK_RIF_ALIGN1M;
-		else if (com.sector_size == 4096)
-			com.rindex.flags |= SANLK_RIF_ALIGN8M;
+		if (com.sector_size)
+			com.rindex.flags |= sanlk_rif_sector_size_to_flag(com.sector_size);
+		if (com.align_size)
+			com.rindex.flags |= sanlk_rif_align_size_to_flag(com.align_size);
 
 		rv = sanlock_format_rindex(&com.rindex, 0);
 		log_tool("format done %d", rv);
@@ -3141,7 +3163,7 @@ static int do_client(void)
 		rv = sanlock_lookup_rindex(&com.rindex, 0, &com.rentry);
 		log_tool("lookup done %d", rv);
 		if (!rv)
-			log_tool("name %s offset %llu",
+			log_tool("name %.48s offset %llu",
 				  com.rentry.name[0] ? com.rentry.name : "-",
 				  (unsigned long long)com.rentry.offset);
 		break;
@@ -3353,21 +3375,19 @@ static int do_direct_write_leader(void)
 		       (unsigned long long)com.lockspace.host_id_disk.offset);
 	} else {
 		rv = sanlock_res_to_str(com.res_args[0], &res_str);
-		if (rv < 0) {
-			syslog(LOG_WARNING, "write_leader resource %.48s:%.48s",
-			       com.res_args[0]->lockspace_name, com.res_args[0]->name);
-		} else {
-			syslog(LOG_WARNING, "write_leader resource %s", res_str);
-		}
+		if (rv < 0)
+			goto out;
+		syslog(LOG_WARNING, "write_leader resource %s", res_str);
 	}
 
 	rv = direct_write_leader(&main_task, com.io_timeout_arg,
 				 &com.lockspace, com.res_args[0],
 				 &leader);
-
+out:
 	log_tool("write_leader done %d", rv);
 
-	print_leader(&leader, is_ls);
+	if (!rv)
+		print_leader(&leader, is_ls);
 
 	if (res_str)
 		free(res_str);
@@ -3381,27 +3401,38 @@ static int do_direct_init(void)
 	int rv;
 
 	if (com.lockspace.host_id_disk.path[0]) {
-		syslog(LOG_WARNING, "init lockspace %.48s:%llu:%s:%llu",
+		if (com.sector_size)
+			com.lockspace.flags |= sanlk_lsf_sector_size_to_flag(com.sector_size);
+		if (com.align_size)
+			com.lockspace.flags |= sanlk_lsf_align_size_to_flag(com.align_size);
+
+		syslog(LOG_WARNING, "init lockspace %.48s:%llu:%s:%llu 0x%x",
 		       com.lockspace.name,
 		       (unsigned long long)com.lockspace.host_id,
 		       com.lockspace.host_id_disk.path,
-		       (unsigned long long)com.lockspace.host_id_disk.offset);
+		       (unsigned long long)com.lockspace.host_id_disk.offset,
+		       com.lockspace.flags);
 
 		rv = direct_write_lockspace(&main_task, &com.lockspace,
-					    com.max_hosts, com.io_timeout_arg);
+					    com.io_timeout_arg);
 	} else {
+		if (com.sector_size)
+			com.res_args[0]->flags |= sanlk_res_sector_size_to_flag(com.sector_size);
+		if (com.align_size)
+			com.res_args[0]->flags |= sanlk_res_align_size_to_flag(com.align_size);
+
 		rv = sanlock_res_to_str(com.res_args[0], &res_str);
 		if (rv < 0) {
-			syslog(LOG_WARNING, "init resource %.48s:%.48s",
-			       com.res_args[0]->lockspace_name, com.res_args[0]->name);
+			log_tool("res_to_str parsing error %d", rv);
+			goto out;
 		} else {
 			syslog(LOG_WARNING, "init resource %s", res_str);
 		}
 
 		rv = direct_write_resource(&main_task, com.res_args[0],
-					   com.max_hosts, com.num_hosts, com.clear_arg);
+					   com.num_hosts, com.clear_arg);
 	}
-
+ out:
 	log_tool("init done %d", rv);
 
 	if (res_str)
@@ -3445,6 +3476,17 @@ static int do_direct(void)
 		break;
 
 	case ACT_FORMAT:
+		if (com.sector_size)
+			com.rindex.flags |= sanlk_rif_sector_size_to_flag(com.sector_size);
+		if (com.align_size)
+			com.rindex.flags |= sanlk_rif_align_size_to_flag(com.align_size);
+
+		syslog(LOG_WARNING, "format rindex %.48s:%s:%llu 0x%x",
+		       com.rindex.lockspace_name,
+		       com.rindex.disk.path,
+		       (unsigned long long)com.rindex.disk.offset,
+		       com.rindex.flags);
+
 		rv = direct_rindex_format(&main_task, &com.rindex);
 		log_tool("format done %d", rv);
 		break;
@@ -3458,7 +3500,7 @@ static int do_direct(void)
 		rv = direct_rindex_lookup(&main_task, &com.rindex, &com.rentry, 0);
 		log_tool("lookup done %d", rv);
 		if (!rv)
-			log_tool("name %s offset %llu",
+			log_tool("name %.48s offset %llu",
 				  com.rentry.name[0] ? com.rentry.name : "-",
 				  (unsigned long long)com.rentry.offset);
 		break;

@@ -75,6 +75,7 @@ A lockspace is based on delta leases held by each host using the lockspace.
 
 .IP \[bu]
 A lockspace is a series of 2000 delta leases on disk, and requires 1MB of storage.
+(See Storage below for size variations.)
 
 .IP \[bu]
 A lockspace can support up to 2000 concurrent hosts using it, each
@@ -101,7 +102,7 @@ number: 1,2,3,...,2000.
 .IP \[bu]
 Each delta lease is a 512 byte sector in the 1MB lockspace, offset by
 its number, e.g. delta lease 1 is offset 0, delta lease 2 is offset 512,
-delta lease 2000 is offset 1023488.
+delta lease 2000 is offset 1023488.  (See Storage below for size variations.)
 
 .IP \[bu]
 When an application joins a lockspace, it must specify the lockspace
@@ -266,9 +267,8 @@ Format is a disk-only operation and does not interact with the live
 lockspace, so it can be called without first calling add_lockspace.  The
 application needs to follow the convention of writing the lockspace at the
 start of the device (offset 0) and formatting the rindex immediately
-following the lockspace area (offset 1M/8M according to align size
-corresponding to the sector size.)  The application must use the ALIGN
-flag in format that corresponds to the same in the lockspace.
+following the lockspace area.  When formatting, the application must set
+flags for sector size and align size to match those for the lockspace.
 
 To use the rindex, the application:
 
@@ -397,11 +397,34 @@ and the host should avoid being reset.
 
 .I Storage
 
-On devices with 512 byte sectors, lockspaces and resources are 1MB in
-size.  On devices with 4096 byte sectors, lockspaces and resources are 8MB
-in size.  sanlock uses 512 byte sectors when shared files are used in
-place of shared block devices.  Offsets of leases or resources must be
-multiples of 1MB/8MB according to the sector size.
+The sector size and the align size should be specified when creating
+lockspaces and resources (and rindex).  The "align size" is the size on
+disk of a lockspace or a resource, i.e. the amount of disk space it uses.
+Lockspaces and resources should use matching sector and align sizes, and
+must use offsets in multiples of the align size.  The max number of hosts
+that can use a lockspace or resource depends on the combination of sector
+size and align size, shown below.  The host_id of hosts using the
+lockspace can be no larger than the max_hosts value for the lockspace.
+
+Accepted combinations of sector size and align size, and the corresponding
+max_hosts (and max host_id) are:
+
+sector_size 512, align_size 1M, max_hosts 2000
+.br
+sector_size 4096, align_size 1M, max_hosts 250
+.br
+sector_size 4096, align_size 2M, max_hosts 500
+.br
+sector_size 4096, align_size 4M, max_hosts 1000
+.br
+sector_size 4096, align_size 8M, max_hosts 2000
+
+When sector_size and align_size are not specified, the behavior matches
+the behavior before these sizes could be configured: on devices which
+report sector size 512, 512/1M/2000 is used, on devices which report
+sector size 4096, 4096/8M/2000 is used, and on files, 512/1M/2000 is
+always used.  (Other combinations are not compatible with sanlock version
+3.6 or earlier.)
 
 Using sanlock on shared block devices that do host based mirroring or
 replication is not likely to work correctly.  When using sanlock on shared
@@ -636,13 +659,15 @@ exist (command fails).
 
 Tell the sanlock daemon to initialize a lockspace on disk.  The -o option
 can be used to specify the io timeout to be written in the host_id leases.
-The -Z option can be used to specify the sector size.
+The -Z and -A options can be used to specify the sector size and align
+size, and both should be set together. 
 (Also see sanlock direct init.)
 
 .BR "sanlock client init -r" " RESOURCE"
 
 Tell the sanlock daemon to initialize a resource lease on disk.
-The -Z option can be used to specify the sector size.
+The -Z and -A options can be used to specify the sector size and align
+size, and both should be set together.
 (Also see sanlock direct init.)
 
 .BR "sanlock client read -s" " LOCKSPACE"
@@ -759,7 +784,8 @@ as the USED.
 
 \fBsanlock client format -x\fP RINDEX
 
-Create a resource index on disk.
+Create a resource index on disk.  Use -Z and -A to set the sector size
+and align size to match the lockspace.
 
 \fBsanlock client create -x\fP RINDEX \fB-e\fP \fIresource_name\fP
 
@@ -802,16 +828,17 @@ io timeout in seconds
 .br
 .BR "sanlock direct init -r" " RESOURCE"
 
-Initialize storage for 2000 host_id (delta) leases for the given
-lockspace, or initialize storage for one resource (paxos) lease.  Both
-options require 1MB of space.  The host_id in the LOCKSPACE string is not
-relevant to initialization, so the value is ignored.  (The default of 2000
-host_ids can be changed for special cases using the -n num_hosts and -m
-max_hosts options.)  With -s, the -o option specifies the io timeout to be
+Initialize storage for a lockspace or resource.  Use the -Z and -A flags
+to specify the sector size and align size.  The max hosts that can use the
+lockspace/resource (and the max possible host_id) is determined by the
+sector/align size combination.  Possible combinations are: 512/1M,
+4096/1M, 4096/2M, 4096/4M, 4096/8M.  Lockspaces and resources both use the
+same amount of space (align_size) for each combination.  When initializing
+a lockspace, sanlock initializes delta leases for max_hosts in the given
+space.  When initializing a resource, sanlock initializes a single paxos
+lease in the space.  With -s, the -o option specifies the io timeout to be
 written in the host_id leases.  With -r, the -z 1 option invalidates the
 resource lease on disk so it cannot be used until reinitialized normally.
-The -Z option can be used to specify the sector size (and corresponding
-1MB/8MB size.)
 
 .BR "sanlock direct read_leader -s" " LOCKSPACE"
 .br

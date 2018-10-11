@@ -35,10 +35,10 @@ int direct_align(struct sync_disk *disk);
 /* io_timeout is written in the leader record and used for the
    write call itself */
 int direct_write_lockspace(struct task *task, struct sanlk_lockspace *ls,
-			   int max_hosts, uint32_t io_timeout);
+			   uint32_t io_timeout);
 
 int direct_write_resource(struct task *task, struct sanlk_resource *res,
-			  int max_hosts, int num_hosts, int write_clear);
+			  int num_hosts, int write_clear);
 
 int direct_read_leader(struct task *task, int io_timeout,
                        struct sanlk_lockspace *ls,

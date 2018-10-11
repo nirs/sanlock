@@ -148,7 +148,8 @@ static int verify_leader(struct sync_disk *disk,
 
 int delta_read_lockspace(struct task *task,
 			 struct sync_disk *disk,
-			 int sector_size,
+			 int sector_size_hint,
+			 int align_size_hint,
 			 uint64_t host_id,
 			 struct sanlk_lockspace *ls,
 			 int io_timeout,
@@ -158,13 +159,19 @@ int delta_read_lockspace(struct task *task,
 	struct leader_record leader;
 	uint32_t checksum;
 	char *space_name;
+	int align_size;
 	int rv, error;
 
 	/* host_id N is block offset N-1 */
 
 	memset(&leader_end, 0, sizeof(struct leader_record));
 
-	rv = read_sectors(disk, sector_size, host_id - 1, 1, (char *)&leader_end, sizeof(struct leader_record),
+	/*
+	 * All we need to read is the leader_record which is returned whether
+	 * or not the sector_size_hint is wrong or not.
+	 */
+
+	rv = read_sectors(disk, sector_size_hint, host_id - 1, 1, (char *)&leader_end, sizeof(struct leader_record),
 			  task, io_timeout, "read_lockspace");
 	if (rv < 0)
 		return rv;
@@ -186,19 +193,22 @@ int delta_read_lockspace(struct task *task,
 		ls->host_id = host_id;
 		*io_timeout_ret = leader.io_timeout;
 
-		if (leader.sector_size == 512)
-			ls->flags |= SANLK_LSF_ALIGN1M;
-		else if (leader.sector_size == 4096)
-			ls->flags |= SANLK_LSF_ALIGN8M;
+		align_size = leader_align_size_from_flag(leader.flags);
+		if (!align_size)
+			align_size = sector_size_to_align_size_old(leader.sector_size);
+
+		ls->flags |= sanlk_lsf_sector_size_to_flag(leader.sector_size);
+		ls->flags |= sanlk_lsf_align_size_to_flag(align_size);
 	}
 
 	return error;
 }
 
-int delta_read_lockspace_sector_size(struct task *task,
+int delta_read_lockspace_sizes(struct task *task,
 			 struct sync_disk *disk,
 			 int io_timeout,
-			 int *sector_size)
+			 int *sector_size,
+			 int *align_size)
 {
 	struct leader_record leader_end;
 	struct leader_record leader;
@@ -226,6 +236,10 @@ int delta_read_lockspace_sector_size(struct task *task,
 		return SANLK_LEADER_VERSION;
 
 	*sector_size = leader.sector_size;
+
+	*align_size = leader_align_size_from_flag(leader.flags);
+	if (!*align_size)
+		*align_size = sector_size_to_align_size_old(leader.sector_size);
 
 	return SANLK_OK;
 }
@@ -816,39 +830,32 @@ int delta_lease_release(struct task *task,
 int delta_lease_init(struct task *task,
 		     struct sanlk_lockspace *ls,
 		     int io_timeout,
-		     struct sync_disk *disk,
-		     int max_hosts)
+		     struct sync_disk *disk)
 {
 	struct leader_record leader_first;
 	struct leader_record leader_end;
 	struct leader_record leader;
 	char *iobuf, **p_iobuf;
 	int iobuf_len;
-	int sector_size;
-	int align_size;
+	int sector_size = 0;
+	int align_size = 0;
+	int max_hosts = 0;
 	int i, rv;
 	uint32_t checksum;
-
-	if (!max_hosts)
-		max_hosts = DEFAULT_MAX_HOSTS;
-
-	if (max_hosts > DEFAULT_MAX_HOSTS)
-		return -E2BIG;
 
 	if (!io_timeout)
 		io_timeout = DEFAULT_IO_TIMEOUT;
 
-	if (ls->flags & SANLK_LSF_ALIGN1M)
-		sector_size = 512;
-	else if (ls->flags & SANLK_LSF_ALIGN8M)
-		sector_size = 4096;
-	else
+	rv = sizes_from_flags(ls->flags, &sector_size, &align_size, &max_hosts, "LSF");
+	if (rv)
+		return rv;
+
+	if (!sector_size) {
+		/* sector/align flags were not set, use historical defaults */
 		sector_size = disk->sector_size;
-
-	align_size = sector_size_to_align_size(sector_size);
-
-	if (sector_size * max_hosts > align_size)
-		return -E2BIG;
+		align_size = sector_size_to_align_size_old(sector_size);
+		max_hosts = DEFAULT_MAX_HOSTS;
+	}
 
 	iobuf_len = align_size;
 
@@ -866,6 +873,7 @@ int delta_lease_init(struct task *task,
 		memset(&leader, 0, sizeof(struct leader_record));
 		leader.magic = DELTA_DISK_MAGIC;
 		leader.version = DELTA_DISK_VERSION_MAJOR | DELTA_DISK_VERSION_MINOR;
+		leader.flags = leader_align_flag_from_size(align_size);
 		leader.sector_size = sector_size;
 		leader.max_hosts = 1;
 		leader.timestamp = LEASE_FREE;

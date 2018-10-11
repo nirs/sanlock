@@ -1039,6 +1039,7 @@ int paxos_read_resource(struct task *task,
 {
 	struct leader_record leader;
 	uint32_t checksum;
+	int align_size;
 	int tmp_sector_size = 0;
 	int rv;
 
@@ -1052,7 +1053,7 @@ int paxos_read_resource(struct task *task,
 	 */
 	if (!token->sector_size) {
 		token->sector_size = 4096;
-		token->align_size = sector_size_to_align_size(4096);
+		token->align_size = sector_size_to_align_size_old(4096);
 		tmp_sector_size = 1;
 	}
 
@@ -1081,15 +1082,18 @@ int paxos_read_resource(struct task *task,
 		res->lver = leader.lver;
 
 		if ((leader.sector_size == 512) || (leader.sector_size == 4096)) {
-			token->sector_size = leader.sector_size;
-			token->align_size = sector_size_to_align_size(leader.sector_size);
+			align_size = leader_align_size_from_flag(leader.flags);
+			if (!align_size)
+				align_size = sector_size_to_align_size_old(leader.sector_size);
 
-			if (leader.sector_size == 512)
-				res->flags |= SANLK_RES_ALIGN1M;
-			else if (leader.sector_size == 4096)
-				res->flags |= SANLK_RES_ALIGN8M;
+			token->sector_size = leader.sector_size;
+			token->align_size = align_size;
+
+			res->flags |= sanlk_res_sector_size_to_flag(leader.sector_size);
+			res->flags |= sanlk_res_align_size_to_flag(align_size);
 		} else if (tmp_sector_size) {
 			/* we don't know the correct value, so don't set any */
+			/* FIXME: add a note about when this can happen */
 			token->sector_size = 0;
 			token->align_size = 0;
 		}
@@ -1624,13 +1628,15 @@ int paxos_lease_acquire(struct task *task,
 	int copy_cur_leader;
 	int disk_open = 0;
 	int error, rv, us;
+	int align_size;
 	int ls_sector_size;
 	int other_io_timeout, other_host_dead_seconds;
 
 	memset(&dblock, 0, sizeof(dblock)); /* shut up compiler */
 
-	log_token(token, "paxos_acquire begin %x %llu %d",
-		  flags, (unsigned long long)acquire_lver, new_num_hosts);
+	log_token(token, "paxos_acquire begin offset %llu 0x%x %d %d",
+		  (unsigned long long)token->disks[0].offset, flags,
+		  token->sector_size, token->align_size);
 
 	if (!token->sector_size) {
 		log_errot(token, "paxos_acquire with zero sector_size");
@@ -1646,15 +1652,23 @@ int paxos_lease_acquire(struct task *task,
 	if (error < 0)
 		goto out;
 
+	align_size = leader_align_size_from_flag(cur_leader.flags);
+	if (!align_size)
+		align_size = sector_size_to_align_size_old(cur_leader.sector_size);
+
 	/*
-	 * It's unusual but possible that the paxos lease was created with a
-	 * different sector size than the lockspace.  There could be a reason
-	 * to do this if they are on different disks.
+	 * token sector_size/align_size are initially set from the lockspace values,
+	 * and paxos_lease_read() uses these values.  It's possible but unusual
+	 * that the paxos lease leader record will have different sector/align
+	 * sizes than we used initially.
 	 */
-	if (cur_leader.sector_size != token->sector_size) {
-		log_token(token, "paxos_acquire restart with different sector size %d", cur_leader.sector_size);
+	if ((cur_leader.sector_size != token->sector_size) ||
+	    (align_size != token->align_size)) {
+		log_token(token, "paxos_acquire restart with different sizes was %d %d now %d %d",
+			  token->sector_size, token->align_size,
+			  cur_leader.sector_size, align_size);
 		token->sector_size = cur_leader.sector_size;
-		token->align_size = sector_size_to_align_size(cur_leader.sector_size);
+		token->align_size = align_size;
 		goto restart;
 	}
 
@@ -2354,7 +2368,7 @@ int paxos_lease_release(struct task *task,
 
 int paxos_lease_init(struct task *task,
 		     struct token *token,
-		     int num_hosts, int max_hosts, int write_clear)
+		     int num_hosts, int write_clear)
 {
 	char *iobuf, **p_iobuf;
 	struct leader_record leader;
@@ -2363,33 +2377,28 @@ int paxos_lease_init(struct task *task,
 	struct request_record rr_end;
 	uint32_t checksum;
 	int iobuf_len;
-	int sector_size;
-	int align_size;
+	int sector_size = 0;
+	int align_size = 0;
+	int max_hosts = 0;
 	int aio_timeout = 0;
 	int rv, d;
 
-	if (!num_hosts)
-		num_hosts = DEFAULT_MAX_HOSTS;
-	if (!max_hosts)
+	rv = sizes_from_flags(token->r.flags, &sector_size, &align_size, &max_hosts, "RES");
+	if (rv)
+		return rv;
+
+	if (!sector_size) {
+		/* sector/align flags were not set, use historical defaults */
+		sector_size = token->disks[0].sector_size;
+		align_size = sector_size_to_align_size_old(sector_size);
 		max_hosts = DEFAULT_MAX_HOSTS;
+	}
 
-	if (max_hosts > DEFAULT_MAX_HOSTS)
-		return -E2BIG;
+	if (!num_hosts || (num_hosts > max_hosts))
+		num_hosts = max_hosts;
 
-	if (num_hosts > DEFAULT_MAX_HOSTS)
-		return -EINVAL;
-
-	if (num_hosts > max_hosts)
-		return -EINVAL;
-
-	if (!token->sector_size || !token->align_size)
-		return -EINVAL;
-
-	sector_size = token->sector_size;
-	align_size = token->align_size;
-
-	if (sector_size * (2 + max_hosts) > align_size)
-		return -E2BIG;
+	token->sector_size = sector_size;
+	token->align_size = align_size;
 
 	iobuf_len = align_size;
 
@@ -2412,6 +2421,7 @@ int paxos_lease_init(struct task *task,
 
 	leader.timestamp = LEASE_FREE;
 	leader.version = PAXOS_DISK_VERSION_MAJOR | PAXOS_DISK_VERSION_MINOR;
+	leader.flags = leader_align_flag_from_size(align_size);
 	leader.sector_size = sector_size;
 	leader.num_hosts = num_hosts;
 	leader.max_hosts = max_hosts;

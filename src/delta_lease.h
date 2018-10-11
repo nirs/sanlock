@@ -49,21 +49,22 @@ int delta_lease_release(struct task *task,
 int delta_lease_init(struct task *task,
 		     struct sanlk_lockspace *ls,
 		     int io_timeout,
-		     struct sync_disk *disk,
-		     int max_hosts);
+		     struct sync_disk *disk);
 
 int delta_read_lockspace(struct task *task,
 			struct sync_disk *disk,
-			int sector_sze,
+			int sector_size_hint,
+			int align_size_hint,
 			uint64_t host_id,
 			struct sanlk_lockspace *ls,
 			int io_timeout,
 			int *io_timeout_ret);
 
-int delta_read_lockspace_sector_size(struct task *task,
+int delta_read_lockspace_sizes(struct task *task,
                          struct sync_disk *disk,
                          int io_timeout,
-                         int *sector_size);
+                         int *sector_size,
+                         int *align_size);
 
 int delta_lease_leader_clobber(struct task *task, int io_timeout,
                                struct sync_disk *disk,

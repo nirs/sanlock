@@ -34,8 +34,7 @@
 static int set_disk_properties(struct sync_disk *disk)
 {
 	blkid_probe probe;
-	blkid_topology topo;
-	uint32_t sector_size, ss_logical, ss_physical;
+	uint32_t sector_size;
 
 	probe = blkid_new_probe_from_filename(disk->path);
 	if (!probe) {
@@ -43,25 +42,9 @@ static int set_disk_properties(struct sync_disk *disk)
 		return -1;
 	}
 
-	topo = blkid_probe_get_topology(probe);
-	if (!topo) {
-		log_error("cannot get blkid topology %s", disk->path);
-		blkid_free_probe(probe);
-		return -1;
-	}
-
 	sector_size = blkid_probe_get_sectorsize(probe);
-	ss_logical = blkid_topology_get_logical_sector_size(topo);
-	ss_physical = blkid_topology_get_physical_sector_size(topo);
 
 	blkid_free_probe(probe);
-
-	if ((sector_size != ss_logical) || (sector_size % 512)) {
-		log_error("invalid disk sector size %u logical %u "
-			  "physical %u %s", sector_size, ss_logical,
-			  ss_physical, disk->path);
-		return -1;
-	}
 
 	disk->sector_size = sector_size;
 	return 0;
@@ -158,7 +141,6 @@ int open_disks_fd(struct sync_disk *disks, int num_disks)
 int open_disk(struct sync_disk *disk)
 {
 	struct stat st;
-	int align_size;
 	int fd, rv;
 
 	fd = open(disk->path, O_RDWR | O_DIRECT | O_SYNC, 0);
@@ -188,22 +170,6 @@ int open_disk(struct sync_disk *disk)
 			close(fd);
 			goto fail;
 		}
-	}
-
-	align_size = direct_align(disk);
-	if (align_size < 0) {
-		rv = align_size;
-		close(fd);
-		goto fail;
-	}
-
-	if (disk->offset % align_size) {
-		rv = -EBADSLT;
-		log_error("invalid offset %llu align size %u %s",
-			  (unsigned long long)disk->offset,
-			  align_size, disk->path);
-		close(fd);
-		goto fail;
 	}
 
 	disk->fd = fd;
@@ -248,7 +214,6 @@ int open_disks(struct sync_disk *disks, int num_disks)
 		} else if (ss != disk->sector_size) {
 			log_error("inconsistent sector sizes %u %u %s",
 				  ss, disk->sector_size, disk->path);
-			goto fail;
 		}
 
 		num_opens++;
@@ -376,6 +341,20 @@ static struct aicb *find_callback_slot(struct task *task, int ioto)
 	return NULL;
 }
 
+void offset_to_str(unsigned long long offset, int buflen, char *off_str)
+{
+	uint64_t num_mb;
+
+	if (!offset) {
+		strncpy(off_str, "0", buflen);
+	} else if (!(offset % 1048576)) {
+		num_mb = offset / 1048576;
+		snprintf(off_str, buflen, "%uM", (uint32_t)num_mb);
+	} else {
+		snprintf(off_str, buflen, "%llu", (unsigned long long)offset);
+	}
+}
+
 /*
  * If this function returns SANLK_AIO_TIMEOUT, it means the io has timed out
  * and the event for the timed out io has not been reaped; the caller cannot
@@ -395,6 +374,7 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 	const char *op_str;
 	const char *len_str;
 	char ms_str[8];
+	char off_str[16];
 	int rv;
 
 	if (!ioto) {
@@ -425,17 +405,13 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 		op_str = "UK";
 
 	if (com.debug_io_submit) {
-		if (len == ONEMB)
-			len_str = "1MB";
-		else if (len == (8 * ONEMB))
-			len_str = "8MB";
-		else
-			len_str = NULL;
+		len_str = align_size_debug_str(len);
+		offset_to_str(offset, sizeof(off_str), off_str);
 
 		if (len_str)
-			log_taskd(task, "%s %s at %llu", op_str, len_str, (unsigned long long)offset);
+			log_taskd(task, "%s %s at %s", op_str, len_str, off_str);
 		else
-			log_taskd(task, "%s %d at %llu", op_str, len, (unsigned long long)offset);
+			log_taskd(task, "%s %d at %s", op_str, len, off_str);
 	}
 
 	if (ms)
@@ -510,12 +486,8 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 		/* standard success case */
 
 		if (com.debug_io_complete) {
-			if (len == ONEMB)
-				len_str = "1MB";
-			else if (len == (8 * ONEMB))
-				len_str = "8MB";
-			else
-				len_str = NULL;
+			len_str = align_size_debug_str(len);
+			offset_to_str(offset, sizeof(off_str), off_str);
 
 			if (ms) {
 				memset(ms_str, 0, sizeof(ms_str));
@@ -523,11 +495,11 @@ static int do_linux_aio(int fd, uint64_t offset, char *buf, int len,
 			}
 
 			if (len_str)
-				log_taskd(task, "%s %s at %llu done %s",
-					  op_str, len_str, (unsigned long long)offset, ms ? ms_str : "");
+				log_taskd(task, "%s %s at %s done %s",
+					  op_str, len_str, off_str, ms ? ms_str : "");
 			else
-				log_taskd(task, "%s %d at %llu done %s",
-					  op_str, len, (unsigned long long)offset, ms ? ms_str : "");
+				log_taskd(task, "%s %d at %s done %s",
+					  op_str, len, off_str, ms ? ms_str : "");
 		}
 
 		rv = 0;

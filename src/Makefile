@@ -24,6 +24,7 @@ CMD_SOURCE = \
 	direct.c \
 	diskio.c \
 	ondisk.c \
+	sizeflags.c \
 	helper.c \
 	lockspace.c \
 	lockfile.c \
@@ -47,6 +48,7 @@ LIB_ENTIRE_SOURCE = \
 	crc32c.c \
 	diskio.c \
 	ondisk.c \
+	sizeflags.c \
 	delta_lease.c \
 	paxos_lease.c \
 	rindex.c \

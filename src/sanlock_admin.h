@@ -173,43 +173,61 @@ int sanlock_init(struct sanlk_lockspace *ls,
 /*
  * Alignment and sector size
  *
- * When ALIGN1M or ALIGN8M is set in sanlk_lockspace | sanlk_resource
- * and passed to sanlock_write_lockspace() | sanlock_write_resource(),
- * it causes sanlock to create 1M or 8M aligned (and sized) leases,
- * which use 512 or 4K sector ios, respectively, for the lockspace | resource.
+ * The ALIGN and SECTOR flags can be set in sanlk_lockspace | sanlk_resource
+ * and passed to sanlock_write_lockspace() | sanlock_write_resource().
+ * These flags cause sanlock to create a lockspace|resource area with the
+ * given align_size, using the given sector_size.  The maximum hosts
+ * that can use a lockspace|resource is determined by the combined effect
+ * of ALIGN and SECTOR flags.  The following combinations are allowed:
  *
- * (A lockspace and its associated resources will typically use the
- * same align and sector size, but it's conceivable they would not, e.g.
- * if the were placed on different storage with different sector sizes.)
+ * ALIGN1M | SECTOR512: max_hosts 2000
+ * ALIGN1M | SECTOR4K:  max_hosts 250
+ * ALIGN2M | SECTOR4K:  max_hosts 500
+ * ALIGN4M | SECTOR4K:  max_hosts 1000
+ * ALIGN8M | SECTOR4K:  max_hosts 2000
  *
- * The ALIGN flag overrides sanlock's detection of sector size for disks,
- * and overrides the default 512 sector assumption for files.
+ * ALIGN and SECTOR flags must both be set, or neither can be set.  When
+ * neither are set, sanlock will:
+ * - detect the sector_size of the disk and use 1M align_size if 512,
+ *   and 8M align_size for 4K.
+ * - use 512 sector_size and 8M align_size for files.
  *
- * sanlock_read_lockspace() | sanlock_read_resource() will return
- * ALIGN1M or ALIGN8M to indicate the lockspace | resource alignment.
- * These flags are returned whether or not they were passed to
+ * sanlock_read_lockspace() | sanlock_read_resource() will return the
+ * ALIGN and SECTOR flags reflecting the state of the lockspace|resource.
+ * These flags are returned whether or not they were specified in
  * sanlock_write_lockspace() | sanlock_write_resource().
  * (The ALIGN flag can be passed to sanlock_read_lockspace() to avoid
  * an extra read to discover the sector size.)
  *
- * Prior to the addition of ALIGN flags, sanlock will return neither from
- * read.  The alignment of the lockspace | resource can then be determined
- * with sanlock_align().  After the addition of ALIGN flags, sanlock_align()
- * no longer correctly indicates the alignment of the lockspace | resource.
+ * Prior to the addition of ALIGN and SECTOR flags, sanlock will return
+ * neither flag from read.  The align_size of the lockspace | resource
+ * can then be determined with sanlock_align().  After the addition of
+ * these flags, sanlock_align() no longer correctly indicates the alignment
+ * of the lockspace | resource.
  *
- * With the addition of ALIGN flags, sanlock_align() still reports the
- * *default* alignment that sanlock will use for disks or files if an
- * ALIGN flag is not passed to write.
+ * With the addition of ALIGN and SECTOR flags, sanlock_align() still
+ * reports the *default* alignment that sanlock will use for disks or
+ * files if ALIGN|SECTOR is not passed to write.
+ *
+ * (A lockspace and its associated resources will typically use the
+ * same align and sector size, but it's conceivable they would not, e.g.
+ * if the were placed on different storage with different sector sizes.)
  */
 
 /*
  * write a lockspace to disk
  *
+ * Set SANLK_LSF_ALIGN and SANLK_LSF_SECTOR in ls.flags to define
+ * the sector size and align size of the lockspace on disk.  max_hosts
+ * is derived from these values (the max_hosts areg is not used.)
+ * It is best for resources in the lockspace to use these same
+ * sector/align sizes.
+ *
  * the sanlock daemon writes max_hosts lockspace leader records to disk
  *
  * the lockspace will support up to max_hosts using the lockspace at once
  *
- * use max_hosts = 0 for default value
+ * valid host_id's for this lockspace are 1 to max_hosts.
  *
  * the first host_id (1) (the first record at offset) is the last
  * leader record written, so read_lockspace of host_id 1 will fail
@@ -248,11 +266,14 @@ int sanlock_read_lockspace(struct sanlk_lockspace *ls,
  *
  * the sanlock daemon writes a resource lease area to disk
  *
- * use max_hosts = 0 for default value
- * use num_hosts = 0 for default value
- *
  * Set flag SANLK_WRITE_CLEAR to cause a subsequent read_resource
  * to return an error.
+ *
+ * Set SANLK_RES_ALIGN and SANLK_RES_SECTOR in res.flags to define
+ * the sector size and align size of the resource on disk.  max_hosts
+ * is derived from these values (the max_hosts arg is not used.)
+ * It is best for the ALIGN and SECTOR flags to match those used
+ * for the resource's lockspace.
  */
 
 int sanlock_write_resource(struct sanlk_resource *res,

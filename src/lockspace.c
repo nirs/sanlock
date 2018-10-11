@@ -205,6 +205,9 @@ int host_status_set_bit(char *space_name, uint64_t host_id)
 	if (!found)
 		return -ENOSPC;
 
+	if (host_id > sp->max_hosts)
+		return -EINVAL;
+
 	pthread_mutex_lock(&sp->mutex);
 	sp->host_status[host_id-1].set_bit_time = monotime();
 	pthread_mutex_unlock(&sp->mutex);
@@ -215,6 +218,7 @@ int host_info(char *space_name, uint64_t host_id, struct host_status *hs_out)
 {
 	struct space *sp;
 	int found = 0;
+	int toobig = 0;
 
 	if (!host_id || host_id > DEFAULT_MAX_HOSTS)
 		return -EINVAL;
@@ -223,6 +227,10 @@ int host_info(char *space_name, uint64_t host_id, struct host_status *hs_out)
 	list_for_each_entry(sp, &spaces, list) {
 		if (strncmp(sp->space_name, space_name, NAME_ID_SIZE))
 			continue;
+		if (host_id > sp->max_hosts) {
+			toobig = 1;
+			break;
+		}
 		memcpy(hs_out, &sp->host_status[host_id-1], sizeof(struct host_status));
 		found = 1;
 
@@ -235,6 +243,8 @@ int host_info(char *space_name, uint64_t host_id, struct host_status *hs_out)
 	}
 	pthread_mutex_unlock(&spaces_mutex);
 
+	if (toobig)
+		return -EINVAL;
 	if (!found)
 		return -ENOSPC;
 	return 0;
@@ -249,7 +259,7 @@ static void create_bitmap_and_extra(struct space *sp, char *bitmap, struct delta
 	now = monotime();
 
 	pthread_mutex_lock(&sp->mutex);
-	for (i = 0; i < DEFAULT_MAX_HOSTS; i++) {
+	for (i = 0; i < sp->max_hosts; i++) {
 		if (i+1 == sp->host_id)
 			continue;
 
@@ -301,7 +311,7 @@ void check_other_leases(struct space *sp, char *buf)
 	now = monotime();
 	new = 0;
 
-	for (i = 0; i < DEFAULT_MAX_HOSTS; i++) {
+	for (i = 0; i < sp->max_hosts; i++) {
 		hs = &sp->host_status[i];
 		hs->last_check = now;
 
@@ -586,6 +596,9 @@ static void *lockspace_thread(void *arg_in)
 	struct space *sp;
 	struct leader_record leader;
 	uint64_t delta_begin, last_success = 0;
+	int sector_size = 0;
+	int align_size = 0;
+	int max_hosts = 0;
 	int log_renewal_level = -1;
 	int rv, delta_length, renewal_interval = 0;
 	int id_renewal_seconds, id_renewal_fail_seconds;
@@ -618,27 +631,39 @@ static void *lockspace_thread(void *arg_in)
 	}
 	opened = 1;
 
-	if (!sp->sector_size) {
-		int ss = 0;
-
-		rv = delta_read_lockspace_sector_size(&task, &sp->host_id_disk, sp->io_timeout, &ss);
-		if (rv < 0) {
-			log_erros(sp, "failed to read device to find sector size error %d %s", rv, sp->host_id_disk.path);
-			acquire_result = rv;
-			delta_result = -1;
-			goto set_status;
-		}
-
-		if ((ss != 512) && (ss != 4096)) {
-			log_erros(sp, "failed to get valid sector size %d %s", ss, sp->host_id_disk.path);
-			acquire_result = SANLK_LEADER_SECTORSIZE;
-			delta_result = -1;
-			goto set_status;
-		}
-
-		sp->sector_size = ss;
-		sp->align_size = sector_size_to_align_size(ss);
+	rv = delta_read_lockspace_sizes(&task, &sp->host_id_disk, sp->io_timeout, &sector_size, &align_size);
+	if (rv < 0) {
+		log_erros(sp, "failed to read device to find sector size error %d %s", rv, sp->host_id_disk.path);
+		acquire_result = rv;
+		delta_result = -1;
+		goto set_status;
 	}
+
+	if ((sector_size != 512) && (sector_size != 4096)) {
+		log_erros(sp, "failed to get valid sector size %d %s", sector_size, sp->host_id_disk.path);
+		acquire_result = SANLK_LEADER_SECTORSIZE;
+		delta_result = -1;
+		goto set_status;
+	}
+
+	max_hosts = size_to_max_hosts(sector_size, align_size);
+	if (!max_hosts) {
+		log_erros(sp, "invalid combination of sector size %d and align_size %d", sector_size, align_size);
+		acquire_result = SANLK_ADDLS_SIZES;
+		delta_result = -1;
+		goto set_status;
+	}
+
+	if (sp->host_id > max_hosts) {
+		log_erros(sp, "host_id %llu too large for max_hosts %d", (unsigned long long)sp->host_id, max_hosts);
+		acquire_result = SANLK_ADDLS_INVALID_HOSTID;
+		delta_result = -1;
+		goto set_status;
+	}
+
+	sp->sector_size = sector_size;
+	sp->align_size = align_size;
+	sp->max_hosts = max_hosts;
 
 	sp->lease_status.renewal_read_buf = malloc(sp->align_size);
 	if (!sp->lease_status.renewal_read_buf) {
@@ -1352,7 +1377,7 @@ int get_hosts(struct sanlk_lockspace *ls, char *buf, int *len, int *count, int m
 		goto out;
 	}
 
-	for (i = 0; i < DEFAULT_MAX_HOSTS; i++) {
+	for (i = 0; i < sp->max_hosts; i++) {
 		hs = &sp->host_status[i];
 
 		if (ls->host_id && (ls->host_id != (i + 1)))
@@ -1562,7 +1587,7 @@ int lockspace_reg_event(struct sanlk_lockspace *ls, int fd, GNUC_UNUSED uint32_t
 	sp = _search_space(ls->name, NULL, 0, &spaces, NULL, NULL, NULL);
 	if (!sp) {
 		pthread_mutex_unlock(&spaces_mutex);
-		log_error("lockspace_reg_event %s not found", ls->name);
+		log_error("lockspace_reg_event %.48s not found", ls->name);
 		return -ENOENT;
 	}
 	pthread_mutex_unlock(&spaces_mutex);
@@ -1601,7 +1626,7 @@ int lockspace_set_event(struct sanlk_lockspace *ls, struct sanlk_host_event *he,
 	int i, rv = 0;
 
 	if (!ls->name[0] || !he->host_id || he->host_id > DEFAULT_MAX_HOSTS) {
-		log_error("set_event invalid args host_id %llu name %s",
+		log_error("set_event invalid args host_id %llu name %.48s",
 			  (unsigned long long)he->host_id, ls->name);
 		return -EINVAL;
 	}
@@ -1613,6 +1638,12 @@ int lockspace_set_event(struct sanlk_lockspace *ls, struct sanlk_host_event *he,
 		return -ENOENT;
 	}
 	pthread_mutex_unlock(&spaces_mutex);
+
+	if (he->host_id > sp->max_hosts) {
+		log_error("set_event host_id %llu too large max %u %s",
+			  (unsigned long long)he->host_id, sp->max_hosts, ls->name);
+		return -EINVAL;
+	}
 
 	if (!he->generation && (flags & SANLK_SETEV_CUR_GENERATION)) {
 		hs = &(sp->host_status[he->host_id-1]);
@@ -1661,7 +1692,7 @@ set:
 	memcpy(&sp->host_event, he, sizeof(struct sanlk_host_event));
 
 	if (flags & SANLK_SETEV_ALL_HOSTS) {
-		for (i = 0; i < DEFAULT_MAX_HOSTS; i++)
+		for (i = 0; i < sp->max_hosts; i++)
 			sp->host_status[i].set_bit_time = now;
 	}
 out:

@@ -48,11 +48,11 @@ struct rindex_info {
 
 static struct token *setup_rindex_token(struct rindex_info *rx,
 				        int sector_size,
+				        int align_size,
 					struct space_info *spi)
 {
 	struct token *token;
 	int token_len;
-	int align_size = sector_size_to_align_size(sector_size);
 
 	token_len = sizeof(struct token) + sizeof(struct sync_disk);
 	token = malloc(token_len);
@@ -66,6 +66,8 @@ static struct token *setup_rindex_token(struct rindex_info *rx,
 	token->align_size = align_size;
 	token->io_timeout = spi ? spi->io_timeout : DEFAULT_IO_TIMEOUT;
 	token->r.num_disks = 1;
+	token->r.flags |= sanlk_res_sector_size_to_flag(sector_size);
+	token->r.flags |= sanlk_res_align_size_to_flag(align_size);
 
 	token->disks = (struct sync_disk *)&token->r.disks[0]; /* shorthand */
 	memcpy(token->disks[0].path, rx->disk->path, SANLK_PATH_LEN);
@@ -87,11 +89,11 @@ static struct token *setup_rindex_token(struct rindex_info *rx,
 static struct token *setup_resource_token(struct rindex_info *rx,
 					  char *res_name,
 				          int sector_size,
+					  int align_size,
 					  struct space_info *spi)
 {
 	struct token *token;
 	int token_len;
-	int align_size = sector_size_to_align_size(sector_size);
 
 	token_len = sizeof(struct token) + sizeof(struct sync_disk);
 	token = malloc(token_len);
@@ -105,6 +107,8 @@ static struct token *setup_resource_token(struct rindex_info *rx,
 	token->align_size = align_size;
 	token->io_timeout = spi ? spi->io_timeout : DEFAULT_IO_TIMEOUT;
 	token->r.num_disks = 1;
+	token->r.flags |= sanlk_res_sector_size_to_flag(sector_size);
+	token->r.flags |= sanlk_res_align_size_to_flag(align_size);
 
 	token->disks = (struct sync_disk *)&token->r.disks[0]; /* shorthand */
 	memcpy(token->disks[0].path, rx->disk->path, SANLK_PATH_LEN);
@@ -114,15 +118,23 @@ static struct token *setup_resource_token(struct rindex_info *rx,
 	return token;
 }
 
-static uint32_t sector_size_to_max_resources(int sector_size)
+/* max resource entries supported by each combination of sector/align size */
+
+static uint32_t size_to_max_resources(int sector_size, int align_size)
 {
-	if (sector_size == 512)
-		return MAX_RINDEX_ENTRIES_1M;
+	if ((sector_size == 512) && (align_size == ALIGN_SIZE_1M))
+		return 16000;
+	if ((sector_size == 4096) && (align_size == ALIGN_SIZE_1M))
+		return 16000;
+	if ((sector_size == 4096) && (align_size == ALIGN_SIZE_2M))
+		return 32000;
+	if ((sector_size == 4096) && (align_size == ALIGN_SIZE_4M))
+		return 64000;
+	if ((sector_size == 4096) && (align_size == ALIGN_SIZE_8M))
+		return 128000;
 
-	if (sector_size == 4096)
-		return MAX_RINDEX_ENTRIES_8M;
-
-	return 0;
+	/* this shouldn't happen */
+	return 16000;
 }
 
 static int search_entries(struct rindex_info *rx, char *rindex_iobuf,
@@ -134,11 +146,11 @@ static int search_entries(struct rindex_info *rx, char *rindex_iobuf,
 	uint64_t entry_offset_in_rindex;
 	uint32_t max_resources = rx->header.max_resources;
 	int sector_size = rx->header.sector_size;
-	int align_size = sector_size_to_align_size(sector_size);
+	int align_size = rindex_header_align_size_from_flag(rx->header.flags);
 	int i;
 
 	if (!max_resources)
-		max_resources = sector_size_to_max_resources(sector_size);
+		max_resources = size_to_max_resources(sector_size, align_size);
 
 	for (i = 0; i < max_resources; i++) {
 		/* skip first sector which holds header */
@@ -239,8 +251,7 @@ static int read_rindex(struct task *task,
 {
 	char *iobuf;
 	char **p_iobuf;
-	int sector_size = rx->header.sector_size;
-	int align_size = sector_size_to_align_size(sector_size);
+	int align_size = rindex_header_align_size_from_flag(rx->header.flags);
 	int iobuf_len;
 	int rv;
 
@@ -327,7 +338,7 @@ static int read_rindex_header(struct task *task,
 	}
 
 	if (strcmp(rx->header.lockspace_name, rx->ri->lockspace_name)) {
-		log_debug("rindex header bad lockspace_name %s vs %s on %s:%llu",
+		log_debug("rindex header bad lockspace_name %.48s vs %.48s on %s:%llu",
 			  rx->header.lockspace_name,
 			  rx->ri->lockspace_name,
 			  rx->disk->path,
@@ -364,7 +375,11 @@ int rindex_format(struct task *task, struct sanlk_rindex *ri)
 	struct token *token;
 	char *iobuf;
 	char **p_iobuf;
-	int sector_size, align_size;
+	uint32_t max_resources;
+	uint32_t max_resources_limit;
+	int sector_size = 0;
+	int align_size = 0;
+	int max_hosts = 0;
 	int iobuf_len;
 	int rv;
 
@@ -378,14 +393,31 @@ int rindex_format(struct task *task, struct sanlk_rindex *ri)
 		return rv;
 	}
 
-	if (ri->flags & SANLK_RIF_ALIGN1M)
-		sector_size = 512;
-	else if (ri->flags & SANLK_RIF_ALIGN8M)
-		sector_size = 4096;
-	else
-		sector_size = rx.disk->sector_size;
+	rv = sizes_from_flags(ri->flags, &sector_size, &align_size, &max_hosts, "RIF");
+	if (rv)
+		return rv;
 
-	align_size = sector_size_to_align_size(sector_size);
+	if (!sector_size) {
+		/* sector/align flags were not set, use historical defaults */
+		sector_size = rx.disk->sector_size;
+		align_size = sector_size_to_align_size_old(sector_size);
+		max_hosts = DEFAULT_MAX_HOSTS;
+	}
+
+	/*
+	 * When unspecified, default to 4096 to limit the amount of searching.
+	 */
+	max_resources = rx.ri->max_resources;
+	if (!max_resources)
+		max_resources = 4096;
+	max_resources_limit = size_to_max_resources(sector_size, align_size);
+	if (max_resources > max_resources_limit)
+		max_resources = max_resources_limit;
+
+	log_debug("rindex_format %.48s:%s:%llu %d %d max_res %u",
+		  rx.ri->lockspace_name, rx.disk->path,
+		  (unsigned long long)rx.disk->offset,
+		  sector_size, align_size, max_resources);
 
 	iobuf_len = align_size;
 
@@ -400,8 +432,9 @@ int rindex_format(struct task *task, struct sanlk_rindex *ri)
 	memset(&rh, 0, sizeof(struct rindex_header));
 	rh.magic = RINDEX_DISK_MAGIC;
 	rh.version = RINDEX_DISK_VERSION_MAJOR | RINDEX_DISK_VERSION_MINOR;
+	rh.flags = rindex_header_align_flag_from_size(align_size);
 	rh.sector_size = sector_size;
-	rh.max_resources = rx.ri->max_resources;
+	rh.max_resources = max_resources;
 	rh.rx_offset = rx.disk->offset;
 	strncpy(rh.lockspace_name, rx.ri->lockspace_name, NAME_ID_SIZE);
 
@@ -416,13 +449,13 @@ int rindex_format(struct task *task, struct sanlk_rindex *ri)
 		goto out_iobuf;
 	}
 
-	token = setup_rindex_token(&rx, sector_size, NULL);
+	token = setup_rindex_token(&rx, sector_size, align_size, NULL);
 	if (!token) {
 		rv = -ENOMEM;
 		goto out_iobuf;
 	}
 
-	rv = paxos_lease_init(task, token, 0, 0, 0);
+	rv = paxos_lease_init(task, token, 0, 0);
 	if (rv < 0) {
 		log_error("rindex_format lease init failed %d", rv);
 		goto out_token;
@@ -452,7 +485,7 @@ int rindex_create(struct task *task, struct sanlk_rindex *ri,
 	struct token *res_token;
 	char *rindex_iobuf = NULL;
 	uint64_t ent_offset, res_offset;
-	int sector_size;
+	int sector_size, align_size;
 	int rv;
 
 	memset(&rx, 0, sizeof(rx));
@@ -474,7 +507,7 @@ int rindex_create(struct task *task, struct sanlk_rindex *ri,
 
 	rv = lockspace_begin_rindex_op(ri->lockspace_name, RX_OP_CREATE, &spi);
 	if (rv < 0) {
-		log_error("rindex_create lockspace not available %d %s", rv, ri->lockspace_name);
+		log_error("rindex_create lockspace not available %d %.48s", rv, ri->lockspace_name);
 		goto out_close;
 	}
 
@@ -486,21 +519,31 @@ int rindex_create(struct task *task, struct sanlk_rindex *ri,
 	}
 
 	sector_size = rx.header.sector_size;
+	align_size = rindex_header_align_size_from_flag(rx.header.flags);
+
+	log_debug("rindex_create %.48s:%s:%llu %d %d max_res %u",
+		  rx.ri->lockspace_name, rx.disk->path,
+		  (unsigned long long)rx.disk->offset,
+		  sector_size, align_size, rx.header.max_resources);
 
 	/* used to acquire the internal paxos lease protecting the rindex */
-	rx_token = setup_rindex_token(&rx, sector_size, &spi);
+	rx_token = setup_rindex_token(&rx, sector_size, align_size, &spi);
 	if (!rx_token) {
 		rv = -ENOMEM;
 		goto out_clear;
 	}
 
 	/* used to initialize the new paxos lease for the resource */
-	res_token = setup_resource_token(&rx, re->name, sector_size, &spi);
+	res_token = setup_resource_token(&rx, re->name, sector_size, align_size, &spi);
 	if (!res_token) {
 		free(rx_token);
 		rv = -ENOMEM;
 		goto out_clear;
 	}
+
+	log_debug("rindex_create acquire offset %llu sector_size %d align_size %d",
+		  (unsigned long long)rx_token->disks[0].offset,
+		  rx_token->sector_size, rx_token->align_size);
 
 	rv = paxos_lease_acquire(task, rx_token,
 			         PAXOS_ACQUIRE_OWNER_NOWAIT | PAXOS_ACQUIRE_QUIET_FAIL,
@@ -525,7 +568,7 @@ int rindex_create(struct task *task, struct sanlk_rindex *ri,
 
 	/* set the location of the new paxos lease */
 
-	log_debug("rindex_create found offset %llu for %s:%s",
+	log_debug("rindex_create found offset %llu for %.48s:%.48s",
 		  (unsigned long long)res_offset,
 		  rx.ri->lockspace_name, re->name);
 
@@ -533,7 +576,7 @@ int rindex_create(struct task *task, struct sanlk_rindex *ri,
 
 	/* write the new paxos lease */
 
-	rv = paxos_lease_init(task, res_token, num_hosts, max_hosts, 0);
+	rv = paxos_lease_init(task, res_token, num_hosts, 0);
 	if (rv < 0) {
 		log_error("rindex_create failed to init new lease %d", rv);
 		goto out_iobuf;
@@ -545,7 +588,7 @@ int rindex_create(struct task *task, struct sanlk_rindex *ri,
 		goto out_iobuf;
 	}
 
-	log_debug("rindex_create updated rindex entry %llu for %s %llu",
+	log_debug("rindex_create updated rindex entry %llu for %.48s %llu",
 		  (unsigned long long)ent_offset,
 		  re->name,
 		  (unsigned long long)res_offset);
@@ -606,7 +649,7 @@ int rindex_delete(struct task *task, struct sanlk_rindex *ri,
 
 	rv = lockspace_begin_rindex_op(ri->lockspace_name, RX_OP_DELETE, &spi);
 	if (rv < 0) {
-		log_error("rindex_delete lockspace not available %d %s", rv, ri->lockspace_name);
+		log_error("rindex_delete lockspace not available %d %.48s", rv, ri->lockspace_name);
 		goto out_close;
 	}
 
@@ -618,22 +661,23 @@ int rindex_delete(struct task *task, struct sanlk_rindex *ri,
 	}
 
 	sector_size = rx.header.sector_size;
-	align_size = sector_size_to_align_size(sector_size);
+	align_size = rindex_header_align_size_from_flag(rx.header.flags);
 
+	/* resource lease locations must use the same alignment as the rindex */
 	if (re->offset && (re->offset % align_size)) {
 		rv = SANLK_RINDEX_OFFSET;
 		goto out_clear;
 	}
 
 	/* used to acquire the internal paxos lease protecting the rindex */
-	rx_token = setup_rindex_token(&rx, sector_size, &spi);
+	rx_token = setup_rindex_token(&rx, sector_size, align_size, &spi);
 	if (!rx_token) {
 		rv = -ENOMEM;
 		goto out_clear;
 	}
 
 	/* used to write the cleared paxos lease for the resource */
-	res_token = setup_resource_token(&rx, re->name, sector_size, &spi);
+	res_token = setup_resource_token(&rx, re->name, sector_size, align_size, &spi);
 	if (!res_token) {
 		free(rx_token);
 		rv = -ENOMEM;
@@ -673,13 +717,13 @@ int rindex_delete(struct task *task, struct sanlk_rindex *ri,
 
 	res_token->disks[0].offset = res_offset;
 
-	rv = paxos_lease_init(task, res_token, 0, 0, 1);
+	rv = paxos_lease_init(task, res_token, 0, 1);
 	if (rv < 0) {
 		log_error("rindex_delete failed to init new lease %d", rv);
 		goto out_iobuf;
 	}
 
-	log_debug("rindex_delete updated rindex entry %llu for %s %llu",
+	log_debug("rindex_delete updated rindex entry %llu for %.48s %llu",
 		  (unsigned long long)ent_offset,
 		  re->name,
 		  (unsigned long long)res_offset);
@@ -739,13 +783,13 @@ int rindex_lookup(struct task *task, struct sanlk_rindex *ri,
 		goto out_clear;
 	}
 
+	sector_size = rx.header.sector_size;
+	align_size = rindex_header_align_size_from_flag(rx.header.flags);
+
 	rv = read_rindex(task, &spi, &rx, &rindex_iobuf);
 	if (rv < 0) {
 		goto out_clear;
 	}
-
-	sector_size = rx.header.sector_size;
-	align_size = sector_size_to_align_size(sector_size);
 
 	if (re->offset && (re->offset % align_size)) {
 		rv = SANLK_RINDEX_OFFSET;
@@ -869,7 +913,7 @@ int rindex_update(struct task *task, struct sanlk_rindex *ri,
 	}
 
 	sector_size = rx.header.sector_size;
-	align_size = sector_size_to_align_size(sector_size);
+	align_size = rindex_header_align_size_from_flag(rx.header.flags);
 
 	if (re->offset && (re->offset % align_size)) {
 		rv = SANLK_RINDEX_OFFSET;
@@ -926,6 +970,7 @@ int rindex_rebuild(struct task *task, struct sanlk_rindex *ri, uint32_t cmd_flag
 	struct token *rx_token;
 	struct token *res_token;
 	struct sanlk_resource res;
+	char off_str[16];
 	char *rindex_iobuf = NULL;
 	uint64_t res_offset;
 	uint64_t ent_offset;
@@ -954,7 +999,7 @@ int rindex_rebuild(struct task *task, struct sanlk_rindex *ri, uint32_t cmd_flag
 	if (!nolock) {
 		rv = lockspace_begin_rindex_op(ri->lockspace_name, RX_OP_REBUILD, &spi);
 		if (rv < 0) {
-			log_error("rindex_rebuild lockspace not available %d %s", rv, ri->lockspace_name);
+			log_error("rindex_rebuild lockspace not available %d %.48s", rv, ri->lockspace_name);
 			goto out_close;
 		}
 	}
@@ -967,10 +1012,19 @@ int rindex_rebuild(struct task *task, struct sanlk_rindex *ri, uint32_t cmd_flag
 	}
 
 	sector_size = rx.header.sector_size;
-	align_size = sector_size_to_align_size(sector_size);
+	align_size = rindex_header_align_size_from_flag(rx.header.flags);
+	max_resources = rx.header.max_resources;
+
+	if (!max_resources)
+		max_resources = size_to_max_resources(sector_size, align_size);
+
+	log_debug("rindex_rebuild %.48s:%s:%llu %d %d max_res %u",
+		  rx.ri->lockspace_name, rx.disk->path,
+		  (unsigned long long)rx.disk->offset,
+		  sector_size, align_size, max_resources);
 
 	/* used to acquire the internal paxos lease protecting the rindex */
-	rx_token = setup_rindex_token(&rx, sector_size, &spi);
+	rx_token = setup_rindex_token(&rx, sector_size, align_size, &spi);
 	if (!rx_token) {
 		rv = -ENOMEM;
 		goto out_clear;
@@ -978,7 +1032,7 @@ int rindex_rebuild(struct task *task, struct sanlk_rindex *ri, uint32_t cmd_flag
 
 	memset(&res, 0, sizeof(res));
 
-	res_token = setup_resource_token(&rx, res.name, sector_size, &spi);
+	res_token = setup_resource_token(&rx, res.name, sector_size, align_size, &spi);
 	if (!res_token) {
 		free(rx_token);
 		rv = -ENOMEM;
@@ -1002,17 +1056,12 @@ int rindex_rebuild(struct task *task, struct sanlk_rindex *ri, uint32_t cmd_flag
 		goto out_lease;
 	}
 
-	if (rx.ri->max_resources)
-		max_resources = rx.ri->max_resources;
-	else
-		max_resources = sector_size_to_max_resources(sector_size);
-
 	/*
-	 * Zero all the entries after the header sector and lease sector.
-	 * Entries will be recreated in the zeroed space if corresponding
-	 * resource leases are found.
+	 * Zero all the entries after the header sector.  Entries will be
+	 * recreated in the zeroed space if corresponding resource leases are
+	 * found.
 	 */
-	memset(rindex_iobuf + (2 * sector_size), 0, align_size - (2 * sector_size));
+	memset(rindex_iobuf + sector_size, 0, align_size - sector_size);
 
 	/*
 	 * We read each potential resource lease offset to check if a
@@ -1037,16 +1086,17 @@ int rindex_rebuild(struct task *task, struct sanlk_rindex *ri, uint32_t cmd_flag
 
 		rv = paxos_read_resource(task, res_token, &res);
 
+		offset_to_str(res_offset, sizeof(off_str), off_str);
+
 		/* end of device */
 		if (rv == -EMSGSIZE) {
-			log_debug("rindex_rebuild reached end of device at %llu",
-			  	  (unsigned long long)res_offset);
+			log_debug("rindex_rebuild reached end of device at %d %s", i, off_str);
 			break;
 		}
 
 		if (rv == SANLK_OK) {
-			log_debug("rindex_rebuild found %s at %llu",
-			  	  res.name, (unsigned long long)res_offset);
+			log_debug("rindex_rebuild found %.48s at %d %s",
+			  	  res.name, i, off_str);
 
 			re_new.res_offset = res_offset;
 			memcpy(re_new.name, res.name, SANLK_NAME_LEN);
@@ -1056,9 +1106,9 @@ int rindex_rebuild(struct task *task, struct sanlk_rindex *ri, uint32_t cmd_flag
 			ent_offset = sector_size + (i * sizeof(struct rindex_entry));
 
 			memcpy(rindex_iobuf + ent_offset, &re_end, sizeof(re_end));
-		} else {
-			log_debug("rindex_rebuild found no resource at %llu %d",
-			  	  (unsigned long long)res_offset, rv);
+		} else if ((i + 1) == max_resources) {
+			log_debug("rindex_rebuild found no resource at last %d %s %d",
+			  	  i, off_str, rv);
 		}
 
 		res_offset += align_size;

@@ -169,6 +169,7 @@ int read_resource_owners(struct task *task, struct token *token,
 	char *lease_buf_dblock;
 	char *lease_buf = NULL;
 	char *hosts_buf = NULL;
+	int align_size;
 	int host_count = 0;
 	int i, rv;
 
@@ -181,7 +182,7 @@ int read_resource_owners(struct task *task, struct token *token,
 
 	if (!token->sector_size) {
 		token->sector_size = 4096;
-		token->align_size = sector_size_to_align_size(4096);
+		token->align_size = sector_size_to_align_size_old(4096);
 	}
 
 	/* we could in-line paxos_read_buf here like we do in read_mode_block */
@@ -201,17 +202,23 @@ int read_resource_owners(struct task *task, struct token *token,
 
 	leader_record_in(&leader_end, &leader);
 
-	if ((token->sector_size == 512) && (leader.sector_size == 4096)) {
-		/* user flag was wrong */
-		token->sector_size = 4096;
-		token->align_size  = sector_size_to_align_size(4096);
+	align_size = leader_align_size_from_flag(leader.flags);
+	if (!align_size)
+		align_size = sector_size_to_align_size_old(leader.sector_size);
+
+	if ((token->sector_size != leader.sector_size) ||
+	    (token->align_size != align_size)) {
+		/* initial sizes were wrong */
+		log_debug("read_resource_owners rereading with correct sizses");
+		token->sector_size = leader.sector_size;
+		token->align_size  = align_size;
 		free(lease_buf);
 		lease_buf = NULL;
 		goto retry;
 	}
 
 	token->sector_size = leader.sector_size;
-	token->align_size = sector_size_to_align_size(leader.sector_size);
+	token->align_size = align_size;
 
 	rv = paxos_verify_leader(token, disk, &leader, checksum, "read_resource_owners");
 	if (rv < 0)
@@ -1794,8 +1801,13 @@ int acquire_token(struct task *task, struct token *token, uint32_t cmd_flags,
 
 	rv = acquire_disk(task, token, acquire_lver, new_num_hosts, owner_nowait, &leader, &dblock);
 
-	/* token sector_size starts as ls sector_size, but can change in paxos acquire */
+	/*
+	 * token sector_size/align_size starts by using sector_size/align_size
+	 * from the ls, but can change in paxos acquire when we see what's in
+	 * the leader_record.
+	 */
 	r->sector_size = token->sector_size;
+	r->align_size = token->align_size;
 
 	if (rv == SANLK_ACQUIRE_IDLIVE || rv == SANLK_ACQUIRE_OWNED || rv == SANLK_ACQUIRE_OTHER) {
 		/*
@@ -1962,6 +1974,7 @@ int request_token(struct task *task, struct token *token, uint32_t force_mode,
 {
 	struct leader_record leader;
 	struct request_record req;
+	int align_size;
 	int rv;
 
 	memset(&req, 0, sizeof(req));
@@ -1975,15 +1988,27 @@ int request_token(struct task *task, struct token *token, uint32_t force_mode,
 	if (!token->acquire_lver && !force_mode)
 		goto req_read;
 
+	/*
+	 * cmd_request() takes the sector_size and align_size from the
+	 * lockspace as a starting point, setting them in the token.  If the
+	 * leader_record for the paxos lease on disk is different, then adjust
+	 * the values in the token.
+	 */
+
 	rv = paxos_lease_leader_read(task, token, &leader, "request");
 	if (rv < 0)
 		goto out;
 
-	if (leader.sector_size != token->sector_size) {
-		/* token sector_size starts with lockspace sector_size,
-		   but it could be different. */
+	align_size = leader_align_size_from_flag(leader.flags);
+	if (!align_size)
+		align_size = sector_size_to_align_size_old(leader.sector_size);
+
+	if ((leader.sector_size != token->sector_size) || (align_size != token->align_size)) {
+		/* paxos lease has different size than we borrowed from the lockspace */
 		token->sector_size = leader.sector_size;
-		token->align_size = sector_size_to_align_size(leader.sector_size);
+		token->align_size = align_size;
+		if (!token->align_size)
+			token->align_size = sector_size_to_align_size_old(leader.sector_size);
 	}
 
 	if (leader.timestamp == LEASE_FREE) {
@@ -2462,7 +2487,7 @@ static void *resource_thread(void *arg GNUC_UNUSED)
 			tt->res_id = r->res_id;
 			tt->io_timeout = r->io_timeout;
 			tt->sector_size = r->sector_size;
-			tt->align_size = sector_size_to_align_size(r->sector_size);
+			tt->align_size = r->align_size;
 			tt->resource = r;
 
 			/*
@@ -2500,7 +2525,7 @@ static void *resource_thread(void *arg GNUC_UNUSED)
 			tt->res_id = r->res_id;
 			tt->io_timeout = r->io_timeout;
 			tt->sector_size = r->sector_size;
-			tt->align_size = sector_size_to_align_size(r->sector_size);
+			tt->align_size = r->align_size;
 			pid = r->pid;
 			lver = r->leader.lver;
 

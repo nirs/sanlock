@@ -10,7 +10,6 @@
 #define __SANLOCK_DIRECT_H__
 
 /*
- * Use max_hosts = 0 for default value.
  * Use num_hosts = 0 for default value.
  * Provide either lockspace or resource, not both
  *
@@ -19,14 +18,14 @@
 
 int sanlock_direct_init(struct sanlk_lockspace *ls,
                         struct sanlk_resource *res,
-                        int max_hosts, int num_hosts, int use_aio);
+                        int max_hosts_unused, int num_hosts, int use_aio);
 
 /*
  * write a lockspace to disk
  * (also see sanlock_write_lockspace)
  */
 
-int sanlock_direct_write_lockspace(struct sanlk_lockspace *ls, int max_hosts,
+int sanlock_direct_write_lockspace(struct sanlk_lockspace *ls, int max_hosts_unused,
 				   uint32_t flags, uint32_t io_timeout);
 
 /*
@@ -35,7 +34,7 @@ int sanlock_direct_write_lockspace(struct sanlk_lockspace *ls, int max_hosts,
  */
 
 int sanlock_direct_write_resource(struct sanlk_resource *res,
-				  int max_hosts, int num_hosts, uint32_t flags);
+				  int max_hosts_unused, int num_hosts, uint32_t flags);
 
 /*
  * Returns the alignment in bytes required by sanlock_direct_init()
