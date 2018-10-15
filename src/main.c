@@ -1850,9 +1850,56 @@ static int parse_arg_rindex(char *str)
 	return 0;
 }
 
+/* <lockspace_name>:<host_id>:<path>:<offset> */
+
 static int parse_arg_lockspace(char *arg)
 {
-	sanlock_str_to_lockspace(arg, &com.lockspace);
+	char offstr[16];
+	char *colon1, *colon2, *colon3, *m, *p;
+	uint64_t offnum = 0;
+	char *arg2 = NULL;
+	int len = strlen(arg);
+	int len2 = 0;
+	int i;
+
+	/*
+	 * If the arg string uses an offset with the 'M' suffix, then
+	 * convert it to a string without 'M'.
+	 */
+	if ((colon1 = strchr(arg, ':'))) {
+		if ((colon2 = strchr(colon1+1, ':'))) {
+			if ((colon3 = strchr(colon2+1, ':'))) {
+
+				if ((m = strchr(colon3+1, 'M'))) {
+					p = colon3+1;
+					i = 0;
+					while (1) {
+						offstr[i++] = *p;
+						p++;
+						if (p == m)
+							break;
+					}
+					offnum = atoll(offstr) * 1024 * 1024;
+
+					/* terminate 'arg' before offset */
+					*colon3 = '\0';
+
+					len2 = len + 64;
+					arg2 = malloc(len2);
+					if (!arg2)
+						return -1;
+					memset(arg2, 0, len2);
+
+					snprintf(arg2, len2, "%s:%llu", arg, (unsigned long long)offnum);
+				}
+			}
+		}
+	}
+
+	if (arg2)
+		sanlock_str_to_lockspace(arg2, &com.lockspace);
+	else
+		sanlock_str_to_lockspace(arg, &com.lockspace);
 
 	log_debug("lockspace %s host_id %llu path %s offset %llu",
 		  com.lockspace.name,
@@ -1863,9 +1910,17 @@ static int parse_arg_lockspace(char *arg)
 	return 0;
 }
 
+/* <lockspace_name>:<resource_name>:<path>:<offset>[:<lver>] */
+
 static int parse_arg_resource(char *arg)
 {
 	struct sanlk_resource *res;
+	char offstr[16];
+	char *colon1, *colon2, *colon3, *colon4, *m, *p;
+	uint64_t offnum = 0;
+	char *arg2 = NULL;
+	int len = strlen(arg);
+	int len2 = 0;
 	int rv, i;
 
 	if (com.res_count >= SANLK_MAX_RESOURCES) {
@@ -1873,7 +1928,51 @@ static int parse_arg_resource(char *arg)
 		return -1;
 	}
 
-	rv = sanlock_str_to_res(arg, &res);
+	memset(offstr, 0, sizeof(offstr));
+
+	/*
+	 * If the arg string uses an offset with the 'M' suffix, then
+	 * convert it to a string without 'M'.
+	 */
+	if ((colon1 = strchr(arg, ':'))) {
+		if ((colon2 = strchr(colon1+1, ':'))) {
+			if ((colon3 = strchr(colon2+1, ':'))) {
+				colon4 = strchr(colon3+1, ':'); /* optional */
+
+				if ((m = strchr(colon3+1, 'M'))) {
+					p = colon3+1;
+					i = 0;
+					while (1) {
+						offstr[i++] = *p;
+						p++;
+						if (p == m)
+							break;
+					}
+					offnum = atoll(offstr) * 1024 * 1024;
+
+					/* terminate 'arg' before offset */
+					*colon3 = '\0';
+
+					len2 = len + 64;
+					arg2 = malloc(len2);
+					if (!arg2)
+						return -1;
+					memset(arg2, 0, len2);
+
+					if (!colon4)
+						snprintf(arg2, len2, "%s:%llu", arg, (unsigned long long)offnum);
+					else
+						snprintf(arg2, len2, "%s:%llu%s", arg, (unsigned long long)offnum, colon4);
+				}
+			}
+		}
+	}
+
+	if (arg2)
+		rv = sanlock_str_to_res(arg2, &res);
+	else
+		rv = sanlock_str_to_res(arg, &res);
+
 	if (rv < 0) {
 		log_tool("resource arg parse error %d\n", rv);
 		return rv;
