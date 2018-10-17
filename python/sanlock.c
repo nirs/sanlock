@@ -360,7 +360,8 @@ exit_fail:
 
 /* write_lockspace */
 PyDoc_STRVAR(pydoc_write_lockspace, "\
-write_lockspace(lockspace, path, offset=0, max_hosts=0, iotimeout=0)\n\
+write_lockspace(lockspace, path, offset=0, max_hosts=0, iotimeout=0, \
+align=SANLK_LSF_ALIGN1M, sector=SANLK_LSF_SECTOR512)\n\
 Initialize or update a device to be used as sanlock lockspace.");
 
 static PyObject *
@@ -368,25 +369,30 @@ py_write_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
     int rv, max_hosts = 0;
     uint32_t io_timeout = 0;
+    uint32_t  align=SANLK_LSF_ALIGN1M, sector=SANLK_LSF_SECTOR512;
     const char *lockspace, *path;
     struct sanlk_lockspace ls;
 
     static char *kwlist[] = {"lockspace", "path", "offset", "max_hosts",
-                                "iotimeout", NULL};
+                                "iotimeout", "align", "sector", NULL};
 
     /* initialize lockspace structure */
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ss|kiI", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ss|kiIII", kwlist,
         &lockspace, &path, &ls.host_id_disk.offset, &max_hosts,
-        &io_timeout)) {
+        &io_timeout, &align, &sector)) {
         return NULL;
     }
 
     /* prepare sanlock names */
     strncpy(ls.name, lockspace, SANLK_NAME_LEN);
     strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN - 1);
+
+    /* set alignment/sector flags */
+    ls.flags |= align;
+    ls.flags |= sector;
 
     /* write sanlock lockspace (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -403,7 +409,8 @@ py_write_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
 /* read_lockspace */
 PyDoc_STRVAR(pydoc_read_lockspace, "\
-read_lockspace(path, offset=0) -> dict\n\
+read_lockspace(path, offset=0 \
+align=SANLK_LSF_ALIGN1M, sector=SANLK_LSF_SECTOR512)\n -> dict\n\
 Read the lockspace information from a device at a specific offset.");
 
 static PyObject *
@@ -411,6 +418,7 @@ py_read_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
     int rv;
     uint32_t io_timeout = 0;
+    uint32_t  align=SANLK_LSF_ALIGN1M, sector=SANLK_LSF_SECTOR512;
     const char *path;
     struct sanlk_lockspace ls;
     PyObject *ls_info = NULL, *ls_entry = NULL;
@@ -421,13 +429,17 @@ py_read_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "s|k", kwlist,
-        &path, &ls.host_id_disk.offset)) {
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "s|kII", kwlist,
+        &path, &ls.host_id_disk.offset, &align, &sector)) {
         return NULL;
     }
 
     /* prepare sanlock names */
     strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN - 1);
+
+    /* set alignment/sector flags */
+    ls.flags |= align;
+    ls.flags |= sector;
 
     /* read sanlock lockspace (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -1631,6 +1643,14 @@ initsanlock(void)
     PYSNLK_INIT_ADD_CONSTANT(SANLK_SETEV_CLEAR_EVENT,    "SETEV_CLEAR_EVENT");
     PYSNLK_INIT_ADD_CONSTANT(SANLK_SETEV_REPLACE_EVENT,  "SETEV_REPLACE_EVENT");
     PYSNLK_INIT_ADD_CONSTANT(SANLK_SETEV_ALL_HOSTS,      "SETEV_ALL_HOSTS");
+
+    /* Sector and align size flags */
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_SECTOR512, "SANLK_RES_SECTOR512");
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_SECTOR4K, "SANLK_RES_SECTOR4K");
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_ALIGN1M, "SANLK_RES_ALIGN1M");
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_ALIGN2M, "SANLK_RES_ALIGN2M");
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_ALIGN4M, "SANLK_RES_ALIGN4M");
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_ALIGN8M, "SANLK_RES_ALIGN8M");
 
 #undef PYSNLK_INIT_ADD_CONSTANT
 }
