@@ -84,7 +84,6 @@ static char command[COMMAND_MAX];
 static int cmd_argc;
 static char **cmd_argv;
 static struct thread_pool pool;
-static struct random_data rand_data;
 static char rand_state[32];
 static pthread_mutex_t rand_mutex = PTHREAD_MUTEX_INITIALIZER;
 static const char *run_dir = NULL;
@@ -1386,16 +1385,15 @@ int get_rand(int a, int b);
 
 int get_rand(int a, int b)
 {
-	int32_t val;
-	int rv;
+	long int rv;
 
 	pthread_mutex_lock(&rand_mutex);
-	rv = random_r(&rand_data, &val);
+	rv = random();
 	pthread_mutex_unlock(&rand_mutex);
 	if (rv < 0)
 		return rv;
 
-	return a + (int) (((float)(b - a + 1)) * val / (RAND_MAX+1.0));
+	return a + (int) (((float)(b - a + 1)) * rv / (RAND_MAX+1.0));
 }
 
 static void setup_host_name(void)
@@ -1405,9 +1403,7 @@ static void setup_host_name(void)
 	uuid_t uu;
 
 	memset(rand_state, 0, sizeof(rand_state));
-	memset(&rand_data, 0, sizeof(rand_data));
-
-	initstate_r(time(NULL), rand_state, sizeof(rand_state), &rand_data);
+	initstate(time(NULL), rand_state, sizeof(rand_state));
 
 	/* use host name from command line */
 
