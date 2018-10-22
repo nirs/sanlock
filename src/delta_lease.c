@@ -197,6 +197,10 @@ int delta_read_lockspace(struct task *task,
 		if (!align_size)
 			align_size = sector_size_to_align_size_old(leader.sector_size);
 
+		/* The flags set by the user may not have been correct. */
+		sanlk_lsf_sector_flags_clear(&ls->flags);
+		sanlk_lsf_align_flags_clear(&ls->flags);
+
 		ls->flags |= sanlk_lsf_sector_size_to_flag(leader.sector_size);
 		ls->flags |= sanlk_lsf_align_size_to_flag(align_size);
 	}

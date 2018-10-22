@@ -1089,6 +1089,10 @@ int paxos_read_resource(struct task *task,
 			token->sector_size = leader.sector_size;
 			token->align_size = align_size;
 
+			/* The flags set by the user may be wrong. */
+			sanlk_res_sector_flags_clear(&res->flags);
+			sanlk_res_align_flags_clear(&res->flags);
+
 			res->flags |= sanlk_res_sector_size_to_flag(leader.sector_size);
 			res->flags |= sanlk_res_align_size_to_flag(align_size);
 		} else if (tmp_sector_size) {

@@ -28,11 +28,15 @@ int sanlk_lsf_sector_flag_to_size(uint32_t flags);
 uint32_t sanlk_lsf_sector_size_to_flag(int sector_size);
 int sanlk_lsf_align_flag_to_size(uint32_t flags);
 uint32_t sanlk_lsf_align_size_to_flag(int align_size);
+void sanlk_lsf_sector_flags_clear(uint32_t *flags);
+void sanlk_lsf_align_flags_clear(uint32_t *flags);
 
 int sanlk_res_sector_flag_to_size(uint32_t flags);
 uint32_t sanlk_res_sector_size_to_flag(int sector_size);
 int sanlk_res_align_flag_to_size(uint32_t flags);
 uint32_t sanlk_res_align_size_to_flag(int align_size);
+void sanlk_res_sector_flags_clear(uint32_t *flags);
+void sanlk_res_align_flags_clear(uint32_t *flags);
 
 int sanlk_rif_sector_flag_to_size(uint32_t flags);
 uint32_t sanlk_rif_sector_size_to_flag(int sector_size);

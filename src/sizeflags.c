@@ -158,6 +158,20 @@ uint32_t sanlk_lsf_sector_size_to_flag(int sector_size)
 	return 0;
 }
 
+void sanlk_lsf_sector_flags_clear(uint32_t *flags)
+{
+	*flags &= ~SANLK_LSF_SECTOR512;
+	*flags &= ~SANLK_LSF_SECTOR4K;
+}
+
+void sanlk_lsf_align_flags_clear(uint32_t *flags)
+{
+	*flags &= ~SANLK_LSF_ALIGN1M;
+	*flags &= ~SANLK_LSF_ALIGN2M;
+	*flags &= ~SANLK_LSF_ALIGN4M;
+	*flags &= ~SANLK_LSF_ALIGN8M;
+}
+
 int sanlk_lsf_align_flag_to_size(uint32_t flags)
 {
 	if (flags & SANLK_LSF_ALIGN1M)
@@ -206,6 +220,20 @@ uint32_t sanlk_res_sector_size_to_flag(int sector_size)
 		return SANLK_RES_SECTOR4K;
 	log_error("sanlk_res_sector_size_to_flag invalid sector size %d", sector_size);
 	return 0;
+}
+
+void sanlk_res_sector_flags_clear(uint32_t *flags)
+{
+	*flags &= ~SANLK_RES_SECTOR512;
+	*flags &= ~SANLK_RES_SECTOR4K;
+}
+
+void sanlk_res_align_flags_clear(uint32_t *flags)
+{
+	*flags &= ~SANLK_RES_ALIGN1M;
+	*flags &= ~SANLK_RES_ALIGN2M;
+	*flags &= ~SANLK_RES_ALIGN4M;
+	*flags &= ~SANLK_RES_ALIGN8M;
 }
 
 int sanlk_res_align_flag_to_size(uint32_t flags)
