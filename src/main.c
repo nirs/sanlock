@@ -2040,8 +2040,7 @@ static void print_usage(void)
 	printf("sanlock client log_dump\n");
 	printf("sanlock client shutdown [-f 0|1] [-w 0|1]\n");
 	printf("sanlock client init -s LOCKSPACE | -r RESOURCE [-z 0|1] [-Z 512|4096 -A 1M|2M|4M|8M]\n");
-	printf("sanlock client read -s LOCKSPACE | -r RESOURCE\n");
-	printf("sanlock client align -s LOCKSPACE\n");
+	printf("sanlock client read -s LOCKSPACE | -r RESOURCE [-D]\n");
 	printf("sanlock client add_lockspace -s LOCKSPACE\n");
 	printf("sanlock client inq_lockspace -s LOCKSPACE\n");
 	printf("sanlock client rem_lockspace -s LOCKSPACE\n");
@@ -2798,7 +2797,11 @@ static int do_client_read(void)
 			 (unsigned long long)com.lockspace.host_id,
 			 com.lockspace.host_id_disk.path,
 			 (unsigned long long)com.lockspace.host_id_disk.offset);
-		log_tool("io_timeout %u", io_timeout);
+		if (com.debug) {
+			log_tool("io_timeout %u", io_timeout);
+			log_tool("sector_size %d", sanlk_lsf_sector_flag_to_size(com.lockspace.flags));
+			log_tool("align_size %d", sanlk_lsf_align_flag_to_size(com.lockspace.flags));
+		}
 		goto out;
 	}
 
@@ -2809,6 +2812,11 @@ static int do_client_read(void)
 	}
 
 	log_tool("r %s", res_str);
+
+	if (com.debug) {
+		log_tool("sector_size %d", sanlk_res_sector_flag_to_size(com.res_args[0]->flags));
+		log_tool("align_size %d", sanlk_res_align_flag_to_size(com.res_args[0]->flags));
+	}
 
 	free(res_str);
 

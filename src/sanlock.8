@@ -674,19 +674,16 @@ size, and both should be set together.
 
 Tell the sanlock daemon to read a lockspace from disk.  Only the
 LOCKSPACE path and offset are required.  If host_id is zero, the first
-record at offset (host_id 1) is used.  The complete LOCKSPACE and io
-timeout are printed.
+record at offset (host_id 1) is used.  The complete LOCKSPACE is printed.
+Add -D to print other details.
+(Also see sanlock direct read_leader.)
 
 .BR "sanlock client read -r" " RESOURCE"
 
 Tell the sanlock daemon to read a resource lease from disk.  Only the
 RESOURCE path and offset are required.  The complete RESOURCE is printed.
+Add -D to print other details.
 (Also see sanlock direct read_leader.)
-
-.BR "sanlock client align -s" " LOCKSPACE"
-
-Tell the sanlock daemon to report the required lease alignment for a storage
-path.  Only path is used from the LOCKSPACE argument.
 
 .BR "sanlock client add_lockspace -s" " LOCKSPACE"
 
