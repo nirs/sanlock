@@ -535,10 +535,6 @@ int sanlock_read_resource(struct sanlk_resource *res, uint32_t flags)
 		goto out;
 	}
 
-	rv = (int)h.data;
-	if (rv < 0)
-		goto out;
-
 	rv = recv_data(fd, res, sizeof(struct sanlk_resource), MSG_WAITALL);
 	if (rv < 0) {
 		rv = -errno;
