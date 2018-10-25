@@ -423,7 +423,7 @@ py_read_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     struct sanlk_lockspace ls;
     PyObject *ls_info = NULL, *ls_entry = NULL;
 
-    static char *kwlist[] = {"path", "offset", NULL};
+    static char *kwlist[] = {"path", "offset", "align", "sector", NULL};
 
     /* initialize lockspace structure */
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
@@ -482,18 +482,20 @@ exit_fail:
 
 /* read_resource */
 PyDoc_STRVAR(pydoc_read_resource, "\
-read_resource(path, offset=0) -> dict\n\
+read_resource(path, offset=0, \
+align=SANLK_LSF_ALIGN1M, sector=SANLK_LSF_SECTOR512) -> dict\n\
 Read the resource information from a device at a specific offset.");
 
 static PyObject *
 py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
     int rv, rs_len;
+    uint32_t  align=SANLK_LSF_ALIGN1M, sector=SANLK_LSF_SECTOR512;
     const char *path;
     struct sanlk_resource *rs;
     PyObject *rs_info = NULL, *rs_entry = NULL;
 
-    static char *kwlist[] = {"path", "offset", NULL};
+    static char *kwlist[] = {"path", "offset", "align", "sector", NULL};
 
     /* allocate the needed memory for the resource and one disk */
     rs_len = sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk);
@@ -509,13 +511,17 @@ py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
     rs->num_disks = 1;
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "s|k", kwlist,
-        &path, &(rs->disks[0].offset))) {
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "s|kII", kwlist,
+        &path, &(rs->disks[0].offset), &align, &sector)) {
         goto exit_fail;
     }
 
     /* prepare the resource disk path */
     strncpy(rs->disks[0].path, path, SANLK_PATH_LEN - 1);
+
+    /* set alignment/sector flags */
+    rs->flags |= align;
+    rs->flags |= sector;
 
     /* read sanlock resource (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -569,7 +575,7 @@ exit_fail:
 /* write_resource */
 PyDoc_STRVAR(pydoc_write_resource, "\
 write_resource(lockspace, resource, disks, max_hosts=0, num_hosts=0, \
-clear=False)\n\
+clear=False, align=SANLK_LSF_ALIGN1M, sector=SANLK_LSF_SECTOR512)\n\
 Initialize a device to be used as sanlock resource.\n\
 The disks must be in the format: [(path, offset), ... ].\n\
 If clear is True, the resource is cleared so subsequent read will\n\
@@ -579,18 +585,19 @@ static PyObject *
 py_write_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
     int rv, max_hosts = 0, num_hosts = 0, clear = 0;
+    uint32_t  align=SANLK_LSF_ALIGN1M, sector=SANLK_LSF_SECTOR512;
     const char *lockspace, *resource;
     struct sanlk_resource *rs;
     PyObject *disks;
     uint32_t flags = 0;
 
     static char *kwlist[] = {"lockspace", "resource", "disks", "max_hosts",
-                                "num_hosts", "clear", NULL};
+                                "num_hosts", "clear", "align", "sector", NULL};
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|iii",
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|iiiII",
         kwlist, &lockspace, &resource, &PyList_Type, &disks, &max_hosts,
-        &num_hosts, &clear)) {
+        &num_hosts, &clear, &align, &sector)) {
         return NULL;
     }
 
@@ -602,6 +609,10 @@ py_write_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
     /* prepare sanlock names */
     strncpy(rs->lockspace_name, lockspace, SANLK_NAME_LEN);
     strncpy(rs->name, resource, SANLK_NAME_LEN);
+
+    /* set alignment/sector flags */
+    rs->flags |= align;
+    rs->flags |= sector;
 
     if (clear) {
         flags |= SANLK_WRITE_CLEAR;
