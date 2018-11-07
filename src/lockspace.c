@@ -23,6 +23,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/un.h>
+#include <sys/stat.h>
 
 #include "sanlock_internal.h"
 #include "sanlock_admin.h"
@@ -580,6 +581,79 @@ static void save_renewal_history(struct space *sp, int delta_result,
 	}
 }
 
+#define ONE_MB_IN_BYTES 1048576
+#define ONE_MB_IN_KB 1024
+
+static void set_lockspace_max_sectors_kb(struct space *sp, int sector_size, int align_size)
+{
+	struct stat st;
+	int align_size_kb = align_size / 1024; /* align_size is in bytes */
+	unsigned int hw_kb = 0;
+	unsigned int set_kb = 0;
+	int rv;
+
+	if (fstat(sp->host_id_disk.fd, &st) < 0) {
+		log_erros(sp, "set_lockspace_max_sectors_kb fstat error %d", errno);
+		return;
+	}
+
+	/* file not device */
+	if (S_ISREG(st.st_mode))
+		return;
+
+	if (com.max_sectors_kb_ignore)
+		return;
+	else if (com.max_sectors_kb_align)
+		set_kb = align_size_kb;
+	else if (com.max_sectors_kb_num)
+		set_kb = com.max_sectors_kb_num;
+	else
+		return;
+
+	rv = read_sysfs_size(sp->host_id_disk.path, "max_hw_sectors_kb", &hw_kb);
+	if (rv < 0 || !hw_kb) {
+		log_space(sp, "set_lockspace_max_sectors_kb max_hw_sectors_kb unknown %d %u", rv, hw_kb);
+		return;
+	}
+
+	if (hw_kb < set_kb) {
+		/*
+		 * If the hardware won't support requested size, try setting 1MB.
+		 */
+		if (hw_kb < ONE_MB_IN_KB) {
+			log_space(sp, "set_lockspace_max_sectors_kb small hw_kb %u req_kb %u", hw_kb, set_kb);
+			return;
+		}
+
+		if (set_kb < 1024) {
+			log_space(sp, "set_lockspace_max_sectors_kb small hw_kb %u small req_kb %u", hw_kb, set_kb);
+			return;
+		}
+
+		set_kb = ONE_MB_IN_KB;
+
+		log_space(sp, "set_lockspace_max_sectors_kb small hw_kb %u using 1024", hw_kb);
+
+		rv = set_max_sectors_kb(&sp->host_id_disk, set_kb);
+		if (rv < 0) {
+			log_space(sp, "set_lockspace_max_sectors_kb small hw_kb %u set 1024 error %d", hw_kb, rv);
+			return;
+		}
+	} else {
+		/*
+		 * Tell the kernel to send hardware io's as large as the lease size.
+		 */
+
+		log_space(sp, "set_lockspace_max_sectors_kb hw_kb %u setting %u", hw_kb, set_kb);
+
+		rv = set_max_sectors_kb(&sp->host_id_disk, set_kb);
+		if (rv < 0) {
+			log_space(sp, "set_lockspace_max_sectors_kb hw_kb %u set %u error %d", hw_kb, set_kb, rv);
+			return;
+		}
+	}
+}
+
 /*
  * This thread must not be stopped unless all pids that may be using any
  * resources in it are dead/gone.  (The USED flag in the lockspace represents
@@ -664,6 +738,8 @@ static void *lockspace_thread(void *arg_in)
 	sp->sector_size = sector_size;
 	sp->align_size = align_size;
 	sp->max_hosts = max_hosts;
+
+	set_lockspace_max_sectors_kb(sp, sector_size, align_size);
 
 	sp->lease_status.renewal_read_buf = malloc(sp->align_size);
 	if (!sp->lease_status.renewal_read_buf) {

@@ -23,6 +23,7 @@
 #include <sched.h>
 #include <pwd.h>
 #include <grp.h>
+#include <ctype.h>
 #include <sys/types.h>
 #include <sys/prctl.h>
 #include <sys/wait.h>
@@ -2651,6 +2652,30 @@ static void read_config_file(void)
 				com.debug_io_submit = 1;
 			if (strstr(str, "complete"))
 				com.debug_io_complete = 1;
+
+		} else if (!strcmp(str, "max_sectors_kb")) {
+			memset(str, 0, sizeof(str));
+			get_val_str(line, str);
+			if (strstr(str, "ignore")) {
+				com.max_sectors_kb_ignore = 1;
+				com.max_sectors_kb_align = 0;
+				com.max_sectors_kb_num = 0;
+			} else if (strstr(str, "align")) {
+				com.max_sectors_kb_ignore = 0;
+				com.max_sectors_kb_align = 1;
+				com.max_sectors_kb_num = 0;
+			} else if (isdigit(str[0])) {
+				int num = atoi(str);
+				if (!num || (num % 2) || (num > 8192)) {
+					log_error("ignore invalid num max_sectors_kb %s", str);
+				} else {
+					com.max_sectors_kb_ignore = 0;
+					com.max_sectors_kb_align = 0;
+					com.max_sectors_kb_num = num;
+				}
+			} else {
+				log_error("ignore unknown max_sectors_kb %s", str);
+			}
 		}
 	}
 

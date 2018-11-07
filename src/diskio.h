@@ -17,6 +17,10 @@ int open_disks(struct sync_disk *disks, int num_disks);
 int open_disks_fd(struct sync_disk *disks, int num_disks);
 int majority_disks(int num_disks, int num);
 
+int read_sysfs_size(const char *path, const char *name, unsigned int *val);
+int set_max_sectors_kb(struct sync_disk *disk, uint32_t max_sectors_kb);
+int get_max_sectors_kb(struct sync_disk *disk, uint32_t *max_sectors_kb);
+
 /*
  * iobuf functions require the caller to allocate iobuf using posix_memalign
  * and pass it into the function

@@ -21,15 +21,137 @@
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <blkid/blkid.h>
 
 #include <libaio.h> /* linux aio */
+#include <aio.h>    /* posix aio */
 #include <aio.h>    /* posix aio */
 
 #include "sanlock_internal.h"
 #include "diskio.h"
 #include "direct.h"
 #include "log.h"
+
+int read_sysfs_size(const char *disk_path, const char *name, unsigned int *val)
+{
+	char path[PATH_MAX];
+	char buf[32];
+	struct stat st;
+	int major, minor;
+	size_t len;
+	int fd;
+	int rv = -1;
+
+	rv = stat(disk_path, &st);
+	if (rv < 0)
+		return -1;
+
+	major = (int)major(st.st_rdev);
+	minor = (int)minor(st.st_rdev);
+
+	snprintf(path, sizeof(path), "/sys/dev/block/%d:%d/queue/%s", major, minor, name);
+
+	fd = open(path, O_RDONLY, 0);
+	if (fd < 0)
+		return -1;
+
+	rv = read(fd, buf, sizeof(buf));
+	if (rv < 0) {
+		close(fd);
+		return -1;
+	}
+
+	if ((len = strlen(buf)) && buf[len - 1] == '\n')
+		buf[--len] = '\0';
+
+	if (strlen(buf)) {
+		*val = atoi(buf);
+		rv = 0;
+	}
+
+	close(fd);
+	return rv;
+}
+
+static int write_sysfs_size(const char *disk_path, const char *name, unsigned int val)
+{
+	char path[PATH_MAX];
+	char buf[32];
+	struct stat st;
+	int major, minor;
+	int fd;
+	int rv;
+
+	rv = stat(disk_path, &st);
+	if (rv < 0) {
+		log_debug("write_sysfs_size stat error %d %s", errno, disk_path);
+		return -1;
+	}
+
+	major = (int)major(st.st_rdev);
+	minor = (int)minor(st.st_rdev);
+
+	snprintf(path, sizeof(path), "/sys/dev/block/%d:%d/queue/%s", major, minor, name);
+
+	memset(buf, 0, sizeof(buf));
+	snprintf(buf, sizeof(buf), "%u", val);
+
+	fd = open(path, O_RDWR, 0);
+	if (fd < 0) {
+		log_debug("write_sysfs_size open error %d %s", errno, path);
+		return -1;
+	}
+
+	rv = write(fd, buf, strlen(buf));
+	if (rv < 0) {
+		log_debug("write_sysfs_size write %s error %d %s", buf, errno, path);
+		close(fd);
+		return -1;
+	}
+
+	close(fd);
+	return 0;
+}
+
+/*
+ * The default max_sectors_kb is 512 (KB), so a 1MB read is split into two
+ * 512KB reads.  Adjust this to at least do 1MB io's.
+ */
+
+int set_max_sectors_kb(struct sync_disk *disk, uint32_t set_kb)
+{
+	unsigned int max_kb = 0;
+	int rv;
+
+	rv = read_sysfs_size(disk->path, "max_sectors_kb", &max_kb);
+	if (rv < 0) {
+		log_debug("set_max_sectors_kb read error %d %s", rv, disk->path);
+		return rv;
+	}
+
+	if (max_kb == set_kb)
+		return 0;
+
+	rv = write_sysfs_size(disk->path, "max_sectors_kb", set_kb);
+	if (rv < 0) {
+		log_debug("set_max_sectors_kb write %u error %d %s", set_kb, rv, disk->path);
+		return rv;
+	}
+
+	return 0;
+}
+
+int get_max_sectors_kb(struct sync_disk *disk, uint32_t *max_sectors_kb)
+{
+	unsigned int max = 0;
+	int rv;
+
+	rv = read_sysfs_size(disk->path, "max_sectors_kb", &max);
+	if (!rv)
+		*max_sectors_kb = max;
+	return rv;
+}
 
 static int set_disk_properties(struct sync_disk *disk)
 {
@@ -47,6 +169,7 @@ static int set_disk_properties(struct sync_disk *disk)
 	blkid_free_probe(probe);
 
 	disk->sector_size = sector_size;
+
 	return 0;
 }
 

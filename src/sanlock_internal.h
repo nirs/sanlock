@@ -330,6 +330,10 @@ EXTERN struct client *client;
 #define DEFAULT_QUIET_FAIL 1
 #define DEFAULT_RENEWAL_HISTORY_SIZE 180 /* about 1 hour with 20 sec renewal interval */
 
+#define DEFAULT_MAX_SECTORS_KB_IGNORE 1  /* don't change it */
+#define DEFAULT_MAX_SECTORS_KB_ALIGN  0  /* set it to align size */
+#define DEFAULT_MAX_SECTORS_KB_NUM    0  /* set it to num KB for all lockspaces */
+
 struct command_line {
 	int type;				/* COM_ */
 	int action;				/* ACT_ */
@@ -338,6 +342,9 @@ struct command_line {
 	int debug_io_submit;
 	int debug_io_complete;
 	int paxos_debug_all;
+	int max_sectors_kb_ignore;
+	int max_sectors_kb_align;
+	int max_sectors_kb_num;
 	int quiet_fail;
 	int wait;
 	int use_watchdog;

@@ -1333,6 +1333,15 @@ Add debug logging for each i/o.  "submit" (no quotes) produces debug
 output at submission time, "complete" produces debug output at completion
 time, and "submit,complete" (no space) produces both.
 
+.IP \[bu] 2
+max_sectors_kb = <str>|<num>
+.br
+Set to "ignore" (no quotes) to prevent sanlock from checking or
+changing max_sectors_kb for the lockspace disk when starting a lockspace.
+Set to "align" (no quotes) to set max_sectors_kb for the lockspace disk
+to the align size of the lockspace.
+Set to a number to set a specific number of KB for all lockspace disks.
+
 
 .SH SEE ALSO
 .BR wdmd (8)
