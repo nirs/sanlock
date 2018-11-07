@@ -24,7 +24,6 @@
 #include <sys/sysmacros.h>
 #include <blkid/blkid.h>
 
-#include <libaio.h> /* linux aio */
 #include <aio.h>    /* posix aio */
 #include <aio.h>    /* posix aio */
 
@@ -679,114 +678,13 @@ static int do_read_aio_linux(int fd, uint64_t offset, char *buf, int len,
 	return do_linux_aio(fd, offset, buf, len, task, ioto, IO_CMD_PREAD, rd_ms);
 }
 
-static int do_write_aio_posix(int fd, uint64_t offset, char *buf, int len,
-			      struct task *task GNUC_UNUSED, int ioto)
-{
-	struct timespec ts;
-	struct aiocb cb;
-	struct aiocb const *p_cb;
-	int rv;
-
-	memset(&ts, 0, sizeof(struct timespec));
-	ts.tv_sec = ioto;
-
-	memset(&cb, 0, sizeof(struct aiocb));
-	p_cb = &cb;
-
-	cb.aio_fildes = fd;
-	cb.aio_buf = buf;
-	cb.aio_nbytes = len;
-	cb.aio_offset = offset;
-
-	rv = aio_write(&cb);
-	if (rv < 0)
-		return -1;
-
-	rv = aio_suspend(&p_cb, 1, &ts);
-	if (!rv)
-		return 0;
-
-	/* the write timed out, try to cancel it... */
-
-	rv = aio_cancel(fd, &cb);
-	if (rv < 0)
-		return -1;
-
-	if (rv == AIO_ALLDONE)
-		return 0;
-
-	if (rv == AIO_CANCELED)
-		return -EIO;
-
-	/* Functions that depend on the timeout might consider
-	 * the action failed even if it will complete if that
-	 * happened after the alloted time frame */
-
-	if (rv == AIO_NOTCANCELED)
-		return -EIO;
-
-	/* undefined error condition */
-	return -1;
-}
-
-static int do_read_aio_posix(int fd, uint64_t offset, char *buf, int len,
-			     struct task *task GNUC_UNUSED, int ioto)
-{
-	struct timespec ts;
-	struct aiocb cb;
-	struct aiocb const *p_cb;
-	int rv;
-
-	memset(&ts, 0, sizeof(struct timespec));
-	ts.tv_sec = ioto;
-
-	memset(&cb, 0, sizeof(struct aiocb));
-	p_cb = &cb;
-
-	cb.aio_fildes = fd;
-	cb.aio_buf = buf;
-	cb.aio_nbytes = len;
-	cb.aio_offset = offset;
-
-	rv = aio_read(&cb);
-	if (rv < 0)
-		return -1;
-
-	rv = aio_suspend(&p_cb, 1, &ts);
-	if (!rv)
-		return 0;
-
-	/* the read timed out, try to cancel it... */
-
-	rv = aio_cancel(fd, &cb);
-	if (rv < 0)
-		return -1;
-
-	if (rv == AIO_ALLDONE)
-		return 0;
-
-	if (rv == AIO_CANCELED)
-		return -EIO;
-
-	if (rv == AIO_NOTCANCELED)
-		/* Functions that depend on the timeout might consider
-		 * the action failed even if it will complete if that
-		 * happened apter the alloted time frame */
-		return -EIO;
-
-	/* undefined error condition */
-	return -1;
-}
-
 /* write aligned io buffer */
 
 int write_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len,
 		struct task *task, int ioto, int *wr_ms)
 {
-	if (task && task->use_aio == 1)
+	if (task && task->use_aio)
 		return do_write_aio_linux(fd, offset, iobuf, iobuf_len, task, ioto, wr_ms);
-	else if (task && task->use_aio == 2)
-		return do_write_aio_posix(fd, offset, iobuf, iobuf_len, task, ioto);
 	else
 		return do_write(fd, offset, iobuf, iobuf_len, task);
 }
@@ -884,10 +782,8 @@ int write_sectors(const struct sync_disk *disk, int sector_size, uint64_t sector
 int read_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len,
 	       struct task *task, int ioto, int *rd_ms)
 {
-	if (task && task->use_aio == 1)
+	if (task && task->use_aio)
 		return do_read_aio_linux(fd, offset, iobuf, iobuf_len, task, ioto, rd_ms);
-	else if (task && task->use_aio == 2)
-		return do_read_aio_posix(fd, offset, iobuf, iobuf_len, task, ioto);
 	else
 		return do_read(fd, offset, iobuf, iobuf_len, task);
 }
