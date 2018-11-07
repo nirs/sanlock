@@ -2582,6 +2582,10 @@ static void read_config_file(void)
 			get_val_int(line, &val);
 			com.debug_renew = val;
 
+		} else if (!strcmp(str, "use_aio")) {
+			get_val_int(line, &val);
+			com.aio_arg = val;
+
 		} else if (!strcmp(str, "logfile_priority")) {
 			get_val_int(line, &val);
 			log_logfile_priority = val;

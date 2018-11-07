@@ -353,25 +353,49 @@ int open_disks(struct sync_disk *disks, int num_disks)
 	return rv;
 }
 
-static int do_write(int fd, uint64_t offset, const char *buf, int len, struct task *task)
+static int do_write(int fd, uint64_t offset, const char *buf, int len, struct task *task, int *wr_ms)
 {
 	off_t ret;
 	int rv;
 	int pos = 0;
+	int sys_error = 0; 
+	int save_errno = 0;
+	struct timespec begin, end, diff;
+	const char *len_str;
+	char off_str[16];
+	char ms_str[8];
 
 	if (task)
 		task->io_count++;
 
+	if (com.debug_io_submit) {
+		len_str = align_size_debug_str(len);
+		offset_to_str(offset, sizeof(off_str), off_str);
+
+		if (len_str)
+			log_taskd(task, "WR %s at %s", len_str, off_str);
+		else
+			log_taskd(task, "WR %d at %s", len, off_str);
+	}
+
 	ret = lseek(fd, offset, SEEK_SET);
-	if (ret != offset)
+	if (ret != offset) {
+		log_taskw(task, "WR %d at %s seek error %llu", len, off_str, (unsigned long long)ret);
 		return -1;
+	}
+
+	if (wr_ms)
+		clock_gettime(CLOCK_MONOTONIC_RAW, &begin);
 
  retry:
 	rv = write(fd, buf + pos, len);
 	if (rv == -1 && errno == EINTR)
 		goto retry;
-	if (rv < 0)
-		return -1;
+	if (rv < 0) {
+		sys_error = 1;
+		save_errno = errno;
+		goto out;
+	}
 
 	/* if (rv != len && len == sector_size) return error?
 	   partial sector writes should not happen AFAIK, and
@@ -383,33 +407,125 @@ static int do_write(int fd, uint64_t offset, const char *buf, int len, struct ta
 		goto retry;
 	}
 
-	return 0;
+	if (sys_error)
+		rv = -1;
+	else
+		rv = 0;
+
+ out:
+	if (wr_ms) {
+		clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+		ts_diff(&begin, &end, &diff);
+		*wr_ms = (diff.tv_sec * 1000) + (diff.tv_nsec / 1000000);
+	}
+
+	if (com.debug_io_complete || sys_error) {
+		len_str = align_size_debug_str(len);
+		offset_to_str(offset, sizeof(off_str), off_str);
+
+		if (wr_ms) {
+			memset(ms_str, 0, sizeof(ms_str));
+			snprintf(ms_str, 7, "%u", *wr_ms);
+		}
+
+		if (len_str)
+			log_taskd(task, "WR %s at %s done %s",
+				  len_str, off_str, wr_ms ? ms_str : "");
+		else
+			log_taskd(task, "WR %d at %s done %s",
+				  len, off_str, wr_ms ? ms_str : "");
+
+		if (sys_error)
+			log_taskw(task, "WR %d at %s error %d %s",
+				  len, off_str, save_errno, wr_ms ? ms_str : "");
+	}
+
+	return rv;
 }
 
-static int do_read(int fd, uint64_t offset, char *buf, int len, struct task *task)
+static int do_read(int fd, uint64_t offset, char *buf, int len, struct task *task, int *rd_ms)
 {
 	off_t ret;
 	int rv, pos = 0;
+	int sys_error = 0;
+	int save_errno = 0;
+	struct timespec begin, end, diff;
+	const char *len_str;
+	char off_str[16];
+	char ms_str[8];
 
 	if (task)
 		task->io_count++;
 
+	if (com.debug_io_submit) {
+		len_str = align_size_debug_str(len);
+		offset_to_str(offset, sizeof(off_str), off_str);
+
+		if (len_str)
+			log_taskd(task, "RD %s at %s", len_str, off_str);
+		else
+			log_taskd(task, "RD %d at %s", len, off_str);
+	}
+
 	ret = lseek(fd, offset, SEEK_SET);
-	if (ret != offset)
+	if (ret != offset) {
+		log_taskw(task, "RD %d at %s seek error %llu", len, off_str, (unsigned long long)ret);
 		return -1;
+	}
+
+	if (rd_ms)
+		clock_gettime(CLOCK_MONOTONIC_RAW, &begin);
 
 	while (pos < len) {
 		rv = read(fd, buf + pos, len - pos);
-		if (rv == 0)
-			return -1;
+		if (rv == 0) {
+			sys_error = 1;
+			save_errno = errno;
+			break;
+		}
 		if (rv == -1 && errno == EINTR)
 			continue;
-		if (rv < 0)
-			return -1;
+		if (rv < 0) {
+			sys_error = 1;
+			save_errno = errno;
+			break;
+		}
 		pos += rv;
 	}
 
-	return 0;
+	if (sys_error)
+		rv = -1;
+	else
+		rv = 0;
+
+	if (rd_ms) {
+		clock_gettime(CLOCK_MONOTONIC_RAW, &end);
+		ts_diff(&begin, &end, &diff);
+		*rd_ms = (diff.tv_sec * 1000) + (diff.tv_nsec / 1000000);
+	}
+
+	if (com.debug_io_complete || sys_error) {
+		len_str = align_size_debug_str(len);
+		offset_to_str(offset, sizeof(off_str), off_str);
+
+		if (rd_ms) {
+			memset(ms_str, 0, sizeof(ms_str));
+			snprintf(ms_str, 7, "%u", *rd_ms);
+		}
+
+		if (len_str)
+			log_taskd(task, "RD %s at %s done %s",
+				  len_str, off_str, rd_ms ? ms_str : "");
+		else
+			log_taskd(task, "RD %d at %s done %s",
+				  len, off_str, rd_ms ? ms_str : "");
+
+		if (sys_error)
+			log_taskw(task, "RD %d at %s error %d %s",
+				  len, off_str, save_errno, rd_ms ? ms_str : "");
+	}
+
+	return rv;
 }
 
 static struct aicb *find_callback_slot(struct task *task, int ioto)
@@ -686,7 +802,7 @@ int write_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len,
 	if (task && task->use_aio)
 		return do_write_aio_linux(fd, offset, iobuf, iobuf_len, task, ioto, wr_ms);
 	else
-		return do_write(fd, offset, iobuf, iobuf_len, task);
+		return do_write(fd, offset, iobuf, iobuf_len, task, wr_ms);
 }
 
 static int _write_sectors(const struct sync_disk *disk, int sector_size, uint64_t sector_nr,
@@ -785,7 +901,7 @@ int read_iobuf(int fd, uint64_t offset, char *iobuf, int iobuf_len,
 	if (task && task->use_aio)
 		return do_read_aio_linux(fd, offset, iobuf, iobuf_len, task, ioto, rd_ms);
 	else
-		return do_read(fd, offset, iobuf, iobuf_len, task);
+		return do_read(fd, offset, iobuf, iobuf_len, task, rd_ms);
 }
 
 /* read sector_count sectors starting with sector_nr, where sector_nr
