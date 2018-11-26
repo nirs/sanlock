@@ -1,23 +1,26 @@
 How to test sanlock
 ===================
 
-To run the python based tests, you need pytest. The best way to install a
+To run the python based tests, you need tox. The best way to install a
 recent version is to use pip:
 
-    $ pip install pytest
+    $ pip install tox
 
-Before running the tests, you need to build wdmd, sanlock, and sanlock
-python bindings:
+To run the tests with python 2.7 and 3.6:
 
-    $ make -C wdmd
-    $ make -C src
-    $ make -C python inplace
+    $ tox
 
-Setup the environment for testing sanlock running sanlcok from source as
-current user:
+Note: python 3.6 tests will fail now, since sanlock extension module needs
+changes to compile on python 3.
 
-    $ source tests/env.sh
+To run only python 2.7:
 
-To run the tests:
+    $ tox -e py27
 
-    $ pytest
+To run only test from some modules:
+
+    $ tox tests/daemon_test.py
+
+To run only tests matching the substring "foo":
+
+    $ tox -- -k foo
