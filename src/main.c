@@ -3669,6 +3669,9 @@ int main(int argc, char *argv[])
 	com.renewal_read_extend_sec = 0;
 	com.renewal_history_size = DEFAULT_RENEWAL_HISTORY_SIZE;
 	com.paxos_debug_all = 0;
+	com.max_sectors_kb_ignore = DEFAULT_MAX_SECTORS_KB_IGNORE;
+	com.max_sectors_kb_align = DEFAULT_MAX_SECTORS_KB_ALIGN;
+	com.max_sectors_kb_num = DEFAULT_MAX_SECTORS_KB_NUM;
 
 	if (getgrnam("sanlock") && getpwnam("sanlock")) {
 		com.uname = (char *)"sanlock";

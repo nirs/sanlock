@@ -330,9 +330,9 @@ EXTERN struct client *client;
 #define DEFAULT_QUIET_FAIL 1
 #define DEFAULT_RENEWAL_HISTORY_SIZE 180 /* about 1 hour with 20 sec renewal interval */
 
-#define DEFAULT_MAX_SECTORS_KB_IGNORE 1  /* don't change it */
-#define DEFAULT_MAX_SECTORS_KB_ALIGN  0  /* set it to align size */
-#define DEFAULT_MAX_SECTORS_KB_NUM    0  /* set it to num KB for all lockspaces */
+#define DEFAULT_MAX_SECTORS_KB_IGNORE 0     /* don't change it */
+#define DEFAULT_MAX_SECTORS_KB_ALIGN  0     /* set it to align size */
+#define DEFAULT_MAX_SECTORS_KB_NUM    1024  /* set it to num KB for all lockspaces */
 
 struct command_line {
 	int type;				/* COM_ */
