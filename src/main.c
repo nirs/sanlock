@@ -1682,8 +1682,12 @@ static int do_daemon(void)
 	if (!privileged)
 		log_warn("Running in unprivileged mode");
 
+	/* If we run as root, make run_dir owned by root, so we can create the
+	 * lockfile when selinux disables DAC_OVERRIDE.
+	 * See https://danwalsh.livejournal.com/79643.html */
 
-	fd = lockfile(run_dir, SANLK_LOCKFILE_NAME, com.uid, com.gid);
+	fd = lockfile(run_dir, SANLK_LOCKFILE_NAME, com.uid,
+		      privileged ? 0 : com.gid);
 	if (fd < 0) {
 		close_logging();
 		return fd;

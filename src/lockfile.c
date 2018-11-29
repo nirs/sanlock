@@ -36,7 +36,10 @@ int lockfile(const char *dir, const char *name, int uid, int gid)
 	mode_t old_umask;
 	int fd, rv;
 
-	old_umask = umask(0022);
+	/* Make rundir group writable, allowing creation of the lockfile when
+	 * starting as root. */
+
+	old_umask = umask(0002);
 	rv = mkdir(dir, 0775);
 	if (rv < 0 && errno != EEXIST) {
 		umask(old_umask);
@@ -85,13 +88,6 @@ int lockfile(const char *dir, const char *name, int uid, int gid)
 	rv = write(fd, buf, strlen(buf));
 	if (rv <= 0) {
 		log_error("lockfile write error %s: %s",
-			  path, strerror(errno));
-		goto fail;
-	}
-
-	rv = fchown(fd, uid, gid);
-	if (rv < 0) {
-		log_error("lockfile fchown error %s: %s",
 			  path, strerror(errno));
 		goto fail;
 	}
