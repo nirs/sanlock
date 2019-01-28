@@ -5,13 +5,13 @@
 # of the GNU General Public License v.2.
 
 all:
-	python setup.py build
+	python2 setup.py build
 
 inplace:
-	python setup.py build_ext --inplace
+	python2 setup.py build_ext --inplace
 
 install:
-	python setup.py install --root=$(DESTDIR)
+	python2 setup.py install --root=$(DESTDIR)
 
 clean:
 	rm -rf build
