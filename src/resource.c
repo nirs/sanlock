@@ -177,18 +177,23 @@ int read_resource_owners(struct task *task, struct token *token,
 
 	/*
 	 * We don't know the sector_size of the resource until the leader
-	 * record has been read, so go with the larger size.
+	 * record has been read, start with the smaller size.
 	 */
 
 	if (!token->sector_size) {
-		token->sector_size = 4096;
-		token->align_size = sector_size_to_align_size_old(4096);
+		token->sector_size = 512;
+		token->align_size = sector_size_to_align_size_old(512);
 	}
 
 	/* we could in-line paxos_read_buf here like we do in read_mode_block */
  retry:
 	rv = paxos_read_buf(task, token, &lease_buf);
-	if (rv < 0) {
+	if (rv == -EMSGSIZE) {
+		/* if an 8M lease was specified, but it's only a 1M lease at
+		   the end of the device, then we'll get an error from a short
+		   read */
+		log_token(token, "read_resource_owners read_buf EMSGSIZE");
+	} else if (rv < 0) {
 		log_errot(token, "read_resource_owners read_buf rv %d", rv);
 
 		if (lease_buf && (rv != SANLK_AIO_TIMEOUT))
