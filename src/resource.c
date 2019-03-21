@@ -188,12 +188,7 @@ int read_resource_owners(struct task *task, struct token *token,
 	/* we could in-line paxos_read_buf here like we do in read_mode_block */
  retry:
 	rv = paxos_read_buf(task, token, &lease_buf);
-	if (rv == -EMSGSIZE) {
-		/* if an 8M lease was specified, but it's only a 1M lease at
-		   the end of the device, then we'll get an error from a short
-		   read */
-		log_token(token, "read_resource_owners read_buf EMSGSIZE");
-	} else if (rv < 0) {
+	if (rv < 0) {
 		log_errot(token, "read_resource_owners read_buf rv %d", rv);
 
 		if (lease_buf && (rv != SANLK_AIO_TIMEOUT))
