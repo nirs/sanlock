@@ -24,7 +24,9 @@ The sanlock daemon manages leases for applications on hosts using shared storage
 %setup -q
 
 %build
+%if 0%{?fedora}
 %set_build_flags
+%endif
 # upstream does not require configure
 # upstream does not support _smp_mflags
 CFLAGS=$RPM_OPT_FLAGS make -C wdmd
