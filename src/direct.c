@@ -569,7 +569,9 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 	uint64_t sector_nr;
 	uint64_t dump_size = 0;
 	uint64_t end_sector_nr;
-	int sector_size, sector_count, datalen, align_size, max_hosts;
+	int sector_size = 0;
+	int align_size = 0;
+	int sector_count, datalen, max_hosts;
 	int i, j, rv, b;
 
 	memset(&sd, 0, sizeof(struct sync_disk));
