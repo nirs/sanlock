@@ -545,6 +545,8 @@ int do_rand_child(void)
 	int iter = 1;
 	int pid = getpid();
 
+	error_count = 0;
+
 	srandom(pid);
 
 	memset(lock_state, 0, sizeof(lock_state));
@@ -637,10 +639,13 @@ int do_rand_child(void)
 	}
 	display_rv(pid);
 
-	if (error_count)
+	if (error_count) {
+		printf("pid %d done error_count %d\n", pid, error_count);
 		exit(EXIT_FAILURE);
+	}
 
-	return 0;
+	printf("pid %d done\n", pid);
+	exit(EXIT_SUCCESS);
 }
 
 int do_all_child(void)
@@ -898,19 +903,27 @@ int do_rand(int argc, char *argv[])
 		sleep(1);
 	}
 
-	printf("stopping pids");
+	printf("stopping pids ");
 
 	for (i = 0; i < pid_count; i++)
 		kill(children[i], SIGTERM);
 
 	while (run_count) {
+		status = 0;
+
 		pid = wait(&status);
 		if (pid > 0) {
 			run_count--;
-			printf(".");
 
-			if (WEXITSTATUS(status))
+			if (!WIFEXITED(status)) {
 				error_count++;
+				printf("-");
+			} else if (WEXITSTATUS(status)) {
+				error_count++;
+				printf("x");
+			} else {
+				printf(".");
+			}
 		}
 	}
 	printf("\n");
