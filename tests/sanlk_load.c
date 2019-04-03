@@ -49,6 +49,10 @@ int res_count = DEFAULT_RES_COUNT;
 int pid_count = DEFAULT_PID_COUNT;
 int one_mode = 0;
 int our_hostid;
+int run_sec;
+int count_sec;
+int error_count;
+int error_range = 1;
 int acquire_rv[MAX_RV];
 int release_rv[MAX_RV];
 
@@ -64,6 +68,7 @@ do { \
 	snprintf(error_buf, 4095, "%ld " fmt "\n", time(NULL), ##args); \
 	printf("ERROR: %s\n", error_buf); \
 	syslog(LOG_ERR, "%s", error_buf); \
+	error_count++; \
 } while (0)
 
 
@@ -112,14 +117,47 @@ static void save_rv(int pid, int rv, int acquire)
 		else
 			release_rv[-rv]++;
 	}
+
+	if (error_range == 1) {
+		switch (rv) {
+		case 0:
+		case -EBUSY:
+			/* -16 */
+		case -EEXIST:
+			/* -17 */
+		case -EAGAIN:
+			/* -11 */
+			break;
+		default:
+			log_error("%d ERROR range %d save_rv %d %d", pid, error_range, rv, acquire);
+			break;
+		};
+
+	} else if (error_range == 2) {
+		switch (rv) {
+		case 0:
+		case -EBUSY:
+			/* -16 */
+		case -EEXIST:
+			/* -17 */
+		case -EAGAIN:
+			/* -11 */
+			break;
+		case -243:
+		case -244:
+		case -245:
+			break;
+		default:
+			log_error("%d ERROR range %d save_rv %d %d", pid, error_range, rv, acquire);
+			break;
+		};
+	}
+
 	return;
 
  fail:
 	log_error("%d save_rv %d %d", pid, rv, acquire);
-	while (1) {
-		sleep(10);
-		printf("%lu %d ERROR save_rv %d %d", time(NULL), pid, rv, acquire);
-	}
+	printf("%lu %d ERROR save_rv %d %d", time(NULL), pid, rv, acquire);
 }
 
 static void display_rv(int pid)
@@ -241,11 +279,10 @@ static int check_lock_state(int pid, int result, int count, char *res_state)
 
 	dump_lock_state(pid);
 
-	while (1) {
-		sleep(10);
-		printf("%lu %d ERROR check_lock_state result %d count %d found %d bad %d res_state %s",
-			time(NULL), pid, result, count, found_count, bad_count, res_state);
-	}
+	printf("%lu %d ERROR check_lock_state result %d count %d found %d bad %d res_state %s",
+		time(NULL), pid, result, count, found_count, bad_count, res_state);
+
+	return -1;
 }
 
 #if 0
@@ -599,6 +636,10 @@ int do_rand_child(void)
 		iter++;
 	}
 	display_rv(pid);
+
+	if (error_count)
+		exit(EXIT_FAILURE);
+
 	return 0;
 }
 
@@ -685,6 +726,9 @@ void get_options(int argc, char *argv[])
 		case 'i':
 			our_hostid = atoi(optionarg);
 			break;
+		case 'S':
+			run_sec = atoi(optionarg);
+			break;
 		case 's':
 			ls_count = atoi(optionarg);
 			if (ls_count > MAX_LS_COUNT) {
@@ -708,6 +752,9 @@ void get_options(int argc, char *argv[])
 			break;
 		case 'm':
 			one_mode = atoi(optionarg);
+			break;
+		case 'e':
+			error_range = atoi(optionarg);
 			break;
 		default:
 			log_error("unknown option: %c", optchar);
@@ -844,6 +891,11 @@ int do_rand(int argc, char *argv[])
 
 		add_lockspace(lsi);
 #endif
+
+		if (run_sec && (count_sec >= run_sec))
+			break;
+		count_sec++;
+		sleep(1);
 	}
 
 	printf("stopping pids");
@@ -856,9 +908,17 @@ int do_rand(int argc, char *argv[])
 		if (pid > 0) {
 			run_count--;
 			printf(".");
+
+			if (WEXITSTATUS(status))
+				error_count++;
 		}
 	}
 	printf("\n");
+
+	if (error_count) {
+		printf("child errors %d\n", error_count);
+		exit(EXIT_FAILURE);
+	}
 
 	return 0;
 }
@@ -921,6 +981,11 @@ int do_all(int argc, char *argv[])
 		}
 	}
 	printf("\n");
+
+	if (error_count) {
+		printf("error_count %d\n", error_count);
+		exit(EXIT_FAILURE);
+	}
 
 	return 0;
 }
@@ -1023,6 +1088,8 @@ int main(int argc, char *argv[])
 	printf("  -r <num>  number of resources per lockspace\n");
 	printf("  -p <num>  number of processes\n");
 	printf("  -m <num>  use one mode for all locks, 3 = SH, 5 = EX\n");
+	printf("  -S <num>  seconds to run (0 unlimited)\n");
+	printf("  -e <num>  error range expected (1 single node, 2 multi node)\n");
 	printf("  -D        debug output\n");
 	printf("  -V        verbose debug output\n");
 	printf("\n");
