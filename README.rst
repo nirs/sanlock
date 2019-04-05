@@ -4,7 +4,8 @@ Mailing list https://lists.fedorahosted.org/admin/lists/sanlock-devel.lists.fedo
 
 From sanlock(8) at sanlock.git/src/sanlock.8
 
-```
+::
+
 SANLOCK(8)                  System Manager's Manual                 SANLOCK(8)
 
 NAME
@@ -67,7 +68,7 @@ DESCRIPTION
          lockspace.
 
        · A  lockspace  is  a series of 2000 delta leases on disk, and requires
-         1MB of storage.
+         1MB of storage.  (See Storage below for size variations.)
 
        · A lockspace can support up to 2000 concurrent hosts  using  it,  each
          using a different delta lease.
@@ -89,240 +90,311 @@ DESCRIPTION
 
        · Each delta lease is a 512 byte sector in the 1MB lockspace, offset by
          its  number,  e.g. delta lease 1 is offset 0, delta lease 2 is offset
-         512, delta lease 2000 is offset 1023488.
+         512, delta lease 2000 is offset 1023488.  (See Storage below for size
+         variations.)
 
-       · When an application joins a lockspace, it must specify the  lockspace
-         name,  the  lockspace  location  on  shared  disk/file, and the local
-         host's host_id.  sanlock then acquires the delta lease  corresponding
-         to  the  host_id,  e.g. joining the lockspace with host_id 1 acquires
+       · When  an application joins a lockspace, it must specify the lockspace
+         name, the lockspace location  on  shared  disk/file,  and  the  local
+         host's  host_id.  sanlock then acquires the delta lease corresponding
+         to the host_id, e.g. joining the lockspace with  host_id  1  acquires
          delta lease 1.
 
-       · The terms delta lease, lockspace lease, and host_id  lease  are  used
+       · The  terms  delta  lease, lockspace lease, and host_id lease are used
          interchangably.
 
-       · sanlock  acquires  a delta lease by writing the host's unique name to
+       · sanlock acquires a delta lease by writing the host's unique  name  to
          the delta lease disk sector, reading it back after a delay, and veri‐
          fying it is the same.
 
-       · If  a  unique host name is not specified, sanlock generates a uuid to
-         use as the host's name.  The delta lease algorithm depends  on  hosts
+       · If a unique host name is not specified, sanlock generates a  uuid  to
+         use  as  the host's name.  The delta lease algorithm depends on hosts
          using unique names.
 
-       · The  application  on  each  host  should  be configured with a unique
+       · The application on each host  should  be  configured  with  a  unique
          host_id, where the host_id is an integer 1-2000.
 
        · If hosts are misconfigured and have the same host_id, the delta lease
          algorithm is designed to detect this conflict, and only one host will
          be able to acquire the delta lease for that host_id.
 
-       · A delta lease ensures that a lockspace host_id is  being  used  by  a
+       · A  delta  lease  ensures  that a lockspace host_id is being used by a
          single host with the unique name specified in the delta lease.
 
-       · Resolving  delta  lease  conflicts  is slow, because the algorithm is
-         based on waiting and watching for some time for other hosts to  write
-         to  the  same  delta  lease sector.  If multiple hosts try to use the
-         same delta lease, the delay is increased substantially.   So,  it  is
-         best  to configure applications to use unique host_id's that will not
+       · Resolving delta lease conflicts is slow,  because  the  algorithm  is
+         based  on waiting and watching for some time for other hosts to write
+         to the same delta lease sector.  If multiple hosts  try  to  use  the
+         same  delta  lease,  the delay is increased substantially.  So, it is
+         best to configure applications to use unique host_id's that will  not
          conflict.
 
        · After sanlock acquires a delta lease, the lease must be renewed until
-         the  application leaves the lockspace (which corresponds to releasing
+         the application leaves the lockspace (which corresponds to  releasing
          the delta lease on the host_id.)
 
-       · sanlock renews delta leases every 20 seconds (by default) by  writing
+       · sanlock  renews delta leases every 20 seconds (by default) by writing
          a new timestamp into the delta lease sector.
 
        · When a host acquires a delta lease in a lockspace, it can be referred
-         to as "joining" the lockspace.  Once it has joined the lockspace,  it
+         to  as "joining" the lockspace.  Once it has joined the lockspace, it
          can use resources associated with the lockspace.
 
        Resources
 
-       · A  lockspace  is  a  context  for  resources  that  can be locked and
+       · A lockspace is a  context  for  resources  that  can  be  locked  and
          unlocked by an application.
 
-       · sanlock uses paxos leases to  implement  leases  on  resources.   The
+       · sanlock  uses  paxos  leases  to  implement leases on resources.  The
          terms paxos lease and resource lease are used interchangably.
 
        · A paxos lease exists on shared storage and requires 1MB of space.  It
          contains a unique resource name and the name of the lockspace.
 
-       · An application assigns its own meaning to a sanlock resource and  the
-         leases  on it.  A sanlock resource could represent some shared object
+       · An  application assigns its own meaning to a sanlock resource and the
+         leases on it.  A sanlock resource could represent some shared  object
          like a file, or some unique role among the hosts.
 
        · Resource leases are associated with a specific lockspace and can only
-         be  used by hosts that have joined that lockspace (they are holding a
+         be used by hosts that have joined that lockspace (they are holding  a
          delta lease on a host_id in that lockspace.)
 
        · An  application  must  keep  track  of  the  disk  locations  of  its
-         lockspaces  and  resources.  sanlock does not maintain any persistent
-         index or directory of lockspaces or resources that have been  created
-         by  applications,  so  applications  need to remember where they have
+         lockspaces and resources.  sanlock does not maintain  any  persistent
+         index  or directory of lockspaces or resources that have been created
+         by applications, so applications need to  remember  where  they  have
          placed their own leases (which files or disks and offsets).
 
-       · sanlock does not renew paxos leases  directly  (although  it  could).
-         Instead,  the  renewal of a host's delta lease represents the renewal
-         of all that host's paxos  leases  in  the  associated  lockspace.  In
-         effect,  many  paxos  lease  renewals are factored out into one delta
+       · sanlock  does  not  renew  paxos leases directly (although it could).
+         Instead, the renewal of a host's delta lease represents  the  renewal
+         of  all  that  host's  paxos  leases  in the associated lockspace. In
+         effect, many paxos lease renewals are factored  out  into  one  delta
          lease renewal.  This reduces i/o when many paxos leases are used.
 
-       · The disk paxos algorithm allows multiple  hosts  to  all  attempt  to
-         acquire  the same paxos lease at once, and will produce a single win‐
-         ner/owner of the resource lease.  (Shared resource  leases  are  also
+       · The  disk  paxos  algorithm  allows  multiple hosts to all attempt to
+         acquire the same paxos lease at once, and will produce a single  win‐
+         ner/owner  of  the  resource lease.  (Shared resource leases are also
          possible in addition to the default exclusive leases.)
 
-       · The  disk paxos algorithm involves a specific sequence of reading and
-         writing the sectors of the paxos lease disk area.  Each  host  has  a
-         dedicated  512  byte  sector  in  the  paxos lease disk area where it
-         writes its own "ballot", and each host reads the entire disk area  to
+       · The disk paxos algorithm involves a specific sequence of reading  and
+         writing  the  sectors  of the paxos lease disk area.  Each host has a
+         dedicated 512 byte sector in the  paxos  lease  disk  area  where  it
+         writes  its own "ballot", and each host reads the entire disk area to
          see the ballots of other hosts.  The first sector of the disk area is
-         the "leader record" that holds the result of the last  paxos  ballot.
+         the  "leader  record" that holds the result of the last paxos ballot.
          The winner of the paxos ballot writes the result of the ballot to the
-         leader record (the winner of the ballot  may  have  selected  another
+         leader  record  (the  winner  of the ballot may have selected another
          contending host as the owner of the paxos lease.)
 
-       · After  a paxos lease is acquired, no further i/o is done in the paxos
+       · After a paxos lease is acquired, no further i/o is done in the  paxos
          lease disk area.
 
-       · Releasing the paxos lease involves writing a single sector  to  clear
+       · Releasing  the  paxos lease involves writing a single sector to clear
          the current owner in the leader record.
 
-       · If  a  host  holding  a paxos lease fails, the disk area of the paxos
-         lease still indicates that the paxos lease is  owned  by  the  failed
+       · If a host holding a paxos lease fails, the disk  area  of  the  paxos
+         lease  still  indicates  that  the paxos lease is owned by the failed
          host.  If another host attempts to acquire the paxos lease, and finds
-         the lease is held by another host_id, it will check the  delta  lease
+         the  lease  is held by another host_id, it will check the delta lease
          of that host_id.  If the delta lease of the host_id is being renewed,
-         then the paxos lease is owned and cannot be acquired.  If  the  delta
-         lease  of  the  owner's  host_id has expired, then the paxos lease is
-         expired and can be taken (by going  through  the  paxos  lease  algo‐
+         then  the  paxos lease is owned and cannot be acquired.  If the delta
+         lease of the owner's host_id has expired, then  the  paxos  lease  is
+         expired  and  can  be  taken  (by going through the paxos lease algo‐
          rithm.)
 
-       · The  "interaction" or "awareness" between hosts of each other is lim‐
-         ited to the case where they attempt to acquire the same paxos  lease,
+       · The "interaction" or "awareness" between hosts of each other is  lim‐
+         ited  to the case where they attempt to acquire the same paxos lease,
          and need to check if the referenced delta lease has expired or not.
 
-       · When  hosts  do  not attempt to lock the same resources concurrently,
-         there is no host interaction or awareness.  The state or  actions  of
+       · When hosts do not attempt to lock the  same  resources  concurrently,
+         there  is  no host interaction or awareness.  The state or actions of
          one host have no effect on others.
 
-       · To  speed  up checking delta lease expiration (in the case of a paxos
-         lease conflict), sanlock keeps track of past renewals of other  delta
+       · To speed up checking delta lease expiration (in the case of  a  paxos
+         lease  conflict), sanlock keeps track of past renewals of other delta
          leases in the lockspace.
+
+       Resource Index
+
+       The resource index (rindex) is an optional sanlock feature that  appli‐
+       cations  can  use to keep track of resource lease offsets.  Without the
+       rindex, an application must keep track of  where  its  resource  leases
+       exist on disk and find available locations when creating new leases.
+
+       The  sanlock  rindex  uses  two  align-size areas on disk following the
+       lockspace.  The first area holds rindex entries; each entry  records  a
+       resource  lease  name  and  location.   The second area holds a private
+       paxos lease, used by sanlock internally to protect rindex updates.
+
+       The application creates the rindex on disk with the "format"  function.
+       Format  is  a  disk-only  operation and does not interact with the live
+       lockspace, so it can be called  without  first  calling  add_lockspace.
+       The application needs to follow the convention of writing the lockspace
+       at the start of the device (offset 0) and formatting the rindex immedi‐
+       ately  following  the lockspace area.  When formatting, the application
+       must set flags for sector size and align size to match  those  for  the
+       lockspace.
+
+       To use the rindex, the application:
+
+       · Uses  the  "create"  function to create a new resource lease on disk.
+         This takes the place of  the  write_resource  function.   The  create
+         function  requires the location of the rindex and the name of the new
+         resource lease.  sanlock finds a free  lease  area,  writes  the  new
+         resource  lease  at  that  location,  updates  the  rindex  with  the
+         name:offset, and returns the offset to the caller.  The  caller  uses
+         this offset when acquiring the resource lease.
+
+       · Uses  the  "delete"  function to remove a resource disk on disk (also
+         corresponding to the write_resource function.)   sanlock  clears  the
+         resource  lease  and  the  rindex entry for it.  A subsequent call to
+         create may use this same  disk  location  for  a  different  resource
+         lease.
+
+       · Uses the "lookup" function to discover the offset of a resource lease
+         given the resource lease name.  The caller would typically call  this
+         prior to acquiring the resource lease.
+
+       · Uses  the  "rebuild" function to recreate the rindex if it is damaged
+         or becomes inconsistent.  This function scans the disk  for  resource
+         leases and creates new rindex entries to match the leases it finds.
+
+       · The  "update" function manipulates rindex entries directly and should
+         not normally be used by the application.  In normal usage, the create
+         and  delete  functions  manipulate  rindex entries.  Update is mainly
+         useful for testing or repairs.
 
        Expiration
 
-       · If  a  host  fails to renew its delta lease, e.g. it looses access to
-         the storage, its delta lease will eventually expire and another  host
+       · If a host fails to renew its delta lease, e.g. it  looses  access  to
+         the  storage, its delta lease will eventually expire and another host
          will be able to take over any resource leases held by the host.  san‐
-         lock must ensure that the application on two different hosts  is  not
+         lock  must  ensure that the application on two different hosts is not
          holding and using the same lease concurrently.
 
-       · When  sanlock has failed to renew a delta lease for a period of time,
-         it will begin taking measures to stop local processes  (applications)
+       · When sanlock has failed to renew a delta lease for a period of  time,
+         it  will begin taking measures to stop local processes (applications)
          from using any resource leases associated with the expiring lockspace
-         delta lease.  sanlock enters this "recovery mode" well ahead  of  the
-         time  when  another  host  could  take over the locally owned leases.
-         sanlock must have sufficient time to stop all  local  processes  that
+         delta  lease.   sanlock enters this "recovery mode" well ahead of the
+         time when another host could take  over  the  locally  owned  leases.
+         sanlock  must  have  sufficient time to stop all local processes that
          are using the expiring leases.
 
-       · sanlock  uses  three  methods  to stop local processes that are using
+       · sanlock uses three methods to stop local  processes  that  are  using
          expiring leases:
 
-         1. Graceful shutdown.  sanlock will  execute  a  "graceful  shutdown"
+         1.  Graceful  shutdown.   sanlock  will execute a "graceful shutdown"
          program that the application previously specified for this case.  The
-         shutdown program tells the  application  to  shut  down  because  its
-         leases  are  expiring.   The application must respond by stopping its
-         activities and releasing its leases (or  exit).   If  an  application
-         does  not  specify a graceful shutdown program, sanlock sends SIGTERM
-         to the process instead.  The process must release its leases or  exit
-         in  a  prescribed amount of time (see -g), or sanlock proceeds to the
+         shutdown  program  tells  the  application  to  shut down because its
+         leases are expiring.  The application must respond  by  stopping  its
+         activities  and  releasing  its  leases (or exit).  If an application
+         does not specify a graceful shutdown program, sanlock  sends  SIGTERM
+         to  the process instead.  The process must release its leases or exit
+         in a prescribed amount of time (see -g), or sanlock proceeds  to  the
          next method of stopping.
 
          2. Forced shutdown.  sanlock will send SIGKILL to processes using the
-         expiring  leases.   The processes have a fixed amount of time to exit
-         after receiving SIGKILL.  If any do not exit in  this  time,  sanlock
+         expiring leases.  The processes have a fixed amount of time  to  exit
+         after  receiving  SIGKILL.   If any do not exit in this time, sanlock
          will proceed to the next method.
 
-         3.  Host  reset.   sanlock will trigger the host's watchdog device to
-         forcibly reset it.  sanlock  carefully  manages  the  timing  of  the
-         watchdog  device so that it fires shortly before any other host could
+         3. Host reset.  sanlock will trigger the host's  watchdog  device  to
+         forcibly  reset  it.   sanlock  carefully  manages  the timing of the
+         watchdog device so that it fires shortly before any other host  could
          take over the resource leases held by local processes.
 
        Failures
 
-       If a process holding resource leases fails or exits  without  releasing
-       its  leases,  sanlock  will  release  the  leases  for it automatically
+       If  a  process holding resource leases fails or exits without releasing
+       its leases, sanlock  will  release  the  leases  for  it  automatically
        (unless persistent resource leases were used.)
 
-       If the sanlock daemon cannot renew a lockspace delta lease for  a  spe‐
-       cific  period  of  time  (see Expiration), sanlock will enter "recovery
-       mode" where it attempts to  stop  and/or  kill  any  processes  holding
-       resource  leases  in  the  expiring lockspace.  If the processes do not
-       exit in time, sanlock will force the host to be reset using  the  local
+       If  the  sanlock daemon cannot renew a lockspace delta lease for a spe‐
+       cific period of time (see Expiration),  sanlock  will  enter  "recovery
+       mode"  where  it  attempts  to  stop  and/or kill any processes holding
+       resource leases in the expiring lockspace.  If  the  processes  do  not
+       exit  in  time, sanlock will force the host to be reset using the local
        watchdog device.
 
-       If  the  sanlock  daemon crashes or hangs, it will not renew the expiry
-       time of the per-lockspace connections it had to the wdmd daemon.   This
-       will  lead to the expiration of the local watchdog device, and the host
+       If the sanlock daemon crashes or hangs, it will not  renew  the  expiry
+       time  of the per-lockspace connections it had to the wdmd daemon.  This
+       will lead to the expiration of the local watchdog device, and the  host
        will be reset.
 
        Watchdog
 
-       sanlock uses the wdmd(8) daemon to access /dev/watchdog.   wdmd  multi‐
-       plexes  multiple  timeouts  onto  the  single  watchdog timer.  This is
+       sanlock  uses  the wdmd(8) daemon to access /dev/watchdog.  wdmd multi‐
+       plexes multiple timeouts onto  the  single  watchdog  timer.   This  is
        required because delta leases for each lockspace are renewed and expire
        independently.
 
-       sanlock  maintains  a  wdmd  connection  for each lockspace delta lease
-       being renewed.  Each connection has an expiry time for some seconds  in
+       sanlock maintains a wdmd connection  for  each  lockspace  delta  lease
+       being  renewed.  Each connection has an expiry time for some seconds in
        the future.  After each successful delta lease renewal, the expiry time
-       is renewed for the associated wdmd connection.  If wdmd finds any  con‐
-       nection  expired,  it  will  not  renew the /dev/watchdog timer.  Given
-       enough successive failed renewals, the watchdog device  will  fire  and
-       reset  the host.  (Given the multiplexing nature of wdmd, shorter over‐
-       lapping renewal failures from multiple lockspaces could cause  spurious
+       is  renewed for the associated wdmd connection.  If wdmd finds any con‐
+       nection expired, it will not  renew  the  /dev/watchdog  timer.   Given
+       enough  successive  failed  renewals, the watchdog device will fire and
+       reset the host.  (Given the multiplexing nature of wdmd, shorter  over‐
+       lapping  renewal failures from multiple lockspaces could cause spurious
        watchdog firing.)
 
        The direct link between delta lease renewals and watchdog renewals pro‐
-       vides a predictable watchdog firing time based on delta  lease  renewal
-       timestamps  that  are visible from other hosts.  sanlock knows the time
-       the watchdog on another host has fired based on the delta  lease  time.
-       Furthermore,  if the watchdog device on another host fails to fire when
+       vides  a  predictable watchdog firing time based on delta lease renewal
+       timestamps that are visible from other hosts.  sanlock knows  the  time
+       the  watchdog  on another host has fired based on the delta lease time.
+       Furthermore, if the watchdog device on another host fails to fire  when
        it should, the continuation of delta lease renewals from the other host
-       will  make  this  evident  and prevent leases from being taken from the
+       will make this evident and prevent leases from  being  taken  from  the
        failed host.
 
-       If sanlock is able  to  stop/kill  all  processing  using  an  expiring
+       If  sanlock  is  able  to  stop/kill  all  processing using an expiring
        lockspace,  the  associated  wdmd  connection  for  that  lockspace  is
-       removed.  The expired wdmd connection will no longer block  /dev/watch‐
+       removed.   The expired wdmd connection will no longer block /dev/watch‐
        dog renewals, and the host should avoid being reset.
 
        Storage
 
-       On  devices  with 512 byte sectors, lockspaces and resources are 1MB in
-       size.  On devices with 4096 byte sectors, lockspaces and resources  are
-       8MB  in size.  sanlock uses 512 byte sectors when shared files are used
-       in place of shared block devices.  Offsets of leases or resources  must
-       be multiples of 1MB/8MB according to the sector size.
+       The sector size and the align size should be  specified  when  creating
+       lockspaces and resources (and rindex).  The "align size" is the size on
+       disk of a lockspace or a resource, i.e. the amount  of  disk  space  it
+       uses.   Lockspaces  and  resources should use matching sector and align
+       sizes, and must use offsets in multiples of the align  size.   The  max
+       number  of  hosts  that  can use a lockspace or resource depends on the
+       combination of sector size and align size, shown below.  The host_id of
+       hosts using the lockspace can be no larger than the max_hosts value for
+       the lockspace.
 
-       Using  sanlock  on shared block devices that do host based mirroring or
-       replication is not likely to work correctly.   When  using  sanlock  on
+       Accepted combinations of sector size and align  size,  and  the  corre‐
+       sponding max_hosts (and max host_id) are:
+
+       sector_size 512, align_size 1M, max_hosts 2000
+       sector_size 4096, align_size 1M, max_hosts 250
+       sector_size 4096, align_size 2M, max_hosts 500
+       sector_size 4096, align_size 4M, max_hosts 1000
+       sector_size 4096, align_size 8M, max_hosts 2000
+
+       When sector_size and align_size are not specified, the behavior matches
+       the behavior before these sizes could be configured: on  devices  which
+       report  sector  size  512, 512/1M/2000 is used, on devices which report
+       sector size 4096, 4096/8M/2000 is used, and on  files,  512/1M/2000  is
+       always  used.  (Other combinations are not compatible with sanlock ver‐
+       sion 3.6 or earlier.)
+
+       Using sanlock on shared block devices that do host based  mirroring  or
+       replication  is  not  likely  to work correctly.  When using sanlock on
        shared files, all sanlock io should go to one file server.
 
        Example
 
-       This  is an example of creating and using lockspaces and resources from
+       This is an example of creating and using lockspaces and resources  from
        the command line.  (Most applications would use sanlock through libsan‐
        lock rather than through the command line.)
 
        1.  Allocate shared storage for sanlock leases.
 
-           This  example assumes 512 byte sectors on the device, in which case
+           This example assumes 512 byte sectors on the device, in which  case
            the lockspace needs 1MB and each resource needs 1MB.
 
-           # vgcreate vg /dev/sdb
-           # lvcreate -n leases -L 1GB vg
+           The  example  shared  block  device  accessible  to  all  hosts  is
+           /dev/leases.
 
        2.  Start sanlock on all hosts.
 
@@ -343,16 +415,16 @@ DESCRIPTION
 
            The lockspace is named "test".
 
-           # sanlock client init -s test:0:/dev/test/leases:0
+           # sanlock client init -s test:0:/dev/leases:0
 
        5.  Join the lockspace for the application.
 
            Use a unique host_id on each host.
 
            host1:
-           # sanlock client add_lockspace -s test:1:/dev/vg/leases:0
+           # sanlock client add_lockspace -s test:1:/dev/leases:0
            host2:
-           # sanlock client add_lockspace -s test:2:/dev/vg/leases:0
+           # sanlock client add_lockspace -s test:2:/dev/leases:0
 
        6.  Create two resources for the application (from one host).
 
@@ -360,8 +432,8 @@ DESCRIPTION
            same device as the lockspace.  Different LVs or files could also be
            used.
 
-           # sanlock client init -r test:RA:/dev/vg/leases:1048576
-           # sanlock client init -r test:RB:/dev/vg/leases:2097152
+           # sanlock client init -r test:RA:/dev/leases:1048576
+           # sanlock client init -r test:RB:/dev/leases:2097152
 
        7.  Acquire resource leases for the application on host1.
 
@@ -369,8 +441,8 @@ DESCRIPTION
            a shared lease (SH) on the second resource.
 
            # export P=`pidof sleep`
-           # sanlock client acquire -r test:RA:/dev/vg/leases:1048576 -p $P
-           # sanlock client acquire -r test:RB:/dev/vg/leases:2097152:SH -p $P
+           # sanlock client acquire -r test:RA:/dev/leases:1048576 -p $P
+           # sanlock client acquire -r test:RB:/dev/leases:2097152:SH -p $P
 
        8.  Acquire resource leases for the application on host2.
 
@@ -379,23 +451,23 @@ DESCRIPTION
            second resource will succeed.
 
            # export P=`pidof sleep`
-           # sanlock client acquire -r test:RA:/dev/vg/leases:1048576 -p $P
-           # sanlock client acquire -r test:RB:/dev/vg/leases:2097152:SH -p $P
+           # sanlock client acquire -r test:RA:/dev/leases:1048576 -p $P
+           # sanlock client acquire -r test:RB:/dev/leases:2097152:SH -p $P
 
        9.  Release resource leases for the application on both hosts.
 
            The sleep pid could also be killed, which will result in  the  san‐
            lock daemon releasing its leases when it exits.
 
-           # sanlock client release -r test:RA:/dev/vg/leases:1048576 -p $P
-           # sanlock client release -r test:RB:/dev/vg/leases:2097152 -p $P
+           # sanlock client release -r test:RA:/dev/leases:1048576 -p $P
+           # sanlock client release -r test:RB:/dev/leases:2097152 -p $P
 
        10. Leave the lockspace for the application.
 
            host1:
-           # sanlock client rem_lockspace -s test:1:/dev/vg/leases:0
+           # sanlock client rem_lockspace -s test:1:/dev/leases:0
            host2:
-           # sanlock client rem_lockspace -s test:2:/dev/vg/leases:0
+           # sanlock client rem_lockspace -s test:2:/dev/leases:0
 
        11. Stop sanlock on all hosts.
 
@@ -484,30 +556,30 @@ OPTIONS
 
        Tell  the  sanlock  daemon  to  initialize a lockspace on disk.  The -o
        option can be used to specify the io  timeout  to  be  written  in  the
-       host_id leases.  (Also see sanlock direct init.)
+       host_id  leases.  The -Z and -A options can be used to specify the sec‐
+       tor size and align size, and both should be set  together.   (Also  see
+       sanlock direct init.)
 
        sanlock client init -r RESOURCE
 
-       Tell  the sanlock daemon to initialize a resource lease on disk.  (Also
-       see sanlock direct init.)
+       Tell the sanlock daemon to initialize a resource lease on disk.  The -Z
+       and -A options can be used to specify the sector size and  align  size,
+       and both should be set together.  (Also see sanlock direct init.)
 
        sanlock client read -s LOCKSPACE
 
-       Tell the sanlock daemon to  read  a  lockspace  from  disk.   Only  the
-       LOCKSPACE  path and offset are required.  If host_id is zero, the first
-       record at offset (host_id 1) is used.  The complete  LOCKSPACE  and  io
-       timeout are printed.
+       Tell  the  sanlock  daemon  to  read  a  lockspace from disk.  Only the
+       LOCKSPACE path and offset are required.  If host_id is zero, the  first
+       record  at  offset  (host_id  1)  is  used.   The complete LOCKSPACE is
+       printed.  Add -D to print other  details.   (Also  see  sanlock  direct
+       read_leader.)
 
        sanlock client read -r RESOURCE
 
        Tell  the  sanlock daemon to read a resource lease from disk.  Only the
        RESOURCE path and  offset  are  required.   The  complete  RESOURCE  is
-       printed.  (Also see sanlock direct read_leader.)
-
-       sanlock client align -s LOCKSPACE
-
-       Tell  the  sanlock  daemon to report the required lease alignment for a
-       storage path.  Only path is used from the LOCKSPACE argument.
+       printed.   Add  -D  to  print  other details.  (Also see sanlock direct
+       read_leader.)
 
        sanlock client add_lockspace -s LOCKSPACE
 
@@ -592,6 +664,35 @@ OPTIONS
        -u 0|1 Set (1) or clear (0) the USED flag.
        -O 0|1 Set (1) or clear (0) the USED_BY_ORPHANS flag.
 
+       sanlock client format -x RINDEX
+
+       Create a resource index on disk.  Use -Z and -A to set the sector  size
+       and align size to match the lockspace.
+
+       sanlock client create -x RINDEX -e resource_name
+
+       Create  a  new  resource lease on disk, using the rindex to find a free
+       offset.
+
+       sanlock client delete -x RINDEX -e resource_name[:offset]
+
+       Delete an existing resource lease on disk.
+
+       sanlock client lookup -x RINDEX -e resource_name
+
+       Look up the offset of an existing resource lease by name on disk, using
+       the rindex.  With no -e option, lookup returns the next free lease off‐
+       set.  If -e specifes both name and offset, the lookup verifies both are
+       correct.
+
+       sanlock client update -x RINDEX -e resource_name[:offset] [-z 0|1]
+
+       Add (-z 0) or remove (-z 1) an rindex entry on disk.
+
+       sanlock client rebuild -x RINDEX
+
+       Rebuild the rindex entries by scanning the disk for resource leases.
+
    Direct Command
        sanlock direct action [options]
 
@@ -600,15 +701,18 @@ OPTIONS
        sanlock direct init -s LOCKSPACE
        sanlock direct init -r RESOURCE
 
-       Initialize storage for  2000  host_id  (delta)  leases  for  the  given
-       lockspace,  or initialize storage for one resource (paxos) lease.  Both
-       options require 1MB of space.  The host_id in the LOCKSPACE  string  is
-       not  relevant to initialization, so the value is ignored.  (The default
-       of 2000 host_ids  can  be  changed  for  special  cases  using  the  -n
-       num_hosts  and -m max_hosts options.)  With -s, the -o option specifies
-       the io timeout to be written in the host_id leases.  With -r, the -z  1
-       option  invalidates  the  resource  lease  on disk so it cannot be used
-       until reinitialized normally.
+       Initialize  storage  for  a  lockspace  or resource.  Use the -Z and -A
+       flags to specify the sector size and align size.  The  max  hosts  that
+       can use the lockspace/resource (and the max possible host_id) is deter‐
+       mined by the sector/align size combination.  Possible combinations are:
+       512/1M,  4096/1M,  4096/2M, 4096/4M, 4096/8M.  Lockspaces and resources
+       both use the same amount of space (align_size)  for  each  combination.
+       When  initializing  a  lockspace,  sanlock initializes delta leases for
+       max_hosts in the given space.  When initializing  a  resource,  sanlock
+       initializes  a single paxos lease in the space.  With -s, the -o option
+       specifies the io timeout to be written in the host_id leases.  With -r,
+       the  -z 1 option invalidates the resource lease on disk so it cannot be
+       used until reinitialized normally.
 
        sanlock direct read_leader -s LOCKSPACE
        sanlock direct read_leader -r RESOURCE
@@ -620,15 +724,24 @@ OPTIONS
        sanlock direct dump path[:offset[:size]]
 
        Read disk sectors and print leader records for delta or  paxos  leases.
-       Add  -f  1  to  print  the  request record values for paxos leases, and
-       host_ids set in delta lease bitmaps.
+       Add  -f 1 to print the request record values for paxos leases, host_ids
+       set in delta lease bitmaps, and rindex entries.
+
+       sanlock direct format -x RINDEX
+       sanlock direct lookup -x RINDEX -e resource_name
+       sanlock direct update -x RINDEX -e resource_name[:offset] [-z 0|1]
+       sanlock direct rebuild -x RINDEX
+
+       Access the resource index on disk without  going  through  the  sanlock
+       daemon.   This  precludes  using  the  internal  paxos lease to protect
+       rindex modifications.  See client equivalents for descriptions.
 
    LOCKSPACE option string
        -s lockspace_name:host_id:path:offset
 
        lockspace_name name of lockspace
        host_id local host identifier in lockspace
-       path path to storage reserved for leases
+       path path to storage to use for leases
        offset offset on path (bytes)
 
    RESOURCE option string
@@ -636,7 +749,7 @@ OPTIONS
 
        lockspace_name name of lockspace
        resource_name name of resource
-       path path to storage reserved for leases
+       path path to storage to use leases
        offset offset on path (bytes)
 
    RESOURCE option string with suffix
@@ -647,6 +760,13 @@ OPTIONS
        -r lockspace_name:resource_name:path:offset:SH
 
        SH indicates shared mode
+
+   RINDEX option string
+       -x lockspace_name:path:offset
+
+       lockspace_name name of lockspace
+       path path to storage to use for leases
+       offset offset on path (bytes) of rindex
 
    Defaults
        sanlock help shows the default values for the options above.
@@ -909,15 +1029,79 @@ INTERNALS
 FILES
        /etc/sanlock/sanlock.conf
 
+       · quiet_fail = 1
+         See -Q
+
+       · debug_renew = 0
+         See -R
+
+       · logfile_priority = 4
+         See -L
+
+       · logfile_use_utc = 0
+         Use UTC instead of local time in log messages.
+
+       · syslog_priority = 3
+         See -S
+
+       · names_log_priority = 4
+         Log resource names at this priority level (uses syslog priority  num‐
+         bers).   If  this  is greater than or equal to logfile_priority, each
+         requested resource name and location is recorded in sanlock.log.
+
+       · use_watchdog = 1
+         See -w
+
+       · high_priority = 1
+         See -h
+
+       · mlock_level = 1
+         See -l
+
+       · sh_retries = 8
+         The number of times to try acquiring a paxos lease when  acquiring  a
+         shared lease when the paxos lease is held by another host acquiring a
+         shared lease.
+
+       · uname = sanlock
+         See -U
+
+       · gname = sanlock
+         See -G
+
+       · our_host_name = <str>
+         See -e
+
+       · renewal_read_extend_sec = <seconds>
+         If a renewal read i/o times out, wait this  many  additional  seconds
+         for  that  read  to  complete  at the start of the subsequent renewal
+         attempt.  When  not  configured,  sanlock  waits  for  an  additional
+         io_timeout seconds for a previous timed out read to complete.
+
+       · renewal_history_size = 180
+         See -H
+
+       · paxos_debug_all = 0
+         Include all details in the paxos debug logging.
+
+       · debug_io = <str>
+         Add  debug logging for each i/o.  "submit" (no quotes) produces debug
+         output at submission time, "complete" produces debug output  at  com‐
+         pletion time, and "submit,complete" (no space) produces both.
+
+       · max_sectors_kb = <str>|<num>
+         Set  to  "ignore"  (no  quotes)  to  prevent sanlock from checking or
+         changing max_sectors_kb  for  the  lockspace  disk  when  starting  a
+         lockspace.   Set to "align" (no quotes) to set max_sectors_kb for the
+         lockspace disk to the align size of the lockspace.  Set to  a  number
+         to set a specific number of KB for all lockspace disks.
+
 SEE ALSO
        wdmd(8)
 
                                   2015-01-23                        SANLOCK(8)
-```
 
-From wdmd(8) at sanlock.git/wdmd/wdmd.8
 
-```
 WDMD(8)                     System Manager's Manual                    WDMD(8)
 
 NAME
@@ -986,15 +1170,18 @@ OPTIONS
 
        --probe, -p
                 Print path of functional watchdog device.  Exit code  0  indi‐
-                cates a functional  device  was  found.  Exit code 1 indicates
-                a functional device was not found.
+              cates a
+                functional  device  was  found.  Exit code 1 indicates a func‐
+              tional device
+                was not found.
 
        -D
                 Enable debugging to stderr and don't fork.
 
        -H 0|1
                 Enable (1) or disable (0) high priority features such as real‐
-                time scheduling priority and mlockall.
+              time
+                scheduling priority and mlockall.
 
        -G name
                 Group ownership for the socket.
@@ -1012,5 +1199,6 @@ OPTIONS
                 The path to the watchdog device to try first.
 
                                   2011-08-01                           WDMD(8)
-```
+
+::
 
