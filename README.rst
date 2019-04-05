@@ -6,15 +6,15 @@ From sanlock(8) at sanlock.git/src/sanlock.8
 
 ::
 
-SANLOCK(8)                  System Manager's Manual                 SANLOCK(8)
+ SANLOCK(8)                  System Manager's Manual                 SANLOCK(8)
 
-NAME
+ NAME
        sanlock - shared storage lock manager
 
-SYNOPSIS
+ SYNOPSIS
        sanlock [COMMAND] [ACTION] ...
 
-DESCRIPTION
+ DESCRIPTION
        sanlock  is  a lock manager built on shared storage.  Hosts with access
        to the storage can perform locking.   An  application  running  on  the
        hosts  is  given  a small amount of space on the shared block device or
@@ -473,7 +473,7 @@ DESCRIPTION
 
            # sanlock shutdown
 
-OPTIONS
+ OPTIONS
        COMMAND can be one of three primary top level choices
 
        sanlock daemon start daemon
@@ -773,7 +773,7 @@ OPTIONS
 
        sanlock version shows the build version.
 
-OTHER
+ OTHER
    Request/Examine
        The first part of making a  request  for  a  resource  is  writing  the
        request  record  of  the  resource  (the  sector  following  the leader
@@ -876,7 +876,7 @@ OTHER
        about 1 hour of history when using a 20 second renewal interval  for  a
        10 second io timeout.
 
-INTERNALS
+ INTERNALS
    Disk Format
        · This example uses 512 byte sectors.
 
@@ -1026,7 +1026,7 @@ INTERNALS
        value  in the paxos_lease becomes expired, and other hosts will use the
        paxos algorithm to acquire the paxos_lease, and set a new owner.
 
-FILES
+ FILES
        /etc/sanlock/sanlock.conf
 
        · quiet_fail = 1
@@ -1096,21 +1096,21 @@ FILES
          lockspace disk to the align size of the lockspace.  Set to  a  number
          to set a specific number of KB for all lockspace disks.
 
-SEE ALSO
+ SEE ALSO
        wdmd(8)
 
                                   2015-01-23                        SANLOCK(8)
 
 
-WDMD(8)                     System Manager's Manual                    WDMD(8)
+ WDMD(8)                     System Manager's Manual                    WDMD(8)
 
-NAME
+ NAME
        wdmd - watchdog multiplexing daemon
 
-SYNOPSIS
+ SYNOPSIS
        wdmd [OPTIONS]
 
-DESCRIPTION
+ DESCRIPTION
        This daemon opens /dev/watchdog and allows multiple independent sources
        to detmermine whether each KEEPALIVE is done.  Every test interval  (10
        seconds),  the  daemon  tests  each  source.   If  any  test fails, the
@@ -1158,7 +1158,7 @@ DESCRIPTION
        failure.  If a script does not exit by the end of the test interval, it
        is considered a failure.
 
-OPTIONS
+ OPTIONS
        --version, -V
                 Print version.
 
