@@ -4,6 +4,8 @@
 # modify, copy, or redistribute it subject to the terms and conditions
 # of the GNU General Public License v2 or (at your option) any later version.
 
+include ../common.mk
+
 CMD_TARGET = wdmd
 LIB_TARGET = libwdmd
 HEADER_TARGET = wdmd.h
@@ -19,33 +21,6 @@ CMD_SOURCE = main.c wdmd_sock.c
 LIB_SOURCE = client.c wdmd_sock.c
 
 TEST_SOURCE = wdmd_client.c
-
-CFLAGS += -D_GNU_SOURCE -O2 -ggdb \
-	-Wall \
-	-Wformat \
-	-Wformat-security \
-	-Wmissing-prototypes \
-	-Wnested-externs \
-	-Wpointer-arith \
-	-Wextra \
-	-Wshadow \
-	-Wcast-align \
-	-Wwrite-strings \
-	-Waggregate-return \
-	-Wstrict-prototypes \
-	-Winline \
-	-Wredundant-decls \
-	-Wno-sign-compare \
-	-Wno-unused-parameter \
-	-Wp,-D_FORTIFY_SOURCE=2 \
-	-Wno-strict-overflow \
-	-fexceptions \
-	-fasynchronous-unwind-tables \
-	-fdiagnostics-show-option \
-	-Wp,-D_GLIBCXX_ASSERTIONS \
-	-fstack-protector-strong \
-	-fstack-clash-protection \
-	-Wl,-z,now
 
 VER=$(shell cat ../VERSION)
 CFLAGS += -DVERSION=\"$(VER)\"

@@ -1,35 +1,10 @@
+include ../common.mk
+
 TARGET1 = sanlk-resetd
 TARGET2 = sanlk-reset
 
 SOURCE1 = sanlk_resetd.c
 SOURCE2 = sanlk_reset.c
-
-CFLAGS += -D_GNU_SOURCE -O2 -ggdb \
-        -Wall \
-        -Wformat \
-        -Wformat-security \
-        -Wmissing-prototypes \
-        -Wnested-externs \
-        -Wpointer-arith \
-        -Wextra \
-        -Wshadow \
-        -Wcast-align \
-        -Wwrite-strings \
-        -Waggregate-return \
-        -Wstrict-prototypes \
-        -Winline \
-        -Wredundant-decls \
-        -Wno-sign-compare \
-        -Wno-unused-parameter \
-        -Wp,-D_FORTIFY_SOURCE=2 \
-        -Wno-strict-overflow \
-        -fexceptions \
-        -fasynchronous-unwind-tables \
-        -fdiagnostics-show-option \
-        -Wp,-D_GLIBCXX_ASSERTIONS \
-        -fstack-protector-strong \
-        -fstack-clash-protection \
-        -Wl,-z,now
 
 VER=$(shell cat ../VERSION)
 CFLAGS += -DVERSION=\"$(VER)\" -I../src -I../wdmd

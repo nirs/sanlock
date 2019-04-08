@@ -10,15 +10,23 @@ endif
 distname := sanlock-$(version)
 tarball := $(distname).tar.gz
 
-all:
-	$(MAKE) -C wdmd
-	$(MAKE) -C src
-	$(MAKE) -C python inplace
+SUBDIRS = wdmd src python reset
 
-clean:
-	$(MAKE) -C wdmd clean
-	$(MAKE) -C src clean
-	$(MAKE) -C python clean
+.PHONY: all $(SUBDIRS) clean install
+
+all: $(SUBDIRS)
+
+$(SUBDIRS):
+	$(MAKE) -C $@
+
+src: wdmd
+
+python reset: src
+
+clean install:
+	for dir in $(SUBDIRS); do \
+		$(MAKE) -C $$dir $@; \
+	done
 
 dist: spec
 	rm -f $(tarball)
