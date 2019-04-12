@@ -16,11 +16,17 @@ from . import util
 
 
 def test_write_lockspace(tmpdir, sanlock_daemon):
-    path = tmpdir.join("lockspace")
+    path = str(tmpdir.join("lockspace"))
     size = 1024**2
-    util.create_file(str(path), size)
+    util.create_file(path, size)
 
-    sanlock.write_lockspace("name", str(path), offset=0)
+    sanlock.write_lockspace("name", path, offset=0, iotimeout=1)
+
+    ls = sanlock.read_lockspace(path, offset=0)
+    assert ls == {"iotimeout": 1, "lockspace": "name"}
+
+    acquired = sanlock.inq_lockspace("name", 1, path, wait=False)
+    assert acquired is False
 
     with io.open(str(path), "rb") as f:
         magic, = struct.unpack("< I", f.read(4))
@@ -32,19 +38,30 @@ def test_write_lockspace(tmpdir, sanlock_daemon):
 
 
 def test_write_resource(tmpdir, sanlock_daemon):
-    path = tmpdir.join("resources")
+    path = str(tmpdir.join("resources"))
     size = 1024**2
-    util.create_file(str(path), size)
+    util.create_file(path, size)
+    disks = [(path, 0)]
 
-    sanlock.write_resource("ls_name", "res_name", [(str(path), 0)])
+    sanlock.write_resource("ls_name", "res_name", disks)
 
-    with io.open(str(path), "rb") as f:
+    res = sanlock.read_resource(path, 0)
+    assert res == {
+        "lockspace": "ls_name",
+        "resource": "res_name",
+        "version": 0
+    }
+
+    owners = sanlock.read_resource_owners("ls_name", "res_name", disks)
+    assert owners == []
+
+    with io.open(path, "rb") as f:
         magic, = struct.unpack("< I", f.read(4))
         assert magic == constants.PAXOS_DISK_MAGIC
 
         # TODO: check more stuff here...
 
-    util.check_guard(str(path), size)
+    util.check_guard(path, size)
 
 
 def test_add_rem_lockspace(tmpdir, sanlock_daemon):
