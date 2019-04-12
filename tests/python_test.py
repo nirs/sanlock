@@ -4,6 +4,7 @@ Test sanlock python binding with sanlock daemon.
 
 import io
 import struct
+import time
 
 import sanlock
 
@@ -41,6 +42,65 @@ def test_write_resource(tmpdir, sanlock_daemon):
         # TODO: check more stuff here...
 
     util.check_guard(str(path), size)
+
+
+def test_add_rem_lockspace(tmpdir, sanlock_daemon):
+    path = str(tmpdir.join("ls_name"))
+    util.create_file(path, 1024**2)
+
+    sanlock.write_lockspace("ls_name", path, iotimeout=1)
+
+    # Since the lockspace is not acquired, we exepect to get False.
+    acquired = sanlock.inq_lockspace("ls_name", 1, path, wait=False)
+    assert acquired is False
+
+    sanlock.add_lockspace("ls_name", 1, path, iotimeout=1)
+
+    # Once the lockspace is acquired, we exepect to get True.
+    acquired = sanlock.inq_lockspace("ls_name", 1, path, wait=False)
+    assert acquired is True
+
+    sanlock.rem_lockspace("ls_name", 1, path)
+
+    # Once the lockspace is released, we exepect to get False.
+    acquired = sanlock.inq_lockspace("ls_name", 1, path, wait=False)
+    assert acquired is False
+
+
+def test_add_rem_lockspace_async(tmpdir, sanlock_daemon):
+    path = str(tmpdir.join("ls_name"))
+    util.create_file(path, 1024**2)
+
+    sanlock.write_lockspace("ls_name", path, iotimeout=1)
+    acquired = sanlock.inq_lockspace("ls_name", 1, path, wait=False)
+    assert acquired is False
+
+    # This will take 3 seconds.
+    sanlock.add_lockspace("ls_name", 1, path, iotimeout=1, **{"async": True})
+
+    # While the lockspace is being aquired, we expect to get None.
+    time.sleep(1)
+    acquired = sanlock.inq_lockspace("ls_name", 1, path, wait=False)
+    assert acquired is None
+
+    # Once the lockspace is acquired, we exepect to get True.
+    acquired = sanlock.inq_lockspace("ls_name", 1, path, wait=True)
+    assert acquired is True
+
+    # This will take about 3 seconds.
+    sanlock.rem_lockspace("ls_name", 1, path, **{"async": True})
+
+    # Wait until the lockspace change state from True to None.
+    while sanlock.inq_lockspace("ls_name", 1, path, wait=False):
+        time.sleep(1)
+
+    # While the lockspace is being released, we expect to get None.
+    acquired = sanlock.inq_lockspace("ls_name", 1, path, wait=False)
+    assert acquired is None
+
+    # Once the lockspace was released, we expect to get False.
+    acquired = sanlock.inq_lockspace("ls_name", 1, path, wait=True)
+    assert acquired is False
 
 
 def test_read_resource_owners(tmpdir, sanlock_daemon):
