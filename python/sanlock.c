@@ -361,7 +361,7 @@ exit_fail:
 /* write_lockspace */
 PyDoc_STRVAR(pydoc_write_lockspace, "\
 write_lockspace(lockspace, path, offset=0, max_hosts=0, iotimeout=0, \
-align=SANLK_LSF_ALIGN1M, sector=SANLK_LSF_SECTOR512)\n\
+align=ALIGN1M, sector=SECTOR512)\n\
 Initialize or update a device to be used as sanlock lockspace.");
 
 static PyObject *
@@ -409,8 +409,7 @@ py_write_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
 /* read_lockspace */
 PyDoc_STRVAR(pydoc_read_lockspace, "\
-read_lockspace(path, offset=0 \
-align=SANLK_LSF_ALIGN1M, sector=SANLK_LSF_SECTOR512)\n -> dict\n\
+read_lockspace(path, offset=0, align=ALIGN1M, sector=SECTOR512)\n -> dict\n\
 Read the lockspace information from a device at a specific offset.");
 
 static PyObject *
@@ -482,15 +481,14 @@ exit_fail:
 
 /* read_resource */
 PyDoc_STRVAR(pydoc_read_resource, "\
-read_resource(path, offset=0, \
-align=SANLK_LSF_ALIGN1M, sector=SANLK_LSF_SECTOR512) -> dict\n\
+read_resource(path, offset=0, align=ALIGN1M, sector=SECTOR512) -> dict\n\
 Read the resource information from a device at a specific offset.");
 
 static PyObject *
 py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
     int rv, rs_len;
-    uint32_t  align=SANLK_LSF_ALIGN1M, sector=SANLK_LSF_SECTOR512;
+    uint32_t  align=SANLK_RES_ALIGN1M, sector=SANLK_RES_SECTOR512;
     const char *path;
     struct sanlk_resource *rs;
     PyObject *rs_info = NULL, *rs_entry = NULL;
@@ -575,7 +573,7 @@ exit_fail:
 /* write_resource */
 PyDoc_STRVAR(pydoc_write_resource, "\
 write_resource(lockspace, resource, disks, max_hosts=0, num_hosts=0, \
-clear=False, align=SANLK_LSF_ALIGN1M, sector=SANLK_LSF_SECTOR512)\n\
+clear=False, align=ALIGN1M, sector=SECTOR512)\n\
 Initialize a device to be used as sanlock resource.\n\
 The disks must be in the format: [(path, offset), ... ].\n\
 If clear is True, the resource is cleared so subsequent read will\n\
@@ -585,7 +583,7 @@ static PyObject *
 py_write_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
     int rv, max_hosts = 0, num_hosts = 0, clear = 0;
-    uint32_t  align=SANLK_LSF_ALIGN1M, sector=SANLK_LSF_SECTOR512;
+    uint32_t  align=SANLK_RES_ALIGN1M, sector=SANLK_RES_SECTOR512;
     const char *lockspace, *resource;
     struct sanlk_resource *rs;
     PyObject *disks;
@@ -1656,12 +1654,12 @@ initsanlock(void)
     PYSNLK_INIT_ADD_CONSTANT(SANLK_SETEV_ALL_HOSTS,      "SETEV_ALL_HOSTS");
 
     /* Sector and align size flags */
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_SECTOR512, "SANLK_RES_SECTOR512");
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_SECTOR4K, "SANLK_RES_SECTOR4K");
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_ALIGN1M, "SANLK_RES_ALIGN1M");
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_ALIGN2M, "SANLK_RES_ALIGN2M");
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_ALIGN4M, "SANLK_RES_ALIGN4M");
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_ALIGN8M, "SANLK_RES_ALIGN8M");
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_SECTOR512, "SECTOR512");
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_SECTOR4K, "SECTOR4K");
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_ALIGN1M, "ALIGN1M");
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_ALIGN2M, "ALIGN2M");
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_ALIGN4M, "ALIGN4M");
+    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_ALIGN8M, "ALIGN8M");
 
 #undef PYSNLK_INIT_ADD_CONSTANT
 }
