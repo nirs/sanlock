@@ -5,10 +5,7 @@
 # of the GNU General Public License v.2.
 
 all:
-	python2 setup.py build
-
-inplace:
-	python2 setup.py build_ext --inplace
+	python2 setup.py build $(BUILDARGS)
 
 install:
 	python2 setup.py install --root=$(DESTDIR)
