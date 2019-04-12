@@ -27,7 +27,7 @@ def test_write_lockspace(tmpdir, sanlock_daemon):
     util.check_guard(str(path), size)
 
 
-def test_init_resource(tmpdir, sanlock_daemon):
+def test_write_resource(tmpdir, sanlock_daemon):
     path = tmpdir.join("resources")
     size = 1024**2
     util.create_file(str(path), size)
