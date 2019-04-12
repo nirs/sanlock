@@ -2,9 +2,12 @@
 Test sanlock python binding with sanlock daemon.
 """
 
+import errno
 import io
 import struct
 import time
+
+import pytest
 
 import sanlock
 
@@ -103,12 +106,68 @@ def test_add_rem_lockspace_async(tmpdir, sanlock_daemon):
     assert acquired is False
 
 
-def test_read_resource_owners(tmpdir, sanlock_daemon):
-    path = tmpdir.join("resources")
-    size = 1024**2
-    util.create_file(str(path), size)
-    disks = [(str(path), 0)]
+def test_acquire_release_resource(tmpdir, sanlock_daemon):
+    ls_path = str(tmpdir.join("ls_name"))
+    util.create_file(ls_path, 1024**2)
+
+    res_path = str(tmpdir.join("res_name"))
+    util.create_file(res_path, 1024**2)
+
+    sanlock.write_lockspace("ls_name", ls_path, iotimeout=1)
+    sanlock.add_lockspace("ls_name", 1, ls_path, iotimeout=1)
+
+    # Host status is not available until the first renewal.
+    with pytest.raises(sanlock.SanlockException) as e:
+        sanlock.get_hosts("ls_name", 1)
+    assert e.value.errno == errno.EAGAIN
+
+    time.sleep(1)
+    host = sanlock.get_hosts("ls_name", 1)[0]
+    assert host["flags"] == sanlock.HOST_LIVE
+
+    disks = [(res_path, 0)]
     sanlock.write_resource("ls_name", "res_name", disks)
 
-    res = sanlock.read_resource_owners("ls_name", "res_name", disks)
-    assert res == []
+    res = sanlock.read_resource(res_path, 0)
+    assert res == {
+        "lockspace": "ls_name",
+        "resource": "res_name",
+        "version": 0
+    }
+
+    owners = sanlock.read_resource_owners("ls_name", "res_name", disks)
+    assert owners == []
+
+    fd = sanlock.register()
+    sanlock.acquire("ls_name", "res_name", disks, slkfd=fd)
+
+    res = sanlock.read_resource(res_path, 0)
+    assert res == {
+        "lockspace": "ls_name",
+        "resource": "res_name",
+        "version": 1
+    }
+
+    owner = sanlock.read_resource_owners("ls_name", "res_name", disks)[0]
+
+    assert owner["host_id"] == 1
+    assert owner["flags"] == 0
+    assert owner["generation"] == 1
+    assert owner["io_timeout"] == 0  # Why 0?
+    # TODO: check timestamp.
+
+    host = sanlock.get_hosts("ls_name", 1)[0]
+    assert host["flags"] == sanlock.HOST_LIVE
+    assert host["generation"] == owner["generation"]
+
+    sanlock.release("ls_name", "res_name", disks, slkfd=fd)
+
+    res = sanlock.read_resource(res_path, 0)
+    assert res == {
+        "lockspace": "ls_name",
+        "resource": "res_name",
+        "version": 1
+    }
+
+    owners = sanlock.read_resource_owners("ls_name", "res_name", disks)
+    assert owners == []
