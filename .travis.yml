@@ -4,17 +4,11 @@ python: 2.7
 
 addons:
   apt:
-    sources:
-    - ubuntu-toolchain-r-test
     packages:
-    - gcc-8
-
-before_install:
-    - sudo apt-get -qq update
-    - sudo apt-get install -y make gcc libaio-dev libblkid-dev
-
-env:
-    - CC="gcc-8"
+    - gcc
+    - libaio-dev
+    - libblkid-dev
+    - make
 
 script:
     - make BUILDARGS="--build-lib=."
