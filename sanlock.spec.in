@@ -25,6 +25,15 @@ Requires(preun): systemd-units
 Requires(postun): systemd-units
 Source0:        https://releases.pagure.org/sanlock/%{name}-%{version}.tar.gz
 
+# On Fedora we switched sanlock-python to python2-sanlock, as part of python 3
+# porting. This change was not done yet for RHEL.
+# TODO: remove when RHEL switches to pythonN-sanlock.
+%if 0%{?fedora}
+%global python_package python2-%{name}
+%else # centos/rhel
+%global python_package %{name}-python
+%endif
+
 %description
 The sanlock daemon manages leases for applications on hosts using shared storage.
 
@@ -127,21 +136,23 @@ access to the shared disks.
 %{_libdir}/libsanlock_client.so.*
 %{_libdir}/libwdmd.so.*
 
-%package        -n python2-sanlock
-%{?python_provide:%python_provide python2-sanlock}
+%package        -n %{python_package}
+Summary:        Python bindings for the sanlock library
+Requires:       %{name}-lib = %{version}-%{release}
+%if 0%{?fedora}
+%{?python_provide:%python_provide python2-%{name}}
 # Remove before F30
 Provides: %{name}-python = %{version}-%{release}
 Provides: %{name}-python%{?_isa} = %{version}-%{release}
 Obsoletes: %{name}-python < %{version}-%{release}
-Summary:        Python bindings for the sanlock library
-Requires:       %{name}-lib = %{version}-%{release}
+%endif # fedora
 
-%description    -n python2-sanlock
-The %{name}-python package contains a module that permits applications
+%description    -n %{python_package}
+The %{python_package} package contains a module that permits applications
 written in the Python programming language to use the interface
 supplied by the sanlock library.
 
-%files          -n python2-sanlock
+%files          -n %{python_package}
 %{python2_sitearch}/sanlock_python-*.egg-info
 %{python2_sitearch}/sanlock.so
 
