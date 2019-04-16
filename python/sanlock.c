@@ -746,8 +746,9 @@ rem_lockspace(lockspace, host_id, path, offset=0, async=False, unused=False)\n\
 Remove a lockspace, releasing the acquired host_id. If async is True the\n\
 function will return immediately and the status can be checked using\n\
 inq_lockspace. If unused is True the command will fail (EBUSY) if there is\n\
-at least one acquired resource in the lockspace (instead of automatically\n\
-release it).");
+at least one acquired resource in the lockspace. Otherwise (the default)\n\
+sanlock will try to terminate processes holding resource leases and upon\n\
+successful termination these leases will be released.");
 
 static PyObject *
 py_rem_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
