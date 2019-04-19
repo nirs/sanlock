@@ -28,13 +28,13 @@ def test_write_lockspace(tmpdir, sanlock_daemon):
     acquired = sanlock.inq_lockspace("name", 1, path, wait=False)
     assert acquired is False
 
-    with io.open(str(path), "rb") as f:
+    with io.open(path, "rb") as f:
         magic, = struct.unpack("< I", f.read(4))
         assert magic == constants.DELTA_DISK_MAGIC
 
         # TODO: check more stuff here...
 
-    util.check_guard(str(path), size)
+    util.check_guard(path, size)
 
 
 def test_write_resource(tmpdir, sanlock_daemon):
