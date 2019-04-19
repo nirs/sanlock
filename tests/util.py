@@ -97,11 +97,9 @@ def wait_for_termination(p, timeout):
         time.sleep(0.05)
 
 
-def create_file(path, size, poison=b"x", guard=b"X", guard_size=4096):
+def create_file(path, size, guard=b"X", guard_size=4096):
     """
-    Create file filled with poison byte.
-
-    To create an empty file, set poison to None.
+    Create sparse file of size bytes.
 
     If guard is set, add a guard area after the end of the file and fill it
     with guard bytes. This allows testing that the code under test do not write
@@ -109,11 +107,9 @@ def create_file(path, size, poison=b"x", guard=b"X", guard_size=4096):
     """
     with io.open(path, "wb") as f:
         f.truncate(size)
-        if poison:
-            f.write(poison * size)
         if guard:
             f.seek(size)
-            f.write(guard * 4096)
+            f.write(guard * guard_size)
 
 
 def check_guard(path, size, guard=b"X", guard_size=4096):
