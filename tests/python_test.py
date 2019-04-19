@@ -14,21 +14,37 @@ import sanlock
 from . import constants
 from . import util
 
+# Largest file size on ext4 is 16TiB, and on xfs 500 TiB. Use 1 TiB as it is
+# large enough to test large offsets, and less likely to fail on developer
+# machine or CI slave.
+# See https://access.redhat.com/articles/rhel-limits
+LARGE_FILE_SIZE = 1024**4
 
-def test_write_lockspace(tmpdir, sanlock_daemon):
+LOCKSPACE_SIZE = 1024**2
+MIN_RES_SIZE = 1024**2
+
+
+@pytest.mark.parametrize("size,offset", [
+    # Smallest offset.
+    (LOCKSPACE_SIZE, 0),
+    # Large offset.
+    (LARGE_FILE_SIZE, LARGE_FILE_SIZE - LOCKSPACE_SIZE),
+])
+def test_write_lockspace(tmpdir, sanlock_daemon, size, offset):
     path = str(tmpdir.join("lockspace"))
-    size = 1024**2
     util.create_file(path, size)
 
-    sanlock.write_lockspace("name", path, offset=0, iotimeout=1)
+    sanlock.write_lockspace("name", path, offset=offset, iotimeout=1)
 
-    ls = sanlock.read_lockspace(path, offset=0)
+    ls = sanlock.read_lockspace(path, offset=offset)
     assert ls == {"iotimeout": 1, "lockspace": "name"}
 
-    acquired = sanlock.inq_lockspace("name", 1, path, wait=False)
+    acquired = sanlock.inq_lockspace(
+        "name", 1, path, offset=offset, wait=False)
     assert acquired is False
 
     with io.open(path, "rb") as f:
+        f.seek(offset)
         magic, = struct.unpack("< I", f.read(4))
         assert magic == constants.DELTA_DISK_MAGIC
 
@@ -37,15 +53,20 @@ def test_write_lockspace(tmpdir, sanlock_daemon):
     util.check_guard(path, size)
 
 
-def test_write_resource(tmpdir, sanlock_daemon):
+@pytest.mark.parametrize("size,offset", [
+    # Smallest offset.
+    (MIN_RES_SIZE, 0),
+    # Large offset.
+    (LARGE_FILE_SIZE, LARGE_FILE_SIZE - MIN_RES_SIZE),
+])
+def test_write_resource(tmpdir, sanlock_daemon, size, offset):
     path = str(tmpdir.join("resources"))
-    size = 1024**2
     util.create_file(path, size)
-    disks = [(path, 0)]
+    disks = [(path, offset)]
 
     sanlock.write_resource("ls_name", "res_name", disks)
 
-    res = sanlock.read_resource(path, 0)
+    res = sanlock.read_resource(path, offset=offset)
     assert res == {
         "lockspace": "ls_name",
         "resource": "res_name",
@@ -56,6 +77,7 @@ def test_write_resource(tmpdir, sanlock_daemon):
     assert owners == []
 
     with io.open(path, "rb") as f:
+        f.seek(offset)
         magic, = struct.unpack("< I", f.read(4))
         assert magic == constants.PAXOS_DISK_MAGIC
 
@@ -64,26 +86,35 @@ def test_write_resource(tmpdir, sanlock_daemon):
     util.check_guard(path, size)
 
 
-def test_add_rem_lockspace(tmpdir, sanlock_daemon):
+@pytest.mark.parametrize("size,offset", [
+    # Smallest offset.
+    (MIN_RES_SIZE, 0),
+    # Large offset.
+    (LARGE_FILE_SIZE, LARGE_FILE_SIZE - MIN_RES_SIZE),
+])
+def test_add_rem_lockspace(tmpdir, sanlock_daemon, size, offset):
     path = str(tmpdir.join("ls_name"))
-    util.create_file(path, 1024**2)
+    util.create_file(path, size)
 
-    sanlock.write_lockspace("ls_name", path, iotimeout=1)
+    sanlock.write_lockspace("ls_name", path, offset=offset, iotimeout=1)
 
     # Since the lockspace is not acquired, we exepect to get False.
-    acquired = sanlock.inq_lockspace("ls_name", 1, path, wait=False)
+    acquired = sanlock.inq_lockspace(
+        "ls_name", 1, path, offset=offset, wait=False)
     assert acquired is False
 
-    sanlock.add_lockspace("ls_name", 1, path, iotimeout=1)
+    sanlock.add_lockspace("ls_name", 1, path, offset=offset, iotimeout=1)
 
     # Once the lockspace is acquired, we exepect to get True.
-    acquired = sanlock.inq_lockspace("ls_name", 1, path, wait=False)
+    acquired = sanlock.inq_lockspace(
+        "ls_name", 1, path, offset=offset, wait=False)
     assert acquired is True
 
-    sanlock.rem_lockspace("ls_name", 1, path)
+    sanlock.rem_lockspace("ls_name", 1, path, offset=offset)
 
     # Once the lockspace is released, we exepect to get False.
-    acquired = sanlock.inq_lockspace("ls_name", 1, path, wait=False)
+    acquired = sanlock.inq_lockspace(
+        "ls_name", 1, path, offset=offset, wait=False)
     assert acquired is False
 
 
@@ -123,15 +154,21 @@ def test_add_rem_lockspace_async(tmpdir, sanlock_daemon):
     assert acquired is False
 
 
-def test_acquire_release_resource(tmpdir, sanlock_daemon):
+@pytest.mark.parametrize("size,offset", [
+    # Smallest offset.
+    (MIN_RES_SIZE, 0),
+    # Large offset.
+    (LARGE_FILE_SIZE, LARGE_FILE_SIZE - MIN_RES_SIZE),
+])
+def test_acquire_release_resource(tmpdir, sanlock_daemon, size, offset):
     ls_path = str(tmpdir.join("ls_name"))
-    util.create_file(ls_path, 1024**2)
+    util.create_file(ls_path, size)
 
     res_path = str(tmpdir.join("res_name"))
-    util.create_file(res_path, 1024**2)
+    util.create_file(res_path, size)
 
-    sanlock.write_lockspace("ls_name", ls_path, iotimeout=1)
-    sanlock.add_lockspace("ls_name", 1, ls_path, iotimeout=1)
+    sanlock.write_lockspace("ls_name", ls_path, offset=offset, iotimeout=1)
+    sanlock.add_lockspace("ls_name", 1, ls_path, offset=offset, iotimeout=1)
 
     # Host status is not available until the first renewal.
     with pytest.raises(sanlock.SanlockException) as e:
@@ -142,10 +179,10 @@ def test_acquire_release_resource(tmpdir, sanlock_daemon):
     host = sanlock.get_hosts("ls_name", 1)[0]
     assert host["flags"] == sanlock.HOST_LIVE
 
-    disks = [(res_path, 0)]
+    disks = [(res_path, offset)]
     sanlock.write_resource("ls_name", "res_name", disks)
 
-    res = sanlock.read_resource(res_path, 0)
+    res = sanlock.read_resource(res_path, offset=offset)
     assert res == {
         "lockspace": "ls_name",
         "resource": "res_name",
@@ -158,7 +195,7 @@ def test_acquire_release_resource(tmpdir, sanlock_daemon):
     fd = sanlock.register()
     sanlock.acquire("ls_name", "res_name", disks, slkfd=fd)
 
-    res = sanlock.read_resource(res_path, 0)
+    res = sanlock.read_resource(res_path, offset=offset)
     assert res == {
         "lockspace": "ls_name",
         "resource": "res_name",
@@ -179,7 +216,7 @@ def test_acquire_release_resource(tmpdir, sanlock_daemon):
 
     sanlock.release("ls_name", "res_name", disks, slkfd=fd)
 
-    res = sanlock.read_resource(res_path, 0)
+    res = sanlock.read_resource(res_path, offset=offset)
     assert res == {
         "lockspace": "ls_name",
         "resource": "res_name",
