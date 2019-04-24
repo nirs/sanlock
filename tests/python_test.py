@@ -29,15 +29,18 @@ ALIGNMENT_2M = 2 * 1024**2
 SECTOR_SIZE_512 = 512
 SECTOR_SIZE_4K = 4096
 
+TestParams=[
+        #size,offset,filename,encoding
+        (LOCKSPACE_SIZE, 0, u"ascii", None),
+        (LOCKSPACE_SIZE, 0, u"\u05d0", None),
+        (LARGE_FILE_SIZE, LARGE_FILE_SIZE - LOCKSPACE_SIZE, "ascii", None),
+        (LARGE_FILE_SIZE, LARGE_FILE_SIZE - LOCKSPACE_SIZE, u"\u05d0", "utf-8"),
+]
 
-@pytest.mark.parametrize("size,offset", [
-    # Smallest offset.
-    (LOCKSPACE_SIZE, 0),
-    # Large offset.
-    (LARGE_FILE_SIZE, LARGE_FILE_SIZE - LOCKSPACE_SIZE),
-])
-def test_write_lockspace(tmpdir, sanlock_daemon, size, offset):
-    path = str(tmpdir.join("lockspace"))
+
+@pytest.mark.parametrize("size,offset,filename,encoding", TestParams)
+def test_write_lockspace(tmpdir, sanlock_daemon, size, offset, filename, encoding):
+    path = util.generate_path(tmpdir, filename, encoding)
     util.create_file(path, size)
 
     # Test read and write with default alignment and sector size values.
@@ -114,14 +117,9 @@ def test_read_lockspace_4k_invalid_sector_size(sanlock_daemon, user_4k_path):
     assert e.value.errno == errno.EINVAL
 
 
-@pytest.mark.parametrize("size,offset", [
-    # Smallest offset.
-    (MIN_RES_SIZE, 0),
-    # Large offset.
-    (LARGE_FILE_SIZE, LARGE_FILE_SIZE - MIN_RES_SIZE),
-])
-def test_write_resource(tmpdir, sanlock_daemon, size, offset):
-    path = str(tmpdir.join("resources"))
+@pytest.mark.parametrize("size,offset,filename,encoding", TestParams)
+def test_write_resource(tmpdir, sanlock_daemon, size, offset, filename, encoding):
+    path = util.generate_path(tmpdir, filename, encoding)
     util.create_file(path, size)
     disks = [(path, offset)]
 
@@ -260,14 +258,9 @@ def test_read_resource_owners_invalid_align_size(tmpdir, sanlock_daemon):
     assert e.value.errno == errno.EINVAL
 
 
-@pytest.mark.parametrize("size,offset", [
-    # Smallest offset.
-    (MIN_RES_SIZE, 0),
-    # Large offset.
-    (LARGE_FILE_SIZE, LARGE_FILE_SIZE - MIN_RES_SIZE),
-])
-def test_add_rem_lockspace(tmpdir, sanlock_daemon, size, offset):
-    path = str(tmpdir.join("ls_name"))
+@pytest.mark.parametrize("size,offset,filename,encoding", TestParams) 
+def test_add_rem_lockspace(tmpdir, sanlock_daemon, size, offset, filename, encoding):
+    path = util.generate_path(tmpdir, filename, encoding)
     util.create_file(path, size)
 
     sanlock.write_lockspace("ls_name", path, offset=offset, iotimeout=1)
