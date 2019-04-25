@@ -29,10 +29,10 @@ def main():
     fd = sanlock.register()
 
     print "Initializing '%s'" % (LOCKSPACE_NAME,)
-    sanlock.write_lockspace(LOCKSPACE_NAME, disk, max_hosts=0, iotimeout=0, align=sanlock.ALIGN1M, sector=sanlock.SECTOR512)
+    sanlock.write_lockspace(LOCKSPACE_NAME, disk, max_hosts=0, iotimeout=0, align=1048576, sector=512)
 
     print "Initializing '%s' on '%s'" % (RESOURCE_NAME, LOCKSPACE_NAME)
-    sanlock.write_resource(LOCKSPACE_NAME, RESOURCE_NAME, SNLK_DISKS, align=sanlock.ALIGN1M, sector=sanlock.SECTOR512)
+    sanlock.write_resource(LOCKSPACE_NAME, RESOURCE_NAME, SNLK_DISKS, align=1048576, sector=512)
 
     print "Acquiring the id '%i' on '%s'" % (HOST_ID, LOCKSPACE_NAME)
     sanlock.add_lockspace(LOCKSPACE_NAME, HOST_ID, disk)

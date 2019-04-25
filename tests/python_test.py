@@ -23,6 +23,9 @@ LARGE_FILE_SIZE = 1024**4
 LOCKSPACE_SIZE = 1024**2
 MIN_RES_SIZE = 1024**2
 
+ALIGNMENT_1M = 1024**2
+SECTOR_SIZE_512 = 512
+
 
 @pytest.mark.parametrize("size,offset", [
     # Smallest offset.
@@ -34,9 +37,19 @@ def test_write_lockspace(tmpdir, sanlock_daemon, size, offset):
     path = str(tmpdir.join("lockspace"))
     util.create_file(path, size)
 
+    # test read and write with default alignment and sector size values
     sanlock.write_lockspace("name", path, offset=offset, iotimeout=1)
 
     ls = sanlock.read_lockspace(path, offset=offset)
+    assert ls == {"iotimeout": 1, "lockspace": "name"}
+
+    # test read and write with explicit alignment and sector size values
+    sanlock.write_lockspace(
+        "name", path, offset=offset, iotimeout=1, align=ALIGNMENT_1M,
+        sector=SECTOR_SIZE_512)
+
+    ls = sanlock.read_lockspace(
+        path, offset=offset, align=ALIGNMENT_1M, sector=SECTOR_SIZE_512)
     assert ls == {"iotimeout": 1, "lockspace": "name"}
 
     acquired = sanlock.inq_lockspace(
@@ -64,9 +77,23 @@ def test_write_resource(tmpdir, sanlock_daemon, size, offset):
     util.create_file(path, size)
     disks = [(path, offset)]
 
+    # test read and write with default alignment and sector size values
     sanlock.write_resource("ls_name", "res_name", disks)
 
     res = sanlock.read_resource(path, offset=offset)
+    assert res == {
+        "lockspace": "ls_name",
+        "resource": "res_name",
+        "version": 0
+    }
+
+    # test read and write with explicit alignment and sector size values
+    sanlock.write_resource(
+        "ls_name", "res_name", disks, align=ALIGNMENT_1M,
+        sector=SECTOR_SIZE_512)
+
+    res = sanlock.read_resource(
+        path, offset=offset, align=ALIGNMENT_1M, sector=SECTOR_SIZE_512)
     assert res == {
         "lockspace": "ls_name",
         "resource": "res_name",
@@ -225,3 +252,35 @@ def test_acquire_release_resource(tmpdir, sanlock_daemon, size, offset):
 
     owners = sanlock.read_resource_owners("ls_name", "res_name", disks)
     assert owners == []
+
+
+@pytest.mark.parametrize("align, sector", [
+    # Invalid alignment
+    (1024, 512),
+    # Invalid sector size
+    (1048576, 8192),
+])
+def test_write_lockspace_invalid_align_sector(
+        tmpdir, sanlock_daemon, align, sector):
+    path = str(tmpdir.join("lockspace"))
+    util.create_file(path, LOCKSPACE_SIZE)
+
+    with pytest.raises(ValueError):
+        sanlock.write_lockspace("name", path, align=align, sector=sector)
+
+
+@pytest.mark.parametrize("align, sector", [
+    # Invalid alignment
+    (1024, 512),
+    # Invalid sector size
+    (1048576, 8192),
+])
+def test_write_resource_invalid_align_sector(
+        tmpdir, sanlock_daemon, align, sector):
+    path = str(tmpdir.join("resources"))
+    util.create_file(path, MIN_RES_SIZE)
+    disks = [(path, 0)]
+
+    with pytest.raises(ValueError):
+        sanlock.write_resource(
+            "ls_name", "res_name", disks, align=align, sector=sector)
