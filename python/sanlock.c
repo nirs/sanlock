@@ -1729,4 +1729,22 @@ initsanlock(void)
     PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_ALIGN8M, "ALIGN8M");
 
 #undef PYSNLK_INIT_ADD_CONSTANT
+
+    /* Tuples with supported sector size and alignment values */
+    PyObject *sector = Py_BuildValue("ii", SECTOR_SIZE_512, SECTOR_SIZE_4K);
+    if (!sector)
+        return;
+    if (PyModule_AddObject(py_module, "SECTOR_SIZE", sector)) {
+        Py_DECREF(sector);
+        return;
+    }
+      
+    PyObject *align = Py_BuildValue("llll", ALIGNMENT_1M, ALIGNMENT_2M, ALIGNMENT_4M, ALIGNMENT_8M);
+    if (!align)
+      return;
+    if (PyModule_AddObject(py_module, "ALIGN_SIZE", align)) {
+        Py_DECREF(align);
+	return;
+    }
+
 }

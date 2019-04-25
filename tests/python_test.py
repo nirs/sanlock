@@ -256,9 +256,9 @@ def test_acquire_release_resource(tmpdir, sanlock_daemon, size, offset):
 
 @pytest.mark.parametrize("align, sector", [
     # Invalid alignment
-    (1024, 512),
+    (1024, sanlock.SECTOR_SIZE[0]),
     # Invalid sector size
-    (1048576, 8192),
+    (sanlock.ALIGN_SIZE[0], 8192),
 ])
 def test_write_lockspace_invalid_align_sector(
         tmpdir, sanlock_daemon, align, sector):
@@ -271,9 +271,9 @@ def test_write_lockspace_invalid_align_sector(
 
 @pytest.mark.parametrize("align, sector", [
     # Invalid alignment
-    (1024, 512),
+    (1024, sanlock.SECTOR_SIZE[0]),
     # Invalid sector size
-    (1048576, 8192),
+    (sanlock.ALIGN_SIZE[0], 8192),
 ])
 def test_write_resource_invalid_align_sector(
         tmpdir, sanlock_daemon, align, sector):
