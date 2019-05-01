@@ -1616,13 +1616,16 @@ initsanlock(void)
     if (py_module == NULL)
         return;
 
-    py_exception = initexception();
+    if (py_exception == NULL) {
+        py_exception = initexception();
+        if (py_exception == NULL)
+            return;
+    }
 
-    if (py_exception == NULL)
+    Py_INCREF(py_exception);
+    if (PyModule_AddObject(py_module, "SanlockException", py_exception)) {
+        Py_DECREF(py_exception);
         return;
-
-    if (PyModule_AddObject(py_module, "SanlockException", py_exception) == 0) {
-        Py_INCREF(py_exception);
     }
 
 #define PYSNLK_INIT_ADD_CONSTANT(x, y) \
