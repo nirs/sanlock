@@ -111,8 +111,6 @@ __parse_resource(PyObject *obj, struct sanlk_resource **res_ret)
                 __set_exception(EINVAL, "Invalid resource offset");
                 goto exit_fail;
             }
-        } else if (PyString_Check(tuple)) {
-            p = PyString_AsString(tuple);
         }
 
         if (p == NULL) {
