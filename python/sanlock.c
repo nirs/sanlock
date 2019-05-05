@@ -154,7 +154,12 @@ add_sector_flag(int sector, uint32_t *flags)
     return 0;
 }
 
-enum {ALIGNMENT_1M = 1048576, ALIGNMENT_2M = 2097152, ALIGNMENT_4M = 4194304, ALIGNMENT_8M = 8388608};
+enum {
+    ALIGNMENT_1M = 1048576,
+    ALIGNMENT_2M = 2097152,
+    ALIGNMENT_4M = 4194304,
+    ALIGNMENT_8M = 8388608
+};
 
 static int
 add_align_flag(long align, uint32_t *flags)
@@ -171,6 +176,7 @@ add_align_flag(long align, uint32_t *flags)
 	break;
     case ALIGNMENT_8M:
         *flags |= SANLK_RES_ALIGN8M;
+	break;
     default:
 	PyErr_Format(PyExc_ValueError, "Invalid align value: %ld", align);
 	return -1;
@@ -441,7 +447,7 @@ py_write_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (add_sector_flag(sector, &ls.flags) == -1)
         return NULL;
-    
+
     /* write sanlock lockspace (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
     rv = sanlock_write_lockspace(&ls, max_hosts, 0, io_timeout);
@@ -1720,14 +1726,6 @@ initsanlock(void)
     PYSNLK_INIT_ADD_CONSTANT(SANLK_SETEV_REPLACE_EVENT,  "SETEV_REPLACE_EVENT");
     PYSNLK_INIT_ADD_CONSTANT(SANLK_SETEV_ALL_HOSTS,      "SETEV_ALL_HOSTS");
 
-    /* Sector and align size flags */
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_SECTOR512, "SECTOR512");
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_SECTOR4K, "SECTOR4K");
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_ALIGN1M, "ALIGN1M");
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_ALIGN2M, "ALIGN2M");
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_ALIGN4M, "ALIGN4M");
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_RES_ALIGN8M, "ALIGN8M");
-
 #undef PYSNLK_INIT_ADD_CONSTANT
 
     /* Tuples with supported sector size and alignment values */
@@ -1738,7 +1736,7 @@ initsanlock(void)
         Py_DECREF(sector);
         return;
     }
-      
+
     PyObject *align = Py_BuildValue("llll", ALIGNMENT_1M, ALIGNMENT_2M, ALIGNMENT_4M, ALIGNMENT_8M);
     if (!align)
       return;

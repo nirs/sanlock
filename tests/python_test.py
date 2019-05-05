@@ -37,13 +37,13 @@ def test_write_lockspace(tmpdir, sanlock_daemon, size, offset):
     path = str(tmpdir.join("lockspace"))
     util.create_file(path, size)
 
-    # test read and write with default alignment and sector size values
+    # Test read and write with default alignment and sector size values.
     sanlock.write_lockspace("name", path, offset=offset, iotimeout=1)
 
     ls = sanlock.read_lockspace(path, offset=offset)
     assert ls == {"iotimeout": 1, "lockspace": "name"}
 
-    # test read and write with explicit alignment and sector size values
+    # Test read and write with explicit alignment and sector size values.
     sanlock.write_lockspace(
         "name", path, offset=offset, iotimeout=1, align=ALIGNMENT_1M,
         sector=SECTOR_SIZE_512)
@@ -77,7 +77,7 @@ def test_write_resource(tmpdir, sanlock_daemon, size, offset):
     util.create_file(path, size)
     disks = [(path, offset)]
 
-    # test read and write with default alignment and sector size values
+    # Test read and write with default alignment and sector size values.
     sanlock.write_resource("ls_name", "res_name", disks)
 
     res = sanlock.read_resource(path, offset=offset)
@@ -87,7 +87,7 @@ def test_write_resource(tmpdir, sanlock_daemon, size, offset):
         "version": 0
     }
 
-    # test read and write with explicit alignment and sector size values
+    # Test read and write with explicit alignment and sector size values.
     sanlock.write_resource(
         "ls_name", "res_name", disks, align=ALIGNMENT_1M,
         sector=SECTOR_SIZE_512)
