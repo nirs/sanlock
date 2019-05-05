@@ -43,7 +43,7 @@ def test_write_lockspace(tmpdir, sanlock_daemon, size, offset):
     sanlock.write_lockspace("name", path, offset=offset, iotimeout=1)
 
     ls = sanlock.read_lockspace(path, offset=offset)
-    assert ls == {"iotimeout": 1, "lockspace": "name"}
+    assert ls == {"iotimeout": 1, "lockspace": b"name"}
 
     # Test read and write with explicit alignment and sector size values.
     sanlock.write_lockspace(
@@ -129,8 +129,8 @@ def test_write_resource(tmpdir, sanlock_daemon, size, offset):
 
     res = sanlock.read_resource(path, offset=offset)
     assert res == {
-        "lockspace": "ls_name",
-        "resource": "res_name",
+        "lockspace": b"ls_name",
+        "resource": b"res_name",
         "version": 0
     }
 
@@ -357,8 +357,8 @@ def test_acquire_release_resource(tmpdir, sanlock_daemon, size, offset):
 
     res = sanlock.read_resource(res_path, offset=offset)
     assert res == {
-        "lockspace": "ls_name",
-        "resource": "res_name",
+        "lockspace": b"ls_name",
+        "resource": b"res_name",
         "version": 0
     }
 
@@ -370,8 +370,8 @@ def test_acquire_release_resource(tmpdir, sanlock_daemon, size, offset):
 
     res = sanlock.read_resource(res_path, offset=offset)
     assert res == {
-        "lockspace": "ls_name",
-        "resource": "res_name",
+        "lockspace": b"ls_name",
+        "resource": b"res_name",
         "version": 1
     }
 
@@ -391,8 +391,8 @@ def test_acquire_release_resource(tmpdir, sanlock_daemon, size, offset):
 
     res = sanlock.read_resource(res_path, offset=offset)
     assert res == {
-        "lockspace": "ls_name",
-        "resource": "res_name",
+        "lockspace": b"ls_name",
+        "resource": b"res_name",
         "version": 1
     }
 
