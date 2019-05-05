@@ -33,6 +33,7 @@
 /* Functions prototypes */
 static void __set_exception(int en, char *msg) __sets_exception;
 static int __parse_resource(PyObject *obj, struct sanlk_resource **res_ret) __neg_sets_exception;
+static void set_value_error(const char* format, PyObject* obj);
 
 /* Sanlock module */
 PyDoc_STRVAR(pydoc_sanlock, "\
@@ -109,8 +110,10 @@ __parse_resource(PyObject *obj, struct sanlk_resource **res_ret)
                 __set_exception(EINVAL, "Invalid resource offset");
                 goto exit_fail;
             }
-        } else if (PyString_Check(tuple)) {
-            p = PyString_AsString(tuple);
+        } else {
+            /* handle invalid non-tuple resource input */
+            set_value_error("invalid disk value: %s", tuple);
+            goto exit_fail;
         }
 
         if (p == NULL) {
@@ -182,6 +185,17 @@ add_align_flag(long align, uint32_t *flags)
 	return -1;
     }
     return 0;
+}
+
+static void
+set_value_error(const char* format, PyObject* obj)
+{
+    const char* str_rep = "";
+    PyObject* rep = PyObject_Repr(obj);
+    if (rep)
+        str_rep = PyString_AsString(rep);
+    PyErr_Format(PyExc_ValueError, format, str_rep);
+    Py_XDECREF(rep);
 }
 
 static PyObject *
