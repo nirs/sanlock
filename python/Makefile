@@ -4,11 +4,13 @@
 # modify, copy, or redistribute it subject to the terms and conditions
 # of the GNU General Public License v.2.
 
+PYTHON := python$(PY_VERSION)
+
 all:
-	python2 setup.py build $(BUILDARGS)
+	$(PYTHON) setup.py build $(BUILDARGS)
 
 install:
-	python2 setup.py install --root=$(DESTDIR)
+	$(PYTHON) setup.py install --root=$(DESTDIR)
 
 clean:
 	rm -rf build
