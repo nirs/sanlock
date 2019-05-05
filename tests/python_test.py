@@ -25,6 +25,7 @@ MIN_RES_SIZE = 1024**2
 
 ALIGNMENT_1M = 1024**2
 SECTOR_SIZE_512 = 512
+SECTOR_SIZE_4K = 4096
 
 
 @pytest.mark.parametrize("size,offset", [
@@ -64,6 +65,35 @@ def test_write_lockspace(tmpdir, sanlock_daemon, size, offset):
         # TODO: check more stuff here...
 
     util.check_guard(path, size)
+
+
+@pytest.mark.parametrize("align", sanlock.ALIGN_SIZE)
+def test_write_lockspace_4k(user_4k_path, sanlock_daemon, align):
+
+    # Poison lockspace area, ensuring that previous tests will not break this
+    # test, and sanlock does not write beyond the lockspace area.
+    with io.open(user_4k_path, "rb+") as f:
+        f.write(align * b"x")
+    util.write_guard(user_4k_path, align)
+
+    sanlock.write_lockspace(
+        "name", user_4k_path, iotimeout=1, align=align, sector=SECTOR_SIZE_4K)
+
+    ls = sanlock.read_lockspace(
+        user_4k_path, align=align, sector=SECTOR_SIZE_4K)
+
+    assert ls == {"iotimeout": 1, "lockspace": "name"}
+
+    acquired = sanlock.inq_lockspace("name", 1, user_4k_path, wait=False)
+    assert acquired is False
+
+    # Verify that lockspace was written.
+    with io.open(user_4k_path, "rb") as f:
+        magic, = struct.unpack("< I", f.read(4))
+        assert magic == constants.DELTA_DISK_MAGIC
+
+    # Check that sanlock did not write beyond the lockspace area.
+    util.check_guard(user_4k_path, align)
 
 
 @pytest.mark.parametrize("size,offset", [
@@ -111,6 +141,41 @@ def test_write_resource(tmpdir, sanlock_daemon, size, offset):
         # TODO: check more stuff here...
 
     util.check_guard(path, size)
+
+
+@pytest.mark.parametrize("align", sanlock.ALIGN_SIZE)
+def test_write_resource_4k(sanlock_daemon, user_4k_path, align):
+    disks = [(user_4k_path, 0)]
+
+    # Poison resource area, ensuring that previous tests will not break this
+    # test, and sanlock does not write beyond the lockspace area.
+    with io.open(user_4k_path, "rb+") as f:
+        f.write(align * b"x")
+    util.write_guard(user_4k_path, align)
+
+    sanlock.write_resource(
+        "ls_name", "res_name", disks, align=align, sector=SECTOR_SIZE_4K)
+
+    res = sanlock.read_resource(
+        user_4k_path, align=align, sector=SECTOR_SIZE_4K)
+
+    assert res == {
+        "lockspace": "ls_name",
+        "resource": "res_name",
+        "version": 0
+    }
+
+    owners = sanlock.read_resource_owners(
+        "ls_name", "res_name", disks, align=align, sector=SECTOR_SIZE_4K)
+    assert owners == []
+
+    # Verify that resource was written.
+    with io.open(user_4k_path, "rb") as f:
+        magic, = struct.unpack("< I", f.read(4))
+        assert magic == constants.PAXOS_DISK_MAGIC
+
+    # Check that sanlock did not write beyond the lockspace area.
+    util.check_guard(user_4k_path, align)
 
 
 @pytest.mark.parametrize("size,offset", [

@@ -13,6 +13,9 @@ import time
 TESTDIR = os.path.dirname(__file__)
 SANLOCK = os.path.join(TESTDIR, os.pardir, "src", "sanlock")
 
+GUARD = b"X"
+GUARD_SIZE = 4096
+
 
 class TimeoutExpired(Exception):
     """ Raised when timeout expired """
@@ -97,28 +100,37 @@ def wait_for_termination(p, timeout):
         time.sleep(0.05)
 
 
-def create_file(path, size, guard=b"X", guard_size=4096):
+def create_file(path, size, guard=True):
     """
     Create sparse file of size bytes.
 
-    If guard is set, add a guard area after the end of the file and fill it
-    with guard bytes. This allows testing that the code under test do not write
-    anything after the end of the file.
+    If guard is True, add a guard area beyond the end of the file.
     """
     with io.open(path, "wb") as f:
         f.truncate(size)
-        if guard:
-            f.seek(size)
-            f.write(guard * guard_size)
+
+    if guard:
+        write_guard(path, size)
 
 
-def check_guard(path, size, guard=b"X", guard_size=4096):
+def write_guard(path, offset):
     """
-    Assert that a file ends with a guard area filled with guard bytes.
+    Write guard areas at offset and fill with guard byte.
+
+    Use check_guard() to verify that nothing was written to the guard area.
+    """
+    with io.open(path, "rb+") as f:
+        f.seek(offset)
+        f.write(GUARD * GUARD_SIZE)
+
+
+def check_guard(path, offset):
+    """
+    Assert that guard area at offset was not modified.
     """
     with io.open(path, "rb") as f:
-        f.seek(size)
-        assert f.read() == guard * guard_size
+        f.seek(offset)
+        assert f.read(GUARD_SIZE) == GUARD * GUARD_SIZE
 
 
 def check_rindex_entry(entry, name, offset=None, flags=None):
