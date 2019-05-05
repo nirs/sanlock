@@ -1,6 +1,7 @@
 """
 Test sanlock client operations.
 """
+from __future__ import absolute_import
 
 import io
 import signal
