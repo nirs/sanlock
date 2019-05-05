@@ -190,7 +190,7 @@ def test_lookup(tmpdir, sanlock_daemon):
     util.sanlock("client", "create", "-x", rindex, "-e", "res")
     lookup = util.sanlock("client", "lookup", "-x", rindex, "-e", "res")
 
-    assert lookup == "lookup done 0\nname res offset 3145728\n"
+    assert lookup == b"lookup done 0\nname res offset 3145728\n"
 
 
 def test_lookup_uninitialized(tmpdir, sanlock_daemon):
@@ -202,8 +202,8 @@ def test_lookup_uninitialized(tmpdir, sanlock_daemon):
         util.sanlock("client", "lookup", "-x", rindex, "-e", "res")
 
     assert e.value.returncode == 1
-    assert e.value.stdout == "lookup done -2\n"
-    assert e.value.stderr == ""
+    assert e.value.stdout == b"lookup done -2\n"
+    assert e.value.stderr == b""
 
 
 def test_lookup_missing(tmpdir, sanlock_daemon):
@@ -224,5 +224,5 @@ def test_lookup_missing(tmpdir, sanlock_daemon):
         util.sanlock("client", "lookup", "-x", rindex, "-e", "res")
 
     assert e.value.returncode == 1
-    assert e.value.stdout == "lookup done -2\n"
-    assert e.value.stderr == ""
+    assert e.value.stdout == b"lookup done -2\n"
+    assert e.value.stderr == b""
