@@ -60,8 +60,8 @@ def wait_for_daemon(timeout):
             try:
                 s.connect(path)
                 return
-            except socket.error as e:
-                if e[0] not in (errno.ECONNREFUSED, errno.ENOENT):
+            except EnvironmentError as e:
+                if e.errno not in (errno.ECONNREFUSED, errno.ENOENT):
                     raise  # Unexpected error
             if time.time() > deadline:
                 raise TimeoutExpired
