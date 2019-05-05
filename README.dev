@@ -1,3 +1,15 @@
+Prerequisites
+=============
+
+For Fedora/CentOS install the following packages:
+
+   $ sudo yum install -y gcc make libaio-devel libblkid-devel
+
+For Ubuntu/Debian install the following packages:
+
+   $ sudo apt install -y gcc make libaio-dev libblkid-dev
+
+
 How to test sanlock
 ===================
 
