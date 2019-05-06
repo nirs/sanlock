@@ -46,6 +46,20 @@ of the GNU General Public License v2 or (at your option) any later version.");
 /* Sanlock exception */
 static PyObject *py_exception;
 
+/*
+    Python 2 forward compatibility functions with Python 3
+    TODO: Once Python 2 will reach EOL at 2020 discrad this section
+*/
+#if PY_MAJOR_VERSION == 2
+
+static const char*
+PyUnicode_AsUTF8(PyObject* obj)
+{
+    return PyString_AsString(obj);
+}
+
+#endif
+
 static void
 __set_exception(int en, char *msg)
 {
@@ -91,8 +105,9 @@ __parse_resource(PyObject *obj, struct sanlk_resource **res_ret)
     res->num_disks = num_disks;
 
     for (i = 0; i < num_disks; i++) {
-        char *p = NULL;
+        const char *p = NULL;
         PyObject *tuple, *path = NULL, *offset = NULL;
+        int offset_is_int = 0;
 
         tuple = PyList_GetItem(obj, i);
 
@@ -105,9 +120,15 @@ __parse_resource(PyObject *obj, struct sanlk_resource **res_ret)
             path = PyTuple_GetItem(tuple, 0);
             offset = PyTuple_GetItem(tuple, 1);
 
-            p = PyString_AsString(path);
+            p = PyUnicode_AsUTF8(path);
 
-            if (!PyInt_Check(offset)) {
+#if PY_MAJOR_VERSION == 2
+            offset_is_int = PyInt_Check(offset) || PyLong_Check(offset);
+#else
+            offset_is_int = PyLong_Check(offset);
+#endif
+
+            if (!offset_is_int) {
                 __set_exception(EINVAL, "Invalid resource offset");
                 goto exit_fail;
             }
@@ -123,7 +144,7 @@ __parse_resource(PyObject *obj, struct sanlk_resource **res_ret)
         if (offset == NULL) {
             res->disks[i].offset = 0;
         } else {
-            res->disks[i].offset = PyInt_AsLong(offset);
+            res->disks[i].offset = PyLong_AsLong(offset);
         }
     }
 
@@ -199,7 +220,7 @@ __hosts_to_list(struct sanlk_host *hss, int hss_count)
             goto exit_fail;
 
         /* fill the dictionary information: host_id */
-        if ((ls_value = PyInt_FromLong(hss[i].host_id)) == NULL)
+        if ((ls_value = PyLong_FromLong(hss[i].host_id)) == NULL)
             goto exit_fail;
         rv = PyDict_SetItemString(ls_entry, "host_id", ls_value);
         Py_DECREF(ls_value);
@@ -207,7 +228,7 @@ __hosts_to_list(struct sanlk_host *hss, int hss_count)
             goto exit_fail;
 
         /* fill the dictionary information: generation */
-        if ((ls_value = PyInt_FromLong(hss[i].generation)) == NULL)
+        if ((ls_value = PyLong_FromLong(hss[i].generation)) == NULL)
             goto exit_fail;
         rv = PyDict_SetItemString(ls_entry, "generation", ls_value);
         Py_DECREF(ls_value);
@@ -215,7 +236,7 @@ __hosts_to_list(struct sanlk_host *hss, int hss_count)
             goto exit_fail;
 
         /* fill the dictionary information: timestamp */
-        if ((ls_value = PyInt_FromLong(hss[i].timestamp)) == NULL)
+        if ((ls_value = PyLong_FromLong(hss[i].timestamp)) == NULL)
             goto exit_fail;
         rv = PyDict_SetItemString(ls_entry, "timestamp", ls_value);
         Py_DECREF(ls_value);
@@ -223,7 +244,7 @@ __hosts_to_list(struct sanlk_host *hss, int hss_count)
             goto exit_fail;
 
         /* fill the dictionary information: io_timeout */
-        if ((ls_value = PyInt_FromLong(hss[i].io_timeout)) == NULL)
+        if ((ls_value = PyLong_FromLong(hss[i].io_timeout)) == NULL)
             goto exit_fail;
         rv = PyDict_SetItemString(ls_entry, "io_timeout", ls_value);
         Py_DECREF(ls_value);
@@ -231,7 +252,7 @@ __hosts_to_list(struct sanlk_host *hss, int hss_count)
             goto exit_fail;
 
         /* fill the dictionary information: flags */
-        if ((ls_value = PyInt_FromLong(hss[i].flags)) == NULL)
+        if ((ls_value = PyLong_FromLong(hss[i].flags)) == NULL)
             goto exit_fail;
         rv = PyDict_SetItemString(ls_entry, "flags", ls_value);
         Py_DECREF(ls_value);
@@ -274,7 +295,7 @@ py_register(PyObject *self __unused, PyObject *args)
         return NULL;
     }
 
-    return PyInt_FromLong(sanlockfd);
+    return PyLong_FromLong(sanlockfd);
 }
 
 /* get_alignment */
@@ -307,7 +328,7 @@ py_get_alignment(PyObject *self __unused, PyObject *args)
         return NULL;
     }
 
-    return PyInt_FromLong(rv);
+    return PyLong_FromLong(rv);
 }
 
 /* init_lockspace */
@@ -514,7 +535,7 @@ py_read_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
         goto exit_fail;
 
     /* fill the dictionary information: lockspace */
-    if ((ls_entry = PyString_FromString(ls.name)) == NULL)
+    if ((ls_entry = PyBytes_FromString(ls.name)) == NULL)
         goto exit_fail;
     rv = PyDict_SetItemString(ls_info, "lockspace", ls_entry);
     Py_DECREF(ls_entry);
@@ -522,7 +543,7 @@ py_read_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
         goto exit_fail;
 
     /* fill the dictionary information: iotimeout */
-    if ((ls_entry = PyInt_FromLong(io_timeout)) == NULL)
+    if ((ls_entry = PyLong_FromLong(io_timeout)) == NULL)
         goto exit_fail;
     rv = PyDict_SetItemString(ls_info, "iotimeout", ls_entry);
     Py_DECREF(ls_entry);
@@ -600,7 +621,7 @@ py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
         goto exit_fail;
 
     /* fill the dictionary information: lockspace */
-    if ((rs_entry = PyString_FromString(rs->lockspace_name)) == NULL)
+    if ((rs_entry = PyBytes_FromString(rs->lockspace_name)) == NULL)
         goto exit_fail;
     rv = PyDict_SetItemString(rs_info, "lockspace", rs_entry);
     Py_DECREF(rs_entry);
@@ -608,7 +629,7 @@ py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
         goto exit_fail;
 
     /* fill the dictionary information: resource */
-    if ((rs_entry = PyString_FromString(rs->name)) == NULL)
+    if ((rs_entry = PyBytes_FromString(rs->name)) == NULL)
         goto exit_fail;
     rv = PyDict_SetItemString(rs_info, "resource", rs_entry);
     Py_DECREF(rs_entry);
@@ -900,7 +921,7 @@ py_get_lockspaces(PyObject *self __unused, PyObject *args, PyObject *keywds)
             goto exit_fail;
 
         /* fill the dictionary information: lockspace */
-        if ((ls_value = PyString_FromString(lss[i].name)) == NULL)
+        if ((ls_value = PyBytes_FromString(lss[i].name)) == NULL)
             goto exit_fail;
         rv = PyDict_SetItemString(ls_entry, "lockspace", ls_value);
         Py_DECREF(ls_value);
@@ -908,7 +929,7 @@ py_get_lockspaces(PyObject *self __unused, PyObject *args, PyObject *keywds)
             goto exit_fail;
 
         /* fill the dictionary information: host_id */
-        if ((ls_value = PyInt_FromLong(lss[i].host_id)) == NULL)
+        if ((ls_value = PyLong_FromLong(lss[i].host_id)) == NULL)
             goto exit_fail;
         rv = PyDict_SetItemString(ls_entry, "host_id", ls_value);
         Py_DECREF(ls_value);
@@ -916,7 +937,7 @@ py_get_lockspaces(PyObject *self __unused, PyObject *args, PyObject *keywds)
             goto exit_fail;
 
         /* fill the dictionary information: path */
-        if ((ls_value = PyString_FromString(lss[i].host_id_disk.path)) == NULL)
+        if ((ls_value = PyUnicode_FromString(lss[i].host_id_disk.path)) == NULL)
             goto exit_fail;
         rv = PyDict_SetItemString(ls_entry, "path", ls_value);
         Py_DECREF(ls_value);
@@ -924,7 +945,7 @@ py_get_lockspaces(PyObject *self __unused, PyObject *args, PyObject *keywds)
             goto exit_fail;
 
         /* fill the dictionary information: offset */
-        if ((ls_value = PyInt_FromLong(lss[i].host_id_disk.offset)) == NULL)
+        if ((ls_value = PyLong_FromLong(lss[i].host_id_disk.offset)) == NULL)
             goto exit_fail;
         rv = PyDict_SetItemString(ls_entry, "offset", ls_value);
         Py_DECREF(ls_value);
@@ -932,7 +953,7 @@ py_get_lockspaces(PyObject *self __unused, PyObject *args, PyObject *keywds)
             goto exit_fail;
 
         /* fill the dictionary information: flags */
-        if ((ls_value = PyInt_FromLong(lss[i].flags)) == NULL)
+        if ((ls_value = PyLong_FromLong(lss[i].flags)) == NULL)
             goto exit_fail;
         rv = PyDict_SetItemString(ls_entry, "flags", ls_value);
         Py_DECREF(ls_value);
@@ -1054,7 +1075,7 @@ py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
     /* prepare the resource version */
     if (version != Py_None) {
         res->flags |= SANLK_RES_LVER;
-        res->lver = PyInt_AsUnsignedLongMask(version);
+        res->lver = PyLong_AsUnsignedLongMask(version);
         if (res->lver == -1) {
             __set_exception(EINVAL, "Unable to convert the version value");
             goto exit_fail;
@@ -1170,7 +1191,7 @@ py_request(PyObject *self __unused, PyObject *args, PyObject *keywds)
         flags = SANLK_REQUEST_NEXT_LVER;
     } else {
         res->flags |= SANLK_RES_LVER;
-        res->lver = PyInt_AsUnsignedLongMask(version);
+        res->lver = PyLong_AsUnsignedLongMask(version);
         if (res->lver == -1) {
             __set_exception(EINVAL, "Unable to convert the version value");
             goto exit_fail;
@@ -1285,7 +1306,7 @@ py_killpath(PyObject *self __unused, PyObject *args, PyObject *keywds)
         size_t arg_len;
 
         item = PyList_GetItem(argslist, i);
-        p = PyString_AsString(item);
+        p = PyUnicode_AsUTF8(item);
 
         if (p == NULL) {
             __set_exception(EINVAL, "Killpath argument not a string");
