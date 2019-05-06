@@ -96,6 +96,22 @@ def test_write_lockspace_4k(user_4k_path, sanlock_daemon, align):
     util.check_guard(user_4k_path, align)
 
 
+def test_write_lockspace_4k_invalid_sector_size(sanlock_daemon, user_4k_path):
+    with pytest.raises(sanlock.SanlockException) as e:
+        sanlock.write_lockspace(
+            "name", user_4k_path, iotimeout=1, sector=SECTOR_SIZE_512)
+    assert e.value.errno == errno.EINVAL
+
+
+def test_read_lockspace_4k_invalid_sector_size(sanlock_daemon, user_4k_path):
+    sanlock.write_lockspace(
+        "name", user_4k_path, iotimeout=1, sector=SECTOR_SIZE_4K)
+
+    with pytest.raises(sanlock.SanlockException) as e:
+        sanlock.read_lockspace(user_4k_path, sector=SECTOR_SIZE_512)
+    assert e.value.errno == errno.EINVAL
+
+
 @pytest.mark.parametrize("size,offset", [
     # Smallest offset.
     (MIN_RES_SIZE, 0),
@@ -176,6 +192,49 @@ def test_write_resource_4k(sanlock_daemon, user_4k_path, align):
 
     # Check that sanlock did not write beyond the lockspace area.
     util.check_guard(user_4k_path, align)
+
+
+@pytest.mark.xfail(reason="need to investigate why the call succeed")
+def test_write_resource_4k_invalid_sector_size(sanlock_daemon, user_4k_path):
+    disks = [(user_4k_path, 0)]
+
+    with pytest.raises(sanlock.SanlockException) as e:
+        sanlock.write_resource(
+            "ls_name", "res_name", disks, sector=SECTOR_SIZE_512)
+    assert e.value.errno == errno.EINVAL
+
+
+def test_read_resource_4k_invalid_sector_size(sanlock_daemon, user_4k_path):
+    disks = [(user_4k_path, 0)]
+
+    sanlock.write_resource(
+        "ls_name",
+        "res_name",
+        disks,
+        align=ALIGNMENT_1M,
+        sector=SECTOR_SIZE_4K)
+
+    with pytest.raises(sanlock.SanlockException) as e:
+        sanlock.read_resource(user_4k_path, sector=SECTOR_SIZE_512)
+    assert e.value.errno == errno.EINVAL
+
+
+@pytest.mark.xfail(reason="fallback hides wrong value from caller")
+def test_read_resource_owners_4k_invalid_sector_size(
+        sanlock_daemon, user_4k_path):
+    disks = [(user_4k_path, 0)]
+
+    sanlock.write_resource(
+        "ls_name",
+        "res_name",
+        disks,
+        align=ALIGNMENT_1M,
+        sector=SECTOR_SIZE_4K)
+
+    with pytest.raises(sanlock.SanlockException) as e:
+        sanlock.read_resource_owners(
+            "ls_name", "res_name", disks, sector=SECTOR_SIZE_512)
+    assert e.value.errno == errno.EINVAL
 
 
 @pytest.mark.parametrize("size,offset", [
