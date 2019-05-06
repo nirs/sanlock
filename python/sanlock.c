@@ -1765,6 +1765,36 @@ util_module_init(PyObject* m)
     return 0;
 }
 
+#if PY_MAJOR_VERSION >= 3 /* Python 3 module init */
+
+static struct PyModuleDef moduledef = {
+        PyModuleDef_HEAD_INIT,
+        MODULE_NAME,
+        pydoc_sanlock,
+        -1,
+        sanlock_methods,
+};
+
+PyMODINIT_FUNC
+PyInit_sanlock(void)
+{
+    PyObject *m = NULL;
+
+    m = PyModule_Create(&moduledef);
+
+    if (m == NULL)
+        return NULL;
+
+    if (util_module_init(m)) {
+        Py_DECREF(m);
+        return NULL;
+    }
+
+    return m;
+}
+
+#else /* Python 2 module init */
+
 PyMODINIT_FUNC
 initsanlock(void)
 {
@@ -1783,3 +1813,5 @@ initsanlock(void)
     if (util_module_init(m))
         Py_DECREF(m);
 }
+
+#endif
