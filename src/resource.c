@@ -169,18 +169,16 @@ int read_resource_owners(struct task *task, struct token *token,
 	char *lease_buf_dblock;
 	char *lease_buf = NULL;
 	char *hosts_buf = NULL;
+	const int sector_size_set = token->sector_size != 0;
 	int align_size;
 	int host_count = 0;
 	int i, rv;
 
 	disk = &token->disks[0];
 
-	/*
-	 * We don't know the sector_size of the resource until the leader
-	 * record has been read, start with the smaller size.
-	 */
+	/* If sector size not set, start with the smaller one. */
 
-	if (!token->sector_size) {
+	if (!sector_size_set) {
 		token->sector_size = 512;
 		token->align_size = sector_size_to_align_size_old(512);
 	}
@@ -206,9 +204,21 @@ int read_resource_owners(struct task *task, struct token *token,
 	if (!align_size)
 		align_size = sector_size_to_align_size_old(leader.sector_size);
 
+	/* If caller specified values are incorrect, fail. */
+
+	if (sector_size_set && token->sector_size != leader.sector_size) {
+		log_errot(token, "read_resource_owners invalid sector_size: %d actual: %d",
+			  token->sector_size, leader.sector_size);
+		rv = -EINVAL;
+		goto out;
+	}
+
+	/*
+	 * If the caller did not specify sector size and our guess was wrong,
+	 * retry with the actual value
+	 */
 	if ((token->sector_size != leader.sector_size) ||
 	    (token->align_size != align_size)) {
-		/* initial sizes were wrong */
 		log_debug("read_resource_owners rereading with correct sizses");
 		token->sector_size = leader.sector_size;
 		token->align_size  = align_size;

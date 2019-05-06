@@ -219,7 +219,6 @@ def test_read_resource_4k_invalid_sector_size(sanlock_daemon, user_4k_path):
     assert e.value.errno == errno.EINVAL
 
 
-@pytest.mark.xfail(reason="fallback hides wrong value from caller")
 def test_read_resource_owners_4k_invalid_sector_size(
         sanlock_daemon, user_4k_path):
     disks = [(user_4k_path, 0)]
