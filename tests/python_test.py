@@ -431,3 +431,18 @@ def test_write_resource_invalid_align_sector(
     with pytest.raises(ValueError):
         sanlock.write_resource(
             "ls_name", "res_name", disks, align=align, sector=sector)
+
+
+@pytest.mark.parametrize("resource", [
+    "invalid resource tuple",
+    b"invalid resource tuple",
+    u'\u05e9\u05dc\u05d5\u05dd',
+    b"\xd7\x90"
+])
+def test_write_resource_invalid_path(tmpdir, sanlock_daemon, resource):
+    # Test parsing a resource which is not a list of tuples
+    disks = [resource]
+    with pytest.raises(ValueError) as e:
+        sanlock.write_resource("ls_name", "res_name", disks)
+    assert repr(resource) in str(e.value)
+
