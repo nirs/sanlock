@@ -30,6 +30,8 @@
 #define __neg_sets_exception
 #endif
 
+#define MODULE_NAME "sanlock"
+
 /* Functions prototypes */
 static void __set_exception(int en, char *msg) __sets_exception;
 static int __parse_resource(PyObject *obj, struct sanlk_resource **res_ret) __neg_sets_exception;
@@ -1674,75 +1676,87 @@ exit_fail:
     return excp;
 }
 
-PyMODINIT_FUNC
-initsanlock(void)
+static int
+util_module_init(PyObject* m)
 {
-    PyObject *py_module, *sk_constant;
-
-    py_module = Py_InitModule4("sanlock",
-                sanlock_methods, pydoc_sanlock, NULL, PYTHON_API_VERSION);
-
-    if (py_module == NULL)
-        return;
+	PyObject *align = NULL, *sector = NULL;
 
     if (py_exception == NULL) {
         py_exception = initexception();
         if (py_exception == NULL)
-            return;
+			goto exit_fail;
     }
 
     Py_INCREF(py_exception);
-    if (PyModule_AddObject(py_module, "SanlockException", py_exception)) {
-        Py_DECREF(py_exception);
-        return;
-    }
-
-#define PYSNLK_INIT_ADD_CONSTANT(x, y) \
-    if ((sk_constant = PyInt_FromLong(x)) != NULL) { \
-        if (PyModule_AddObject(py_module, y, sk_constant)) { \
-            Py_DECREF(sk_constant); \
-        } \
-    }
+    if (PyModule_AddObject(m, "SanlockException", py_exception))
+		goto exit_fail;
 
     /* lockspaces list flags */
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_LSF_ADD, "LSFLAG_ADD");
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_LSF_REM, "LSFLAG_REM");
+    if (PyModule_AddIntConstant(m, "LSFLAG_ADD", SANLK_LSF_ADD))
+		goto exit_fail;
+    if (PyModule_AddIntConstant(m, "LSFLAG_REM", SANLK_LSF_REM))
+		goto exit_fail;
 
     /* resource request flags */
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_REQ_FORCE, "REQ_FORCE");
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_REQ_GRACEFUL, "REQ_GRACEFUL");
+    if (PyModule_AddIntConstant(m, "REQ_FORCE", SANLK_REQ_FORCE))
+		goto exit_fail;
+    if (PyModule_AddIntConstant(m, "REQ_GRACEFUL", SANLK_REQ_GRACEFUL))
+		goto exit_fail;
 
     /* hosts list flags */
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_HOST_FREE, "HOST_FREE");
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_HOST_LIVE, "HOST_LIVE");
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_HOST_FAIL, "HOST_FAIL");
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_HOST_DEAD, "HOST_DEAD");
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_HOST_UNKNOWN, "HOST_UNKNOWN");
+    if (PyModule_AddIntConstant(m, "HOST_FREE", SANLK_HOST_FREE))
+		goto exit_fail;
+    if (PyModule_AddIntConstant(m, "HOST_LIVE", SANLK_HOST_LIVE))
+		goto exit_fail;
+    if (PyModule_AddIntConstant(m, "HOST_FAIL", SANLK_HOST_FAIL))
+		goto exit_fail;
+    if (PyModule_AddIntConstant(m, "HOST_DEAD", SANLK_HOST_DEAD))
+		goto exit_fail;
+    if (PyModule_AddIntConstant(m, "HOST_UNKNOWN", SANLK_HOST_UNKNOWN))
+		goto exit_fail;
 
     /* set event flags */
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_SETEV_CUR_GENERATION, "SETEV_CUR_GENERATION");
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_SETEV_CLEAR_HOSTID,   "SETEV_CLEAR_HOSTID");
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_SETEV_CLEAR_EVENT,    "SETEV_CLEAR_EVENT");
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_SETEV_REPLACE_EVENT,  "SETEV_REPLACE_EVENT");
-    PYSNLK_INIT_ADD_CONSTANT(SANLK_SETEV_ALL_HOSTS,      "SETEV_ALL_HOSTS");
-
-#undef PYSNLK_INIT_ADD_CONSTANT
+    if (PyModule_AddIntConstant(m, "SETEV_CUR_GENERATION", SANLK_SETEV_CUR_GENERATION))
+		goto exit_fail;
+    if (PyModule_AddIntConstant(m, "SETEV_CLEAR_HOSTID", SANLK_SETEV_CLEAR_HOSTID))
+		goto exit_fail;
+    if (PyModule_AddIntConstant(m, "SETEV_CLEAR_EVENT", SANLK_SETEV_CLEAR_EVENT))
+		goto exit_fail;
+    if (PyModule_AddIntConstant(m, "SETEV_REPLACE_EVENT", SANLK_SETEV_REPLACE_EVENT))
+		goto exit_fail;
+    if (PyModule_AddIntConstant(m, "SETEV_ALL_HOSTS", SANLK_SETEV_ALL_HOSTS))
+		goto exit_fail;
 
     /* Tuples with supported sector size and alignment values */
-    PyObject *sector = Py_BuildValue("ii", SECTOR_SIZE_512, SECTOR_SIZE_4K);
-    if (!sector)
-        return;
-    if (PyModule_AddObject(py_module, "SECTOR_SIZE", sector)) {
-        Py_DECREF(sector);
-        return;
-    }
+    sector = Py_BuildValue("ii", SECTOR_SIZE_512, SECTOR_SIZE_4K);
+    if (!sector || PyModule_AddObject(m, "SECTOR_SIZE", sector))
+		goto exit_fail;
 
-    PyObject *align = Py_BuildValue("llll", ALIGNMENT_1M, ALIGNMENT_2M, ALIGNMENT_4M, ALIGNMENT_8M);
-    if (!align)
-      return;
-    if (PyModule_AddObject(py_module, "ALIGN_SIZE", align)) {
-        Py_DECREF(align);
-	return;
-    }
+    align = Py_BuildValue("llll",
+                        ALIGNMENT_1M, ALIGNMENT_2M, ALIGNMENT_4M, ALIGNMENT_8M);
+    if (!align || PyModule_AddObject(m, "ALIGN_SIZE", align))
+		goto exit_fail;
 
+	return 0;
+
+exit_fail:
+	Py_XDECREF(py_exception);
+	Py_XDECREF(sector);
+	Py_XDECREF(align);
+	return -1;
+}
+
+PyMODINIT_FUNC
+initsanlock(void)
+{
+    PyObject *m = NULL;
+
+    m = Py_InitModule4(MODULE_NAME,
+                sanlock_methods, pydoc_sanlock, NULL, PYTHON_API_VERSION);
+
+    if (m == NULL)
+        return;
+
+    if (util_module_init(m))
+        Py_DECREF(m);
 }
