@@ -18,12 +18,12 @@ from . import util
 # large enough to test large offsets, and less likely to fail on developer
 # machine or CI slave.
 # See https://access.redhat.com/articles/rhel-limits
-LARGE_FILE_SIZE = 1024**4
+LARGE_FILE_SIZE = constants.TiB
 
-LOCKSPACE_SIZE = 1024**2
-MIN_RES_SIZE = 1024**2
+LOCKSPACE_SIZE = constants.MiB
+MIN_RES_SIZE = constants.MiB
 
-ALIGNMENT_1M = 1024**2
+ALIGNMENT_1M = constants.MiB
 SECTOR_SIZE_512 = 512
 
 
@@ -147,7 +147,7 @@ def test_add_rem_lockspace(tmpdir, sanlock_daemon, size, offset):
 
 def test_add_rem_lockspace_async(tmpdir, sanlock_daemon):
     path = str(tmpdir.join("ls_name"))
-    util.create_file(path, 1024**2)
+    util.create_file(path, constants.MiB)
 
     sanlock.write_lockspace("ls_name", path, iotimeout=1)
     acquired = sanlock.inq_lockspace("ls_name", 1, path, wait=False)
@@ -256,7 +256,7 @@ def test_acquire_release_resource(tmpdir, sanlock_daemon, size, offset):
 
 @pytest.mark.parametrize("align, sector", [
     # Invalid alignment
-    (1024, sanlock.SECTOR_SIZE[0]),
+    (constants.KiB, sanlock.SECTOR_SIZE[0]),
     # Invalid sector size
     (sanlock.ALIGN_SIZE[0], 8192),
 ])
@@ -271,7 +271,7 @@ def test_write_lockspace_invalid_align_sector(
 
 @pytest.mark.parametrize("align, sector", [
     # Invalid alignment
-    (1024, sanlock.SECTOR_SIZE[0]),
+    (constants.KiB, sanlock.SECTOR_SIZE[0]),
     # Invalid sector size
     (sanlock.ALIGN_SIZE[0], 8192),
 ])

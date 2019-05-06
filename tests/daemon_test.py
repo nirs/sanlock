@@ -44,7 +44,7 @@ def test_client_failure():
 
 def test_init_lockspace(tmpdir, sanlock_daemon):
     path = tmpdir.join("lockspace")
-    size = 1024**2
+    size = constants.MiB
     util.create_file(str(path), size)
 
     lockspace = "name:1:%s:0" % path
@@ -61,7 +61,7 @@ def test_init_lockspace(tmpdir, sanlock_daemon):
 
 def test_init_resource(tmpdir, sanlock_daemon):
     path = tmpdir.join("resources")
-    size = 1024**2
+    size = constants.MiB
     util.create_file(str(path), size)
 
     resource = "ls_name:res_name:%s:0" % path
@@ -78,7 +78,7 @@ def test_init_resource(tmpdir, sanlock_daemon):
 
 def test_format(tmpdir, sanlock_daemon):
     path = tmpdir.join("rindex")
-    size = 1024**2 * 3
+    size = constants.MiB * 3
     util.create_file(str(path), size)
 
     rindex = "ls_name:%s:1M" % path
@@ -86,18 +86,18 @@ def test_format(tmpdir, sanlock_daemon):
 
     with io.open(str(path), "rb") as f:
         # The first slot should contain the rindex header sector.
-        f.seek(1024**2)
+        f.seek(constants.MiB)
         magic, = struct.unpack("< I", f.read(4))
         assert magic == constants.RINDEX_DISK_MAGIC
 
         # The rindex entries starts at the second rindex slot sector. All
         # entries should be zeroed.
-        f.seek(1024**2 + 512)
+        f.seek(constants.MiB + 512)
         entries_size = 512 * constants.RINDEX_ENTRIES_SECTORS
         assert f.read(entries_size) == b"\0" * entries_size
 
         # The next slot should contain the internal lease.
-        f.seek(1024**2 * 2)
+        f.seek(constants.MiB * 2)
         magic, = struct.unpack("< I", f.read(4))
         assert magic == constants.PAXOS_DISK_MAGIC
 
@@ -107,7 +107,7 @@ def test_format(tmpdir, sanlock_daemon):
 def test_create(tmpdir, sanlock_daemon):
     path = tmpdir.join("rindex")
     # Slots: lockspace rindex master-lease user-lease-1
-    size = 1024**2 * 4
+    size = constants.MiB * 4
     util.create_file(str(path), size)
 
     # Note: using 1 second io timeout (-o 1) for quicker tests.
@@ -123,16 +123,16 @@ def test_create(tmpdir, sanlock_daemon):
     with io.open(str(path), "rb") as f:
         # New entry should be created at the first slot
         # The first rindex sector is used by the rindex header.
-        f.seek(1024**2 + 512)
+        f.seek(constants.MiB + 512)
         util.check_rindex_entry(f.read(constants.RINDEX_ENTRY_SIZE),
-                                b"res", 1024**2 * 3, 0)
+                                b"res", constants.MiB * 3, 0)
 
         # The rest of the entries should not be modified.
         rest = 512 * constants.RINDEX_ENTRIES_SECTORS - constants.RINDEX_ENTRY_SIZE
         assert f.read(rest) == b"\0" * rest
 
         # The next slot should contain the internal lease.
-        f.seek(1024**2 * 3)
+        f.seek(constants.MiB * 3)
         magic, = struct.unpack("< I", f.read(4))
         assert magic == constants.PAXOS_DISK_MAGIC
 
@@ -142,7 +142,7 @@ def test_create(tmpdir, sanlock_daemon):
 def test_delete(tmpdir, sanlock_daemon):
     path = tmpdir.join("rindex")
     # Slots: lockspace rindex master-lease user-lease-1
-    size = 1024**2 * 4
+    size = constants.MiB * 4
     util.create_file(str(path), size)
 
     # Note: using 1 second io timeout (-o 1) for quicker tests.
@@ -158,7 +158,7 @@ def test_delete(tmpdir, sanlock_daemon):
 
     with io.open(str(path), "rb") as f:
         # First entry should be cleared.
-        f.seek(1024**2 + 512)
+        f.seek(constants.MiB + 512)
         util.check_rindex_entry(f.read(constants.RINDEX_ENTRY_SIZE), b"", 0, 0)
 
         # Rest of entires should not be modified.
@@ -166,7 +166,7 @@ def test_delete(tmpdir, sanlock_daemon):
         assert f.read(rest) == b"\0" * rest
 
         # The next slot should contain a cleared lease.
-        f.seek(1024**2 * 3)
+        f.seek(constants.MiB * 3)
         magic, = struct.unpack("< I", f.read(4))
         assert magic == constants.PAXOS_DISK_CLEAR
 
@@ -176,7 +176,7 @@ def test_delete(tmpdir, sanlock_daemon):
 def test_lookup(tmpdir, sanlock_daemon):
     path = tmpdir.join("rindex")
     # Slots: lockspace rindex master-lease user-lease-1 ... user-lease-7
-    size = 1024**2 * 10
+    size = constants.MiB * 10
     util.create_file(str(path), size)
 
     # Note: using 1 second io timeout (-o 1) for quicker tests.
@@ -195,7 +195,7 @@ def test_lookup(tmpdir, sanlock_daemon):
 
 def test_lookup_uninitialized(tmpdir, sanlock_daemon):
     path = tmpdir.join("rindex")
-    util.create_file(str(path), 1024**2)
+    util.create_file(str(path), constants.MiB)
     rindex = "ls_name:%s:1M" % path
 
     with pytest.raises(util.CommandError) as e:
@@ -209,7 +209,7 @@ def test_lookup_uninitialized(tmpdir, sanlock_daemon):
 def test_lookup_missing(tmpdir, sanlock_daemon):
     path = tmpdir.join("rindex")
     # Slots: lockspace rindex master-lease user-lease-1 ... user-lease-7
-    size = 1024**2 * 10
+    size = constants.MiB * 10
     util.create_file(str(path), size)
 
     # Note: using 1 second io timeout (-o 1) for quicker tests.
