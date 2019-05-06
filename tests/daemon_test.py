@@ -8,7 +8,7 @@ import struct
 
 import pytest
 
-from . constants import *
+from . import constants
 from . import util
 
 
@@ -52,7 +52,7 @@ def test_init_lockspace(tmpdir, sanlock_daemon):
 
     with io.open(str(path), "rb") as f:
         magic, = struct.unpack("< I", f.read(4))
-        assert magic == DELTA_DISK_MAGIC
+        assert magic == constants.DELTA_DISK_MAGIC
 
         # TODO: check more stuff here...
 
@@ -69,7 +69,7 @@ def test_init_resource(tmpdir, sanlock_daemon):
 
     with io.open(str(path), "rb") as f:
         magic, = struct.unpack("< I", f.read(4))
-        assert magic == PAXOS_DISK_MAGIC
+        assert magic == constants.PAXOS_DISK_MAGIC
 
         # TODO: check more stuff here...
 
@@ -88,18 +88,18 @@ def test_format(tmpdir, sanlock_daemon):
         # The first slot should contain the rindex header sector.
         f.seek(1024**2)
         magic, = struct.unpack("< I", f.read(4))
-        assert magic == RINDEX_DISK_MAGIC
+        assert magic == constants.RINDEX_DISK_MAGIC
 
         # The rindex entries starts at the second rindex slot sector. All
         # entries should be zeroed.
         f.seek(1024**2 + 512)
-        entries_size = 512 * RINDEX_ENTRIES_SECTORS
+        entries_size = 512 * constants.RINDEX_ENTRIES_SECTORS
         assert f.read(entries_size) == b"\0" * entries_size
 
         # The next slot should contain the internal lease.
         f.seek(1024**2 * 2)
         magic, = struct.unpack("< I", f.read(4))
-        assert magic == PAXOS_DISK_MAGIC
+        assert magic == constants.PAXOS_DISK_MAGIC
 
     util.check_guard(str(path), size)
 
@@ -124,17 +124,17 @@ def test_create(tmpdir, sanlock_daemon):
         # New entry should be created at the first slot
         # The first rindex sector is used by the rindex header.
         f.seek(1024**2 + 512)
-        util.check_rindex_entry(f.read(RINDEX_ENTRY_SIZE),
+        util.check_rindex_entry(f.read(constants.RINDEX_ENTRY_SIZE),
                                 b"res", 1024**2 * 3, 0)
 
         # The rest of the entries should not be modified.
-        rest = 512 * RINDEX_ENTRIES_SECTORS - RINDEX_ENTRY_SIZE
+        rest = 512 * constants.RINDEX_ENTRIES_SECTORS - constants.RINDEX_ENTRY_SIZE
         assert f.read(rest) == b"\0" * rest
 
         # The next slot should contain the internal lease.
         f.seek(1024**2 * 3)
         magic, = struct.unpack("< I", f.read(4))
-        assert magic == PAXOS_DISK_MAGIC
+        assert magic == constants.PAXOS_DISK_MAGIC
 
     util.check_guard(str(path), size)
 
@@ -159,16 +159,16 @@ def test_delete(tmpdir, sanlock_daemon):
     with io.open(str(path), "rb") as f:
         # First entry should be cleared.
         f.seek(1024**2 + 512)
-        util.check_rindex_entry(f.read(RINDEX_ENTRY_SIZE), b"", 0, 0)
+        util.check_rindex_entry(f.read(constants.RINDEX_ENTRY_SIZE), b"", 0, 0)
 
         # Rest of entires should not be modified.
-        rest = 512 * RINDEX_ENTRIES_SECTORS - RINDEX_ENTRY_SIZE
+        rest = 512 * constants.RINDEX_ENTRIES_SECTORS - constants.RINDEX_ENTRY_SIZE
         assert f.read(rest) == b"\0" * rest
 
         # The next slot should contain a cleared lease.
         f.seek(1024**2 * 3)
         magic, = struct.unpack("< I", f.read(4))
-        assert magic == PAXOS_DISK_CLEAR
+        assert magic == constants.PAXOS_DISK_CLEAR
 
     util.check_guard(str(path), size)
 
