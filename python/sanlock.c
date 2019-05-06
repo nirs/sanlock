@@ -58,6 +58,45 @@ PyUnicode_AsUTF8(PyObject* obj)
     return PyString_AsString(obj);
 }
 
+static int
+PyUnicode_FSConverter(PyObject* arg, void* addr)
+{
+    PyObject *output = NULL;
+    Py_ssize_t size;
+    const char *data;
+
+    if (arg == NULL) {
+        PyErr_Format(PyExc_ValueError, "Input parameter is nil");
+        return 0;
+    }
+    if (PyBytes_Check(arg)) {
+        output = arg;
+        Py_INCREF(arg);
+    }
+    else {
+        output = PyUnicode_AsEncodedString(arg, Py_FileSystemDefaultEncoding, NULL);
+        if (!output) {
+            return 0;
+        }
+        if (!PyBytes_Check(output)) {
+            PyErr_Format(PyExc_ValueError, "Invalid encoded bytes");
+            Py_DECREF(output);
+            return 0;
+        }
+    }
+
+    size = PyBytes_GET_SIZE(output);
+    data = PyBytes_AS_STRING(output);
+    if ((size_t)size != strlen(data)) {
+        PyErr_Format(PyExc_ValueError, "Embedded null byte");
+        Py_XDECREF(output);
+        return 0;
+    }
+
+    *(PyObject**)addr = output;
+    return 1;
+}
+
 #endif
 
 static void
