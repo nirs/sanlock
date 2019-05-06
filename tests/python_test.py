@@ -41,16 +41,8 @@ FILE_NAMES = [
     #name, encoding
     ("ascii", None),
     (u"ascii", None),
-    pytest.param(
-        u"\u05d0", None,
-        marks=pytest.mark.xfail(
-            six.PY2,
-            reason="currently not supporting non-ascii paths")),
-    pytest.param(
-        u"\u05d0", "utf-8",
-        marks=pytest.mark.xfail(
-            six.PY3,
-            reason="currently not supporting bytes paths")),
+    (u"\u05d0", None),
+    (u"\u05d0", "utf-8"),
 ]
 
 LOCKSPACE_OR_RESOURCE_NAMES = [
