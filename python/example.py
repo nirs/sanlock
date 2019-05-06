@@ -54,7 +54,7 @@ def main():
             time.sleep(5)
         print "Resource '%s' owners: " % RESOURCE_NAME, \
             sanlock.read_resource_owners(
-                LOCKSPACE_NAME, RESOURCE_NAME, SNLK_DISKS)
+                LOCKSPACE_NAME, RESOURCE_NAME, SNLK_DISKS, align=1048576, sector=512)
         print "Releasing '%s' on '%s'" % (RESOURCE_NAME, LOCKSPACE_NAME)
         sanlock.release(LOCKSPACE_NAME, RESOURCE_NAME, SNLK_DISKS, slkfd=fd)
     except Exception as e:

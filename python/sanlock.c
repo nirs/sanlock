@@ -1197,26 +1197,32 @@ exit_fail:
 
 /* read_resource_owners */
 PyDoc_STRVAR(pydoc_read_resource_owners, "\
-read_resource_owners(lockspace, resource, disks) -> list\n\
+read_resource_owners(lockspace, resource, disks, align=1048576, sector=512) \
+-> list\n\
 Returns the list of hosts owning a resource, the list is not filtered and\n\
 it might contain hosts that are currently failing or dead. The hosts are\n\
 returned in the same format used by get_hosts.\n\
-The disks must be in the format: [(path, offset), ... ]");
+The disks must be in the format: [(path, offset), ... ].\n\
+Align can be one of (1048576, 2097152, 4194304, 8388608).\n\
+Sector can be one of (512, 4096).");
 
 static PyObject *
 py_read_resource_owners(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
     int rv, hss_count = 0;
+    int sector = SECTOR_SIZE_512;
+    long align = ALIGNMENT_1M;
     const char *lockspace, *resource;
     struct sanlk_resource *res = NULL;
     struct sanlk_host *hss = NULL;
     PyObject *disks, *ls_list = NULL;
 
-    static char *kwlist[] = {"lockspace", "resource", "disks", NULL};
+    static char *kwlist[] = {"lockspace", "resource", "disks", "align",
+                             "sector", NULL};
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!", kwlist,
-        &lockspace, &resource, &PyList_Type, &disks)) {
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|li", kwlist,
+        &lockspace, &resource, &PyList_Type, &disks, &align, &sector)) {
         return NULL;
     }
 
@@ -1228,6 +1234,14 @@ py_read_resource_owners(PyObject *self __unused, PyObject *args, PyObject *keywd
     /* prepare sanlock names */
     strncpy(res->lockspace_name, lockspace, SANLK_NAME_LEN);
     strncpy(res->name, resource, SANLK_NAME_LEN);
+
+    /* set resource alignment and sector flags */
+
+    if (add_align_flag(align, &res->flags) == -1)
+        goto exit_fail;
+
+    if (add_sector_flag(sector, &res->flags) == -1)
+        goto exit_fail;
 
     /* read resource owners (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
