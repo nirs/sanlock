@@ -28,6 +28,9 @@ MIN_RES_SIZE = 1024**2
 ALIGNMENT_1M = 1024**2
 SECTOR_SIZE_512 = 512
 
+#keep python 3 long compatibility with python 2
+if sys.version_info[0] >= 3:
+    long = int
 
 @pytest.mark.parametrize("size,offset", [
     # Smallest offset.
@@ -76,9 +79,9 @@ def test_write_lockspace(tmpdir, sanlock_daemon, size, offset, filename, encodin
 
 @pytest.mark.parametrize("size,offset", [
     # Smallest offset.
-    (MIN_RES_SIZE, 0),
+    (MIN_RES_SIZE, long(0)),
     # Large offset.
-    (LARGE_FILE_SIZE, LARGE_FILE_SIZE - MIN_RES_SIZE),
+    (LARGE_FILE_SIZE, long(LARGE_FILE_SIZE - MIN_RES_SIZE)),
 ])
 @pytest.mark.parametrize("filename,encoding", [
     (u"ascii", None),
@@ -131,7 +134,7 @@ def test_write_resource(tmpdir, sanlock_daemon, size, offset, filename, encoding
     # Smallest offset.
     (MIN_RES_SIZE, 0),
     # Large offset.
-    (LARGE_FILE_SIZE, LARGE_FILE_SIZE - MIN_RES_SIZE),
+    (LARGE_FILE_SIZE, long(LARGE_FILE_SIZE - MIN_RES_SIZE)),
 ])
 @pytest.mark.parametrize("filename,encoding", [
     (u"ascii", None),
@@ -203,9 +206,9 @@ def test_add_rem_lockspace_async(tmpdir, sanlock_daemon):
 
 @pytest.mark.parametrize("size,offset", [
     # Smallest offset.
-    (MIN_RES_SIZE, 0),
+    (MIN_RES_SIZE, long(0)),
     # Large offset.
-    (LARGE_FILE_SIZE, LARGE_FILE_SIZE - MIN_RES_SIZE),
+    (LARGE_FILE_SIZE, long(LARGE_FILE_SIZE) - MIN_RES_SIZE),
 ])
 def test_acquire_release_resource_size_offset(tmpdir, sanlock_daemon, size, offset):
     internal_test_acquire_release_resource(tmpdir, sanlock_daemon, size, offset)
