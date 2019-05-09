@@ -7,6 +7,7 @@ import errno
 import io
 import struct
 import time
+import sys
 
 import pytest
 
@@ -206,49 +207,83 @@ def test_add_rem_lockspace_async(tmpdir, sanlock_daemon):
     # Large offset.
     (LARGE_FILE_SIZE, LARGE_FILE_SIZE - MIN_RES_SIZE),
 ])
-def test_acquire_release_resource(tmpdir, sanlock_daemon, size, offset):
+def test_acquire_release_resource_size_offset(tmpdir, sanlock_daemon, size, offset):
+    internal_test_acquire_release_resource(tmpdir, sanlock_daemon, size, offset)
+
+
+@pytest.mark.parametrize("lockspace,pass_version", [
+    ("ascii", [2]),
+    (u"ascii", []),
+    (b"\xd7\x90", [2,3]),
+    (u"\u05d0", []),
+])
+def test_acquire_release_resource_lockspace(tmpdir, sanlock_daemon, lockspace, pass_version):
+    try:
+        internal_test_acquire_release_resource(tmpdir, sanlock_daemon, MIN_RES_SIZE, 0, lockspace)
+    except TypeError:
+        assert sys.version_info[0] not in pass_version
+    else:
+        assert sys.version_info[0] in pass_version
+
+
+@pytest.mark.parametrize("resource,pass_version", [
+    ("ascii", [2]),
+    (u"ascii", []),
+    (b"\xd7\x90", [2,3]),
+    (u"\u05d0", []),
+])
+def test_acquire_release_resource_name(tmpdir, sanlock_daemon, resource, pass_version):
+    try:
+        internal_test_acquire_release_resource(tmpdir, sanlock_daemon, MIN_RES_SIZE, 0, b"ls_name", resource)
+    except TypeError:
+        assert sys.version_info[0] not in pass_version
+    else:
+        assert sys.version_info[0] in pass_version
+
+
+def internal_test_acquire_release_resource(tmpdir, sanlock_daemon, size, offset, lockspace=b"ls_name", resource=b"res_name"):
     ls_path = util.generate_path(tmpdir, "ls_name")
     util.create_file(ls_path, size)
 
     res_path = util.generate_path(tmpdir, "res_name")
     util.create_file(res_path, size)
 
-    sanlock.write_lockspace(b"ls_name", ls_path, offset=offset, iotimeout=1)
-    sanlock.add_lockspace(b"ls_name", 1, ls_path, offset=offset, iotimeout=1)
+    sanlock.write_lockspace(lockspace, ls_path, offset=offset, iotimeout=1)
+    sanlock.add_lockspace(lockspace, 1, ls_path, offset=offset, iotimeout=1)
 
     # Host status is not available until the first renewal.
     with pytest.raises(sanlock.SanlockException) as e:
-        sanlock.get_hosts(b"ls_name", 1)
+        sanlock.get_hosts(lockspace, 1)
     assert e.value.errno == errno.EAGAIN
 
     time.sleep(1)
-    host = sanlock.get_hosts(b"ls_name", 1)[0]
+    host = sanlock.get_hosts(lockspace, 1)[0]
     assert host["flags"] == sanlock.HOST_LIVE
 
     disks = [(res_path, offset)]
-    sanlock.write_resource(b"ls_name", b"res_name", disks)
+    sanlock.write_resource(lockspace, resource, disks)
 
     res = sanlock.read_resource(res_path, offset=offset)
     assert res == {
-        "lockspace": b"ls_name",
-        "resource": b"res_name",
+        "lockspace": lockspace,
+        "resource": resource,
         "version": 0
     }
 
-    owners = sanlock.read_resource_owners(b"ls_name", b"res_name", disks)
+    owners = sanlock.read_resource_owners(lockspace, resource, disks)
     assert owners == []
 
     fd = sanlock.register()
-    sanlock.acquire(b"ls_name", b"res_name", disks, slkfd=fd)
+    sanlock.acquire(lockspace, resource, disks, slkfd=fd)
 
     res = sanlock.read_resource(res_path, offset=offset)
     assert res == {
-        "lockspace": b"ls_name",
-        "resource": b"res_name",
+        "lockspace": lockspace,
+        "resource": resource,
         "version": 1
     }
 
-    owner = sanlock.read_resource_owners(b"ls_name", b"res_name", disks)[0]
+    owner = sanlock.read_resource_owners(lockspace, resource, disks)[0]
 
     assert owner["host_id"] == 1
     assert owner["flags"] == 0
@@ -256,20 +291,20 @@ def test_acquire_release_resource(tmpdir, sanlock_daemon, size, offset):
     assert owner["io_timeout"] == 0  # Why 0?
     # TODO: check timestamp.
 
-    host = sanlock.get_hosts(b"ls_name", 1)[0]
+    host = sanlock.get_hosts(lockspace, 1)[0]
     assert host["flags"] == sanlock.HOST_LIVE
     assert host["generation"] == owner["generation"]
 
-    sanlock.release(b"ls_name", b"res_name", disks, slkfd=fd)
+    sanlock.release(lockspace, resource, disks, slkfd=fd)
 
     res = sanlock.read_resource(res_path, offset=offset)
     assert res == {
-        "lockspace": b"ls_name",
-        "resource": b"res_name",
+        "lockspace": lockspace,
+        "resource": resource,
         "version": 1
     }
 
-    owners = sanlock.read_resource_owners(b"ls_name", b"res_name", disks)
+    owners = sanlock.read_resource_owners(lockspace, resource, disks)
     assert owners == []
 
 
