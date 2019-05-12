@@ -23,7 +23,8 @@ LARGE_FILE_SIZE = 1024**4
 LOCKSPACE_SIZE = 1024**2
 MIN_RES_SIZE = 1024**2
 
-ALIGNMENT_1M = 1024**2
+ALIGNMENT_1M = 1 * 1024**2
+ALIGNMENT_2M = 2 * 1024**2
 SECTOR_SIZE_512 = 512
 SECTOR_SIZE_4K = 4096
 
@@ -233,6 +234,29 @@ def test_read_resource_owners_4k_invalid_sector_size(
     with pytest.raises(sanlock.SanlockException) as e:
         sanlock.read_resource_owners(
             "ls_name", "res_name", disks, sector=SECTOR_SIZE_512)
+    assert e.value.errno == errno.EINVAL
+
+
+@pytest.mark.xfail(reason="fallback hides invalid user value")
+def test_read_resource_owners_invalid_align_size(tmpdir, sanlock_daemon):
+    path = str(tmpdir.join("path"))
+    util.create_file(path, 1024**3)
+    disks = [(path, 0)]
+
+    sanlock.write_resource(
+        "ls_name",
+        "res_name",
+        disks,
+        align=ALIGNMENT_1M,
+        sector=SECTOR_SIZE_512)
+
+    with pytest.raises(sanlock.SanlockException) as e:
+        sanlock.read_resource_owners(
+            "ls_name",
+            "res_name",
+            disks,
+            align=ALIGNMENT_2M,
+            sector=SECTOR_SIZE_512)
     assert e.value.errno == errno.EINVAL
 
 
