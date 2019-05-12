@@ -8,11 +8,12 @@ import struct
 
 from . import constants
 from . import util
+from . units import *
 
 
 def test_init_lockspace(tmpdir):
     path = tmpdir.join("lockspace")
-    size = 1024**2
+    size = MiB
     util.create_file(str(path), size)
 
     lockspace = "name:1:%s:0" % path
@@ -29,7 +30,7 @@ def test_init_lockspace(tmpdir):
 
 def test_init_resource(tmpdir, sanlock_daemon):
     path = tmpdir.join("resources")
-    size = 1024**2
+    size = MiB
     util.create_file(str(path), size)
 
     resource = "ls_name:res_name:%s:0" % path
