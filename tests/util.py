@@ -11,11 +11,13 @@ import struct
 import subprocess
 import time
 
+from . units import *
+
 TESTDIR = os.path.dirname(__file__)
 SANLOCK = os.path.join(TESTDIR, os.pardir, "src", "sanlock")
 
 GUARD = b"X"
-GUARD_SIZE = 4096
+GUARD_SIZE = 4 * KiB
 
 
 class TimeoutExpired(Exception):

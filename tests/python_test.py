@@ -14,20 +14,22 @@ import sanlock
 
 from . import constants
 from . import util
+from . units import *
+
 
 # Largest file size on ext4 is 16TiB, and on xfs 500 TiB. Use 1 TiB as it is
 # large enough to test large offsets, and less likely to fail on developer
 # machine or CI slave.
 # See https://access.redhat.com/articles/rhel-limits
-LARGE_FILE_SIZE = 1024**4
+LARGE_FILE_SIZE = TiB
 
-LOCKSPACE_SIZE = 1024**2
-MIN_RES_SIZE = 1024**2
+LOCKSPACE_SIZE = MiB
+MIN_RES_SIZE = MiB
 
-ALIGNMENT_1M = 1 * 1024**2
-ALIGNMENT_2M = 2 * 1024**2
+ALIGNMENT_1M = 1 * MiB
+ALIGNMENT_2M = 2 * MiB
 SECTOR_SIZE_512 = 512
-SECTOR_SIZE_4K = 4096
+SECTOR_SIZE_4K = 4 * KiB
 
 
 @pytest.mark.parametrize("size,offset", [
@@ -240,7 +242,7 @@ def test_read_resource_owners_4k_invalid_sector_size(
 
 def test_read_resource_owners_invalid_align_size(tmpdir, sanlock_daemon):
     path = str(tmpdir.join("path"))
-    util.create_file(path, 1024**3)
+    util.create_file(path, GiB)
     disks = [(path, 0)]
 
     sanlock.write_resource(
@@ -294,7 +296,7 @@ def test_add_rem_lockspace(tmpdir, sanlock_daemon, size, offset):
 
 def test_add_rem_lockspace_async(tmpdir, sanlock_daemon):
     path = str(tmpdir.join("ls_name"))
-    util.create_file(path, 1024**2)
+    util.create_file(path, MiB)
 
     sanlock.write_lockspace("ls_name", path, iotimeout=1)
     acquired = sanlock.inq_lockspace("ls_name", 1, path, wait=False)
@@ -403,9 +405,9 @@ def test_acquire_release_resource(tmpdir, sanlock_daemon, size, offset):
 
 @pytest.mark.parametrize("align, sector", [
     # Invalid alignment
-    (1024, sanlock.SECTOR_SIZE[0]),
+    (KiB, sanlock.SECTOR_SIZE[0]),
     # Invalid sector size
-    (sanlock.ALIGN_SIZE[0], 8192),
+    (sanlock.ALIGN_SIZE[0], 8 * KiB),
 ])
 def test_write_lockspace_invalid_align_sector(
         tmpdir, sanlock_daemon, align, sector):
@@ -418,9 +420,9 @@ def test_write_lockspace_invalid_align_sector(
 
 @pytest.mark.parametrize("align, sector", [
     # Invalid alignment
-    (1024, sanlock.SECTOR_SIZE[0]),
+    (KiB, sanlock.SECTOR_SIZE[0]),
     # Invalid sector size
-    (sanlock.ALIGN_SIZE[0], 8192),
+    (sanlock.ALIGN_SIZE[0], 8 * KiB),
 ])
 def test_write_resource_invalid_align_sector(
         tmpdir, sanlock_daemon, align, sector):
