@@ -170,6 +170,7 @@ int read_resource_owners(struct task *task, struct token *token,
 	char *lease_buf = NULL;
 	char *hosts_buf = NULL;
 	const int sector_size_set = token->sector_size != 0;
+	const int align_size_set = token->align_size != 0;
 	int align_size;
 	int host_count = 0;
 	int i, rv;
@@ -177,11 +178,12 @@ int read_resource_owners(struct task *task, struct token *token,
 	disk = &token->disks[0];
 
 	/* If sector size not set, start with the smaller one. */
-
-	if (!sector_size_set) {
+	if (!sector_size_set)
 		token->sector_size = 512;
-		token->align_size = sector_size_to_align_size_old(512);
-	}
+
+	/* If align size not set, default to the older align. */
+	if (!align_size_set)
+		token->align_size = sector_size_to_align_size_old(token->sector_size);
 
 	/* we could in-line paxos_read_buf here like we do in read_mode_block */
  retry:
@@ -209,6 +211,13 @@ int read_resource_owners(struct task *task, struct token *token,
 	if (sector_size_set && token->sector_size != leader.sector_size) {
 		log_errot(token, "read_resource_owners invalid sector_size: %d actual: %d",
 			  token->sector_size, leader.sector_size);
+		rv = -EINVAL;
+		goto out;
+	}
+
+	if (align_size_set && token->align_size != align_size) {
+		log_errot(token, "read_resource_owners invalid align_size: %d actual: %d",
+			  token->align_size, align_size);
 		rv = -EINVAL;
 		goto out;
 	}

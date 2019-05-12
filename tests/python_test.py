@@ -237,7 +237,6 @@ def test_read_resource_owners_4k_invalid_sector_size(
     assert e.value.errno == errno.EINVAL
 
 
-@pytest.mark.xfail(reason="fallback hides invalid user value")
 def test_read_resource_owners_invalid_align_size(tmpdir, sanlock_daemon):
     path = str(tmpdir.join("path"))
     util.create_file(path, 1024**3)
