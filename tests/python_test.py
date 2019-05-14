@@ -33,16 +33,33 @@ SECTOR_SIZE_4K = 4096
 if six.PY3:
     long = int
 
-TestParams=[
-        #size,offset,filename,encoding
-        (LOCKSPACE_SIZE, 0, u"ascii", None),
-        (LOCKSPACE_SIZE, long(0), u"\u05d0", None),
-        (LARGE_FILE_SIZE, LARGE_FILE_SIZE - LOCKSPACE_SIZE, "ascii", None),
-        (LARGE_FILE_SIZE, long(LARGE_FILE_SIZE - LOCKSPACE_SIZE), u"\u05d0", "utf-8"),
+
+TestParams = [
+        #testing large offset and path encoding
+        [
+            #size,offset,filename,encoding
+            (LOCKSPACE_SIZE, 0, u"ascii", None),
+            (LOCKSPACE_SIZE, long(0), u"\u05d0", None),
+            (LARGE_FILE_SIZE, LARGE_FILE_SIZE - LOCKSPACE_SIZE, "ascii", None),
+            (LARGE_FILE_SIZE, long(LARGE_FILE_SIZE - LOCKSPACE_SIZE), u"\u05d0", "utf-8"),
+        ],
+        #testing lockspace/resource names encoding
+        [
+            #lockspace/resource name, python pass versions
+            pytest.param('ascii', marks=[
+                pytest.mark.xfail(six.PY3, raises=TypeError, reason="py3 api expects bytes"),
+                pytest.mark.xfail(not six.PY3, raises=sanlock.SanlockException, reason="test stub"),
+            ]),
+            pytest.param(u'ascii',
+                marks=pytest.mark.xfail(raises=TypeError, reason="py3 api expects bytes, py2 not expecting unicode")),
+            pytest.param(b'\xd7\x90',
+                marks=pytest.mark.xfail(raises=sanlock.SanlockException, reason="test stub")),
+            pytest.param(u'\u05d0',
+                marks=pytest.mark.xfail(raises=TypeError, reason="py3 api expects bytes, py2 not expecting unicode")),
+        ]
 ]
 
-
-@pytest.mark.parametrize("size,offset,filename,encoding", TestParams)
+@pytest.mark.parametrize("size,offset,filename,encoding", TestParams[0])
 def test_write_lockspace(tmpdir, sanlock_daemon, size, offset, filename, encoding):
     path = util.generate_path(tmpdir, filename, encoding)
     util.create_file(path, size)
@@ -121,7 +138,7 @@ def test_read_lockspace_4k_invalid_sector_size(sanlock_daemon, user_4k_path):
     assert e.value.errno == errno.EINVAL
 
 
-@pytest.mark.parametrize("size,offset,filename,encoding", TestParams)
+@pytest.mark.parametrize("size,offset,filename,encoding", TestParams[0])
 def test_write_resource(tmpdir, sanlock_daemon, size, offset, filename, encoding):
     path = util.generate_path(tmpdir, filename, encoding)
     util.create_file(path, size)
@@ -174,7 +191,7 @@ def test_write_resource_4k(sanlock_daemon, user_4k_path, align):
     util.write_guard(user_4k_path, align)
 
     sanlock.write_resource(
-        "ls_name", "res_name", disks, align=align, sector=SECTOR_SIZE_4K)
+        b"ls_name", b"res_name", disks, align=align, sector=SECTOR_SIZE_4K)
 
     res = sanlock.read_resource(
         user_4k_path, align=align, sector=SECTOR_SIZE_4K)
@@ -186,7 +203,7 @@ def test_write_resource_4k(sanlock_daemon, user_4k_path, align):
     }
 
     owners = sanlock.read_resource_owners(
-        "ls_name", "res_name", disks, align=align, sector=SECTOR_SIZE_4K)
+        b"ls_name", b"res_name", disks, align=align, sector=SECTOR_SIZE_4K)
     assert owners == []
 
     # Verify that resource was written.
@@ -204,7 +221,7 @@ def test_write_resource_4k_invalid_sector_size(sanlock_daemon, user_4k_path):
 
     with pytest.raises(sanlock.SanlockException) as e:
         sanlock.write_resource(
-            "ls_name", "res_name", disks, sector=SECTOR_SIZE_512)
+            b"ls_name", b"res_name", disks, sector=SECTOR_SIZE_512)
     assert e.value.errno == errno.EINVAL
 
 
@@ -212,8 +229,8 @@ def test_read_resource_4k_invalid_sector_size(sanlock_daemon, user_4k_path):
     disks = [(user_4k_path, 0)]
 
     sanlock.write_resource(
-        "ls_name",
-        "res_name",
+        b"ls_name",
+        b"res_name",
         disks,
         align=ALIGNMENT_1M,
         sector=SECTOR_SIZE_4K)
@@ -228,15 +245,15 @@ def test_read_resource_owners_4k_invalid_sector_size(
     disks = [(user_4k_path, 0)]
 
     sanlock.write_resource(
-        "ls_name",
-        "res_name",
+        b"ls_name",
+        b"res_name",
         disks,
         align=ALIGNMENT_1M,
         sector=SECTOR_SIZE_4K)
 
     with pytest.raises(sanlock.SanlockException) as e:
         sanlock.read_resource_owners(
-            "ls_name", "res_name", disks, sector=SECTOR_SIZE_512)
+            b"ls_name", b"res_name", disks, sector=SECTOR_SIZE_512)
     assert e.value.errno == errno.EINVAL
 
 
@@ -246,23 +263,23 @@ def test_read_resource_owners_invalid_align_size(tmpdir, sanlock_daemon):
     disks = [(path, 0)]
 
     sanlock.write_resource(
-        "ls_name",
-        "res_name",
+        b"ls_name",
+        b"res_name",
         disks,
         align=ALIGNMENT_1M,
         sector=SECTOR_SIZE_512)
 
     with pytest.raises(sanlock.SanlockException) as e:
         sanlock.read_resource_owners(
-            "ls_name",
-            "res_name",
+            b"ls_name",
+            b"res_name",
             disks,
             align=ALIGNMENT_2M,
             sector=SECTOR_SIZE_512)
     assert e.value.errno == errno.EINVAL
 
 
-@pytest.mark.parametrize("size,offset,filename,encoding", TestParams) 
+@pytest.mark.parametrize("size,offset,filename,encoding", TestParams[0])
 def test_add_rem_lockspace(tmpdir, sanlock_daemon, size, offset, filename, encoding):
     path = util.generate_path(tmpdir, filename, encoding)
     util.create_file(path, size)
@@ -327,7 +344,7 @@ def test_add_rem_lockspace_async(tmpdir, sanlock_daemon):
 
 @pytest.mark.parametrize("size,offset", [
     # Smallest offset.
-    (MIN_RES_SIZE, 0),
+    (MIN_RES_SIZE, long(0)),
     # Large offset.
     (LARGE_FILE_SIZE, long(LARGE_FILE_SIZE) - MIN_RES_SIZE),
 ])
@@ -428,4 +445,47 @@ def test_write_resource_invalid_align_sector(
     with pytest.raises(ValueError):
         sanlock.write_resource(
             b"ls_name", b"res_name", disks, align=align, sector=sector)
+
+
+@pytest.mark.parametrize("name", TestParams[1])
+def test_rem_lockspace_parse_args(sanlock_daemon, name):
+    sanlock.rem_lockspace,(name, 1, "ls_path", 0)
+
+
+@pytest.mark.parametrize("name", TestParams[1])
+def test_add_lockspace_parse_args(sanlock_daemon, name):
+    sanlock.add_lockspace(name, 1, "ls_path", 0)
+
+
+@pytest.mark.parametrize("name", TestParams[1])
+def test_write_lockspace_parse_args(sanlock_daemon, name):
+    sanlock.write_lockspace(name,"ls_path")
+
+
+@pytest.mark.parametrize("name", TestParams[1])
+def test_write_resource_parse_args(sanlock_daemon, name):
+    sanlock.write_resource(name,  b"res_name", [("disk_path",0)])
+    sanlock.write_resource(b"ls_name", name, [("disk_path",0)])
+
+
+@pytest.mark.parametrize("name", TestParams[1])
+def test_release_resource_parse_args(sanlock_daemon, name):
+    sanlock.release(name, b"res_name", [("disk_path",0)])
+    sanlock.release(b"ls_name", name, [("disk_path",0)])
+
+
+@pytest.mark.parametrize("name", TestParams[1])
+def test_read_resource_owners_parse_args(sanlock_daemon, name):
+    sanlock.read_resource_owners(name, b"res_name", [("disk_path",0)])
+    sanlock.read_resource_owners(b"ls_name", name, [("disk_path",0)])
+
+
+@pytest.mark.parametrize("name", TestParams[1])
+def test_get_hosts_parse_args(sanlock_daemon, name):
+    sanlock.get_hosts(name, 1)
+
+
+@pytest.mark.parametrize("name", TestParams[1])
+def test_inq_lockspace_parse_args(sanlock_daemon, name):
+    sanlock.inq_lockspace(name, 1, "path", wait=False)
 
