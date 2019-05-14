@@ -7,7 +7,7 @@ import errno
 import io
 import struct
 import time
-
+import six
 import pytest
 
 import sanlock
@@ -29,12 +29,16 @@ ALIGNMENT_2M = 2 * 1024**2
 SECTOR_SIZE_512 = 512
 SECTOR_SIZE_4K = 4096
 
+# Set long compatability for Python 3
+if six.PY3:
+    long = int
+
 TestParams=[
         #size,offset,filename,encoding
         (LOCKSPACE_SIZE, 0, u"ascii", None),
-        (LOCKSPACE_SIZE, 0, u"\u05d0", None),
+        (LOCKSPACE_SIZE, long(0), u"\u05d0", None),
         (LARGE_FILE_SIZE, LARGE_FILE_SIZE - LOCKSPACE_SIZE, "ascii", None),
-        (LARGE_FILE_SIZE, LARGE_FILE_SIZE - LOCKSPACE_SIZE, u"\u05d0", "utf-8"),
+        (LARGE_FILE_SIZE, long(LARGE_FILE_SIZE - LOCKSPACE_SIZE), u"\u05d0", "utf-8"),
 ]
 
 
@@ -325,7 +329,7 @@ def test_add_rem_lockspace_async(tmpdir, sanlock_daemon):
     # Smallest offset.
     (MIN_RES_SIZE, 0),
     # Large offset.
-    (LARGE_FILE_SIZE, LARGE_FILE_SIZE - MIN_RES_SIZE),
+    (LARGE_FILE_SIZE, long(LARGE_FILE_SIZE) - MIN_RES_SIZE),
 ])
 def test_acquire_release_resource(tmpdir, sanlock_daemon, size, offset):
     ls_path = str(tmpdir.join("ls_name"))
