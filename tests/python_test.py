@@ -52,7 +52,7 @@ def test_write_lockspace(tmpdir, sanlock_daemon, size, offset):
 
     ls = sanlock.read_lockspace(
         path, offset=offset, align=ALIGNMENT_1M, sector=SECTOR_SIZE_512)
-    assert ls == {"iotimeout": 1, "lockspace": "name"}
+    assert ls == {"iotimeout": 1, "lockspace": b"name"}
 
     acquired = sanlock.inq_lockspace(
         "name", 1, path, offset=offset, wait=False)
@@ -83,7 +83,7 @@ def test_write_lockspace_4k(user_4k_path, sanlock_daemon, align):
     ls = sanlock.read_lockspace(
         user_4k_path, align=align, sector=SECTOR_SIZE_4K)
 
-    assert ls == {"iotimeout": 1, "lockspace": "name"}
+    assert ls == {"iotimeout": 1, "lockspace": b"name"}
 
     acquired = sanlock.inq_lockspace("name", 1, user_4k_path, wait=False)
     assert acquired is False
@@ -142,8 +142,8 @@ def test_write_resource(tmpdir, sanlock_daemon, size, offset):
     res = sanlock.read_resource(
         path, offset=offset, align=ALIGNMENT_1M, sector=SECTOR_SIZE_512)
     assert res == {
-        "lockspace": "ls_name",
-        "resource": "res_name",
+        "lockspace": b"ls_name",
+        "resource": b"res_name",
         "version": 0
     }
 
@@ -177,8 +177,8 @@ def test_write_resource_4k(sanlock_daemon, user_4k_path, align):
         user_4k_path, align=align, sector=SECTOR_SIZE_4K)
 
     assert res == {
-        "lockspace": "ls_name",
-        "resource": "res_name",
+        "lockspace": b"ls_name",
+        "resource": b"res_name",
         "version": 0
     }
 
