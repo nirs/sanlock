@@ -8,6 +8,7 @@ import io
 import struct
 import time
 
+import six
 import pytest
 
 import sanlock
@@ -32,14 +33,31 @@ SECTOR_SIZE_512 = 512
 SECTOR_SIZE_4K = 4 * KiB
 
 
+FILE_NAMES = [
+    #name, encoding
+    ("ascii", None),
+    (u"ascii", None),
+    pytest.param(
+        u"\u05d0", None,
+        marks=pytest.mark.xfail(
+            six.PY2,
+            reason="currently not supporting non-ascii paths")),
+    pytest.param(
+        u"\u05d0", "utf-8",
+        marks=pytest.mark.xfail(
+            six.PY3,
+            reason="currently not supporting bytes paths")),
+]
+
+@pytest.mark.parametrize("filename, encoding" , FILE_NAMES)
 @pytest.mark.parametrize("size,offset", [
     # Smallest offset.
     (LOCKSPACE_SIZE, 0),
     # Large offset.
     (LARGE_FILE_SIZE, LARGE_FILE_SIZE - LOCKSPACE_SIZE),
 ])
-def test_write_lockspace(tmpdir, sanlock_daemon, size, offset):
-    path = str(tmpdir.join("lockspace"))
+def test_write_lockspace(tmpdir, sanlock_daemon, filename, encoding, size, offset):
+    path = util.generate_path(tmpdir, filename, encoding)
     util.create_file(path, size)
 
     # Test read and write with default alignment and sector size values.
@@ -116,14 +134,15 @@ def test_read_lockspace_4k_invalid_sector_size(sanlock_daemon, user_4k_path):
     assert e.value.errno == errno.EINVAL
 
 
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 @pytest.mark.parametrize("size,offset", [
     # Smallest offset.
     (MIN_RES_SIZE, 0),
     # Large offset.
     (LARGE_FILE_SIZE, LARGE_FILE_SIZE - MIN_RES_SIZE),
 ])
-def test_write_resource(tmpdir, sanlock_daemon, size, offset):
-    path = str(tmpdir.join("resources"))
+def test_write_resource(tmpdir, sanlock_daemon, filename, encoding, size, offset):
+    path = util.generate_path(tmpdir, filename, encoding)
     util.create_file(path, size)
     disks = [(path, offset)]
 
