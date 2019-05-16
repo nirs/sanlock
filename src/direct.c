@@ -339,7 +339,7 @@ static int do_delta_action(int action,
 
 	switch (action) {
 	case ACT_DIRECT_INIT:
-		/* delta_lease_init looks at ls->flags for sector/align sizses */
+		/* delta_lease_init looks at ls->flags for sector/align sizes */
 
 		rv = delta_lease_init(task, ls, io_timeout, &sd);
 		break;
