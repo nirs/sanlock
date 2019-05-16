@@ -71,6 +71,28 @@ __set_exception(int en, char *msg)
     }
 }
 
+/*
+ * Returns NULL-terminated representation of the contents of obj.
+ *
+ * obj must be a string object (py2) or Unicode object (py3), otherwise returns NULL
+ * and raises TypeError.[1][2]
+ *
+ * The returned pointer refers to the internal buffer of string, not a copy. It must not be
+ * deallocated, and the object must be kept alive as long as the retruned pointer is used.
+ * [1] https://docs.python.org/2/c-api/string.html#c.PyString_AsString
+ * [2] https://docs.python.org/3/c-api/unicode.html#c.PyUnicode_AsUTF8
+ *
+ */
+static const char*
+pystring_as_cstring(PyObject *obj)
+{
+#if PY_MAJOR_VERSION == 2
+    return PyString_AsString(obj);
+#else
+    return PyUnicode_AsUTF8(obj);
+#endif
+}
+
 static int
 __parse_resource(PyObject *obj, struct sanlk_resource **res_ret)
 {
@@ -92,7 +114,7 @@ __parse_resource(PyObject *obj, struct sanlk_resource **res_ret)
     res->num_disks = num_disks;
 
     for (i = 0; i < num_disks; i++) {
-        char *p = NULL;
+        const char *p = NULL;
         PyObject *tuple, *path = NULL, *offset = NULL;
 
         tuple = PyList_GetItem(obj, i);
@@ -106,7 +128,7 @@ __parse_resource(PyObject *obj, struct sanlk_resource **res_ret)
             path = PyTuple_GetItem(tuple, 0);
             offset = PyTuple_GetItem(tuple, 1);
 
-            p = PyString_AsString(path);
+            p = pystring_as_cstring(path);
 
             if (!PyInt_Check(offset)) {
                 __set_exception(EINVAL, "Invalid resource offset");
@@ -195,7 +217,7 @@ set_value_error(const char* format, PyObject* obj)
     const char* str_rep = "";
     PyObject* rep = PyObject_Repr(obj);
     if (rep)
-        str_rep = PyString_AsString(rep);
+        str_rep = pystring_as_cstring(rep);
     PyErr_Format(PyExc_ValueError, format, str_rep);
     Py_XDECREF(rep);
 }
@@ -1315,7 +1337,7 @@ py_killpath(PyObject *self __unused, PyObject *args, PyObject *keywds)
         size_t arg_len;
 
         item = PyList_GetItem(argslist, i);
-        p = PyString_AsString(item);
+        p = pystring_as_cstring(item);
 
         if (p == NULL) {
             __set_exception(EINVAL, "Killpath argument not a string");
