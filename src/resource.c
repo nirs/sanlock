@@ -228,7 +228,7 @@ int read_resource_owners(struct task *task, struct token *token,
 	 */
 	if ((token->sector_size != leader.sector_size) ||
 	    (token->align_size != align_size)) {
-		log_debug("read_resource_owners rereading with correct sizses");
+		log_debug("read_resource_owners rereading with correct sizes");
 		token->sector_size = leader.sector_size;
 		token->align_size  = align_size;
 		free(lease_buf);
