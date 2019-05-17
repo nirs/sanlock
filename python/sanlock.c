@@ -235,55 +235,24 @@ set_value_error(const char* format, PyObject* obj)
 static PyObject *
 __hosts_to_list(struct sanlk_host *hss, int hss_count)
 {
-    int i, rv;
-    PyObject *ls_list = NULL, *ls_entry = NULL, *ls_value = NULL;
+    int i;
+    PyObject *ls_list = NULL, *ls_entry = NULL;
 
     /* prepare the dictionary holding the information */
     if ((ls_list = PyList_New(0)) == NULL)
         goto exit_fail;
 
     for (i = 0; i < hss_count; i++) {
-        if ((ls_entry = PyDict_New()) == NULL)
-            goto exit_fail;
 
-        /* fill the dictionary information: host_id */
-        if ((ls_value = PyInt_FromLong(hss[i].host_id)) == NULL)
-            goto exit_fail;
-        rv = PyDict_SetItemString(ls_entry, "host_id", ls_value);
-        Py_DECREF(ls_value);
-        if (rv != 0)
-            goto exit_fail;
-
-        /* fill the dictionary information: generation */
-        if ((ls_value = PyInt_FromLong(hss[i].generation)) == NULL)
-            goto exit_fail;
-        rv = PyDict_SetItemString(ls_entry, "generation", ls_value);
-        Py_DECREF(ls_value);
-        if (rv != 0)
-            goto exit_fail;
-
-        /* fill the dictionary information: timestamp */
-        if ((ls_value = PyInt_FromLong(hss[i].timestamp)) == NULL)
-            goto exit_fail;
-        rv = PyDict_SetItemString(ls_entry, "timestamp", ls_value);
-        Py_DECREF(ls_value);
-        if (rv != 0)
-            goto exit_fail;
-
-        /* fill the dictionary information: io_timeout */
-        if ((ls_value = PyInt_FromLong(hss[i].io_timeout)) == NULL)
-            goto exit_fail;
-        rv = PyDict_SetItemString(ls_entry, "io_timeout", ls_value);
-        Py_DECREF(ls_value);
-        if (rv != 0)
-            goto exit_fail;
-
-        /* fill the dictionary information: flags */
-        if ((ls_value = PyInt_FromLong(hss[i].flags)) == NULL)
-            goto exit_fail;
-        rv = PyDict_SetItemString(ls_entry, "flags", ls_value);
-        Py_DECREF(ls_value);
-        if (rv != 0)
+        /* fill the dictionary information */
+        ls_entry = Py_BuildValue(
+                "{s:K,s:K,s:K,s:I,s:I}",
+                "host_id", hss[i].host_id,
+                "generation", hss[i].generation,
+                "timestamp", hss[i].timestamp,
+                "io_timeout", hss[i].io_timeout,
+                "flags", hss[i].flags);
+        if (ls_entry == NULL)
             goto exit_fail;
 
         if (PyList_Append(ls_list, ls_entry) != 0)
