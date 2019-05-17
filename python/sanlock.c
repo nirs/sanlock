@@ -124,44 +124,26 @@ __parse_resource(PyObject *obj, struct sanlk_resource **res_ret)
     res->num_disks = num_disks;
 
     for (i = 0; i < num_disks; i++) {
-        const char *p = NULL;
-        PyObject *tuple, *path = NULL, *offset = NULL;
+        PyObject *disk;
+        const char *path;
+        uint64_t offset;
 
-        tuple = PyList_GetItem(obj, i);
+        disk = PyList_GetItem(obj, i);
 
-        if (PyTuple_Check(tuple)) {
-            if (PyTuple_Size(tuple) != 2) {
-                __set_exception(EINVAL, "Invalid resource tuple");
-                goto exit_fail;
-            }
+        if (!PyTuple_Check(disk)) {
+            set_value_error("Invalid disk %s", disk);
+            goto exit_fail;
 
-            path = PyTuple_GetItem(tuple, 0);
-            offset = PyTuple_GetItem(tuple, 1);
+        }
 
-            p = pystring_as_cstring(path);
-
-            if (!PyInt_Check(offset)) {
-                __set_exception(EINVAL, "Invalid resource offset");
-                goto exit_fail;
-            }
-        } else {
-            /* handle invalid non-tuple resource input */
-            set_value_error("invalid disk value: %s", tuple);
+        if (!PyArg_ParseTuple(disk, "sK", &path, &offset)) {
+            /* Override the error since it confusing in this context. */
+            set_value_error("Invalid disk %s", disk);
             goto exit_fail;
         }
 
-        if (p == NULL) {
-            __set_exception(EINVAL, "Invalid resource path");
-            goto exit_fail;
-        }
-
-        strncpy(res->disks[i].path, p, SANLK_PATH_LEN - 1);
-
-        if (offset == NULL) {
-            res->disks[i].offset = 0;
-        } else {
-            res->disks[i].offset = PyInt_AsLong(offset);
-        }
+        strncpy(res->disks[i].path, path, SANLK_PATH_LEN - 1);
+        res->disks[i].offset = offset;
     }
 
     *res_ret = res;
