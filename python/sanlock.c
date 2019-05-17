@@ -1760,3 +1760,5 @@ initsanlock(void)
     }
 
 }
+
+/* vim: set expandtab shiftwidth=4 tabstop=4 : */
