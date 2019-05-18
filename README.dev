@@ -29,42 +29,20 @@ To run only tests matching the substring "foo":
 Testing 4K support
 ==================
 
-This requires manual setup for creating a block device using 4k sector size,
-optionally creating and mounting a file system, and passing the test path to
-tests. The setup must be done as root, but the tests can run later as the
-current user.
+To enable the 4k tests, you need to setup 4k stroage for the tests:
 
-Common setup
-------------
+    $ python tests/storage.py setup
 
-1. Create a backing file:
+This creates two loop devices with 4k sector size; one for testing sanlock with
+4k block device, and the other for testing with a filesystem backed by a 4k
+block device.
 
-    $ truncate -s 1G /var/tmp/backing
+To teardown the storage:
 
-2. Create a loop device with 4k sector size:
+    $ python tests/storage.py teardown
 
-    $ sudo losetup -f /var/tmp/backing --show --sector-size=4096
-    /dev/loop2
+The script unmounts the filesystem and detaches the loop devices.
 
-3. Change the device (or mountpoint) owner to current user
-
-    $ sudo chown $USER:$USER /dev/loop2
-
-Testing 4k block device
------------------------
-
-Run the tests with USER_4K_PATH environment variable:
-
-    $ USER_4K_PATH=/dev/loop2 tox -e py27
-
-Testing 4k file system
-----------------------
-
-To test file system on top of 4k block device, create a file system on the
-device, mount it, and create a file for testing lockspace or resources:
-
-    $ sudo mkfs.xfs /dev/loop2
-    $ sudo mount /dev/loop2 /tmp/sanlock-4k
-    $ sudo chown $USER:$USER /tmp/sanlock-4k
-    $ truncate -s 128m /tmp/sanlock-4k/disk
-    $ USER_4K_PATH=/tmp/sanlock-4k/disk tox -e py27
+The storage helper script uses sudo to perform privileged operations. The best
+way to use it is to setup the environment once at the start of the session, and
+teardown when you finish.
