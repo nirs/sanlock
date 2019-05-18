@@ -475,7 +475,7 @@ py_read_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     uint32_t io_timeout = 0;
     const char *path;
     struct sanlk_lockspace ls;
-    PyObject *ls_info = NULL, *ls_entry = NULL;
+    PyObject *ls_info = NULL;
 
     static char *kwlist[] = {"path", "offset", "align", "sector", NULL};
 
@@ -508,33 +508,20 @@ py_read_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
         return NULL;
     }
 
-    /* prepare the dictionary holding the information */
-    if ((ls_info = PyDict_New()) == NULL)
-        goto exit_fail;
-
-    /* fill the dictionary information: lockspace */
-    if ((ls_entry = PyString_FromString(ls.name)) == NULL)
-        goto exit_fail;
-    rv = PyDict_SetItemString(ls_info, "lockspace", ls_entry);
-    Py_DECREF(ls_entry);
-    if (rv != 0)
-        goto exit_fail;
-
-    /* fill the dictionary information: iotimeout */
-    if ((ls_entry = PyInt_FromLong(io_timeout)) == NULL)
-        goto exit_fail;
-    rv = PyDict_SetItemString(ls_info, "iotimeout", ls_entry);
-    Py_DECREF(ls_entry);
-    if (rv != 0)
-        goto exit_fail;
+    /* fill the information dictionary */
+    ls_info = Py_BuildValue(
+#if PY_MAJOR_VERSION == 2
+            "{s:s,s:I}",
+#else
+            "{s:y,s:I}",
+#endif
+            "lockspace", ls.name,
+            "iotimeout", io_timeout);
+    if (ls_info  == NULL)
+        return NULL;
 
     /* success */
     return ls_info;
-
-    /* failure */
-exit_fail:
-    Py_XDECREF(ls_info);
-    return NULL;
 }
 
 /* read_resource */
