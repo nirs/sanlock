@@ -273,7 +273,7 @@ py_register(PyObject *self __unused, PyObject *args)
         return NULL;
     }
 
-    return PyInt_FromLong(sanlockfd);
+    return Py_BuildValue("i", sanlockfd);
 }
 
 /* get_alignment */
@@ -306,7 +306,7 @@ py_get_alignment(PyObject *self __unused, PyObject *args)
         return NULL;
     }
 
-    return PyInt_FromLong(rv);
+    return Py_BuildValue("i", rv);
 }
 
 /* init_lockspace */
