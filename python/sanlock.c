@@ -878,7 +878,7 @@ py_get_lockspaces(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
     int rv, i, lss_count;
     struct sanlk_lockspace *lss = NULL;
-    PyObject *ls_list = NULL, *ls_entry = NULL, *ls_value = NULL;
+    PyObject *ls_list = NULL, *ls_entry = NULL;
 
     /* get all the lockspaces (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -895,47 +895,20 @@ py_get_lockspaces(PyObject *self __unused, PyObject *args, PyObject *keywds)
         goto exit_fail;
 
     for (i = 0; i < lss_count; i++) {
-        if ((ls_entry = PyDict_New()) == NULL)
-            goto exit_fail;
 
-        /* fill the dictionary information: lockspace */
-        if ((ls_value = PyString_FromString(lss[i].name)) == NULL)
-            goto exit_fail;
-        rv = PyDict_SetItemString(ls_entry, "lockspace", ls_value);
-        Py_DECREF(ls_value);
-        if (rv != 0)
-            goto exit_fail;
-
-        /* fill the dictionary information: host_id */
-        if ((ls_value = PyInt_FromLong(lss[i].host_id)) == NULL)
-            goto exit_fail;
-        rv = PyDict_SetItemString(ls_entry, "host_id", ls_value);
-        Py_DECREF(ls_value);
-        if (rv != 0)
-            goto exit_fail;
-
-        /* fill the dictionary information: path */
-        if ((ls_value = PyString_FromString(lss[i].host_id_disk.path)) == NULL)
-            goto exit_fail;
-        rv = PyDict_SetItemString(ls_entry, "path", ls_value);
-        Py_DECREF(ls_value);
-        if (rv != 0)
-            goto exit_fail;
-
-        /* fill the dictionary information: offset */
-        if ((ls_value = PyInt_FromLong(lss[i].host_id_disk.offset)) == NULL)
-            goto exit_fail;
-        rv = PyDict_SetItemString(ls_entry, "offset", ls_value);
-        Py_DECREF(ls_value);
-        if (rv != 0)
-            goto exit_fail;
-
-        /* fill the dictionary information: flags */
-        if ((ls_value = PyInt_FromLong(lss[i].flags)) == NULL)
-            goto exit_fail;
-        rv = PyDict_SetItemString(ls_entry, "flags", ls_value);
-        Py_DECREF(ls_value);
-        if (rv != 0)
+        /* fill the dictionary information */
+        ls_entry = Py_BuildValue(
+#if PY_MAJOR_VERSION == 2
+                "{s:s,s:K,s:s,s:K,s:I}",
+#else
+                "{s:y,s:K,s:s,s:K,s:I}",
+#endif
+                "lockspace", lss[i].name,
+                "host_id", lss[i].host_id,
+                "path", lss[i].host_id_disk.path,
+                "offset", lss[i].host_id_disk.offset,
+                "flags", lss[i].flags);
+        if (ls_entry == NULL)
             goto exit_fail;
 
         if (PyList_Append(ls_list, ls_entry) != 0)
