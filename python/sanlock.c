@@ -538,7 +538,7 @@ py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
     long align = ALIGNMENT_1M;
     const char *path;
     struct sanlk_resource *rs;
-    PyObject *rs_info = NULL, *rs_entry = NULL;
+    PyObject *rs_info = NULL;
 
     static char *kwlist[] = {"path", "offset", "align", "sector", NULL};
 
@@ -582,31 +582,16 @@ py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
     }
 
     /* prepare the dictionary holding the information */
-    if ((rs_info = PyDict_New()) == NULL)
-        goto exit_fail;
-
-    /* fill the dictionary information: lockspace */
-    if ((rs_entry = PyString_FromString(rs->lockspace_name)) == NULL)
-        goto exit_fail;
-    rv = PyDict_SetItemString(rs_info, "lockspace", rs_entry);
-    Py_DECREF(rs_entry);
-    if (rv != 0)
-        goto exit_fail;
-
-    /* fill the dictionary information: resource */
-    if ((rs_entry = PyString_FromString(rs->name)) == NULL)
-        goto exit_fail;
-    rv = PyDict_SetItemString(rs_info, "resource", rs_entry);
-    Py_DECREF(rs_entry);
-    if (rv != 0)
-        goto exit_fail;
-
-    /* fill the dictionary information: version */
-    if ((rs_entry = PyLong_FromUnsignedLong(rs->lver)) == NULL)
-        goto exit_fail;
-    rv = PyDict_SetItemString(rs_info, "version", rs_entry);
-    Py_DECREF(rs_entry);
-    if (rv != 0)
+    rs_info = Py_BuildValue(
+#if PY_MAJOR_VERSION == 2
+        "{s:s,s:s,s:K}",
+#else
+        "{s:y,s:y,s:K}",
+#endif
+        "lockspace", rs->lockspace_name,
+        "resource", rs->name,
+        "version", rs->lver);
+    if (rs_info  == NULL)
         goto exit_fail;
 
     /* success */
