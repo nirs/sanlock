@@ -147,7 +147,7 @@ def test_write_resource(tmpdir, sanlock_daemon, filename, encoding, size, offset
     disks = [(path, offset)]
 
     # Test read and write with default alignment and sector size values.
-    sanlock.write_resource(b"ls_name", "res_name", disks)
+    sanlock.write_resource(b"ls_name", b"res_name", disks)
 
     res = sanlock.read_resource(path, offset=offset)
     assert res == {
@@ -158,7 +158,7 @@ def test_write_resource(tmpdir, sanlock_daemon, filename, encoding, size, offset
 
     # Test read and write with explicit alignment and sector size values.
     sanlock.write_resource(
-        b"ls_name", "res_name", disks, align=ALIGNMENT_1M,
+        b"ls_name", b"res_name", disks, align=ALIGNMENT_1M,
         sector=SECTOR_SIZE_512)
 
     res = sanlock.read_resource(
@@ -169,7 +169,7 @@ def test_write_resource(tmpdir, sanlock_daemon, filename, encoding, size, offset
         "version": 0
     }
 
-    owners = sanlock.read_resource_owners(b"ls_name", "res_name", disks)
+    owners = sanlock.read_resource_owners(b"ls_name", b"res_name", disks)
     assert owners == []
 
     with io.open(path, "rb") as f:
@@ -193,7 +193,7 @@ def test_write_resource_4k(sanlock_daemon, user_4k_path, align):
     util.write_guard(user_4k_path, align)
 
     sanlock.write_resource(
-        b"ls_name", "res_name", disks, align=align, sector=SECTOR_SIZE_4K)
+        b"ls_name", b"res_name", disks, align=align, sector=SECTOR_SIZE_4K)
 
     res = sanlock.read_resource(
         user_4k_path, align=align, sector=SECTOR_SIZE_4K)
@@ -205,7 +205,7 @@ def test_write_resource_4k(sanlock_daemon, user_4k_path, align):
     }
 
     owners = sanlock.read_resource_owners(
-        b"ls_name", "res_name", disks, align=align, sector=SECTOR_SIZE_4K)
+        b"ls_name", b"res_name", disks, align=align, sector=SECTOR_SIZE_4K)
     assert owners == []
 
     # Verify that resource was written.
@@ -223,7 +223,7 @@ def test_write_resource_4k_invalid_sector_size(sanlock_daemon, user_4k_path):
 
     with pytest.raises(sanlock.SanlockException) as e:
         sanlock.write_resource(
-            b"ls_name", "res_name", disks, sector=SECTOR_SIZE_512)
+            b"ls_name", b"res_name", disks, sector=SECTOR_SIZE_512)
     assert e.value.errno == errno.EINVAL
 
 
@@ -232,7 +232,7 @@ def test_read_resource_4k_invalid_sector_size(sanlock_daemon, user_4k_path):
 
     sanlock.write_resource(
         b"ls_name",
-        "res_name",
+        b"res_name",
         disks,
         align=ALIGNMENT_1M,
         sector=SECTOR_SIZE_4K)
@@ -248,14 +248,14 @@ def test_read_resource_owners_4k_invalid_sector_size(
 
     sanlock.write_resource(
         b"ls_name",
-        "res_name",
+        b"res_name",
         disks,
         align=ALIGNMENT_1M,
         sector=SECTOR_SIZE_4K)
 
     with pytest.raises(sanlock.SanlockException) as e:
         sanlock.read_resource_owners(
-            b"ls_name", "res_name", disks, sector=SECTOR_SIZE_512)
+            b"ls_name", b"res_name", disks, sector=SECTOR_SIZE_512)
     assert e.value.errno == errno.EINVAL
 
 
@@ -266,7 +266,7 @@ def test_read_resource_owners_invalid_align_size(tmpdir, sanlock_daemon):
 
     sanlock.write_resource(
         b"ls_name",
-        "res_name",
+        b"res_name",
         disks,
         align=ALIGNMENT_1M,
         sector=SECTOR_SIZE_512)
@@ -274,7 +274,7 @@ def test_read_resource_owners_invalid_align_size(tmpdir, sanlock_daemon):
     with pytest.raises(sanlock.SanlockException) as e:
         sanlock.read_resource_owners(
             b"ls_name",
-            "res_name",
+            b"res_name",
             disks,
             align=ALIGNMENT_2M,
             sector=SECTOR_SIZE_512)
@@ -387,7 +387,7 @@ def test_acquire_release_resource(tmpdir, sanlock_daemon, size, offset):
     assert host["flags"] == sanlock.HOST_LIVE
 
     disks = [(res_path, offset)]
-    sanlock.write_resource(b"ls_name", "res_name", disks)
+    sanlock.write_resource(b"ls_name", b"res_name", disks)
 
     res = sanlock.read_resource(res_path, offset=offset)
     assert res == {
@@ -396,11 +396,11 @@ def test_acquire_release_resource(tmpdir, sanlock_daemon, size, offset):
         "version": 0
     }
 
-    owners = sanlock.read_resource_owners(b"ls_name", "res_name", disks)
+    owners = sanlock.read_resource_owners(b"ls_name", b"res_name", disks)
     assert owners == []
 
     fd = sanlock.register()
-    sanlock.acquire(b"ls_name", "res_name", disks, slkfd=fd)
+    sanlock.acquire(b"ls_name", b"res_name", disks, slkfd=fd)
 
     res = sanlock.read_resource(res_path, offset=offset)
     assert res == {
@@ -409,7 +409,7 @@ def test_acquire_release_resource(tmpdir, sanlock_daemon, size, offset):
         "version": 1
     }
 
-    owner = sanlock.read_resource_owners(b"ls_name", "res_name", disks)[0]
+    owner = sanlock.read_resource_owners(b"ls_name", b"res_name", disks)[0]
 
     assert owner["host_id"] == 1
     assert owner["flags"] == 0
@@ -421,7 +421,7 @@ def test_acquire_release_resource(tmpdir, sanlock_daemon, size, offset):
     assert host["flags"] == sanlock.HOST_LIVE
     assert host["generation"] == owner["generation"]
 
-    sanlock.release(b"ls_name", "res_name", disks, slkfd=fd)
+    sanlock.release(b"ls_name", b"res_name", disks, slkfd=fd)
 
     res = sanlock.read_resource(res_path, offset=offset)
     assert res == {
@@ -430,7 +430,7 @@ def test_acquire_release_resource(tmpdir, sanlock_daemon, size, offset):
         "version": 1
     }
 
-    owners = sanlock.read_resource_owners(b"ls_name", "res_name", disks)
+    owners = sanlock.read_resource_owners(b"ls_name", b"res_name", disks)
     assert owners == []
 
 
@@ -463,7 +463,7 @@ def test_write_resource_invalid_align_sector(
 
     with pytest.raises(ValueError):
         sanlock.write_resource(
-            b"ls_name", "res_name", disks, align=align, sector=sector)
+            b"ls_name", b"res_name", disks, align=align, sector=sector)
 
 
 @pytest.mark.parametrize("disk", [
@@ -484,6 +484,6 @@ def test_write_resource_invalid_disk(tmpdir, sanlock_daemon, disk):
     # Test parsing disks list with invalid content.
     disks = [disk]
     with pytest.raises(ValueError) as e:
-        sanlock.write_resource(b"ls_name", "res_name", disks)
+        sanlock.write_resource(b"ls_name", b"res_name", disks)
     assert repr(disk) in str(e.value)
 
