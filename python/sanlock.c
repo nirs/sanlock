@@ -132,14 +132,14 @@ __parse_resource(PyObject *obj, struct sanlk_resource **res_ret)
 
         if (!PyTuple_Check(disk)) {
             set_error(PyExc_ValueError, "Invalid disk %s", disk);
-            goto exit_fail;
+            goto finally;
 
         }
 
         if (!PyArg_ParseTuple(disk, "sK", &path, &offset)) {
             /* Override the error since it confusing in this context. */
             set_error(PyExc_ValueError, "Invalid disk %s", disk);
-            goto exit_fail;
+            goto finally;
         }
 
         strncpy(res->disks[i].path, path, SANLK_PATH_LEN - 1);
@@ -149,7 +149,7 @@ __parse_resource(PyObject *obj, struct sanlk_resource **res_ret)
     *res_ret = res;
     return 0;
 
-exit_fail:
+finally:
     free(res);
     return -1;
 }
@@ -222,7 +222,7 @@ __hosts_to_list(struct sanlk_host *hss, int hss_count)
 
     /* prepare the dictionary holding the information */
     if ((ls_list = PyList_New(0)) == NULL)
-        goto exit_fail;
+        goto finally;
 
     for (i = 0; i < hss_count; i++) {
 
@@ -235,10 +235,10 @@ __hosts_to_list(struct sanlk_host *hss, int hss_count)
                 "io_timeout", hss[i].io_timeout,
                 "flags", hss[i].flags);
         if (ls_entry == NULL)
-            goto exit_fail;
+            goto finally;
 
         if (PyList_Append(ls_list, ls_entry) != 0)
-            goto exit_fail;
+            goto finally;
 
         Py_DECREF(ls_entry);
     }
@@ -246,7 +246,7 @@ __hosts_to_list(struct sanlk_host *hss, int hss_count)
     return ls_list;
 
     /* failure */
-exit_fail:
+finally:
     Py_XDECREF(ls_entry);
     Py_XDECREF(ls_list);
     return NULL;
@@ -309,6 +309,43 @@ py_get_alignment(PyObject *self __unused, PyObject *args)
     return Py_BuildValue("i", rv);
 }
 
+/*
+ * Convert parsed arg into PyBytes object.
+ * For Python 2:
+ * If arg is unicode onject, ascii encode it to new PyBytes object passed by addr.
+ * If arg is a bytes object, inc its refcount and pass it in addr.
+ * Set TypeError and return 0 if arg doens not comply to any of the above.
+ * Return 1 on a successful conversion.
+ * For Python 3:
+ * If arg is a bytes object, inc its refcount and pass it in addr.
+ * Set TypeError and return 0 otherwise.
+ * Return 1 on a successful conversion.
+*/
+static int
+convert_to_pybytes(PyObject* arg, void *addr)
+{
+    assert(arg && "convert_to_pybytes called with NULL arg");
+
+#if PY_MAJOR_VERSION == 2
+    if (PyUnicode_Check(arg)) {
+        PyObject *bytes = PyUnicode_AsASCIIString(arg);
+        if (bytes == NULL)
+            return 0;
+        *(PyObject **)addr = bytes;
+        return 1;
+    }
+#endif
+
+    if (PyBytes_Check(arg)) {
+        Py_INCREF(arg);
+        *(PyObject **)addr = arg;
+        return 1;
+    }
+
+    set_error(PyExc_TypeError, "Argument type is not bytes: %s", arg);
+    return 0;
+}
+
 /* init_lockspace */
 PyDoc_STRVAR(pydoc_init_lockspace, "\
 init_lockspace(lockspace, path, offset=0, max_hosts=0, num_hosts=0, \
@@ -319,8 +356,9 @@ Initialize a device to be used as sanlock lockspace.");
 static PyObject *
 py_init_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, max_hosts = 0, num_hosts = 0, use_aio = 1;
-    const char *lockspace, *path;
+    int rv = -1, max_hosts = 0, num_hosts = 0, use_aio = 1;
+    PyObject *lockspace = NULL;
+    const char *path;
     struct sanlk_lockspace ls;
 
     static char *kwlist[] = {"lockspace", "path", "offset",
@@ -330,14 +368,14 @@ py_init_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ss|kiii", kwlist,
-        &lockspace, &path, &ls.host_id_disk.offset, &max_hosts,
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&s|kiii", kwlist,
+        convert_to_pybytes, &lockspace, &path, &ls.host_id_disk.offset, &max_hosts,
         &num_hosts, &use_aio)) {
-        return NULL;
+        goto finally;
     }
 
     /* prepare sanlock names */
-    strncpy(ls.name, lockspace, SANLK_NAME_LEN);
+    strncpy(ls.name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
     strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN - 1);
 
     /* init sanlock lockspace (gil disabled) */
@@ -347,9 +385,13 @@ py_init_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv != 0) {
         __set_exception(rv, "Sanlock lockspace init failure");
-        return NULL;
+        goto finally;
     }
 
+finally:
+    Py_XDECREF(lockspace);
+    if (rv != 0)
+        return NULL;
     Py_RETURN_NONE;
 }
 
@@ -364,29 +406,28 @@ The disks must be in the format: [(path, offset), ... ]");
 static PyObject *
 py_init_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, max_hosts = 0, num_hosts = 0, use_aio = 1;
-    const char *lockspace, *resource;
-    struct sanlk_resource *res;
-    PyObject *disks;
+    int rv = -1, max_hosts = 0, num_hosts = 0, use_aio = 1;
+    PyObject *disks, *lockspace = NULL, *resource= NULL;
+    struct sanlk_resource *res = NULL;
 
     static char *kwlist[] = {"lockspace", "resource", "disks", "max_hosts",
                                 "num_hosts", "use_aio", NULL};
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|iii",
-        kwlist, &lockspace, &resource, &PyList_Type, &disks, &max_hosts,
-        &num_hosts, &use_aio)) {
-        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&O&O!|iii",
+        kwlist, convert_to_pybytes, &lockspace, convert_to_pybytes, &resource, 
+        &PyList_Type, &disks, &max_hosts, &num_hosts, &use_aio)) {
+        goto finally;
     }
 
     /* parse and check sanlock resource */
     if (__parse_resource(disks, &res) < 0) {
-        return NULL;
+        goto finally;
     }
 
     /* prepare sanlock names */
-    strncpy(res->lockspace_name, lockspace, SANLK_NAME_LEN);
-    strncpy(res->name, resource, SANLK_NAME_LEN);
+    strncpy(res->lockspace_name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
+    strncpy(res->name, PyBytes_AsString(resource), SANLK_NAME_LEN);
 
     /* init sanlock resource (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -395,15 +436,16 @@ py_init_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv != 0) {
         __set_exception(rv, "Sanlock resource init failure");
-        goto exit_fail;
+        goto finally;
     }
 
-    free(res);
+finally:
+    Py_XDECREF(lockspace);
+    Py_XDECREF(resource);
+    if (res) free(res);
+    if (rv != 0)
+        return NULL;
     Py_RETURN_NONE;
-
-exit_fail:
-    free(res);
-    return NULL;
 }
 
 /* write_lockspace */
@@ -417,10 +459,11 @@ Sector can be one of (512, 4096).");
 static PyObject *
 py_write_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, max_hosts = 0, sector = SECTOR_SIZE_512;
+    int rv = -1, max_hosts = 0, sector = SECTOR_SIZE_512;
     long align = ALIGNMENT_1M;
     uint32_t io_timeout = 0;
-    const char *lockspace, *path;
+    PyObject *lockspace = NULL;
+    const char *path;
     struct sanlk_lockspace ls;
 
     static char *kwlist[] = {"lockspace", "path", "offset", "max_hosts",
@@ -430,22 +473,22 @@ py_write_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ss|kiIli", kwlist,
-        &lockspace, &path, &ls.host_id_disk.offset, &max_hosts,
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&s|kiIli", kwlist,
+        convert_to_pybytes, &lockspace, &path, &ls.host_id_disk.offset, &max_hosts,
         &io_timeout, &align, &sector)) {
-        return NULL;
+        goto finally;
     }
 
     /* prepare sanlock names */
-    strncpy(ls.name, lockspace, SANLK_NAME_LEN);
+    strncpy(ls.name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
     strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN - 1);
 
     /* set alignment/sector flags */
     if (add_align_flag(align, &ls.flags) == -1)
-        return NULL;
+        goto finally;
 
     if (add_sector_flag(sector, &ls.flags) == -1)
-        return NULL;
+        goto finally;
 
     /* write sanlock lockspace (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -454,9 +497,13 @@ py_write_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv != 0) {
         __set_exception(rv, "Sanlock lockspace write failure");
-        return NULL;
+        goto finally;
     }
 
+finally:
+    Py_XDECREF(lockspace);
+    if (rv != 0)
+        return NULL;
     Py_RETURN_NONE;
 }
 
@@ -558,7 +605,7 @@ py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
     /* parse python tuple */
     if (!PyArg_ParseTupleAndKeywords(args, keywds, "s|kli", kwlist,
         &path, &(rs->disks[0].offset), &align, &sector)) {
-        goto exit_fail;
+        goto finally;
     }
 
     /* prepare the resource disk path */
@@ -566,10 +613,10 @@ py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     /* set alignment/sector flags */
     if (add_align_flag(align, &rs->flags) == -1)
-        goto exit_fail;
+        goto finally;
 
     if (add_sector_flag(sector, &rs->flags) == -1)
-        goto exit_fail;
+        goto finally;
 
     /* read sanlock resource (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -578,7 +625,7 @@ py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv != 0) {
         __set_exception(rv, "Sanlock resource read failure");
-        goto exit_fail;
+        goto finally;
     }
 
     /* prepare the dictionary holding the information */
@@ -592,17 +639,12 @@ py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
         "resource", rs->name,
         "version", rs->lver);
     if (rs_info  == NULL)
-        goto exit_fail;
+        goto finally;
 
-    /* success */
-    free(rs);
+finally:
+    if(rs) free(rs);
+    /* rs_info is either NULL or returned - no decref here */
     return rs_info;
-
-    /* failure */
-exit_fail:
-    free(rs);
-    Py_XDECREF(rs_info);
-    return NULL;
 }
 
 /* write_resource */
@@ -619,38 +661,37 @@ Sector can be one of (512, 4096).");
 static PyObject *
 py_write_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, max_hosts = 0, num_hosts = 0, clear = 0, sector = SECTOR_SIZE_512;
+    int rv = -1, max_hosts = 0, num_hosts = 0, clear = 0, sector = SECTOR_SIZE_512;
     long align = ALIGNMENT_1M;
-    const char *lockspace, *resource;
-    struct sanlk_resource *rs;
-    PyObject *disks;
+    PyObject *disks, *lockspace = NULL, *resource = NULL;
     uint32_t flags = 0;
+    struct sanlk_resource *rs = NULL;
 
     static char *kwlist[] = {"lockspace", "resource", "disks", "max_hosts",
                                 "num_hosts", "clear", "align", "sector", NULL};
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|iiili",
-        kwlist, &lockspace, &resource, &PyList_Type, &disks, &max_hosts,
-        &num_hosts, &clear, &align, &sector)) {
-        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&O&O!|iiili",
+        kwlist, convert_to_pybytes, &lockspace, convert_to_pybytes, &resource,
+        &PyList_Type, &disks, &max_hosts, &num_hosts, &clear, &align, &sector)) {
+        goto finally;
     }
 
     /* parse and check sanlock resource */
     if (__parse_resource(disks, &rs) < 0) {
-        return NULL;
+        goto finally;
     }
 
     /* prepare sanlock names */
-    strncpy(rs->lockspace_name, lockspace, SANLK_NAME_LEN);
-    strncpy(rs->name, resource, SANLK_NAME_LEN);
+    strncpy(rs->lockspace_name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
+    strncpy(rs->name, PyBytes_AsString(resource), SANLK_NAME_LEN);
 
     /* set alignment/sector flags */
     if (add_align_flag(align, &rs->flags) == -1)
-        goto exit_fail;
+        goto finally;
 
     if (add_sector_flag(sector, &rs->flags) == -1)
-        goto exit_fail;
+        goto finally;
 
     if (clear) {
         flags |= SANLK_WRITE_CLEAR;
@@ -663,15 +704,17 @@ py_write_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv != 0) {
         __set_exception(rv, "Sanlock resource write failure");
-        goto exit_fail;
+        goto finally;
     }
 
-    free(rs);
-    Py_RETURN_NONE;
 
-exit_fail:
-    free(rs);
-    return NULL;
+finally:
+    Py_XDECREF(lockspace);
+    Py_XDECREF(resource);
+    if(rs) free(rs);
+    if (rv != 0)
+        return NULL;
+    Py_RETURN_NONE;
 }
 
 /* add_lockspace */
@@ -685,9 +728,10 @@ overriding the default value (see the sanlock daemon parameter -o).");
 static PyObject *
 py_add_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, async = 0, flags = 0;
+    int rv = -1, async = 0, flags = 0;
     uint32_t iotimeout = 0;
-    const char *lockspace, *path;
+    PyObject *lockspace = NULL;
+    const char *path;
     struct sanlk_lockspace ls;
 
     static char *kwlist[] = {"lockspace", "host_id", "path", "offset",
@@ -697,10 +741,10 @@ py_add_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "sks|kIi", kwlist,
-        &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset, &iotimeout,
-        &async)) {
-        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&ks|kIi", kwlist,
+        convert_to_pybytes, &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset,
+        &iotimeout, &async)) {
+        goto finally;
     }
 
     /* prepare sanlock_add_lockspace flags */
@@ -709,7 +753,7 @@ py_add_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     }
 
     /* prepare sanlock names */
-    strncpy(ls.name, lockspace, SANLK_NAME_LEN);
+    strncpy(ls.name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
     strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN - 1);
 
     /* add sanlock lockspace (gil disabled) */
@@ -719,9 +763,13 @@ py_add_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv != 0) {
         __set_exception(rv, "Sanlock lockspace add failure");
-        return NULL;
+        goto finally;
     }
 
+finally:
+    Py_XDECREF(lockspace);
+    if (rv != 0)
+        return NULL;
     Py_RETURN_NONE;
 }
 
@@ -737,8 +785,9 @@ acquired or released.");
 static PyObject *
 py_inq_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, waitrs = 0, flags = 0;
-    const char *lockspace, *path;
+    int rv = -1, waitrs = 0, flags = 0;
+    PyObject *lockspace = NULL;
+    const char *path;
     struct sanlk_lockspace ls;
 
     static char *kwlist[] = {"lockspace", "host_id", "path", "offset",
@@ -748,10 +797,10 @@ py_inq_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "sks|ki", kwlist,
-        &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset,
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&ks|ki", kwlist,
+        convert_to_pybytes, &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset,
         &waitrs)) {
-        return NULL;
+        goto finally;
     }
 
     /* prepare sanlock_inq_lockspace flags */
@@ -760,7 +809,7 @@ py_inq_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     }
 
     /* prepare sanlock names */
-    strncpy(ls.name, lockspace, SANLK_NAME_LEN);
+    strncpy(ls.name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
     strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN - 1);
 
     /* add sanlock lockspace (gil disabled) */
@@ -768,6 +817,8 @@ py_inq_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     rv = sanlock_inq_lockspace(&ls, flags);
     Py_END_ALLOW_THREADS
 
+finally:
+    Py_XDECREF(lockspace);
     if (rv == 0) {
         Py_RETURN_TRUE;
     } else if (rv == -ENOENT) {
@@ -793,8 +844,9 @@ successful termination these leases will be released.");
 static PyObject *
 py_rem_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, async = 0, unused = 0, flags = 0;
-    const char *lockspace, *path;
+    int rv = -1, async = 0, unused = 0, flags = 0;
+    PyObject *lockspace = NULL;
+    const char *path;
     struct sanlk_lockspace ls;
 
     static char *kwlist[] = {"lockspace", "host_id", "path", "offset",
@@ -804,14 +856,14 @@ py_rem_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "sks|kii", kwlist,
-        &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset, &async,
-        &unused)) {
-        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&ks|kii", kwlist,
+        convert_to_pybytes, &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset,
+        &async, &unused)) {
+        goto finally;
     }
 
     /* prepare sanlock names */
-    strncpy(ls.name, lockspace, SANLK_NAME_LEN);
+    strncpy(ls.name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
     strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN - 1);
 
     /* prepare sanlock_rem_lockspace flags */
@@ -830,9 +882,13 @@ py_rem_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv != 0) {
         __set_exception(rv, "Sanlock lockspace remove failure");
-        return NULL;
+        goto finally;
     }
 
+finally:
+    Py_XDECREF(lockspace);
+    if (rv != 0)
+        return NULL;
     Py_RETURN_NONE;
 }
 
@@ -859,12 +915,12 @@ py_get_lockspaces(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv < 0) {
         __set_exception(rv, "Sanlock get lockspaces failure");
-        goto exit_fail;
+        goto finally;
     }
 
     /* prepare the dictionary holding the information */
     if ((ls_list = PyList_New(0)) == NULL)
-        goto exit_fail;
+        goto finally;
 
     for (i = 0; i < lss_count; i++) {
 
@@ -881,11 +937,12 @@ py_get_lockspaces(PyObject *self __unused, PyObject *args, PyObject *keywds)
                 "offset", lss[i].host_id_disk.offset,
                 "flags", lss[i].flags);
         if (ls_entry == NULL)
-            goto exit_fail;
+            goto finally;
 
         if (PyList_Append(ls_list, ls_entry) != 0)
-            goto exit_fail;
+            goto finally;
 
+        /* PyList_Append incs refcount for added item */
         Py_DECREF(ls_entry);
     }
 
@@ -894,7 +951,7 @@ py_get_lockspaces(PyObject *self __unused, PyObject *args, PyObject *keywds)
     return ls_list;
 
     /* failure */
-exit_fail:
+finally:
     if (lss) free(lss);
     Py_XDECREF(ls_entry);
     Py_XDECREF(ls_list);
@@ -917,32 +974,33 @@ static PyObject *
 py_get_hosts(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
     int rv, hss_count = 0;
+    PyObject *lockspace = NULL;
     uint64_t host_id = 0;
-    const char *lockspace = NULL;
     struct sanlk_host *hss = NULL;
     PyObject *ls_list = NULL;
 
     static char *kwlist[] = {"lockspace", "host_id", NULL};
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "s|k", kwlist,
-        &lockspace, &host_id)) {
-        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&|k", kwlist,
+        convert_to_pybytes, &lockspace, &host_id)) {
+        goto finally;
     }
 
     /* get all the lockspaces (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_get_hosts(lockspace, host_id, &hss, &hss_count, 0);
+    rv = sanlock_get_hosts(PyBytes_AsString(lockspace), host_id, &hss, &hss_count, 0);
     Py_END_ALLOW_THREADS
 
     if (rv < 0) {
         __set_exception(rv, "Sanlock get hosts failure");
-        goto exit_fail;
+        goto finally;
     }
 
     ls_list = __hosts_to_list(hss, hss_count);
 
-exit_fail:
+finally:
+    Py_XDECREF(lockspace);
     if (hss) free(hss);
     return ls_list;
 }
@@ -960,35 +1018,34 @@ The disks must be in the format: [(path, offset), ... ]\n");
 static PyObject *
 py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, sanlockfd = -1, pid = -1, shared = 0;
-    const char *lockspace, *resource;
-    struct sanlk_resource *res;
-    PyObject *disks, *version = Py_None;
+    int rv = -1, sanlockfd = -1, pid = -1, shared = 0;
+    PyObject *disks, *version = Py_None, *lockspace = NULL, *resource = NULL;
+    struct sanlk_resource *res = NULL;
 
     static char *kwlist[] = {"lockspace", "resource", "disks", "slkfd",
                                 "pid", "shared", "version", NULL};
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|iiiO", kwlist,
-        &lockspace, &resource, &PyList_Type, &disks, &sanlockfd, &pid,
-        &shared, &version)) {
-        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&O&O!|iiiO", kwlist,
+        convert_to_pybytes, &lockspace, convert_to_pybytes, &resource,
+        &PyList_Type, &disks, &sanlockfd, &pid, &shared, &version)) {
+        goto finally;
     }
 
     /* check if any of the slkfd or pid parameters was given */
     if (sanlockfd == -1 && pid == -1) {
         __set_exception(EINVAL, "Invalid slkfd and pid values");
-        return NULL;
+        goto finally;
     }
 
     /* parse and check sanlock resource */
     if (__parse_resource(disks, &res) < 0) {
-        return NULL;
+        goto finally;
     }
 
     /* prepare sanlock names */
-    strncpy(res->lockspace_name, lockspace, SANLK_NAME_LEN);
-    strncpy(res->name, resource, SANLK_NAME_LEN);
+    strncpy(res->lockspace_name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
+    strncpy(res->name, PyBytes_AsString(resource), SANLK_NAME_LEN);
 
     /* prepare sanlock flags */
     if (shared) {
@@ -1001,7 +1058,7 @@ py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
         res->lver = pyinteger_as_unsigned_long_long_mask(version);
         if (res->lver == (uint64_t)-1) {
             __set_exception(EINVAL, "Unable to convert the version value");
-            goto exit_fail;
+            goto finally;
         }
     }
 
@@ -1012,15 +1069,16 @@ py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv != 0) {
         __set_exception(rv, "Sanlock resource not acquired");
-        goto exit_fail;
+        goto finally;
     }
 
-    free(res);
+finally:
+    Py_XDECREF(lockspace);
+    Py_XDECREF(resource);
+    if (res) free(res);
+    if (rv != 0)
+        return NULL;
     Py_RETURN_NONE;
-
-exit_fail:
-    free(res);
-    return NULL;
 }
 
 /* release */
@@ -1032,28 +1090,28 @@ The disks must be in the format: [(path, offset), ... ]");
 static PyObject *
 py_release(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, sanlockfd = -1, pid = -1;
-    const char *lockspace, *resource;
-    struct sanlk_resource *res;
-    PyObject *disks;
+    int rv = -1, sanlockfd = -1, pid = -1;
+    PyObject *disks, *lockspace = NULL, *resource = NULL;
+    struct sanlk_resource *res = NULL;
 
     static char *kwlist[] = {"lockspace", "resource", "disks", "slkfd",
                                 "pid", NULL};
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|ii", kwlist,
-        &lockspace, &resource, &PyList_Type, &disks, &sanlockfd, &pid)) {
-        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&O&O!|ii", kwlist,
+        convert_to_pybytes, &lockspace, convert_to_pybytes, &resource,
+        &PyList_Type, &disks, &sanlockfd, &pid)) {
+        goto finally;
     }
 
     /* parse and check sanlock resource */
     if (__parse_resource(disks, &res) < 0) {
-        return NULL;
+        goto finally;
     }
 
     /* prepare sanlock names */
-    strncpy(res->lockspace_name, lockspace, SANLK_NAME_LEN);
-    strncpy(res->name, resource, SANLK_NAME_LEN);
+    strncpy(res->lockspace_name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
+    strncpy(res->name, PyBytes_AsString(resource), SANLK_NAME_LEN);
 
     /* release sanlock resource (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -1062,15 +1120,16 @@ py_release(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv != 0) {
         __set_exception(rv, "Sanlock resource not released");
-        goto exit_fail;
+        goto finally;
     }
 
-    free(res);
+finally:
+    Py_XDECREF(lockspace);
+    Py_XDECREF(resource);
+    if (res) free(res);
+    if (rv != 0)
+        return NULL;
     Py_RETURN_NONE;
-
-exit_fail:
-    free(res);
-    return NULL;
 }
 
 /* request */
@@ -1086,28 +1145,28 @@ The disks must be in the format: [(path, offset), ... ]");
 static PyObject *
 py_request(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, action = SANLK_REQ_GRACEFUL, flags = 0;
-    const char *lockspace, *resource;
-    struct sanlk_resource *res;
-    PyObject *disks, *version = Py_None;
+    int rv = -1, action = SANLK_REQ_GRACEFUL, flags = 0;
+    struct sanlk_resource *res = NULL;
+    PyObject *disks, *version = Py_None, *lockspace = NULL, *resource = NULL;
 
     static char *kwlist[] = {"lockspace", "resource", "disks", "action",
                                 "version", NULL};
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|iO", kwlist,
-        &lockspace, &resource, &PyList_Type, &disks, &action, &version)) {
-        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&O&O!|iO", kwlist,
+        convert_to_pybytes, &lockspace, convert_to_pybytes, &resource,
+        &PyList_Type, &disks, &action, &version)) {
+        goto finally;
     }
 
     /* parse and check sanlock resource */
     if (__parse_resource(disks, &res) < 0) {
-        return NULL;
+        goto finally;
     }
 
     /* prepare sanlock names */
-    strncpy(res->lockspace_name, lockspace, SANLK_NAME_LEN);
-    strncpy(res->name, resource, SANLK_NAME_LEN);
+    strncpy(res->lockspace_name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
+    strncpy(res->name, PyBytes_AsString(resource), SANLK_NAME_LEN);
 
     /* prepare the resource version */
     if (version == Py_None) {
@@ -1117,7 +1176,7 @@ py_request(PyObject *self __unused, PyObject *args, PyObject *keywds)
         res->lver = pyinteger_as_unsigned_long_long_mask(version);
         if (res->lver == (uint64_t)-1) {
             __set_exception(EINVAL, "Unable to convert the version value");
-            goto exit_fail;
+            goto finally;
         }
     }
 
@@ -1128,15 +1187,16 @@ py_request(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv != 0) {
         __set_exception(rv, "Sanlock request not submitted");
-        goto exit_fail;
+        goto finally;
     }
 
-    free(res);
+finally:
+    Py_XDECREF(lockspace);
+    Py_XDECREF(resource);
+    if (res) free(res);
+    if (rv != 0)
+        return NULL;
     Py_RETURN_NONE;
-
-exit_fail:
-    free(res);
-    return NULL;
 }
 
 /* read_resource_owners */
@@ -1156,36 +1216,36 @@ py_read_resource_owners(PyObject *self __unused, PyObject *args, PyObject *keywd
     int rv, hss_count = 0;
     int sector = SECTOR_SIZE_512;
     long align = ALIGNMENT_1M;
-    const char *lockspace, *resource;
+    PyObject *disks, *ls_list = NULL, *lockspace = NULL, *resource = NULL;
     struct sanlk_resource *res = NULL;
     struct sanlk_host *hss = NULL;
-    PyObject *disks, *ls_list = NULL;
 
     static char *kwlist[] = {"lockspace", "resource", "disks", "align",
                              "sector", NULL};
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|li", kwlist,
-        &lockspace, &resource, &PyList_Type, &disks, &align, &sector)) {
-        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&O&O!|li", kwlist,
+        convert_to_pybytes, &lockspace, convert_to_pybytes, &resource,
+        &PyList_Type, &disks, &align, &sector)) {
+        goto finally;
     }
 
     /* parse and check sanlock resource */
     if (__parse_resource(disks, &res) < 0) {
-        return NULL;
+        goto finally;
     }
 
     /* prepare sanlock names */
-    strncpy(res->lockspace_name, lockspace, SANLK_NAME_LEN);
-    strncpy(res->name, resource, SANLK_NAME_LEN);
+    strncpy(res->lockspace_name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
+    strncpy(res->name, PyBytes_AsString(resource), SANLK_NAME_LEN);
 
     /* set resource alignment and sector flags */
 
     if (add_align_flag(align, &res->flags) == -1)
-        goto exit_fail;
+        goto finally;
 
     if (add_sector_flag(sector, &res->flags) == -1)
-        goto exit_fail;
+        goto finally;
 
     /* read resource owners (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -1194,12 +1254,14 @@ py_read_resource_owners(PyObject *self __unused, PyObject *args, PyObject *keywd
 
     if (rv != 0) {
         __set_exception(rv, "Unable to read resource owners");
-        goto exit_fail;
+        goto finally;
     }
 
     ls_list = __hosts_to_list(hss, hss_count);
 
-exit_fail:
+finally:
+    Py_XDECREF(lockspace);
+    Py_XDECREF(resource);
     if (res) free(res);
     if (hss) free(hss);
     return ls_list;
@@ -1316,22 +1378,28 @@ unregister the event listener using end_event.");
 static PyObject *
 py_reg_event(PyObject *self __unused, PyObject *args)
 {
-    const char *lockspace = NULL;
+    PyObject *lockspace = NULL;
     int fd = -1;
 
-    if (!PyArg_ParseTuple(args, "s", &lockspace))
-        return NULL;
+    if (!PyArg_ParseTuple(args, "O&", convert_to_pybytes, &lockspace))
+        goto finally;
 
     Py_BEGIN_ALLOW_THREADS
-    fd = sanlock_reg_event(lockspace, NULL /* event */, 0 /* flags */);
+    fd = sanlock_reg_event(PyBytes_AsString(lockspace), NULL /* event */, 0 /* flags */);
     Py_END_ALLOW_THREADS
 
     if (fd < 0) {
         __set_exception(fd, "Unable to register event fd");
-        return NULL;
+        goto finally;
     }
 
     return Py_BuildValue("i", fd);
+
+finally:
+    Py_XDECREF(lockspace);
+    if (fd < 0)
+        return NULL;
+    Py_RETURN_NONE;
 }
 
 /* get_event */
@@ -1364,7 +1432,7 @@ py_get_event(PyObject *self __unused, PyObject *args)
         return NULL;
 
     if ((events = PyList_New(0)) == NULL)
-        goto exit_fail;
+        goto finally;
 
     for (;;) {
         Py_BEGIN_ALLOW_THREADS
@@ -1376,62 +1444,62 @@ py_get_event(PyObject *self __unused, PyObject *args)
 
         if (rv != 0) {
             __set_exception(rv, "Unable to get events");
-            goto exit_fail;
+            goto finally;
         }
 
         if ((item = PyDict_New()) == NULL)
-            goto exit_fail;
+            goto finally;
 
         /* from_host_id */
         if ((value = PyLong_FromUnsignedLongLong(from_host_id)) == NULL)
-            goto exit_fail;
+            goto finally;
         rv = PyDict_SetItemString(item, "from_host_id", value);
         Py_DECREF(value);
         if (rv != 0)
-            goto exit_fail;
+            goto finally;
 
         /* from_generation */
         if ((value = PyLong_FromUnsignedLongLong(from_generation)) == NULL)
-            goto exit_fail;
+            goto finally;
         rv = PyDict_SetItemString(item, "from_generation", value);
         Py_DECREF(value);
         if (rv != 0)
-            goto exit_fail;
+            goto finally;
 
         /* host_id */
         if ((value = PyLong_FromUnsignedLongLong(he.host_id)) == NULL)
-            goto exit_fail;
+            goto finally;
         rv = PyDict_SetItemString(item, "host_id", value);
         Py_DECREF(value);
         if (rv != 0)
-            goto exit_fail;
+            goto finally;
 
         /* generation */
         if ((value = PyLong_FromUnsignedLongLong(he.generation)) == NULL)
-            goto exit_fail;
+            goto finally;
         rv = PyDict_SetItemString(item, "generation", value);
         Py_DECREF(value);
         if (rv != 0)
-            goto exit_fail;
+            goto finally;
 
         /* event */
         if ((value = PyLong_FromUnsignedLongLong(he.event)) == NULL)
-            goto exit_fail;
+            goto finally;
         rv = PyDict_SetItemString(item, "event", value);
         Py_DECREF(value);
         if (rv != 0)
-            goto exit_fail;
+            goto finally;
 
         /* data */
         if ((value = PyLong_FromUnsignedLongLong(he.data)) == NULL)
-            goto exit_fail;
+            goto finally;
         rv = PyDict_SetItemString(item, "data", value);
         Py_DECREF(value);
         if (rv != 0)
-            goto exit_fail;
+            goto finally;
 
         if (PyList_Append(events, item) != 0)
-            goto exit_fail;
+            goto finally;
 
         Py_DECREF(item);
         item = NULL;
@@ -1439,7 +1507,7 @@ py_get_event(PyObject *self __unused, PyObject *args)
 
     return events;
 
-exit_fail:
+finally:
     Py_XDECREF(item);
     Py_XDECREF(events);
     return NULL;
@@ -1454,21 +1522,25 @@ static PyObject *
 py_end_event(PyObject *self __unused, PyObject *args)
 {
     int fd = -1;
-    const char *lockspace = NULL;
-    int rv;
+    PyObject *lockspace = NULL;
+    int rv = -1;
 
-    if (!PyArg_ParseTuple(args, "is", &fd, &lockspace))
-        return NULL;
+    if (!PyArg_ParseTuple(args, "iO&", &fd, convert_to_pybytes, &lockspace))
+        goto finally;
 
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_end_event(fd, lockspace, 0 /* flags */);
+    rv = sanlock_end_event(fd, PyBytes_AsString(lockspace), 0 /* flags */);
     Py_END_ALLOW_THREADS
 
     if (rv < 0) {
         __set_exception(rv, "Unable to unregister event fd");
-        return NULL;
+        goto finally;
     }
 
+finally:
+    Py_XDECREF(lockspace);
+    if (rv < 0)
+        return NULL;
     Py_RETURN_NONE;
 }
 
@@ -1527,29 +1599,33 @@ with -EBUSY error in this case.\n\
 static PyObject *
 py_set_event(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    const char *lockspace;
+    PyObject *lockspace = NULL;
     struct sanlk_host_event he = {0};
     uint32_t flags = 0;
-    int rv;
+    int rv = -1;
 
     static char *kwlist[] = {"lockspace", "host_id", "generation", "event",
                              "data", "flags", NULL};
 
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "sKKK|KI", kwlist,
-        &lockspace, &he.host_id, &he.generation, &he.event, &he.data,
-        &flags)) {
-        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&KKK|KI", kwlist,
+        convert_to_pybytes, &lockspace, &he.host_id, &he.generation, &he.event,
+        &he.data, &flags)) {
+        goto finally;
     }
 
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_set_event(lockspace, &he, flags);
+    rv = sanlock_set_event(PyBytes_AsString(lockspace), &he, flags);
     Py_END_ALLOW_THREADS
 
     if (rv < 0) {
         __set_exception(rv, "Unable to set event");
-        return NULL;
+        goto finally;
     }
 
+finally:
+    Py_XDECREF(lockspace);
+    if (rv < 0)
+        return NULL;
     Py_RETURN_NONE;
 }
 
@@ -1609,24 +1685,24 @@ initexception(void)
     PyObject *dict, *func, *meth, *excp = NULL;
 
     if ((dict = PyDict_New()) == NULL)
-        goto exit_fail;
+        goto finally;
 
     if ((func = PyCFunction_New(&sanlock_exception, NULL)) == NULL)
-        goto exit_fail;
+        goto finally;
 
     meth = PyObject_CallFunction((PyObject *) &PyProperty_Type, "O", func);
     Py_DECREF(func);
     if (meth == NULL)
-        goto exit_fail;
+        goto finally;
 
     rv = PyDict_SetItemString(dict, sanlock_exception.ml_name, meth);
     Py_DECREF(meth);
     if (rv < 0)
-        goto exit_fail;
+        goto finally;
 
     excp = PyErr_NewException("sanlock.SanlockException", NULL, dict);
 
-exit_fail:
+finally:
     Py_XDECREF(dict);
 
     return excp;
