@@ -305,12 +305,24 @@ def test_add_rem_lockspace(tmpdir, sanlock_daemon, size, offset):
         "ls_name", 1, path, offset=offset, wait=False)
     assert acquired is True
 
+    lockspaces = sanlock.get_lockspaces()
+    assert lockspaces == [{
+        'flags': 0,
+        'host_id': 1,
+        'lockspace': b'ls_name',
+        'offset': offset,
+        'path': path
+    }]
+
     sanlock.rem_lockspace("ls_name", 1, path, offset=offset)
 
     # Once the lockspace is released, we exepect to get False.
     acquired = sanlock.inq_lockspace(
         "ls_name", 1, path, offset=offset, wait=False)
     assert acquired is False
+
+    lockspaces = sanlock.get_lockspaces()
+    assert lockspaces == []
 
 
 def test_add_rem_lockspace_async(tmpdir, sanlock_daemon):
