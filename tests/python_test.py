@@ -8,8 +8,10 @@ import io
 import struct
 import time
 
-import six
+from contextlib import contextmanager
+
 import pytest
+import six
 
 import sanlock
 
@@ -47,6 +49,21 @@ FILE_NAMES = [
         marks=pytest.mark.xfail(
             six.PY3,
             reason="currently not supporting bytes paths")),
+]
+
+LOCKSPACE_OR_RESOURCE_NAMES = [
+    # Bytes are supported with python 2 and 3.
+    pytest.param(
+        b"\xd7\x90",
+        marks=pytest.mark.xfail(six.PY3, reason="bytes support not implemented yet")),
+    # Python 2 also supports str.
+    pytest.param(
+        "\xd7\x90",
+        marks=pytest.mark.skipif(six.PY3, reason="python 3 supports only bytes")),
+    # Python 2 also supports unicode with ascii content.
+    pytest.param(
+        u"ascii",
+        marks=pytest.mark.skipif(six.PY3, reason="python 3 supports only bytes")),
 ]
 
 @pytest.mark.parametrize("filename, encoding" , FILE_NAMES)
@@ -487,8 +504,84 @@ def test_write_resource_invalid_disk(tmpdir, sanlock_daemon, disk):
         sanlock.write_resource("ls_name", "res_name", disks)
     assert repr(disk) in str(e.value)
 
+
 @pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 def test_killpath(tmpdir, sanlock_daemon, filename, encoding):
     cmd_path = util.generate_path(tmpdir, filename, encoding)
     fd = sanlock.register()
     sanlock.killpath(cmd_path, [cmd_path], fd)
+
+
+@contextmanager
+def raises_sanlock_errno(expected_errno=errno.ECONNREFUSED):
+    with pytest.raises(sanlock.SanlockException) as e:
+        yield
+    assert e.value.errno == expected_errno
+
+
+@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
+def test_rem_lockspace_parse_args(no_sanlock_daemon, name):
+    with raises_sanlock_errno():
+        sanlock.rem_lockspace(name, 1, "ls_path", 0)
+
+
+@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
+def test_add_lockspace_parse_args(no_sanlock_daemon, name):
+    with raises_sanlock_errno():
+        sanlock.add_lockspace(name, 1, "ls_path", 0)
+
+
+@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
+def test_write_lockspace_parse_args(no_sanlock_daemon, name):
+    with raises_sanlock_errno():
+        sanlock.write_lockspace(name, "ls_path")
+
+
+@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
+def test_write_resource_parse_args(no_sanlock_daemon, name):
+    with raises_sanlock_errno():
+        sanlock.write_resource(name, "res_name", [("disk_path",0)])
+
+    with raises_sanlock_errno():
+        sanlock.write_resource("ls_name", name, [("disk_path",0)])
+
+
+@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
+def test_release_resource_parse_args(no_sanlock_daemon, name):
+    with raises_sanlock_errno():
+        sanlock.release(name, "res_name", [("disk_path",0)])
+
+    with raises_sanlock_errno():
+        sanlock.release("ls_name", name, [("disk_path",0)])
+
+
+@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
+def test_read_resource_owners_parse_args(no_sanlock_daemon, name):
+    with raises_sanlock_errno():
+        sanlock.read_resource_owners(name, "res_name", [("disk_path",0)])
+
+    with raises_sanlock_errno():
+        sanlock.read_resource_owners("ls_name", name, [("disk_path",0)])
+
+
+@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
+def test_get_hosts_parse_args(no_sanlock_daemon, name):
+    with raises_sanlock_errno():
+        sanlock.get_hosts(name, 1)
+
+
+@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
+def test_inq_lockspace_parse_args(no_sanlock_daemon, name):
+    with raises_sanlock_errno():
+        sanlock.inq_lockspace(name, 1, "path", wait=False)
+
+
+@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
+def test_reg_event_parse_args(no_sanlock_daemon, name):
+    with raises_sanlock_errno():
+        sanlock.reg_event(name)
+
+@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
+def test_end_event_parse_args(no_sanlock_daemon, name):
+    with raises_sanlock_errno(errno.EALREADY):
+        sanlock.end_event(-1, name)
