@@ -487,3 +487,8 @@ def test_write_resource_invalid_disk(tmpdir, sanlock_daemon, disk):
         sanlock.write_resource("ls_name", "res_name", disks)
     assert repr(disk) in str(e.value)
 
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+def test_killpath(tmpdir, sanlock_daemon, filename, encoding):
+    cmd_path = util.generate_path(tmpdir, filename, encoding)
+    fd = sanlock.register()
+    sanlock.killpath(cmd_path, [cmd_path], fd)
