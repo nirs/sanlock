@@ -34,6 +34,8 @@ ALIGNMENT_2M = 2 * MiB
 SECTOR_SIZE_512 = 512
 SECTOR_SIZE_4K = 4 * KiB
 
+DUMMY_PATH = "/no/such/path/at/all"
+
 
 FILE_NAMES = [
     #name, encoding
@@ -490,11 +492,11 @@ def test_write_resource_invalid_align_sector(
     b"\xd7\x90",
     # Tuple with incorrect length:
     (),
-    ("path",),
-    ("path", 0, "extra"),
+    (DUMMY_PATH,),
+    (DUMMY_PATH, 0, "extra"),
     # Tuple with invalid content:
-    (0, "path"),
-    ("path", "not an offset"),
+    (0, DUMMY_PATH),
+    (DUMMY_PATH, "not an offset"),
 ])
 def test_write_resource_invalid_disk(tmpdir, sanlock_daemon, disk):
     # Test parsing disks list with invalid content.
@@ -521,46 +523,46 @@ def raises_sanlock_errno(expected_errno=errno.ECONNREFUSED):
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 def test_rem_lockspace_parse_args(no_sanlock_daemon, name):
     with raises_sanlock_errno():
-        sanlock.rem_lockspace(name, 1, "ls_path", 0)
+        sanlock.rem_lockspace(name, 1, DUMMY_PATH, 0)
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 def test_add_lockspace_parse_args(no_sanlock_daemon, name):
     with raises_sanlock_errno():
-        sanlock.add_lockspace(name, 1, "ls_path", 0)
+        sanlock.add_lockspace(name, 1, DUMMY_PATH, 0)
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 def test_write_lockspace_parse_args(no_sanlock_daemon, name):
     with raises_sanlock_errno():
-        sanlock.write_lockspace(name, "ls_path")
+        sanlock.write_lockspace(name, DUMMY_PATH)
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 def test_write_resource_parse_args(no_sanlock_daemon, name):
     with raises_sanlock_errno():
-        sanlock.write_resource(name, b"res_name", [("disk_path",0)])
+        sanlock.write_resource(name, b"res_name", [(DUMMY_PATH, 0)])
 
     with raises_sanlock_errno():
-        sanlock.write_resource(b"ls_name", name, [("disk_path",0)])
+        sanlock.write_resource(b"ls_name", name, [(DUMMY_PATH, 0)])
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 def test_release_resource_parse_args(no_sanlock_daemon, name):
     with raises_sanlock_errno():
-        sanlock.release(name, b"res_name", [("disk_path",0)])
+        sanlock.release(name, b"res_name", [(DUMMY_PATH, 0)])
 
     with raises_sanlock_errno():
-        sanlock.release(b"ls_name", name, [("disk_path",0)])
+        sanlock.release(b"ls_name", name, [(DUMMY_PATH, 0)])
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 def test_read_resource_owners_parse_args(no_sanlock_daemon, name):
     with raises_sanlock_errno():
-        sanlock.read_resource_owners(name, b"res_name", [("disk_path",0)])
+        sanlock.read_resource_owners(name, b"res_name", [(DUMMY_PATH, 0)])
 
     with raises_sanlock_errno():
-        sanlock.read_resource_owners(b"ls_name", name, [("disk_path",0)])
+        sanlock.read_resource_owners(b"ls_name", name, [(DUMMY_PATH, 0)])
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
@@ -572,7 +574,7 @@ def test_get_hosts_parse_args(no_sanlock_daemon, name):
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 def test_inq_lockspace_parse_args(no_sanlock_daemon, name):
     with raises_sanlock_errno():
-        sanlock.inq_lockspace(name, 1, "path", wait=False)
+        sanlock.inq_lockspace(name, 1, DUMMY_PATH, wait=False)
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
