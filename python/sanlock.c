@@ -999,7 +999,7 @@ py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
     if (version != Py_None) {
         res->flags |= SANLK_RES_LVER;
         res->lver = pyinteger_as_unsigned_long_long_mask(version);
-        if (res->lver == -1) {
+        if (res->lver == (uint64_t)-1) {
             __set_exception(EINVAL, "Unable to convert the version value");
             goto exit_fail;
         }
@@ -1115,7 +1115,7 @@ py_request(PyObject *self __unused, PyObject *args, PyObject *keywds)
     } else {
         res->flags |= SANLK_RES_LVER;
         res->lver = pyinteger_as_unsigned_long_long_mask(version);
-        if (res->lver == -1) {
+        if (res->lver == (uint64_t)-1) {
             __set_exception(EINVAL, "Unable to convert the version value");
             goto exit_fail;
         }
