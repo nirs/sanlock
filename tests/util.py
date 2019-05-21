@@ -160,3 +160,20 @@ def generate_path(dirname, filename, encoding=None):
     if encoding:
         path = path.encode(encoding)
     return path
+
+
+def sanlock_is_running():
+    """
+    Return boolean value indicating whether sanlock process
+    is currently executing within pytests run dir.
+    """
+    pid_file = os.path.join(os.environ["SANLOCK_RUN_DIR"], "sanlock.pid")
+    try:
+        with open(pid_file, "r") as f:
+            pid = f.readline().strip()
+            executable = os.readlink("/proc/{}/exe".format(pid))
+            return os.path.samefile(executable, SANLOCK)
+    except OSError as e:
+        if e.errno != errno.ENOENT:
+            raise
+    return False

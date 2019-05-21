@@ -44,3 +44,12 @@ def user_4k_path(request):
             "user storage available - run 'python tests/strorage.py setup' "
             "to enable 4k storage tests")
     return request.param
+
+
+@pytest.fixture
+def no_sanlock_daemon():
+    if util.sanlock_is_running():
+        raise SanlockIsRunning
+
+class SanlockIsRunning(Exception):
+    pass
