@@ -14,7 +14,10 @@ Summary:        A shared storage lock manager
 License:        GPLv2 and GPLv2+ and LGPLv2+
 URL:            https://pagure.io/sanlock/
 BuildRequires:  gcc
-BuildRequires:  libblkid-devel libaio-devel python2 python2-devel
+BuildRequires:  libaio-devel
+BuildRequires:  libblkid-devel
+BuildRequires:  python2
+BuildRequires:  python2-devel
 BuildRequires:  systemd-units
 Requires:       %{name}-lib = %{version}-%{release}
 Requires(pre):  /usr/sbin/groupadd
