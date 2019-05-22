@@ -83,8 +83,8 @@ install -D -m 0644 init.d/wdmd.sysconfig \
 	$RPM_BUILD_ROOT/etc/sysconfig/wdmd
 
 install -Dd -m 0755 $RPM_BUILD_ROOT/etc/wdmd.d
-install -Dd -m 0775 $RPM_BUILD_ROOT/%{_localstatedir}/run/sanlock
-install -Dd -m 0775 $RPM_BUILD_ROOT/%{_localstatedir}/run/sanlk-resetd
+install -Dd -m 0775 $RPM_BUILD_ROOT/%{_rundir}/sanlock
+install -Dd -m 0775 $RPM_BUILD_ROOT/%{_rundir}/sanlk-resetd
 
 %pre
 getent group sanlock > /dev/null || /usr/sbin/groupadd \
@@ -111,7 +111,7 @@ getent passwd sanlock > /dev/null || /usr/sbin/useradd \
 %{_sbindir}/wdmd
 %dir %{_sysconfdir}/wdmd.d
 %dir %{_sysconfdir}/sanlock
-%dir %attr(-,sanlock,sanlock) %{_localstatedir}/run/sanlock
+%dir %attr(-,sanlock,sanlock) %{_rundir}/sanlock
 %{_mandir}/man8/wdmd*
 %{_mandir}/man8/sanlock*
 %config(noreplace) %{_sysconfdir}/logrotate.d/sanlock
@@ -193,7 +193,7 @@ common sanlock lockspace.
 %{_sbindir}/sanlk-reset
 %{_sbindir}/sanlk-resetd
 %{_unitdir}/sanlk-resetd.service
-%dir %attr(-,root,root) %{_localstatedir}/run/sanlk-resetd
+%dir %attr(-,root,root) %{_rundir}/sanlk-resetd
 %{_mandir}/man8/sanlk-reset*
 
 
