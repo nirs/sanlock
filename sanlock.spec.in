@@ -16,6 +16,8 @@ URL:            https://pagure.io/sanlock/
 BuildRequires:  gcc
 BuildRequires:  libaio-devel
 BuildRequires:  libblkid-devel
+BuildRequires:  libuuid-devel
+BuildRequires:  make
 BuildRequires:  python2
 BuildRequires:  python2-devel
 BuildRequires:  systemd-units
