@@ -569,7 +569,7 @@ static int active_clients(void)
 
 
 #ifdef TEST_FILES
-#define FILES_DIR "/var/run/wdmd/test_files"
+#define FILES_DIR "/run/wdmd/test_files"
 const char *files_built = " files";
 static DIR *files_dir;
 
@@ -1024,7 +1024,7 @@ static int _setup_watchdog(char *path)
  out:
 	log_error("%s armed with fire_timeout %d", watchdog_path, fire_timeout);
 
-	/* TODO: save watchdog_path in /var/run/wdmd/saved_path,
+	/* TODO: save watchdog_path in /run/wdmd/saved_path,
 	 * and in startup read that file, copying it to saved_path */
 
 	return 0;

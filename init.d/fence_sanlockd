@@ -23,8 +23,8 @@
 
 prog="fence_sanlockd"
 agent="fence_sanlock"
-runfile="/var/run/$prog/$prog.pid"
-fifofile="/var/run/$prog/$prog.fifo"
+runfile="/run/$prog/$prog.pid"
+fifofile="/run/$prog/$prog.fifo"
 lockfile="/var/lock/subsys/$prog"
 exec="/usr/sbin/$prog"
 
@@ -41,17 +41,17 @@ start() {
 
 	service sanlock status > /dev/null 2>&1 || service sanlock start
 
-	[ ! -d /var/run/$prog ] && install -d -m 775 /var/run/$prog
+	[ ! -d /run/$prog ] && install -d -m 775 /run/$prog
 
-	[ ! -d /var/run/$agent ] && install -d -m 775 /var/run/$agent
-
-	[ -n "$(which restorecon)" ] && \
-		[ -x "$(which restorecon)" ] && \
-		restorecon /var/run/$prog
+	[ ! -d /run/$agent ] && install -d -m 775 /run/$agent
 
 	[ -n "$(which restorecon)" ] && \
 		[ -x "$(which restorecon)" ] && \
-		restorecon /var/run/$agent
+		restorecon /run/$prog
+
+	[ -n "$(which restorecon)" ] && \
+		[ -x "$(which restorecon)" ] && \
+		restorecon /run/$agent
 
 	echo -n $"Starting $prog: "
 	daemon $prog $FENCESANLOCKDOPTS

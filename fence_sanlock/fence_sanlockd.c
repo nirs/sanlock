@@ -37,8 +37,8 @@
 #define LIVE_INTERVAL 5
 #define EXPIRE_INTERVAL 20
 
-#define DAEMON_RUN_DIR "/var/run/fence_sanlockd"
-#define AGENT_RUN_DIR "/var/run/fence_sanlock"
+#define DAEMON_RUN_DIR "/run/fence_sanlockd"
+#define AGENT_RUN_DIR "/run/fence_sanlock"
 
 static char *prog_name = (char *)"fence_sanlockd";
 
@@ -441,7 +441,7 @@ static int check_fence_agent(int *victim_host_id)
 		log_debug("read %s", de->d_name);
 
 		/*
-		 * read /var/run/fence_sanlock/fence_sanlock.pid.<pid>
+		 * read /run/fence_sanlock/fence_sanlock.pid.<pid>
 		 * to get the pid of fence_sanlock and the victim's host_id
 		 *
 		 * read /proc/pid/comm to check that the pid from that file

@@ -33,7 +33,7 @@ elif [ "$cmd" == "delay" ]; then
 
 	sec=$3
 
-	pid=`cat /var/run/sanlock/sanlock.pid`
+	pid=`cat /run/sanlock/sanlock.pid`
 
 	echo sync with daemon renewals
 	kill -s SIGSTOP $pid
@@ -54,7 +54,7 @@ elif [ "$cmd" == "iodelay" ]; then
 
 	sec=$4
 
-	pid=`cat /var/run/sanlock/sanlock.pid`
+	pid=`cat /run/sanlock/sanlock.pid`
 
 	echo sync with daemon renewals
 	kill -s SIGSTOP $pid

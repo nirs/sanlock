@@ -91,7 +91,7 @@ getent group sanlock > /dev/null || /usr/sbin/groupadd \
 	-g 179 sanlock
 getent passwd sanlock > /dev/null || /usr/sbin/useradd \
 	-u 179 -c "sanlock" -s /sbin/nologin -r \
-	-g 179 -d /var/run/sanlock sanlock
+	-g 179 -d /run/sanlock sanlock
 /usr/sbin/usermod -a -G disk sanlock
 
 %post

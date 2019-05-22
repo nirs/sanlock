@@ -10,7 +10,7 @@
 #ifndef __WDMD_SOCK_H__
 #define __WDMD_SOCK_H__
 
-#define WDMD_RUN_DIR "/var/run/wdmd"
+#define WDMD_RUN_DIR "/run/wdmd"
 #define WDMD_SOCKET_NAME "wdmd.sock"
 
 enum {

@@ -256,7 +256,7 @@ action_off() {
 	# fence_sanlock's can run in parallel.  fence_sanlockd may read
 	# this file to see which host_id we are fencing.
 
-	pidfile=/var/run/$prog/$prog.pid.$$
+	pidfile=/run/$prog/$prog.pid.$$
 
 	echo "$$ host_id $host_id gen $owner_gen ver $ver timestamp $timestamp" > $pidfile
 

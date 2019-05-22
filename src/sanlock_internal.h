@@ -46,7 +46,7 @@
 #define COMMAND_MAX 4096
 
 #define SANLOCK_RUN_DIR "SANLOCK_RUN_DIR"
-#define DEFAULT_RUN_DIR "/var/run/sanlock"
+#define DEFAULT_RUN_DIR "/run/sanlock"
 #define SANLOCK_PRIVILEGED "SANLOCK_PRIVILEGED"
 
 #define SANLK_LOG_DIR "/var/log"

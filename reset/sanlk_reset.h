@@ -14,7 +14,7 @@
 #define EVENT_REBOOT             4
 #define EVENT_REBOOTING          8
 
-#define SANLK_RESETD_RUNDIR "/var/run/sanlk-resetd"
+#define SANLK_RESETD_RUNDIR "/run/sanlk-resetd"
 #define SANLK_RESETD_SOCKET SANLK_RESETD_RUNDIR "/sanlk-resetd.sock"
 #define SANLK_RESETD_SOCKET_MODE (S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP)
 

@@ -22,7 +22,7 @@
 . /etc/rc.d/init.d/functions
 
 prog="wdmd"
-runfile="/var/run/$prog/$prog.pid"
+runfile="/run/$prog/$prog.pid"
 lockfile="/var/lock/subsys/$prog"
 exec="/usr/sbin/$prog"
 
@@ -60,9 +60,9 @@ start() {
 
 	[ -x $exec ] || exit 5
 
-	if [ ! -d /var/run/$prog ]; then
-		install -d -g $WDMDGROUP -m 775 /var/run/$prog
-		[ -x /sbin/restorecon ] && restorecon /var/run/$prog
+	if [ ! -d /run/$prog ]; then
+		install -d -g $WDMDGROUP -m 775 /run/$prog
+		[ -x /sbin/restorecon ] && restorecon /run/$prog
 	fi
 
 	echo -n $"Starting $prog: "
