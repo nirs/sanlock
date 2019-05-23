@@ -35,7 +35,7 @@
 /* Functions prototypes */
 static void __set_exception(int en, char *msg) __sets_exception;
 static int __parse_resource(PyObject *obj, struct sanlk_resource **res_ret) __neg_sets_exception;
-static void set_value_error(const char* format, PyObject* obj);
+static void set_error(PyObject *exception, const char* format, PyObject* obj);
 
 /* Sanlock module */
 PyDoc_STRVAR(pydoc_sanlock, "\
@@ -131,14 +131,14 @@ __parse_resource(PyObject *obj, struct sanlk_resource **res_ret)
         disk = PyList_GetItem(obj, i);
 
         if (!PyTuple_Check(disk)) {
-            set_value_error("Invalid disk %s", disk);
+            set_error(PyExc_ValueError, "Invalid disk %s", disk);
             goto exit_fail;
 
         }
 
         if (!PyArg_ParseTuple(disk, "sK", &path, &offset)) {
             /* Override the error since it confusing in this context. */
-            set_value_error("Invalid disk %s", disk);
+            set_error(PyExc_ValueError, "Invalid disk %s", disk);
             goto exit_fail;
         }
 
@@ -204,13 +204,13 @@ add_align_flag(long align, uint32_t *flags)
 }
 
 static void
-set_value_error(const char* format, PyObject* obj)
+set_error(PyObject* exception, const char* format, PyObject* obj)
 {
     const char* str_rep = "";
     PyObject* rep = PyObject_Repr(obj);
     if (rep)
         str_rep = pystring_as_cstring(rep);
-    PyErr_Format(PyExc_ValueError, format, str_rep);
+    PyErr_Format(exception, format, str_rep);
     Py_XDECREF(rep);
 }
 
