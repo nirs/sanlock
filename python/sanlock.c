@@ -918,50 +918,104 @@ finally:
     return NULL;
 }
 
+static int
+rem_lockspace_parse_args(
+        PyObject* args,
+        PyObject* keywds,
+        struct sanlk_lockspace* ls,
+        int* flags)
+{
+    int rv = 0, unused = 0;
+    PyObject *lockspace = NULL;
+    PyObject *path = NULL;
+    /* initialize parsed args */
+    memset(ls, 0, sizeof(struct sanlk_lockspace));
+    *flags = 0;
+
+#if PY_MAJOR_VERSION == 2
+    /* parse arg for python 2 api */
+    int async = -1, wait = -1;
+    static char* kwlist[] = {"lockspace", "host_id", "path", "offset",
+                                "async", "unused", "wait", NULL};
+
+    if(!PyArg_ParseTupleAndKeywords(args, keywds, "O&kO&|kiii", kwlist,
+        convert_to_pybytes, &lockspace, &(ls->host_id), pypath_converter, &path,
+        &(ls->host_id_disk.offset), &async, &unused, &wait)) {
+        goto finally;
+    }
+    if (wait != -1 && async != -1) {
+        PyErr_Format(PyExc_RuntimeError, "async and wait flags must be mutually exclusive");
+        goto finally;
+    }
+    if (wait == -1) {
+        wait = 1;
+        if (async != -1)
+            wait = !async;
+    }
+#else
+    /* parse args for python 3 api */
+    int wait = 1;
+    static char* kwlist[] = {"lockspace", "host_id", "path", "offset",
+                                "unused", "wait", NULL};
+    if(!PyArg_ParseTupleAndKeywords(args, keywds, "O&kO&|kii", kwlist,
+        convert_to_pybytes, &lockspace, &(ls->host_id), pypath_converter, &path,
+        &(ls->host_id_disk.offset), &unused, &wait)) {
+        goto finally;
+    }
+#endif
+    /* prepare sanlock names */
+    strncpy(ls->name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
+    strncpy(ls->host_id_disk.path, PyBytes_AsString(path), SANLK_PATH_LEN - 1);
+
+    /* prepare sanlock_rem_lockspace flags */
+    if (!wait) {
+        *flags |= SANLK_REM_ASYNC;
+    }
+
+    if (unused) {
+        *flags |= SANLK_REM_UNUSED;
+    }
+    rv = 1;
+
+finally:
+    Py_XDECREF(lockspace);
+    Py_XDECREF(path);
+    return rv;
+}
+
 /* rem_lockspace */
+#if PY_MAJOR_VERSION == 2
 PyDoc_STRVAR(pydoc_rem_lockspace, "\
-rem_lockspace(lockspace, host_id, path, offset=0, async=False, unused=False)\n\
-Remove a lockspace, releasing the acquired host_id. If async is True the\n\
+rem_lockspace(lockspace, host_id, path, offset=0, async=False, unused=False, wait=True)\n\
+Remove a lockspace, releasing the acquired host_id. If wait is False the\n\
+function will return immediately and the status can be checked using\n\
+inq_lockspace; This is identical to having the async flag set to True.\n\
+async flag is maintained only for backward compatibility and will be\n\
+deprecated in sanlock release for python 3.\n\
+If unused is True the command will fail (EBUSY) if there is\n\
+at least one acquired resource in the lockspace. Otherwise (the default)\n\
+sanlock will try to terminate processes holding resource leases and upon\n\
+successful termination these leases will be released.");
+#else
+PyDoc_STRVAR(pydoc_rem_lockspace, "\
+rem_lockspace(lockspace, host_id, path, offset=0, unused=False, wait=True)\n\
+Remove a lockspace, releasing the acquired host_id. If wait is False the\n\
 function will return immediately and the status can be checked using\n\
 inq_lockspace. If unused is True the command will fail (EBUSY) if there is\n\
 at least one acquired resource in the lockspace. Otherwise (the default)\n\
 sanlock will try to terminate processes holding resource leases and upon\n\
 successful termination these leases will be released.");
+#endif
 
 static PyObject *
 py_rem_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv = -1, async = 0, unused = 0, flags = 0;
-    PyObject *lockspace = NULL;
-    PyObject *path = NULL;
+    int rv = -1, flags = 0;
     struct sanlk_lockspace ls;
 
-    static char *kwlist[] = {"lockspace", "host_id", "path", "offset",
-                                "async", "unused", NULL};
-
-    /* initialize lockspace structure */
-    memset(&ls, 0, sizeof(struct sanlk_lockspace));
-
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&kO&|kii", kwlist,
-        convert_to_pybytes, &lockspace, &ls.host_id, pypath_converter, &path,
-        &ls.host_id_disk.offset,
-        &async, &unused)) {
-        goto finally;
-    }
-
-    /* prepare sanlock names */
-    strncpy(ls.name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
-    strncpy(ls.host_id_disk.path, PyBytes_AsString(path), SANLK_PATH_LEN - 1);
-
-    /* prepare sanlock_rem_lockspace flags */
-    if (async) {
-        flags |= SANLK_REM_ASYNC;
-    }
-
-    if (unused) {
-        flags |= SANLK_REM_UNUSED;
-    }
+    if (!rem_lockspace_parse_args(args, keywds, &ls, &flags))
+        return NULL;
 
     /* remove sanlock lockspace (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -970,14 +1024,9 @@ py_rem_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv != 0) {
         __set_exception(rv, "Sanlock lockspace remove failure");
-        goto finally;
+        return NULL;
     }
 
-finally:
-    Py_XDECREF(lockspace);
-    Py_XDECREF(path);
-    if (rv != 0)
-        return NULL;
     Py_RETURN_NONE;
 }
 

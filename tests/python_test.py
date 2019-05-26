@@ -331,8 +331,12 @@ def test_add_rem_lockspace(tmpdir, sanlock_daemon, size, offset):
     lockspaces = sanlock.get_lockspaces()
     assert lockspaces == []
 
-
-def test_add_rem_lockspace_async(tmpdir, sanlock_daemon):
+@pytest.mark.parametrize("flags", [
+        pytest.param({"async": True},
+            marks=pytest.mark.skipif(six.PY3, reason="async flag is deprecated by wait")),
+        pytest.param({"wait": False}),
+    ])
+def test_add_rem_lockspace_async(tmpdir, sanlock_daemon, flags):
     path = str(tmpdir.join("ls_name"))
     util.create_file(path, MiB)
 
@@ -353,7 +357,7 @@ def test_add_rem_lockspace_async(tmpdir, sanlock_daemon):
     assert acquired is True
 
     # This will take about 3 seconds.
-    sanlock.rem_lockspace(b"ls_name", 1, path, **{"async": True})
+    sanlock.rem_lockspace(b"ls_name", 1, path, **flags)
 
     # Wait until the lockspace change state from True to None.
     while sanlock.inq_lockspace(b"ls_name", 1, path, wait=False):
@@ -511,10 +515,26 @@ def raises_sanlock_errno(expected_errno=errno.ECONNREFUSED):
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 @pytest.mark.parametrize("filename,encoding", FILE_NAMES)
-def test_rem_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding):
+@pytest.mark.parametrize("flags", [
+        pytest.param({"async": False},
+            marks=pytest.mark.skipif(six.PY3, raises=TypeError, reason="async flag is replaced by wait")),
+        pytest.param({"wait": False}),
+        pytest.param({"wait": True}),
+    ])
+def test_rem_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding, flags):
     path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno():
-        sanlock.rem_lockspace(name, 1, path, 0)
+        sanlock.rem_lockspace(name, 1, path, 0, **flags)
+
+
+@pytest.mark.parametrize("flags,exception", [
+        pytest.param({"wait": True, "async": False}, TypeError if six.PY3 else RuntimeError),
+        pytest.param({"async": False}, TypeError,
+            marks=pytest.mark.skipif(six.PY2, reason="async flag is still supported")),
+    ])
+def test_rem_lockspace_parse_invalid_flag_args(no_sanlock_daemon, flags, exception):
+    with pytest.raises(exception):
+        sanlock.rem_lockspace(b"ls_name", 1, "/no/such/path/at/all", 0, **flags)
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
