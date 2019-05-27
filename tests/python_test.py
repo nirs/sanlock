@@ -345,7 +345,7 @@ def test_add_rem_lockspace_async(tmpdir, sanlock_daemon, flags):
     assert acquired is False
 
     # This will take 3 seconds.
-    sanlock.add_lockspace(b"ls_name", 1, path, iotimeout=1, **{"async": True})
+    sanlock.add_lockspace(b"ls_name", 1, path, iotimeout=1, **flags)
 
     # While the lockspace is being aquired, we expect to get None.
     time.sleep(1)
@@ -521,8 +521,11 @@ def raises_sanlock_errno(expected_errno=errno.ECONNREFUSED):
         pytest.param({"wait": False}),
         pytest.param({"wait": True}),
     ])
-def test_rem_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding, flags):
+def test_add_rem_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding, flags):
     path = util.generate_path("/tmp/", filename, encoding)
+    with raises_sanlock_errno():
+        sanlock.add_lockspace(name, 1, path, 0, **flags)
+
     with raises_sanlock_errno():
         sanlock.rem_lockspace(name, 1, path, 0, **flags)
 
@@ -532,17 +535,12 @@ def test_rem_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding, f
         pytest.param({"async": False}, TypeError,
             marks=pytest.mark.skipif(six.PY2, reason="async flag is still supported")),
     ])
-def test_rem_lockspace_parse_invalid_flag_args(no_sanlock_daemon, flags, exception):
+def test_add_rem_lockspace_parse_invalid_flag_args(no_sanlock_daemon, flags, exception):
+    with pytest.raises(exception):
+        sanlock.add_lockspace(b"ls_name", 1, "/no/such/path/at/all", 0, **flags)
+
     with pytest.raises(exception):
         sanlock.rem_lockspace(b"ls_name", 1, "/no/such/path/at/all", 0, **flags)
-
-
-@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
-def test_add_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding):
-    path = util.generate_path("/tmp/", filename, encoding)
-    with raises_sanlock_errno():
-        sanlock.add_lockspace(name, 1, path, 0)
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)

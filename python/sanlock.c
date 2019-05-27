@@ -799,44 +799,99 @@ finally:
     Py_RETURN_NONE;
 }
 
+static int
+add_lockspace_parse_args(
+        PyObject *args,
+        PyObject *keywds,
+        struct sanlk_lockspace* ls,
+        int* flags,
+        uint32_t* iotimeout)
+{
+    int rv = 0;
+
+    *flags = 0;
+    *iotimeout = 0;
+    PyObject *lockspace = NULL, *path = NULL;
+    memset(ls, 0, sizeof(struct sanlk_lockspace));
+
+#if PY_MAJOR_VERSION == 2
+    int async = -1, wait = -1;
+    static char *kwlist[] = {"lockspace", "host_id", "path", "offset",
+                                "iotimeout", "async", "wait", NULL};
+
+    /* parse python 2 tuple */
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&kO&|kIii", kwlist,
+        convert_to_pybytes, &lockspace, &(ls->host_id), pypath_converter, &path, &(ls->host_id_disk.offset),
+        iotimeout, &async, &wait)) {
+        goto finally;
+    }
+    if (wait != -1 && async != -1) {
+        PyErr_Format(PyExc_RuntimeError, "async and wait flags must be mutually exclusive");
+        goto finally;
+    }
+    if (wait == -1) {
+        wait = 1;
+        if (async != -1)
+            wait = !async;
+    }
+#else
+    int wait = 1;
+    static char *kwlist[] = {"lockspace", "host_id", "path", "offset",
+                                "iotimeout","wait", NULL};
+
+    /* parse python 3 tuple */
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&kO&|kIi", kwlist,
+        convert_to_pybytes, &lockspace, &(ls->host_id), pypath_converter, &path, &(ls->host_id_disk.offset),
+        iotimeout, &wait)) {
+        goto finally;
+    }
+#endif
+    /* prepare sanlock_add_lockspace flags */
+    if (!wait) {
+        *flags |= SANLK_ADD_ASYNC;
+    }
+    /* prepare sanlock names */
+    strncpy(ls->name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
+    strncpy(ls->host_id_disk.path, PyBytes_AsString(path), SANLK_PATH_LEN - 1);
+    rv = 1;
+
+finally:
+    Py_XDECREF(lockspace);
+    Py_XDECREF(path);
+    return rv;
+}
+
 /* add_lockspace */
+#if PY_MAJOR_VERSION == 2
 PyDoc_STRVAR(pydoc_add_lockspace, "\
-add_lockspace(lockspace, host_id, path, offset=0, iotimeout=0, async=False)\n\
-Add a lockspace, acquiring a host_id in it. If async is True the function\n\
+add_lockspace(lockspace, host_id, path, offset=0, iotimeout=0, async=False, wait=True)\n\
+Add a lockspace, acquiring a host_id in it. If wait is False the function\n\
+will return immediatly and the status can be checked using inq_lockspace;\n\
+This behavior is identical to having the async flag set as True. async flag\n\
+is maintained for back compatibility with earlier use cases and will be\n\
+deprecated in sanlock release for python 3.\n\
+The iotimeout option configures the io timeout for the specific lockspace,\n\
+overriding the default value (see the sanlock daemon parameter -o).");
+#else
+PyDoc_STRVAR(pydoc_add_lockspace, "\
+add_lockspace(lockspace, host_id, path, offset=0, iotimeout=0, wait=True)\n\
+Add a lockspace, acquiring a host_id in it. If wait is False the function\n\
 will return immediatly and the status can be checked using inq_lockspace.\n\
 The iotimeout option configures the io timeout for the specific lockspace,\n\
 overriding the default value (see the sanlock daemon parameter -o).");
+#endif
 
 static PyObject *
 py_add_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv = -1, async = 0, flags = 0;
+    int rv = 0, flags = 0;
     uint32_t iotimeout = 0;
-    PyObject *lockspace = NULL;
-    PyObject *path = NULL;
     struct sanlk_lockspace ls;
 
-    static char *kwlist[] = {"lockspace", "host_id", "path", "offset",
-                                "iotimeout", "async", NULL};
-
-    /* initialize lockspace structure */
-    memset(&ls, 0, sizeof(struct sanlk_lockspace));
-
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&kO&|kIi", kwlist,
-        convert_to_pybytes, &lockspace, &ls.host_id, pypath_converter, &path,
-        &ls.host_id_disk.offset, &iotimeout, &async)) {
-        goto finally;
+    if (!add_lockspace_parse_args(args, keywds, &ls, &flags, &iotimeout)){
+        return NULL;
     }
-
-    /* prepare sanlock_add_lockspace flags */
-    if (async) {
-        flags |= SANLK_ADD_ASYNC;
-    }
-
-    /* prepare sanlock names */
-    strncpy(ls.name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
-    strncpy(ls.host_id_disk.path, PyBytes_AsString(path), SANLK_PATH_LEN - 1);
 
     /* add sanlock lockspace (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -845,14 +900,9 @@ py_add_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv != 0) {
         __set_exception(rv, "Sanlock lockspace add failure");
-        goto finally;
+        return NULL;
     }
 
-finally:
-    Py_XDECREF(lockspace);
-    Py_XDECREF(path);
-    if (rv != 0 )
-        return NULL;
     Py_RETURN_NONE;
 }
 
