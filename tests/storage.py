@@ -84,6 +84,10 @@ def create_loop_device(link_path, backing_file, size=1024**3,
 
     device = out.decode("utf-8").strip()
 
+    # Remove stale symlink.
+    if os.path.islink(link_path):
+        os.unlink(link_path)
+
     os.symlink(device, link_path)
     chown(link_path)
 
