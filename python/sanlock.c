@@ -1395,21 +1395,26 @@ unregister the event listener using end_event.");
 static PyObject *
 py_reg_event(PyObject *self __unused, PyObject *args)
 {
-    const char *lockspace = NULL;
+    PyObject *lockspace = NULL;
     int fd = -1;
 
-    if (!PyArg_ParseTuple(args, "s", &lockspace))
-        return NULL;
+    if (!PyArg_ParseTuple(args, "O&", convert_to_pybytes, &lockspace)) {
+        goto finally;
+    }
 
     Py_BEGIN_ALLOW_THREADS
-    fd = sanlock_reg_event(lockspace, NULL /* event */, 0 /* flags */);
+    fd = sanlock_reg_event(PyBytes_AsString(lockspace), NULL /* event */, 0 /* flags */);
     Py_END_ALLOW_THREADS
 
     if (fd < 0) {
         __set_exception(fd, "Unable to register event fd");
-        return NULL;
+       goto finally;
     }
 
+finally:
+    Py_XDECREF(lockspace);
+    if (fd < 0)
+        return NULL;
     return Py_BuildValue("i", fd);
 }
 
