@@ -460,10 +460,11 @@ Sector can be one of (512, 4096).");
 static PyObject *
 py_write_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, max_hosts = 0, sector = SECTOR_SIZE_512;
+    int rv = -1, max_hosts = 0, sector = SECTOR_SIZE_512;
     long align = ALIGNMENT_1M;
     uint32_t io_timeout = 0;
-    const char *lockspace, *path;
+    PyObject *lockspace = NULL;
+    const char  *path;
     struct sanlk_lockspace ls;
 
     static char *kwlist[] = {"lockspace", "path", "offset", "max_hosts",
@@ -473,22 +474,22 @@ py_write_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ss|kiIli", kwlist,
-        &lockspace, &path, &ls.host_id_disk.offset, &max_hosts,
-        &io_timeout, &align, &sector)) {
-        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&s|kiIli", kwlist,
+        convert_to_pybytes, &lockspace, &path, &ls.host_id_disk.offset,
+        &max_hosts, &io_timeout, &align, &sector)) {
+        goto finally;
     }
 
     /* prepare sanlock names */
-    strncpy(ls.name, lockspace, SANLK_NAME_LEN);
+    strncpy(ls.name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
     strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN - 1);
 
     /* set alignment/sector flags */
     if (add_align_flag(align, &ls.flags) == -1)
-        return NULL;
+        goto finally;
 
     if (add_sector_flag(sector, &ls.flags) == -1)
-        return NULL;
+        goto finally;
 
     /* write sanlock lockspace (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -497,9 +498,13 @@ py_write_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv != 0) {
         __set_exception(rv, "Sanlock lockspace write failure");
-        return NULL;
+        goto finally;
     }
 
+finally:
+    Py_XDECREF(lockspace);
+    if (rv != 0)
+        return NULL;
     Py_RETURN_NONE;
 }
 
