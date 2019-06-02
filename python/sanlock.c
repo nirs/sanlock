@@ -983,34 +983,37 @@ timestamp and the io_timeout.\n");
 static PyObject *
 py_get_hosts(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, hss_count = 0;
+    int rv = -1, hss_count = 0;
     uint64_t host_id = 0;
-    const char *lockspace = NULL;
+    PyObject *lockspace = NULL;
     struct sanlk_host *hss = NULL;
     PyObject *ls_list = NULL;
 
     static char *kwlist[] = {"lockspace", "host_id", NULL};
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "s|k", kwlist,
-        &lockspace, &host_id)) {
-        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&|k", kwlist,
+        convert_to_pybytes, &lockspace, &host_id)) {
+        goto finally;
     }
 
     /* get all the lockspaces (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_get_hosts(lockspace, host_id, &hss, &hss_count, 0);
+    rv = sanlock_get_hosts(PyBytes_AsString(lockspace), host_id, &hss, &hss_count, 0);
     Py_END_ALLOW_THREADS
 
     if (rv < 0) {
         __set_exception(rv, "Sanlock get hosts failure");
-        goto exit_fail;
+        goto finally;
     }
 
     ls_list = __hosts_to_list(hss, hss_count);
 
-exit_fail:
-    if (hss) free(hss);
+finally:
+    Py_XDECREF(lockspace);
+    free(hss);
+    if (rv < 0)
+        return NULL;
     return ls_list;
 }
 
