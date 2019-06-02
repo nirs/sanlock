@@ -356,8 +356,9 @@ Initialize a device to be used as sanlock lockspace.");
 static PyObject *
 py_init_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, max_hosts = 0, num_hosts = 0, use_aio = 1;
-    const char *lockspace, *path;
+    int rv = -1, max_hosts = 0, num_hosts = 0, use_aio = 1;
+    PyObject *lockspace = NULL;
+    const char *path;
     struct sanlk_lockspace ls;
 
     static char *kwlist[] = {"lockspace", "path", "offset",
@@ -367,14 +368,14 @@ py_init_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ss|kiii", kwlist,
-        &lockspace, &path, &ls.host_id_disk.offset, &max_hosts,
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&s|kiii", kwlist,
+        convert_to_pybytes, &lockspace, &path, &ls.host_id_disk.offset, &max_hosts,
         &num_hosts, &use_aio)) {
-        return NULL;
+        goto finally;
     }
 
     /* prepare sanlock names */
-    strncpy(ls.name, lockspace, SANLK_NAME_LEN);
+    strncpy(ls.name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
     strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN - 1);
 
     /* init sanlock lockspace (gil disabled) */
@@ -384,9 +385,13 @@ py_init_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv != 0) {
         __set_exception(rv, "Sanlock lockspace init failure");
-        return NULL;
+        goto finally;
     }
 
+finally:
+    Py_XDECREF(lockspace);
+    if (rv != 0)
+        return NULL;
     Py_RETURN_NONE;
 }
 
