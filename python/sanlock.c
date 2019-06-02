@@ -1538,14 +1538,15 @@ static PyObject *
 py_end_event(PyObject *self __unused, PyObject *args)
 {
     int fd = -1;
-    const char *lockspace = NULL;
-    int rv;
+    PyObject *lockspace = NULL;
+    int rv = -1;
 
-    if (!PyArg_ParseTuple(args, "is", &fd, &lockspace))
-        return NULL;
+    if (!PyArg_ParseTuple(args, "iO&", &fd, convert_to_pybytes, &lockspace)) {
+        goto finally;
+    }
 
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_end_event(fd, lockspace, 0 /* flags */);
+    rv = sanlock_end_event(fd, PyBytes_AsString(lockspace), 0 /* flags */);
     Py_END_ALLOW_THREADS
 
     if (rv < 0) {
@@ -1553,6 +1554,10 @@ py_end_event(PyObject *self __unused, PyObject *args)
         return NULL;
     }
 
+finally:
+    Py_XDECREF(lockspace);
+    if (rv < 0)
+        return NULL;
     Py_RETURN_NONE;
 }
 
