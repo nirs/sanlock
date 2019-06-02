@@ -1227,10 +1227,10 @@ Sector can be one of (512, 4096).");
 static PyObject *
 py_read_resource_owners(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, hss_count = 0;
+    int rv = -1, hss_count = 0;
     int sector = SECTOR_SIZE_512;
     long align = ALIGNMENT_1M;
-    const char *lockspace, *resource;
+    PyObject *lockspace = NULL, *resource = NULL;
     struct sanlk_resource *res = NULL;
     struct sanlk_host *hss = NULL;
     PyObject *disks, *ls_list = NULL;
@@ -1239,27 +1239,28 @@ py_read_resource_owners(PyObject *self __unused, PyObject *args, PyObject *keywd
                              "sector", NULL};
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|li", kwlist,
-        &lockspace, &resource, &PyList_Type, &disks, &align, &sector)) {
-        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&O&O!|li", kwlist,
+        convert_to_pybytes, &lockspace, convert_to_pybytes, &resource,
+        &PyList_Type, &disks, &align, &sector)) {
+        goto finally;
     }
 
     /* parse and check sanlock resource */
     if (__parse_resource(disks, &res) < 0) {
-        return NULL;
+        goto finally;
     }
 
     /* prepare sanlock names */
-    strncpy(res->lockspace_name, lockspace, SANLK_NAME_LEN);
-    strncpy(res->name, resource, SANLK_NAME_LEN);
+    strncpy(res->lockspace_name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
+    strncpy(res->name, PyBytes_AsString(resource), SANLK_NAME_LEN);
 
     /* set resource alignment and sector flags */
 
     if (add_align_flag(align, &res->flags) == -1)
-        goto exit_fail;
+        goto finally;
 
     if (add_sector_flag(sector, &res->flags) == -1)
-        goto exit_fail;
+        goto finally;
 
     /* read resource owners (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -1268,14 +1269,18 @@ py_read_resource_owners(PyObject *self __unused, PyObject *args, PyObject *keywd
 
     if (rv != 0) {
         __set_exception(rv, "Unable to read resource owners");
-        goto exit_fail;
+        goto finally;
     }
 
     ls_list = __hosts_to_list(hss, hss_count);
 
-exit_fail:
-    if (res) free(res);
-    if (hss) free(hss);
+finally:
+    Py_XDECREF(lockspace);
+    Py_XDECREF(resource);
+    free(res);
+    free(hss);
+    if (rv != 0)
+        return NULL;
     return ls_list;
 }
 
