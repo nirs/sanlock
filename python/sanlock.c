@@ -1029,35 +1029,35 @@ The disks must be in the format: [(path, offset), ... ]\n");
 static PyObject *
 py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, sanlockfd = -1, pid = -1, shared = 0;
-    const char *lockspace, *resource;
-    struct sanlk_resource *res;
+    int rv = -1, sanlockfd = -1, pid = -1, shared = 0;
+    PyObject *lockspace = NULL, *resource = NULL;
+    struct sanlk_resource *res = NULL;
     PyObject *disks, *version = Py_None;
 
     static char *kwlist[] = {"lockspace", "resource", "disks", "slkfd",
                                 "pid", "shared", "version", NULL};
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|iiiO", kwlist,
-        &lockspace, &resource, &PyList_Type, &disks, &sanlockfd, &pid,
-        &shared, &version)) {
-        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&O&O!|iiiO", kwlist,
+        convert_to_pybytes, &lockspace, convert_to_pybytes, &resource,
+        &PyList_Type, &disks, &sanlockfd, &pid, &shared, &version)) {
+        goto finally;
     }
 
     /* check if any of the slkfd or pid parameters was given */
     if (sanlockfd == -1 && pid == -1) {
         __set_exception(EINVAL, "Invalid slkfd and pid values");
-        return NULL;
+        goto finally;
     }
 
     /* parse and check sanlock resource */
     if (__parse_resource(disks, &res) < 0) {
-        return NULL;
+        goto finally;
     }
 
     /* prepare sanlock names */
-    strncpy(res->lockspace_name, lockspace, SANLK_NAME_LEN);
-    strncpy(res->name, resource, SANLK_NAME_LEN);
+    strncpy(res->lockspace_name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
+    strncpy(res->name, PyBytes_AsString(resource), SANLK_NAME_LEN);
 
     /* prepare sanlock flags */
     if (shared) {
@@ -1070,7 +1070,7 @@ py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
         res->lver = pyinteger_as_unsigned_long_long_mask(version);
         if (res->lver == (uint64_t)-1) {
             __set_exception(EINVAL, "Unable to convert the version value");
-            goto exit_fail;
+            goto finally;
         }
     }
 
@@ -1081,15 +1081,16 @@ py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv != 0) {
         __set_exception(rv, "Sanlock resource not acquired");
-        goto exit_fail;
+        goto finally;
     }
 
+finally:
+    Py_XDECREF(lockspace);
+    Py_XDECREF(resource);
     free(res);
+    if (rv != 0)
+        return NULL;
     Py_RETURN_NONE;
-
-exit_fail:
-    free(res);
-    return NULL;
 }
 
 /* release */
