@@ -607,6 +607,12 @@ def test_end_event_parse_args(no_sanlock_daemon, name):
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
+def test_set_event_parse_args(no_sanlock_daemon, name):
+    with raises_sanlock_errno():
+        sanlock.set_event(name, 1, 1, 1)
+
+
+@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 def test_init_lockspace_parse_args(no_sanlock_daemon, name):
     with raises_sanlock_errno(errno.ENODEV):
         sanlock.init_lockspace(name, "path")

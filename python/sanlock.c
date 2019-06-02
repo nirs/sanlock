@@ -1617,29 +1617,33 @@ with -EBUSY error in this case.\n\
 static PyObject *
 py_set_event(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    const char *lockspace;
+    PyObject *lockspace = NULL;
     struct sanlk_host_event he = {0};
     uint32_t flags = 0;
-    int rv;
+    int rv = -1;
 
     static char *kwlist[] = {"lockspace", "host_id", "generation", "event",
                              "data", "flags", NULL};
 
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "sKKK|KI", kwlist,
-        &lockspace, &he.host_id, &he.generation, &he.event, &he.data,
-        &flags)) {
-        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&KKK|KI", kwlist,
+        convert_to_pybytes, &lockspace, &he.host_id, &he.generation, &he.event,
+        &he.data, &flags)) {
+        goto finally;
     }
 
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_set_event(lockspace, &he, flags);
+    rv = sanlock_set_event(PyBytes_AsString(lockspace), &he, flags);
     Py_END_ALLOW_THREADS
 
     if (rv < 0) {
         __set_exception(rv, "Unable to set event");
-        return NULL;
+        goto finally;
     }
 
+finally:
+    Py_XDECREF(lockspace);
+    if (rv < 0)
+        return NULL;
     Py_RETURN_NONE;
 }
 
