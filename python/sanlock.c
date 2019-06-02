@@ -406,29 +406,29 @@ The disks must be in the format: [(path, offset), ... ]");
 static PyObject *
 py_init_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, max_hosts = 0, num_hosts = 0, use_aio = 1;
-    const char *lockspace, *resource;
-    struct sanlk_resource *res;
+    int rv = -1, max_hosts = 0, num_hosts = 0, use_aio = 1;
+    PyObject *lockspace = NULL, *resource = NULL;
+    struct sanlk_resource *res = NULL;
     PyObject *disks;
 
     static char *kwlist[] = {"lockspace", "resource", "disks", "max_hosts",
                                 "num_hosts", "use_aio", NULL};
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|iii",
-        kwlist, &lockspace, &resource, &PyList_Type, &disks, &max_hosts,
-        &num_hosts, &use_aio)) {
-        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&O&O!|iii",
+        kwlist, convert_to_pybytes, &lockspace, convert_to_pybytes, &resource,
+        &PyList_Type, &disks, &max_hosts, &num_hosts, &use_aio)) {
+        goto finally;
     }
 
     /* parse and check sanlock resource */
     if (__parse_resource(disks, &res) < 0) {
-        return NULL;
+        goto finally;
     }
 
     /* prepare sanlock names */
-    strncpy(res->lockspace_name, lockspace, SANLK_NAME_LEN);
-    strncpy(res->name, resource, SANLK_NAME_LEN);
+    strncpy(res->lockspace_name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
+    strncpy(res->name, PyBytes_AsString(resource), SANLK_NAME_LEN);
 
     /* init sanlock resource (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -437,15 +437,16 @@ py_init_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv != 0) {
         __set_exception(rv, "Sanlock resource init failure");
-        goto exit_fail;
+        goto finally;
     }
 
+finally:
+    Py_XDECREF(lockspace);
+    Py_XDECREF(resource);
     free(res);
+    if (rv != 0)
+        return NULL;
     Py_RETURN_NONE;
-
-exit_fail:
-    free(res);
-    return NULL;
 }
 
 /* write_lockspace */
