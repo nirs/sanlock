@@ -53,9 +53,7 @@ FILE_NAMES = [
 
 LOCKSPACE_OR_RESOURCE_NAMES = [
     # Bytes are supported with python 2 and 3.
-    pytest.param(
-        b"\xd7\x90",
-        marks=pytest.mark.xfail(six.PY3, reason="bytes support not implemented yet")),
+    pytest.param(b"\xd7\x90"),
     # Python 2 also supports str.
     pytest.param(
         "\xd7\x90",
@@ -66,7 +64,6 @@ LOCKSPACE_OR_RESOURCE_NAMES = [
         marks=pytest.mark.skipif(six.PY3, reason="python 3 supports only bytes")),
 ]
 
-@pytest.mark.xfail(six.PY3, reason="lockspace/resource names in bytes are unsupported yet")
 @pytest.mark.parametrize("filename, encoding" , FILE_NAMES)
 @pytest.mark.parametrize("size,offset", [
     # Smallest offset.
@@ -107,7 +104,6 @@ def test_write_lockspace(tmpdir, sanlock_daemon, filename, encoding, size, offse
     util.check_guard(path, size)
 
 
-@pytest.mark.xfail(six.PY3, reason="lockspace/resource names in bytes are unsupported yet")
 @pytest.mark.parametrize("align", sanlock.ALIGN_SIZE)
 def test_write_lockspace_4k(user_4k_path, sanlock_daemon, align):
 
@@ -137,7 +133,6 @@ def test_write_lockspace_4k(user_4k_path, sanlock_daemon, align):
     util.check_guard(user_4k_path, align)
 
 
-@pytest.mark.xfail(six.PY3, reason="lockspace/resource names in bytes are unsupported yet")
 def test_write_lockspace_4k_invalid_sector_size(sanlock_daemon, user_4k_path):
     with pytest.raises(sanlock.SanlockException) as e:
         sanlock.write_lockspace(
@@ -155,7 +150,6 @@ def test_read_lockspace_4k_invalid_sector_size(sanlock_daemon, user_4k_path):
     assert e.value.errno == errno.EINVAL
 
 
-@pytest.mark.xfail(six.PY3, reason="lockspace/resource names in bytes are unsupported yet")
 @pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 @pytest.mark.parametrize("size,offset", [
     # Smallest offset.
@@ -204,7 +198,6 @@ def test_write_resource(tmpdir, sanlock_daemon, filename, encoding, size, offset
     util.check_guard(path, size)
 
 
-@pytest.mark.xfail(six.PY3, reason="lockspace/resource names in bytes are unsupported yet")
 @pytest.mark.parametrize("align", sanlock.ALIGN_SIZE)
 def test_write_resource_4k(sanlock_daemon, user_4k_path, align):
     disks = [(user_4k_path, 0)]
@@ -250,7 +243,6 @@ def test_write_resource_4k_invalid_sector_size(sanlock_daemon, user_4k_path):
     assert e.value.errno == errno.EINVAL
 
 
-@pytest.mark.xfail(six.PY3, reason="lockspace/resource names in bytes are unsupported yet")
 def test_read_resource_4k_invalid_sector_size(sanlock_daemon, user_4k_path):
     disks = [(user_4k_path, 0)]
 
@@ -266,7 +258,6 @@ def test_read_resource_4k_invalid_sector_size(sanlock_daemon, user_4k_path):
     assert e.value.errno == errno.EINVAL
 
 
-@pytest.mark.xfail(six.PY3, reason="lockspace/resource names in bytes are unsupported yet")
 def test_read_resource_owners_4k_invalid_sector_size(
         sanlock_daemon, user_4k_path):
     disks = [(user_4k_path, 0)]
@@ -284,7 +275,6 @@ def test_read_resource_owners_4k_invalid_sector_size(
     assert e.value.errno == errno.EINVAL
 
 
-@pytest.mark.xfail(six.PY3, reason="lockspace/resource names in bytes are unsupported yet")
 def test_read_resource_owners_invalid_align_size(tmpdir, sanlock_daemon):
     path = str(tmpdir.join("path"))
     util.create_file(path, GiB)
@@ -307,7 +297,6 @@ def test_read_resource_owners_invalid_align_size(tmpdir, sanlock_daemon):
     assert e.value.errno == errno.EINVAL
 
 
-@pytest.mark.xfail(six.PY3, reason="lockspace/resource names in bytes are unsupported yet")
 @pytest.mark.parametrize("size,offset", [
     # Smallest offset.
     (MIN_RES_SIZE, 0),
@@ -352,7 +341,6 @@ def test_add_rem_lockspace(tmpdir, sanlock_daemon, size, offset):
     assert lockspaces == []
 
 
-@pytest.mark.xfail(six.PY3, reason="lockspace/resource names in bytes are unsupported yet")
 def test_add_rem_lockspace_async(tmpdir, sanlock_daemon):
     path = str(tmpdir.join("ls_name"))
     util.create_file(path, MiB)
@@ -389,7 +377,6 @@ def test_add_rem_lockspace_async(tmpdir, sanlock_daemon):
     assert acquired is False
 
 
-@pytest.mark.xfail(six.PY3, reason="lockspace/resource names in bytes are unsupported yet")
 @pytest.mark.parametrize("size,offset", [
     # Smallest offset.
     (MIN_RES_SIZE, 0),
@@ -463,7 +450,6 @@ def test_acquire_release_resource(tmpdir, sanlock_daemon, size, offset):
     assert owners == []
 
 
-@pytest.mark.xfail(six.PY3, reason="lockspace/resource names in bytes are unsupported yet")
 @pytest.mark.parametrize("align, sector", [
     # Invalid alignment
     (KiB, sanlock.SECTOR_SIZE[0]),
@@ -479,7 +465,6 @@ def test_write_lockspace_invalid_align_sector(
         sanlock.write_lockspace(b"ls_name", path, align=align, sector=sector)
 
 
-@pytest.mark.xfail(six.PY3, reason="lockspace/resource names in bytes are unsupported yet")
 @pytest.mark.parametrize("align, sector", [
     # Invalid alignment
     (KiB, sanlock.SECTOR_SIZE[0]),
@@ -497,7 +482,6 @@ def test_write_resource_invalid_align_sector(
             b"ls_name", b"res_name", disks, align=align, sector=sector)
 
 
-@pytest.mark.xfail(six.PY3, reason="lockspace/resource names in bytes are unsupported yet")
 @pytest.mark.parametrize("disk", [
     # Not a tuple - unicode and bytes:
     "not a tuple",
@@ -552,7 +536,6 @@ def test_write_lockspace_parse_args(no_sanlock_daemon, name):
         sanlock.write_lockspace(name, "ls_path")
 
 
-@pytest.mark.xfail(six.PY3, reason="lockspace/resource names in bytes are unsupported yet")
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 def test_write_resource_parse_args(no_sanlock_daemon, name):
     with raises_sanlock_errno():
@@ -562,7 +545,6 @@ def test_write_resource_parse_args(no_sanlock_daemon, name):
         sanlock.write_resource(b"ls_name", name, [("disk_path",0)])
 
 
-@pytest.mark.xfail(six.PY3, reason="lockspace/resource names in bytes are unsupported yet")
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 def test_release_resource_parse_args(no_sanlock_daemon, name):
     with raises_sanlock_errno():
@@ -572,7 +554,6 @@ def test_release_resource_parse_args(no_sanlock_daemon, name):
         sanlock.release(b"ls_name", name, [("disk_path",0)])
 
 
-@pytest.mark.xfail(six.PY3, reason="lockspace/resource names in bytes are unsupported yet")
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 def test_read_resource_owners_parse_args(no_sanlock_daemon, name):
     with raises_sanlock_errno():
