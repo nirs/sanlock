@@ -734,9 +734,10 @@ overriding the default value (see the sanlock daemon parameter -o).");
 static PyObject *
 py_add_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, async = 0, flags = 0;
+    int rv = -1, async = 0, flags = 0;
     uint32_t iotimeout = 0;
-    const char *lockspace, *path;
+    PyObject *lockspace = NULL;
+    const char *path;
     struct sanlk_lockspace ls;
 
     static char *kwlist[] = {"lockspace", "host_id", "path", "offset",
@@ -746,10 +747,10 @@ py_add_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "sks|kIi", kwlist,
-        &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset, &iotimeout,
-        &async)) {
-        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&ks|kIi", kwlist,
+        convert_to_pybytes, &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset,
+        &iotimeout, &async)) {
+        goto finally;
     }
 
     /* prepare sanlock_add_lockspace flags */
@@ -758,7 +759,7 @@ py_add_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     }
 
     /* prepare sanlock names */
-    strncpy(ls.name, lockspace, SANLK_NAME_LEN);
+    strncpy(ls.name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
     strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN - 1);
 
     /* add sanlock lockspace (gil disabled) */
@@ -768,9 +769,13 @@ py_add_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv != 0) {
         __set_exception(rv, "Sanlock lockspace add failure");
-        return NULL;
+        goto finally;
     }
 
+finally:
+    Py_XDECREF(lockspace);
+    if (rv != 0 )
+        return NULL;
     Py_RETURN_NONE;
 }
 
