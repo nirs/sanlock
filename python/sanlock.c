@@ -309,6 +309,43 @@ py_get_alignment(PyObject *self __unused, PyObject *args)
     return Py_BuildValue("i", rv);
 }
 
+/*
+ * Convert parsed arg into PyBytes object.
+ * For Python 2:
+ * If arg is unicode onject, ascii encode it to new PyBytes object passed by addr.
+ * If arg is a bytes object, inc its refcount and pass it in addr.
+ * Set TypeError and return 0 if arg doens not comply to any of the above.
+ * Return 1 on a successful conversion.
+ * For Python 3:
+ * If arg is a bytes object, inc its refcount and pass it in addr.
+ * Set TypeError and return 0 otherwise.
+ * Return 1 on a successful conversion.
+*/
+static int
+convert_to_pybytes(PyObject* arg, void *addr)
+{
+    assert(arg && "convert_to_pybytes called with NULL arg");
+
+#if PY_MAJOR_VERSION == 2
+    if (PyUnicode_Check(arg)) {
+        PyObject *bytes = PyUnicode_AsASCIIString(arg);
+        if (bytes == NULL)
+            return 0;
+        *(PyObject **)addr = bytes;
+        return 1;
+    }
+#endif
+
+    if (PyBytes_Check(arg)) {
+        Py_INCREF(arg);
+        *(PyObject **)addr = arg;
+        return 1;
+    }
+
+    set_error(PyExc_TypeError, "Argument type is not bytes: %s", arg);
+    return 0;
+}
+
 /* init_lockspace */
 PyDoc_STRVAR(pydoc_init_lockspace, "\
 init_lockspace(lockspace, path, offset=0, max_hosts=0, num_hosts=0, \
