@@ -667,10 +667,10 @@ Sector can be one of (512, 4096).");
 static PyObject *
 py_write_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, max_hosts = 0, num_hosts = 0, clear = 0, sector = SECTOR_SIZE_512;
+    int rv = -1, max_hosts = 0, num_hosts = 0, clear = 0, sector = SECTOR_SIZE_512;
     long align = ALIGNMENT_1M;
-    const char *lockspace, *resource;
-    struct sanlk_resource *rs;
+    PyObject *lockspace = NULL, *resource = NULL;
+    struct sanlk_resource *rs = NULL;
     PyObject *disks;
     uint32_t flags = 0;
 
@@ -678,27 +678,27 @@ py_write_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
                                 "num_hosts", "clear", "align", "sector", NULL};
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "ssO!|iiili",
-        kwlist, &lockspace, &resource, &PyList_Type, &disks, &max_hosts,
-        &num_hosts, &clear, &align, &sector)) {
-        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&O&O!|iiili",
+        kwlist, convert_to_pybytes, &lockspace, convert_to_pybytes, &resource,
+        &PyList_Type, &disks, &max_hosts, &num_hosts, &clear, &align, &sector)) {
+        goto finally;
     }
 
     /* parse and check sanlock resource */
     if (__parse_resource(disks, &rs) < 0) {
-        return NULL;
+        goto finally;
     }
 
     /* prepare sanlock names */
-    strncpy(rs->lockspace_name, lockspace, SANLK_NAME_LEN);
-    strncpy(rs->name, resource, SANLK_NAME_LEN);
+    strncpy(rs->lockspace_name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
+    strncpy(rs->name, PyBytes_AsString(resource), SANLK_NAME_LEN);
 
     /* set alignment/sector flags */
     if (add_align_flag(align, &rs->flags) == -1)
-        goto exit_fail;
+        goto finally;
 
     if (add_sector_flag(sector, &rs->flags) == -1)
-        goto exit_fail;
+        goto finally;
 
     if (clear) {
         flags |= SANLK_WRITE_CLEAR;
@@ -711,15 +711,16 @@ py_write_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv != 0) {
         __set_exception(rv, "Sanlock resource write failure");
-        goto exit_fail;
+        goto finally;
     }
 
+finally:
+    Py_XDECREF(lockspace);
+    Py_XDECREF(resource);
     free(rs);
+    if (rv != 0)
+        return NULL;
     Py_RETURN_NONE;
-
-exit_fail:
-    free(rs);
-    return NULL;
 }
 
 /* add_lockspace */
