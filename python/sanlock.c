@@ -32,6 +32,8 @@
 
 #define MODULE_NAME "sanlock"
 
+#define BIND_ERROR -1000
+
 /* Functions prototypes */
 static void __set_exception(int en, char *msg) __sets_exception;
 static int __parse_resource(PyObject *obj, struct sanlk_resource **res_ret) __neg_sets_exception;
@@ -791,8 +793,9 @@ acquired or released.");
 static PyObject *
 py_inq_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, waitrs = 0, flags = 0;
-    const char *lockspace, *path;
+    int rv = BIND_ERROR, waitrs = 0, flags = 0;
+    PyObject *lockspace = NULL;
+    const char *path;
     struct sanlk_lockspace ls;
 
     static char *kwlist[] = {"lockspace", "host_id", "path", "offset",
@@ -802,10 +805,10 @@ py_inq_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "sks|ki", kwlist,
-        &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset,
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&ks|ki", kwlist,
+        convert_to_pybytes, &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset,
         &waitrs)) {
-        return NULL;
+        goto finally;
     }
 
     /* prepare sanlock_inq_lockspace flags */
@@ -814,7 +817,7 @@ py_inq_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     }
 
     /* prepare sanlock names */
-    strncpy(ls.name, lockspace, SANLK_NAME_LEN);
+    strncpy(ls.name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
     strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN - 1);
 
     /* add sanlock lockspace (gil disabled) */
@@ -822,13 +825,17 @@ py_inq_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     rv = sanlock_inq_lockspace(&ls, flags);
     Py_END_ALLOW_THREADS
 
-    if (rv == 0) {
+finally:
+    Py_XDECREF(lockspace);
+
+    if (rv == BIND_ERROR)
+        return NULL;
+    if (rv == 0)
         Py_RETURN_TRUE;
-    } else if (rv == -ENOENT) {
+    if (rv == -ENOENT)
         Py_RETURN_FALSE;
-    } else if (rv == -EINPROGRESS) {
+    if (rv == -EINPROGRESS)
         Py_RETURN_NONE;
-    }
 
     __set_exception(rv, "Sanlock lockspace inquire failure");
     return NULL;
