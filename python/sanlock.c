@@ -933,7 +933,7 @@ py_rem_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
     int rv = -1, async = 0, unused = 0, flags = 0;
     PyObject *lockspace = NULL;
-    const char *path;
+    PyObject *path = NULL;
     struct sanlk_lockspace ls;
 
     static char *kwlist[] = {"lockspace", "host_id", "path", "offset",
@@ -943,15 +943,16 @@ py_rem_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&ks|kii", kwlist,
-        convert_to_pybytes, &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset,
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&kO&|kii", kwlist,
+        convert_to_pybytes, &lockspace, &ls.host_id, pypath_converter, &path,
+        &ls.host_id_disk.offset,
         &async, &unused)) {
         goto finally;
     }
 
     /* prepare sanlock names */
     strncpy(ls.name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
-    strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN - 1);
+    strncpy(ls.host_id_disk.path, PyBytes_AsString(path), SANLK_PATH_LEN - 1);
 
     /* prepare sanlock_rem_lockspace flags */
     if (async) {
@@ -974,6 +975,7 @@ py_rem_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
 finally:
     Py_XDECREF(lockspace);
+    Py_XDECREF(path);
     if (rv != 0)
         return NULL;
     Py_RETURN_NONE;

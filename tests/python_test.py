@@ -527,7 +527,7 @@ def raises_sanlock_errno(expected_errno=errno.ECONNREFUSED):
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES_NO_XFAILS)
 def test_rem_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno():
