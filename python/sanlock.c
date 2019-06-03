@@ -659,9 +659,9 @@ Sector can be one of (512, 4096).");
 static PyObject *
 py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, rs_len, sector = SECTOR_SIZE_512;
+    int rv = -1, rs_len, sector = SECTOR_SIZE_512;
     long align = ALIGNMENT_1M;
-    const char *path;
+    PyObject *path = NULL;
     struct sanlk_resource *rs;
     PyObject *rs_info = NULL;
 
@@ -681,20 +681,20 @@ py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
     rs->num_disks = 1;
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "s|kli", kwlist,
-        &path, &(rs->disks[0].offset), &align, &sector)) {
-        goto exit_fail;
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&|kli", kwlist,
+        pypath_converter, &path, &(rs->disks[0].offset), &align, &sector)) {
+        goto finally;
     }
 
     /* prepare the resource disk path */
-    strncpy(rs->disks[0].path, path, SANLK_PATH_LEN - 1);
+    strncpy(rs->disks[0].path, PyBytes_AsString(path), SANLK_PATH_LEN - 1);
 
     /* set alignment/sector flags */
     if (add_align_flag(align, &rs->flags) == -1)
-        goto exit_fail;
+        goto finally;
 
     if (add_sector_flag(sector, &rs->flags) == -1)
-        goto exit_fail;
+        goto finally;
 
     /* read sanlock resource (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -703,7 +703,7 @@ py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv != 0) {
         __set_exception(rv, "Sanlock resource read failure");
-        goto exit_fail;
+        goto finally;
     }
 
     /* prepare the dictionary holding the information */
@@ -717,17 +717,16 @@ py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
         "resource", rs->name,
         "version", rs->lver);
     if (rs_info  == NULL)
-        goto exit_fail;
+        goto finally;
 
-    /* success */
+finally:
     free(rs);
+    Py_XDECREF(path);
+    if (rv != 0) {
+        Py_XDECREF(rs_info);
+        return NULL;
+    }
     return rs_info;
-
-    /* failure */
-exit_fail:
-    free(rs);
-    Py_XDECREF(rs_info);
-    return NULL;
 }
 
 /* write_resource */
