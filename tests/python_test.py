@@ -51,6 +51,14 @@ FILE_NAMES = [
             reason="currently not supporting bytes paths")),
 ]
 
+FILE_NAMES_NO_XFAILS = [
+    #name, encoding
+    ("ascii", None),
+    (u"ascii", None),
+    (u"\u05d0", None),
+    (u"\u05d0", "utf-8"),
+]
+
 LOCKSPACE_OR_RESOURCE_NAMES = [
     # Bytes are supported with python 2 and 3.
     pytest.param(b"\xd7\x90"),
@@ -543,7 +551,7 @@ def test_write_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding)
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES_NO_XFAILS)
 def test_write_resource_parse_args(no_sanlock_daemon, name, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     disks = [(path, 0)]
@@ -555,7 +563,7 @@ def test_write_resource_parse_args(no_sanlock_daemon, name, filename, encoding):
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES_NO_XFAILS)
 def test_release_resource_parse_args(no_sanlock_daemon, name, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     disks = [(path, 0)]
@@ -567,7 +575,7 @@ def test_release_resource_parse_args(no_sanlock_daemon, name, filename, encoding
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES_NO_XFAILS)
 def test_read_resource_owners_parse_args(no_sanlock_daemon, name, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     disks = [(path, 0)]
@@ -619,7 +627,7 @@ def test_init_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding):
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES_NO_XFAILS)
 def test_init_resource_parse_args(no_sanlock_daemon, name, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     disks = [(path, 0)]

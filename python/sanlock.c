@@ -160,6 +160,33 @@ pystring_as_cstring(PyObject *obj)
 }
 
 static int
+parse_single_disk(PyObject* disk, struct sanlk_disk* res_disk)
+{
+    int rv = 0;
+    PyObject *path = NULL;
+    uint64_t offset;
+
+    if (!PyTuple_Check(disk)) {
+         set_error(PyExc_ValueError, "Invalid disk %s", disk);
+         goto finally;
+    }
+
+    if (!PyArg_ParseTuple(disk, "O&K", pypath_converter, &path, &offset)) {
+        /* Override the error since it confusing in this context. */
+        set_error(PyExc_ValueError, "Invalid disk %s", disk);
+        goto finally;
+    }
+
+    strncpy(res_disk->path, PyBytes_AsString(path), SANLK_PATH_LEN - 1);
+    res_disk->offset = offset;
+    rv = 1;
+
+finally:
+    Py_XDECREF(path);
+    return rv;
+}
+
+static int
 __parse_resource(PyObject *obj, struct sanlk_resource **res_ret)
 {
     int i, num_disks, res_len;
@@ -180,26 +207,11 @@ __parse_resource(PyObject *obj, struct sanlk_resource **res_ret)
     res->num_disks = num_disks;
 
     for (i = 0; i < num_disks; i++) {
-        PyObject *disk;
-        const char *path;
-        uint64_t offset;
+        PyObject *disk = PyList_GetItem(obj,i);
 
-        disk = PyList_GetItem(obj, i);
-
-        if (!PyTuple_Check(disk)) {
-            set_error(PyExc_ValueError, "Invalid disk %s", disk);
-            goto exit_fail;
-
-        }
-
-        if (!PyArg_ParseTuple(disk, "sK", &path, &offset)) {
-            /* Override the error since it confusing in this context. */
-            set_error(PyExc_ValueError, "Invalid disk %s", disk);
+        if (!parse_single_disk(disk, &(res->disks[i]))) {
             goto exit_fail;
         }
-
-        strncpy(res->disks[i].path, path, SANLK_PATH_LEN - 1);
-        res->disks[i].offset = offset;
     }
 
     *res_ret = res;
