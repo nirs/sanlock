@@ -73,6 +73,60 @@ __set_exception(int en, char *msg)
     }
 }
 
+
+/*
+ * Converts a unicode path into PyBytes object.
+ * If conversion succeeds addr will hold a reference to a new
+ * PyBytes object containing bytes represenation of the system path
+ * given in arg object.
+ * Returns 1 on successful operation, 0 otherwise.
+ * Py2 implementation is based on Py3's PyUnicode_FSConverter[1].
+ * Py3 implementation wraps call PyUnicode_FSConverter and eliminates
+ * the cleanup support in order to make usage flow the same between
+ * versions.
+ * [1] https://github.com/python/cpython/blob/master/Objects/unicodeobject.c#L3818
+ */
+static int
+pypath_converter(PyObject* arg, void* addr)
+{
+    assert(arg && "path converter does not support cleanup (arg is NULL)");
+
+#if PY_MAJOR_VERSION == 2
+    /* python 2 implementation */
+    PyObject *output = NULL;
+    Py_ssize_t size;
+    const char *data;
+
+    if (PyBytes_Check(arg)) {
+        Py_INCREF(arg);
+        output = arg;
+    } else {
+        output = PyUnicode_AsEncodedString(arg, Py_FileSystemDefaultEncoding, NULL);
+        if (!output)
+            return 0;
+        assert(PyBytes_Check(output));
+    }
+
+    size = PyBytes_GET_SIZE(output);
+    data = PyBytes_AS_STRING(output);
+    if ((size_t)size != strlen(data)) {
+        PyErr_Format(PyExc_ValueError, "Embedded null byte");
+        Py_DECREF(output);
+        return 0;
+    }
+
+    *(PyObject**)addr = output;
+    return 1;
+#else
+    /* python 3 call wrapper */
+    int rv = PyUnicode_FSConverter(arg, addr);
+    /* python 2 does not suppot cleanups - same applies here */
+    if (rv == Py_CLEANUP_SUPPORTED)
+        rv = 1;
+    return rv;
+#endif
+}
+
 static uint64_t
 pyinteger_as_unsigned_long_long_mask(PyObject *obj)
 {
