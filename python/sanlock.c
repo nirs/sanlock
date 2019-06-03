@@ -870,7 +870,7 @@ py_inq_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
     int rv = BIND_ERROR, waitrs = 0, flags = 0;
     PyObject *lockspace = NULL;
-    const char *path;
+    PyObject *path = NULL;
     struct sanlk_lockspace ls;
 
     static char *kwlist[] = {"lockspace", "host_id", "path", "offset",
@@ -880,9 +880,9 @@ py_inq_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&ks|ki", kwlist,
-        convert_to_pybytes, &lockspace, &ls.host_id, &path, &ls.host_id_disk.offset,
-        &waitrs)) {
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&kO&|ki", kwlist,
+        convert_to_pybytes, &lockspace, &ls.host_id, pypath_converter, &path,
+        &ls.host_id_disk.offset, &waitrs)) {
         goto finally;
     }
 
@@ -893,7 +893,7 @@ py_inq_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     /* prepare sanlock names */
     strncpy(ls.name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
-    strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN - 1);
+    strncpy(ls.host_id_disk.path, PyBytes_AsString(path), SANLK_PATH_LEN - 1);
 
     /* add sanlock lockspace (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -902,6 +902,7 @@ py_inq_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
 finally:
     Py_XDECREF(lockspace);
+    Py_XDECREF(path);
 
     if (rv == BIND_ERROR) {
         return NULL;

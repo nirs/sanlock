@@ -593,7 +593,7 @@ def test_get_hosts_parse_args(no_sanlock_daemon, name):
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES_NO_XFAILS)
 def test_inq_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno():
