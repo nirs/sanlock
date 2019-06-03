@@ -352,17 +352,17 @@ Get device alignment.");
 static PyObject *
 py_get_alignment(PyObject *self __unused, PyObject *args)
 {
-    int rv;
-    const char *path;
+    int rv = -1;
+    PyObject *path = NULL;
     struct sanlk_disk disk;
 
     /* parse python tuple */
-    if (!PyArg_ParseTuple(args, "s", &path)) {
-        return NULL;
+    if (!PyArg_ParseTuple(args, "O&", pypath_converter, &path)) {
+        goto finally;
     }
 
     memset(&disk, 0, sizeof(struct sanlk_disk));
-    strncpy(disk.path, path, SANLK_PATH_LEN - 1);
+    strncpy(disk.path, PyBytes_AsString(path), SANLK_PATH_LEN - 1);
 
     /* get device alignment (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -371,9 +371,13 @@ py_get_alignment(PyObject *self __unused, PyObject *args)
 
     if (rv < 0) {
         __set_exception(rv, "Unable to get device alignment");
-        return NULL;
+        goto finally;
     }
 
+finally:
+    Py_XDECREF(path);
+    if (rv < 0)
+        return NULL;
     return Py_BuildValue("i", rv);
 }
 

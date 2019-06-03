@@ -636,7 +636,7 @@ def test_init_resource_parse_args(no_sanlock_daemon, name, filename, encoding):
     with raises_sanlock_errno(errno.ENOENT):
         sanlock.init_resource(name, b"res_name", disks)
 
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES_NO_XFAILS)
 def test_get_alignment_parse_args(no_sanlock_daemon, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno(errno.ENOENT):
