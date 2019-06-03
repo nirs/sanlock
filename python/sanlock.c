@@ -592,10 +592,10 @@ Sector can be one of (512, 4096).");
 static PyObject *
 py_read_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, sector = SECTOR_SIZE_512;
+    int rv = -1, sector = SECTOR_SIZE_512;
     long align = ALIGNMENT_1M;
     uint32_t io_timeout = 0;
-    const char *path;
+    PyObject *path = NULL;
     struct sanlk_lockspace ls;
     PyObject *ls_info = NULL;
 
@@ -605,20 +605,20 @@ py_read_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "s|kli", kwlist,
-        &path, &ls.host_id_disk.offset, &align, &sector)) {
-        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&|kli", kwlist,
+        pypath_converter, &path, &ls.host_id_disk.offset, &align, &sector)) {
+        goto finally;
     }
 
     /* prepare sanlock names */
-    strncpy(ls.host_id_disk.path, path, SANLK_PATH_LEN - 1);
+    strncpy(ls.host_id_disk.path, PyBytes_AsString(path), SANLK_PATH_LEN - 1);
 
     /* set alignment/sector flags */
     if (add_align_flag(align, &ls.flags) == -1)
-        return NULL;
+        goto finally;
 
     if (add_sector_flag(sector, &ls.flags) == -1)
-        return NULL;
+        goto finally;
 
     /* read sanlock lockspace (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -627,7 +627,7 @@ py_read_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv != 0) {
         __set_exception(rv, "Sanlock lockspace read failure");
-        return NULL;
+        goto finally;
     }
 
     /* fill the information dictionary */
@@ -640,9 +640,12 @@ py_read_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
             "lockspace", ls.name,
             "iotimeout", io_timeout);
     if (ls_info  == NULL)
-        return NULL;
+        goto finally;
 
-    /* success */
+finally:
+    Py_XDECREF(path);
+    if (rv != 0)
+        return NULL;
     return ls_info;
 }
 

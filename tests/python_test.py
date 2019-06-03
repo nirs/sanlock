@@ -642,7 +642,7 @@ def test_get_alignment_parse_args(no_sanlock_daemon, filename, encoding):
     with raises_sanlock_errno(errno.ENOENT):
         sanlock.get_alignment(path)
 
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES_NO_XFAILS)
 def test_read_lockspace_parse_args(no_sanlock_daemon, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno():
