@@ -1363,6 +1363,51 @@ finally:
     return ls_list;
 }
 
+static int
+parse_killpath_item(PyObject *item, char *kpargs, size_t *kplen)
+{
+    int rv = 0, i;
+    size_t arg_len;
+    PyObject *path = NULL;
+    const char *p = NULL;
+
+    if (!pypath_converter(item, &path)) {
+        goto finally;
+    }
+    p = PyBytes_AsString(path);
+    if (!p) {
+        goto finally;
+    }
+    /* computing the argument length considering the escape chars */
+    for (i = 0, arg_len = 0; p[i]; i++, arg_len++) {
+        if (p[i] == ' ' || p[i] == '\\') arg_len++;
+    }
+
+    /* adding 2 for the space separator ' ' and the '\0' terminator */
+    if (*kplen + arg_len + 2 > SANLK_HELPER_ARGS_LEN) {
+        __set_exception(EINVAL, "Killpath arguments are too long");
+        goto finally;
+    }
+
+    /* adding the space separator between arguments */
+    if (*kplen > 0) {
+        kpargs[(*kplen)++] = ' ';
+    }
+
+    while (*p) {
+        if (*p == ' ' || *p == '\\') {
+            kpargs[(*kplen)++] = '\\';
+        }
+
+        kpargs[(*kplen)++] = *p++;
+    }
+    rv = 1;
+
+finally:
+    Py_XDECREF(path);
+    return rv;
+}
+
 /* killpath */
 PyDoc_STRVAR(pydoc_killpath, "\
 killpath(path, args [, slkfd=fd])\n\
@@ -1374,75 +1419,51 @@ The arguments must be in the format: [\"arg1\", \"arg2\", ...]");
 static PyObject *
 py_killpath(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, i, j, n, num_args, sanlockfd = -1;
+    int rv = -1, i, num_args, sanlockfd = -1;
+    size_t kplen;
     char kpargs[SANLK_HELPER_ARGS_LEN];
-    const char *p, *path;
-    PyObject *argslist, *item;
+    PyObject *path = NULL;
+    PyObject *argslist;
 
     static char *kwlist[] = {"path", "args", "slkfd", NULL};
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "sO!|i", kwlist,
-        &path, &PyList_Type, &argslist, &sanlockfd)) {
-        return NULL;
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&O!|i", kwlist,
+        pypath_converter, &path, &PyList_Type, &argslist, &sanlockfd)) {
+        goto finally;
     }
 
     /* checking the path length */
-    if (strlen(path) + 1 > SANLK_HELPER_PATH_LEN) {
+    if (PyBytes_Size(path) + 1 > SANLK_HELPER_PATH_LEN) {
         __set_exception(EINVAL, "Killpath path argument too long");
-        return NULL;
+        goto finally;
     }
 
     num_args = PyList_Size(argslist);
     memset(kpargs, 0, SANLK_HELPER_ARGS_LEN);
 
     /* creating the arguments string from a python list */
-    for (i = 0, n = 0; i < num_args; i++) {
-        size_t arg_len;
-
-        item = PyList_GetItem(argslist, i);
-        p = pystring_as_cstring(item);
-
-        if (p == NULL) {
-            __set_exception(EINVAL, "Killpath argument not a string");
-            return NULL;
-        }
-
-        /* computing the argument length considering the escape chars */
-        for (j = 0, arg_len = 0; p[j]; j++, arg_len++) {
-            if (p[j] == ' ' || p[j] == '\\') arg_len++;
-        }
-
-        /* adding 2 for the space separator ' ' and the '\0' terminator */
-        if (n + arg_len + 2 > SANLK_HELPER_ARGS_LEN) {
-            __set_exception(EINVAL, "Killpath arguments are too long");
-            return NULL;
-        }
-
-        /* adding the space separator between arguments */
-        if (n > 0) {
-            kpargs[n++] = ' ';
-        }
-
-        while (*p) {
-            if (*p == ' ' || *p == '\\') {
-                kpargs[n++] = '\\';
-            }
-
-            kpargs[n++] = *p++;
+    for (i = 0, kplen = 0; i < num_args; i++) {
+        PyObject *item = PyList_GetItem(argslist, i);
+        if (!parse_killpath_item(item, kpargs, &kplen)) {
+            goto finally;
         }
     }
 
     /* configure killpath (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_killpath(sanlockfd, 0, path, kpargs);
+    rv = sanlock_killpath(sanlockfd, 0, PyBytes_AsString(path), kpargs);
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        __set_exception(rv, "Killpath script not configured");
-        return NULL;
+       __set_exception(rv, "Killpath script not configured");
+       goto finally;
     }
 
+finally:
+    Py_XDECREF(path);
+    if (rv != 0)
+        return NULL;
     Py_RETURN_NONE;
 }
 
