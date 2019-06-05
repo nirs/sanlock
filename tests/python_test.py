@@ -519,48 +519,63 @@ def raises_sanlock_errno(expected_errno=errno.ECONNREFUSED):
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-def test_rem_lockspace_parse_args(no_sanlock_daemon, name):
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+def test_rem_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding):
+    path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno():
-        sanlock.rem_lockspace(name, 1, "ls_path", 0)
+        sanlock.rem_lockspace(name, 1, path, 0)
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-def test_add_lockspace_parse_args(no_sanlock_daemon, name):
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+def test_add_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding):
+    path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno():
-        sanlock.add_lockspace(name, 1, "ls_path", 0)
+        sanlock.add_lockspace(name, 1, path, 0)
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-def test_write_lockspace_parse_args(no_sanlock_daemon, name):
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+def test_write_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding):
+    path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno():
-        sanlock.write_lockspace(name, "ls_path")
+        sanlock.write_lockspace(name, path)
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-def test_write_resource_parse_args(no_sanlock_daemon, name):
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+def test_write_resource_parse_args(no_sanlock_daemon, name, filename, encoding):
+    path = util.generate_path("/tmp/", filename, encoding)
+    disks = [(path, 0)]
     with raises_sanlock_errno():
-        sanlock.write_resource(name, b"res_name", [("disk_path",0)])
+        sanlock.write_resource(name, b"res_name", disks)
 
     with raises_sanlock_errno():
-        sanlock.write_resource(b"ls_name", name, [("disk_path",0)])
+        sanlock.write_resource(b"ls_name", name, disks)
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-def test_release_resource_parse_args(no_sanlock_daemon, name):
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+def test_release_resource_parse_args(no_sanlock_daemon, name, filename, encoding):
+    path = util.generate_path("/tmp/", filename, encoding)
+    disks = [(path, 0)]
     with raises_sanlock_errno():
-        sanlock.release(name, b"res_name", [("disk_path",0)])
+        sanlock.release(name, b"res_name", disks)
 
     with raises_sanlock_errno():
-        sanlock.release(b"ls_name", name, [("disk_path",0)])
+        sanlock.release(b"ls_name", name, disks)
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-def test_read_resource_owners_parse_args(no_sanlock_daemon, name):
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+def test_read_resource_owners_parse_args(no_sanlock_daemon, name, filename, encoding):
+    path = util.generate_path("/tmp/", filename, encoding)
+    disks = [(path, 0)]
     with raises_sanlock_errno():
-        sanlock.read_resource_owners(name, b"res_name", [("disk_path",0)])
+        sanlock.read_resource_owners(name, b"res_name", disks)
 
     with raises_sanlock_errno():
-        sanlock.read_resource_owners(b"ls_name", name, [("disk_path",0)])
+        sanlock.read_resource_owners(b"ls_name", name, disks)
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
@@ -570,9 +585,11 @@ def test_get_hosts_parse_args(no_sanlock_daemon, name):
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-def test_inq_lockspace_parse_args(no_sanlock_daemon, name):
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+def test_inq_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding):
+    path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno():
-        sanlock.inq_lockspace(name, 1, "path", wait=False)
+        sanlock.inq_lockspace(name, 1, path, wait=False)
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
@@ -594,15 +611,38 @@ def test_set_event_parse_args(no_sanlock_daemon, name):
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-def test_init_lockspace_parse_args(no_sanlock_daemon, name):
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+def test_init_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding):
+    path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno(errno.ENODEV):
-        sanlock.init_lockspace(name, "path")
+        sanlock.init_lockspace(name, path)
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-def test_init_resource_parse_args(no_sanlock_daemon, name):
-    disks = [("path", 0)]
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+def test_init_resource_parse_args(no_sanlock_daemon, name, filename, encoding):
+    path = util.generate_path("/tmp/", filename, encoding)
+    disks = [(path, 0)]
     with raises_sanlock_errno(errno.ENOENT):
         sanlock.init_resource(b"ls_name", name, disks)
     with raises_sanlock_errno(errno.ENOENT):
         sanlock.init_resource(name, b"res_name", disks)
+
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+def test_get_alignment_parse_args(no_sanlock_daemon, filename, encoding):
+    path = util.generate_path("/tmp/", filename, encoding)
+    with raises_sanlock_errno(errno.ENOENT):
+        sanlock.get_alignment(path)
+
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+def test_read_lockspace_parse_args(no_sanlock_daemon, filename, encoding):
+    path = util.generate_path("/tmp/", filename, encoding)
+    with raises_sanlock_errno():
+        sanlock.read_lockspace(path)
+
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+def test_read_resource_parse_args(no_sanlock_daemon, filename, encoding):
+    path = util.generate_path("/tmp/", filename, encoding)
+    with raises_sanlock_errno():
+        sanlock.read_resource(path)
+
