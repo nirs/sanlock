@@ -39,22 +39,6 @@ FILE_NAMES = [
     #name, encoding
     ("ascii", None),
     (u"ascii", None),
-    pytest.param(
-        u"\u05d0", None,
-        marks=pytest.mark.xfail(
-            six.PY2,
-            reason="currently not supporting non-ascii paths")),
-    pytest.param(
-        u"\u05d0", "utf-8",
-        marks=pytest.mark.xfail(
-            six.PY3,
-            reason="currently not supporting bytes paths")),
-]
-
-FILE_NAMES_NO_XFAILS = [
-    #name, encoding
-    ("ascii", None),
-    (u"ascii", None),
     (u"\u05d0", None),
     (u"\u05d0", "utf-8"),
 ]
@@ -512,7 +496,7 @@ def test_write_resource_invalid_disk(tmpdir, sanlock_daemon, disk):
     assert repr(disk) in str(e.value)
 
 
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES_NO_XFAILS)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 def test_killpath(tmpdir, sanlock_daemon, filename, encoding):
     cmd_path = util.generate_path(tmpdir, filename, encoding)
     fd = sanlock.register()
@@ -527,7 +511,7 @@ def raises_sanlock_errno(expected_errno=errno.ECONNREFUSED):
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES_NO_XFAILS)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 def test_rem_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno():
@@ -535,7 +519,7 @@ def test_rem_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding):
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES_NO_XFAILS)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 def test_add_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno():
@@ -543,7 +527,7 @@ def test_add_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding):
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES_NO_XFAILS)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 def test_write_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno():
@@ -551,7 +535,7 @@ def test_write_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding)
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES_NO_XFAILS)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 def test_write_resource_parse_args(no_sanlock_daemon, name, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     disks = [(path, 0)]
@@ -563,7 +547,7 @@ def test_write_resource_parse_args(no_sanlock_daemon, name, filename, encoding):
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES_NO_XFAILS)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 def test_release_resource_parse_args(no_sanlock_daemon, name, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     disks = [(path, 0)]
@@ -575,7 +559,7 @@ def test_release_resource_parse_args(no_sanlock_daemon, name, filename, encoding
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES_NO_XFAILS)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 def test_read_resource_owners_parse_args(no_sanlock_daemon, name, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     disks = [(path, 0)]
@@ -593,7 +577,7 @@ def test_get_hosts_parse_args(no_sanlock_daemon, name):
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES_NO_XFAILS)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 def test_inq_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno():
@@ -619,7 +603,7 @@ def test_set_event_parse_args(no_sanlock_daemon, name):
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES_NO_XFAILS)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 def test_init_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno(errno.ENODEV):
@@ -627,7 +611,7 @@ def test_init_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding):
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES_NO_XFAILS)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 def test_init_resource_parse_args(no_sanlock_daemon, name, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     disks = [(path, 0)]
@@ -636,19 +620,19 @@ def test_init_resource_parse_args(no_sanlock_daemon, name, filename, encoding):
     with raises_sanlock_errno(errno.ENOENT):
         sanlock.init_resource(name, b"res_name", disks)
 
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES_NO_XFAILS)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 def test_get_alignment_parse_args(no_sanlock_daemon, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno(errno.ENOENT):
         sanlock.get_alignment(path)
 
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES_NO_XFAILS)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 def test_read_lockspace_parse_args(no_sanlock_daemon, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno():
         sanlock.read_lockspace(path)
 
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES_NO_XFAILS)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 def test_read_resource_parse_args(no_sanlock_daemon, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno():
