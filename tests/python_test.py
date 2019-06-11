@@ -132,7 +132,6 @@ def test_write_lockspace_4k_invalid_sector_size(sanlock_daemon, user_4k_path):
     assert e.value.errno == errno.EINVAL
 
 
-@pytest.mark.xfail(six.PY3, reason="lockspace/resource names in bytes are unsupported yet")
 def test_read_lockspace_4k_invalid_sector_size(sanlock_daemon, user_4k_path):
     sanlock.write_lockspace(
         b"ls_name", user_4k_path, iotimeout=1, sector=SECTOR_SIZE_4K)
