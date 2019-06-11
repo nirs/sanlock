@@ -801,8 +801,8 @@ finally:
 
 /* add_lockspace */
 PyDoc_STRVAR(pydoc_add_lockspace, "\
-add_lockspace(lockspace, host_id, path, offset=0, iotimeout=0, async=False)\n\
-Add a lockspace, acquiring a host_id in it. If async is True the function\n\
+add_lockspace(lockspace, host_id, path, offset=0, iotimeout=0, wait=True)\n\
+Add a lockspace, acquiring a host_id in it. If wait is False the function\n\
 will return immediatly and the status can be checked using inq_lockspace.\n\
 The iotimeout option configures the io timeout for the specific lockspace,\n\
 overriding the default value (see the sanlock daemon parameter -o).");
@@ -810,14 +810,15 @@ overriding the default value (see the sanlock daemon parameter -o).");
 static PyObject *
 py_add_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv = -1, async = 0, flags = 0;
+    int rv = -1, flags = 0;
+    int wait = 1;
     uint32_t iotimeout = 0;
     PyObject *lockspace = NULL;
     PyObject *path = NULL;
     struct sanlk_lockspace ls;
 
     static char *kwlist[] = {"lockspace", "host_id", "path", "offset",
-                                "iotimeout", "async", NULL};
+                                "iotimeout", "wait", NULL};
 
     /* initialize lockspace structure */
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
@@ -825,12 +826,12 @@ py_add_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     /* parse python tuple */
     if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&kO&|kIi", kwlist,
         convert_to_pybytes, &lockspace, &ls.host_id, pypath_converter, &path,
-        &ls.host_id_disk.offset, &iotimeout, &async)) {
+        &ls.host_id_disk.offset, &iotimeout, &wait)) {
         goto finally;
     }
 
     /* prepare sanlock_add_lockspace flags */
-    if (async) {
+    if (!wait) {
         flags |= SANLK_ADD_ASYNC;
     }
 
@@ -920,8 +921,8 @@ finally:
 
 /* rem_lockspace */
 PyDoc_STRVAR(pydoc_rem_lockspace, "\
-rem_lockspace(lockspace, host_id, path, offset=0, async=False, unused=False)\n\
-Remove a lockspace, releasing the acquired host_id. If async is True the\n\
+rem_lockspace(lockspace, host_id, path, offset=0, wait=True, unused=False)\n\
+Remove a lockspace, releasing the acquired host_id. If wait is False the\n\
 function will return immediately and the status can be checked using\n\
 inq_lockspace. If unused is True the command will fail (EBUSY) if there is\n\
 at least one acquired resource in the lockspace. Otherwise (the default)\n\
@@ -931,13 +932,14 @@ successful termination these leases will be released.");
 static PyObject *
 py_rem_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv = -1, async = 0, unused = 0, flags = 0;
+    int rv = -1, unused = 0, flags = 0;
+    int wait = 1;
     PyObject *lockspace = NULL;
     PyObject *path = NULL;
     struct sanlk_lockspace ls;
 
     static char *kwlist[] = {"lockspace", "host_id", "path", "offset",
-                                "async", "unused", NULL};
+                                "wait", "unused", NULL};
 
     /* initialize lockspace structure */
     memset(&ls, 0, sizeof(struct sanlk_lockspace));
@@ -946,7 +948,7 @@ py_rem_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&kO&|kii", kwlist,
         convert_to_pybytes, &lockspace, &ls.host_id, pypath_converter, &path,
         &ls.host_id_disk.offset,
-        &async, &unused)) {
+        &wait, &unused)) {
         goto finally;
     }
 
@@ -955,7 +957,7 @@ py_rem_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     strncpy(ls.host_id_disk.path, PyBytes_AsString(path), SANLK_PATH_LEN - 1);
 
     /* prepare sanlock_rem_lockspace flags */
-    if (async) {
+    if (!wait) {
         flags |= SANLK_REM_ASYNC;
     }
 
