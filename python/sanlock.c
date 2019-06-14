@@ -269,7 +269,7 @@ set_error(PyObject* exception, const char* format, PyObject* obj)
 }
 
 static PyObject *
-__hosts_to_list(struct sanlk_host *hss, int hss_count)
+hosts_to_list(struct sanlk_host *hss, int hss_count)
 {
     int i;
     PyObject *ls_list = NULL, *ls_entry = NULL;
@@ -1073,7 +1073,7 @@ py_get_hosts(PyObject *self __unused, PyObject *args, PyObject *keywds)
         goto finally;
     }
 
-    ls_list = __hosts_to_list(hss, hss_count);
+    ls_list = hosts_to_list(hss, hss_count);
 
 finally:
     Py_XDECREF(lockspace);
@@ -1339,7 +1339,7 @@ py_read_resource_owners(PyObject *self __unused, PyObject *args, PyObject *keywd
         goto finally;
     }
 
-    ls_list = __hosts_to_list(hss, hss_count);
+    ls_list = hosts_to_list(hss, hss_count);
 
 finally:
     Py_XDECREF(lockspace);
