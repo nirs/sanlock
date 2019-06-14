@@ -1027,7 +1027,7 @@ py_get_lockspaces(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     /* failure */
 exit_fail:
-    if (lss) free(lss);
+    free(lss);
     Py_XDECREF(ls_entry);
     Py_XDECREF(ls_list);
     return NULL;
