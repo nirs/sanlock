@@ -16,27 +16,13 @@
 #define __unused __attribute__ ((unused))
 #endif
 
-#ifdef WITH_CPYCHECKER_SETS_EXCEPTION_ATTRIBUTE
-#define __sets_exception \
-    __attribute__((cpychecker_sets_exception))
-#else
-#define __sets_exception
-#endif
-
-#ifdef WITH_CPYCHECKER_NEGATIVE_RESULT_SETS_EXCEPTION_ATTRIBUTE
-#define __neg_sets_exception \
-    __attribute__((cpychecker_negative_result_sets_exception))
-#else
-#define __neg_sets_exception
-#endif
-
 #define MODULE_NAME "sanlock"
 
 #define BIND_ERROR -1000
 
 /* Functions prototypes */
-static void __set_exception(int en, char *msg) __sets_exception;
-static int __parse_resource(PyObject *obj, struct sanlk_resource **res_ret) __neg_sets_exception;
+static void __set_exception(int en, char *msg);
+static int __parse_resource(PyObject *obj, struct sanlk_resource **res_ret);
 static void set_error(PyObject *exception, const char* format, PyObject* obj);
 
 /* Sanlock module */
