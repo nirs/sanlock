@@ -22,7 +22,7 @@
 
 /* Functions prototypes */
 static void set_sanlock_error(int en, char *msg);
-static int __parse_resource(PyObject *obj, struct sanlk_resource **res_ret);
+static int parse_disks(PyObject *obj, struct sanlk_resource **res_ret);
 static void set_error(PyObject *exception, const char* format, PyObject* obj);
 
 /* Sanlock module */
@@ -173,7 +173,7 @@ finally:
 }
 
 static int
-__parse_resource(PyObject *obj, struct sanlk_resource **res_ret)
+parse_disks(PyObject *obj, struct sanlk_resource **res_ret)
 {
     int i, num_disks, res_len;
     struct sanlk_resource *res;
@@ -481,7 +481,7 @@ py_init_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
     }
 
     /* parse and check sanlock resource */
-    if (__parse_resource(disks, &res) < 0) {
+    if (parse_disks(disks, &res) < 0) {
         goto finally;
     }
 
@@ -747,7 +747,7 @@ py_write_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
     }
 
     /* parse and check sanlock resource */
-    if (__parse_resource(disks, &rs) < 0) {
+    if (parse_disks(disks, &rs) < 0) {
         goto finally;
     }
 
@@ -1118,7 +1118,7 @@ py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
     }
 
     /* parse and check sanlock resource */
-    if (__parse_resource(disks, &res) < 0) {
+    if (parse_disks(disks, &res) < 0) {
         goto finally;
     }
 
@@ -1185,7 +1185,7 @@ py_release(PyObject *self __unused, PyObject *args, PyObject *keywds)
     }
 
     /* parse and check sanlock resource */
-    if (__parse_resource(disks, &res) < 0) {
+    if (parse_disks(disks, &res) < 0) {
         goto finally;
     }
 
@@ -1241,7 +1241,7 @@ py_request(PyObject *self __unused, PyObject *args, PyObject *keywds)
     }
 
     /* parse and check sanlock resource */
-    if (__parse_resource(disks, &res) < 0) {
+    if (parse_disks(disks, &res) < 0) {
         goto finally;
     }
 
@@ -1313,7 +1313,7 @@ py_read_resource_owners(PyObject *self __unused, PyObject *args, PyObject *keywd
     }
 
     /* parse and check sanlock resource */
-    if (__parse_resource(disks, &res) < 0) {
+    if (parse_disks(disks, &res) < 0) {
         goto finally;
     }
 
