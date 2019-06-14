@@ -639,46 +639,46 @@ Sector can be one of (512, 4096).");
 static PyObject *
 py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv = -1, rs_len, sector = SECTOR_SIZE_512;
+    int rv = -1, res_len, sector = SECTOR_SIZE_512;
     long align = ALIGNMENT_1M;
     PyObject *path = NULL;
-    struct sanlk_resource *rs;
-    PyObject *rs_info = NULL;
+    struct sanlk_resource *res;
+    PyObject *res_info = NULL;
 
     static char *kwlist[] = {"path", "offset", "align", "sector", NULL};
 
     /* allocate the needed memory for the resource and one disk */
-    rs_len = sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk);
-    rs = malloc(rs_len);
+    res_len = sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk);
+    res = malloc(res_len);
 
-    if (rs == NULL) {
+    if (res == NULL) {
         PyErr_NoMemory();
         return NULL;
     }
 
     /* initialize resource and disk structures */
-    memset(rs, 0, rs_len);
-    rs->num_disks = 1;
+    memset(res, 0, res_len);
+    res->num_disks = 1;
 
     /* parse python tuple */
     if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&|kli", kwlist,
-        pypath_converter, &path, &(rs->disks[0].offset), &align, &sector)) {
+        pypath_converter, &path, &(res->disks[0].offset), &align, &sector)) {
         goto finally;
     }
 
     /* prepare the resource disk path */
-    strncpy(rs->disks[0].path, PyBytes_AsString(path), SANLK_PATH_LEN - 1);
+    strncpy(res->disks[0].path, PyBytes_AsString(path), SANLK_PATH_LEN - 1);
 
     /* set alignment/sector flags */
-    if (add_align_flag(align, &rs->flags) == -1)
+    if (add_align_flag(align, &res->flags) == -1)
         goto finally;
 
-    if (add_sector_flag(sector, &rs->flags) == -1)
+    if (add_sector_flag(sector, &res->flags) == -1)
         goto finally;
 
     /* read sanlock resource (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_read_resource(rs, 0);
+    rv = sanlock_read_resource(res, 0);
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
@@ -687,26 +687,26 @@ py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
     }
 
     /* prepare the dictionary holding the information */
-    rs_info = Py_BuildValue(
+    res_info = Py_BuildValue(
 #if PY_MAJOR_VERSION == 2
         "{s:s,s:s,s:K}",
 #else
         "{s:y,s:y,s:K}",
 #endif
-        "lockspace", rs->lockspace_name,
-        "resource", rs->name,
-        "version", rs->lver);
-    if (rs_info  == NULL)
+        "lockspace", res->lockspace_name,
+        "resource", res->name,
+        "version", res->lver);
+    if (res_info  == NULL)
         goto finally;
 
 finally:
-    free(rs);
+    free(res);
     Py_XDECREF(path);
     if (rv != 0) {
-        Py_XDECREF(rs_info);
+        Py_XDECREF(res_info);
         return NULL;
     }
-    return rs_info;
+    return res_info;
 }
 
 /* write_resource */
@@ -726,7 +726,7 @@ py_write_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
     int rv = -1, max_hosts = 0, num_hosts = 0, clear = 0, sector = SECTOR_SIZE_512;
     long align = ALIGNMENT_1M;
     PyObject *lockspace = NULL, *resource = NULL;
-    struct sanlk_resource *rs = NULL;
+    struct sanlk_resource *res = NULL;
     PyObject *disks;
     uint32_t flags = 0;
 
@@ -741,19 +741,19 @@ py_write_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
     }
 
     /* parse and check sanlock resource */
-    if (parse_disks(disks, &rs) < 0) {
+    if (parse_disks(disks, &res) < 0) {
         goto finally;
     }
 
     /* prepare sanlock names */
-    strncpy(rs->lockspace_name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
-    strncpy(rs->name, PyBytes_AsString(resource), SANLK_NAME_LEN);
+    strncpy(res->lockspace_name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
+    strncpy(res->name, PyBytes_AsString(resource), SANLK_NAME_LEN);
 
     /* set alignment/sector flags */
-    if (add_align_flag(align, &rs->flags) == -1)
+    if (add_align_flag(align, &res->flags) == -1)
         goto finally;
 
-    if (add_sector_flag(sector, &rs->flags) == -1)
+    if (add_sector_flag(sector, &res->flags) == -1)
         goto finally;
 
     if (clear) {
@@ -762,7 +762,7 @@ py_write_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     /* init sanlock resource (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_write_resource(rs, max_hosts, num_hosts, flags);
+    rv = sanlock_write_resource(res, max_hosts, num_hosts, flags);
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
@@ -773,7 +773,7 @@ py_write_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 finally:
     Py_XDECREF(lockspace);
     Py_XDECREF(resource);
-    free(rs);
+    free(res);
     if (rv != 0)
         return NULL;
     Py_RETURN_NONE;
