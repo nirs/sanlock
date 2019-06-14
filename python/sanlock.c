@@ -271,36 +271,31 @@ set_error(PyObject* exception, const char* format, PyObject* obj)
 static PyObject *
 hosts_to_list(struct sanlk_host *hss, int hss_count)
 {
-    PyObject *ls_list = NULL, *ls_entry = NULL;
-
-    /* prepare the dictionary holding the information */
-    if ((ls_list = PyList_New(0)) == NULL)
+    PyObject *ls_list = PyList_New(hss_count);
+    if (ls_list == NULL)
         goto exit_fail;
 
     for (int i = 0; i < hss_count; i++) {
-
-        /* fill the dictionary information */
-        ls_entry = Py_BuildValue(
-                "{s:K,s:K,s:K,s:I,s:I}",
-                "host_id", hss[i].host_id,
-                "generation", hss[i].generation,
-                "timestamp", hss[i].timestamp,
-                "io_timeout", hss[i].io_timeout,
-                "flags", hss[i].flags);
+        PyObject *ls_entry = Py_BuildValue(
+            "{s:K,s:K,s:K,s:I,s:I}",
+            "host_id", hss[i].host_id,
+            "generation", hss[i].generation,
+            "timestamp", hss[i].timestamp,
+            "io_timeout", hss[i].io_timeout,
+            "flags", hss[i].flags);
         if (ls_entry == NULL)
             goto exit_fail;
 
-        if (PyList_Append(ls_list, ls_entry) != 0)
+        /* Steals reference to ls_entry. */
+        if (PyList_SetItem(ls_list, i, ls_entry) != 0) {
+            Py_DECREF(ls_entry);
             goto exit_fail;
-
-        Py_DECREF(ls_entry);
+        }
     }
 
     return ls_list;
 
-    /* failure */
 exit_fail:
-    Py_XDECREF(ls_entry);
     Py_XDECREF(ls_list);
     return NULL;
 }
