@@ -963,6 +963,42 @@ finally:
     Py_RETURN_NONE;
 }
 
+static PyObject *
+lockspaces_to_list(struct sanlk_lockspace *lss, int lss_count)
+{
+    PyObject *ls_list = PyList_New(lss_count);
+    if (ls_list == NULL)
+        goto exit_fail;
+
+    for (int i = 0; i < lss_count; i++) {
+        PyObject *ls_entry = Py_BuildValue(
+#if PY_MAJOR_VERSION == 2
+            "{s:s,s:K,s:s,s:K,s:I}",
+#else
+            "{s:y,s:K,s:s,s:K,s:I}",
+#endif
+            "lockspace", lss[i].name,
+            "host_id", lss[i].host_id,
+            "path", lss[i].host_id_disk.path,
+            "offset", lss[i].host_id_disk.offset,
+            "flags", lss[i].flags);
+        if (ls_entry == NULL)
+            goto exit_fail;
+
+        /* Steals reference to ls_entry. */
+        if (PyList_SetItem(ls_list, i, ls_entry) != 0) {
+            Py_DECREF(ls_entry);
+            goto exit_fail;
+        }
+    }
+
+    return ls_list;
+
+exit_fail:
+    Py_XDECREF(ls_list);
+    return NULL;
+}
+
 /* get_lockspaces */
 PyDoc_STRVAR(pydoc_get_lockspaces, "\
 get_lockspaces() -> list\n\
@@ -977,7 +1013,7 @@ py_get_lockspaces(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
     int rv, lss_count;
     struct sanlk_lockspace *lss = NULL;
-    PyObject *ls_list = NULL, *ls_entry = NULL;
+    PyObject *ls_list = NULL;
 
     /* get all the lockspaces (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
@@ -986,46 +1022,14 @@ py_get_lockspaces(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     if (rv < 0) {
         set_sanlock_error(rv, "Sanlock get lockspaces failure");
-        goto exit_fail;
+        goto finally;
     }
 
-    /* prepare the dictionary holding the information */
-    if ((ls_list = PyList_New(0)) == NULL)
-        goto exit_fail;
+    ls_list = lockspaces_to_list(lss, lss_count);
 
-    for (int i = 0; i < lss_count; i++) {
-
-        /* fill the dictionary information */
-        ls_entry = Py_BuildValue(
-#if PY_MAJOR_VERSION == 2
-                "{s:s,s:K,s:s,s:K,s:I}",
-#else
-                "{s:y,s:K,s:s,s:K,s:I}",
-#endif
-                "lockspace", lss[i].name,
-                "host_id", lss[i].host_id,
-                "path", lss[i].host_id_disk.path,
-                "offset", lss[i].host_id_disk.offset,
-                "flags", lss[i].flags);
-        if (ls_entry == NULL)
-            goto exit_fail;
-
-        if (PyList_Append(ls_list, ls_entry) != 0)
-            goto exit_fail;
-
-        Py_DECREF(ls_entry);
-    }
-
-    /* success */
+finally:
     free(lss);
     return ls_list;
-
-    /* failure */
-exit_fail:
-    free(lss);
-    Py_XDECREF(ls_entry);
-    Py_XDECREF(ls_list);
-    return NULL;
 }
 
 /* get_hosts */
