@@ -216,13 +216,13 @@ add_sector_flag(int sector, uint32_t *flags)
     switch (sector) {
     case SECTOR_SIZE_512:
         *flags |= SANLK_LSF_SECTOR512;
-	break;
+        break;
     case SECTOR_SIZE_4K:
         *flags |= SANLK_LSF_SECTOR4K;
-	break;
+        break;
     default:
-	PyErr_Format(PyExc_ValueError, "Invalid sector value: %d", sector);
-	return -1;
+        PyErr_Format(PyExc_ValueError, "Invalid sector value: %d", sector);
+        return -1;
     }
     return 0;
 }
@@ -240,19 +240,19 @@ add_align_flag(long align, uint32_t *flags)
     switch (align) {
     case ALIGNMENT_1M:
         *flags |= SANLK_RES_ALIGN1M;
-	break;
+        break;
     case ALIGNMENT_2M:
         *flags |= SANLK_RES_ALIGN2M;
-	break;
+        break;
     case ALIGNMENT_4M:
         *flags |= SANLK_RES_ALIGN4M;
-	break;
+        break;
     case ALIGNMENT_8M:
         *flags |= SANLK_RES_ALIGN8M;
-	break;
+        break;
     default:
-	PyErr_Format(PyExc_ValueError, "Invalid align value: %ld", align);
-	return -1;
+        PyErr_Format(PyExc_ValueError, "Invalid align value: %ld", align);
+        return -1;
     }
     return 0;
 }
@@ -613,12 +613,12 @@ py_read_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     /* fill the information dictionary */
     ls_info = Py_BuildValue(
 #if PY_MAJOR_VERSION == 2
-            "{s:s,s:I}",
+        "{s:s,s:I}",
 #else
-            "{s:y,s:I}",
+        "{s:y,s:I}",
 #endif
-            "lockspace", ls.name,
-            "iotimeout", io_timeout);
+        "lockspace", ls.name,
+        "iotimeout", io_timeout);
     if (ls_info  == NULL)
         goto finally;
 
