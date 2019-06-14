@@ -27,7 +27,7 @@ static void set_error(PyObject *exception, const char* format, PyObject* obj);
 
 /* Sanlock module */
 PyDoc_STRVAR(pydoc_sanlock, "\
-Copyright (C) 2010-2019 Red Hat, Inc.  All rights reserved.\n\
+Copyright (C) 2010-2019 Red Hat, Inc.\n\
 This copyrighted material is made available to anyone wishing to use,\n\
 modify, copy, or redistribute it subject to the terms and conditions\n\
 of the GNU General Public License v2 or (at your option) any later version.");
