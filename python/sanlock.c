@@ -175,7 +175,7 @@ finally:
 static int
 parse_disks(PyObject *obj, struct sanlk_resource **res_ret)
 {
-    int i, num_disks, res_len;
+    int num_disks, res_len;
     struct sanlk_resource *res;
 
     num_disks = PyList_Size(obj);
@@ -192,7 +192,7 @@ parse_disks(PyObject *obj, struct sanlk_resource **res_ret)
     memset(res, 0, res_len);
     res->num_disks = num_disks;
 
-    for (i = 0; i < num_disks; i++) {
+    for (int i = 0; i < num_disks; i++) {
         PyObject *disk = PyList_GetItem(obj,i);
 
         if (!parse_single_disk(disk, &(res->disks[i]))) {
@@ -271,14 +271,13 @@ set_error(PyObject* exception, const char* format, PyObject* obj)
 static PyObject *
 hosts_to_list(struct sanlk_host *hss, int hss_count)
 {
-    int i;
     PyObject *ls_list = NULL, *ls_entry = NULL;
 
     /* prepare the dictionary holding the information */
     if ((ls_list = PyList_New(0)) == NULL)
         goto exit_fail;
 
-    for (i = 0; i < hss_count; i++) {
+    for (int i = 0; i < hss_count; i++) {
 
         /* fill the dictionary information */
         ls_entry = Py_BuildValue(
@@ -981,7 +980,7 @@ released.\n");
 static PyObject *
 py_get_lockspaces(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv, i, lss_count;
+    int rv, lss_count;
     struct sanlk_lockspace *lss = NULL;
     PyObject *ls_list = NULL, *ls_entry = NULL;
 
@@ -999,7 +998,7 @@ py_get_lockspaces(PyObject *self __unused, PyObject *args, PyObject *keywds)
     if ((ls_list = PyList_New(0)) == NULL)
         goto exit_fail;
 
-    for (i = 0; i < lss_count; i++) {
+    for (int i = 0; i < lss_count; i++) {
 
         /* fill the dictionary information */
         ls_entry = Py_BuildValue(
@@ -1354,8 +1353,8 @@ finally:
 static int
 parse_killpath_item(PyObject *item, char *kpargs, size_t *kplen)
 {
-    int rv = 0, i;
-    size_t arg_len;
+    int rv = 0;
+    size_t arg_len = 0;
     PyObject *path = NULL;
     const char *p = NULL;
 
@@ -1367,7 +1366,7 @@ parse_killpath_item(PyObject *item, char *kpargs, size_t *kplen)
         goto finally;
     }
     /* computing the argument length considering the escape chars */
-    for (i = 0, arg_len = 0; p[i]; i++, arg_len++) {
+    for (int i = 0; p[i]; i++, arg_len++) {
         if (p[i] == ' ' || p[i] == '\\') arg_len++;
     }
 
@@ -1407,8 +1406,8 @@ The arguments must be in the format: [\"arg1\", \"arg2\", ...]");
 static PyObject *
 py_killpath(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv = -1, i, num_args, sanlockfd = -1;
-    size_t kplen;
+    int rv = -1, num_args, sanlockfd = -1;
+    size_t kplen = 0;
     char kpargs[SANLK_HELPER_ARGS_LEN];
     PyObject *path = NULL;
     PyObject *argslist;
@@ -1431,7 +1430,7 @@ py_killpath(PyObject *self __unused, PyObject *args, PyObject *keywds)
     memset(kpargs, 0, SANLK_HELPER_ARGS_LEN);
 
     /* creating the arguments string from a python list */
-    for (i = 0, kplen = 0; i < num_args; i++) {
+    for (int i = 0; i < num_args; i++) {
         PyObject *item = PyList_GetItem(argslist, i);
         if (!parse_killpath_item(item, kpargs, &kplen)) {
             goto finally;
