@@ -21,7 +21,7 @@
 #define BIND_ERROR -1000
 
 /* Functions prototypes */
-static void __set_exception(int en, char *msg);
+static void set_sanlock_error(int en, char *msg);
 static int __parse_resource(PyObject *obj, struct sanlk_resource **res_ret);
 static void set_error(PyObject *exception, const char* format, PyObject* obj);
 
@@ -36,7 +36,7 @@ of the GNU General Public License v2 or (at your option) any later version.");
 static PyObject *py_exception;
 
 static void
-__set_exception(int en, char *msg)
+set_sanlock_error(int en, char *msg)
 {
     const char *err_name;
     PyObject *exc_tuple;
@@ -323,7 +323,7 @@ py_register(PyObject *self __unused, PyObject *args)
     Py_END_ALLOW_THREADS
 
     if (sanlockfd < 0) {
-        __set_exception(sanlockfd, "Sanlock registration failed");
+        set_sanlock_error(sanlockfd, "Sanlock registration failed");
         return NULL;
     }
 
@@ -356,7 +356,7 @@ py_get_alignment(PyObject *self __unused, PyObject *args)
     Py_END_ALLOW_THREADS
 
     if (rv < 0) {
-        __set_exception(rv, "Unable to get device alignment");
+        set_sanlock_error(rv, "Unable to get device alignment");
         goto finally;
     }
 
@@ -442,7 +442,7 @@ py_init_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        __set_exception(rv, "Sanlock lockspace init failure");
+        set_sanlock_error(rv, "Sanlock lockspace init failure");
         goto finally;
     }
 
@@ -495,7 +495,7 @@ py_init_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        __set_exception(rv, "Sanlock resource init failure");
+        set_sanlock_error(rv, "Sanlock resource init failure");
         goto finally;
     }
 
@@ -556,7 +556,7 @@ py_write_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        __set_exception(rv, "Sanlock lockspace write failure");
+        set_sanlock_error(rv, "Sanlock lockspace write failure");
         goto finally;
     }
 
@@ -612,7 +612,7 @@ py_read_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        __set_exception(rv, "Sanlock lockspace read failure");
+        set_sanlock_error(rv, "Sanlock lockspace read failure");
         goto finally;
     }
 
@@ -688,7 +688,7 @@ py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        __set_exception(rv, "Sanlock resource read failure");
+        set_sanlock_error(rv, "Sanlock resource read failure");
         goto finally;
     }
 
@@ -772,7 +772,7 @@ py_write_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        __set_exception(rv, "Sanlock resource write failure");
+        set_sanlock_error(rv, "Sanlock resource write failure");
         goto finally;
     }
 
@@ -831,7 +831,7 @@ py_add_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        __set_exception(rv, "Sanlock lockspace add failure");
+        set_sanlock_error(rv, "Sanlock lockspace add failure");
         goto finally;
     }
 
@@ -901,7 +901,7 @@ finally:
         Py_RETURN_NONE;
     }
 
-    __set_exception(rv, "Sanlock lockspace inquire failure");
+    set_sanlock_error(rv, "Sanlock lockspace inquire failure");
     return NULL;
 }
 
@@ -957,7 +957,7 @@ py_rem_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        __set_exception(rv, "Sanlock lockspace remove failure");
+        set_sanlock_error(rv, "Sanlock lockspace remove failure");
         goto finally;
     }
 
@@ -991,7 +991,7 @@ py_get_lockspaces(PyObject *self __unused, PyObject *args, PyObject *keywds)
     Py_END_ALLOW_THREADS
 
     if (rv < 0) {
-        __set_exception(rv, "Sanlock get lockspaces failure");
+        set_sanlock_error(rv, "Sanlock get lockspaces failure");
         goto exit_fail;
     }
 
@@ -1069,7 +1069,7 @@ py_get_hosts(PyObject *self __unused, PyObject *args, PyObject *keywds)
     Py_END_ALLOW_THREADS
 
     if (rv < 0) {
-        __set_exception(rv, "Sanlock get hosts failure");
+        set_sanlock_error(rv, "Sanlock get hosts failure");
         goto finally;
     }
 
@@ -1113,7 +1113,7 @@ py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     /* check if any of the slkfd or pid parameters was given */
     if (sanlockfd == -1 && pid == -1) {
-        __set_exception(EINVAL, "Invalid slkfd and pid values");
+        set_sanlock_error(EINVAL, "Invalid slkfd and pid values");
         goto finally;
     }
 
@@ -1136,7 +1136,7 @@ py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
         res->flags |= SANLK_RES_LVER;
         res->lver = pyinteger_as_unsigned_long_long_mask(version);
         if (res->lver == (uint64_t)-1) {
-            __set_exception(EINVAL, "Unable to convert the version value");
+            set_sanlock_error(EINVAL, "Unable to convert the version value");
             goto finally;
         }
     }
@@ -1147,7 +1147,7 @@ py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        __set_exception(rv, "Sanlock resource not acquired");
+        set_sanlock_error(rv, "Sanlock resource not acquired");
         goto finally;
     }
 
@@ -1199,7 +1199,7 @@ py_release(PyObject *self __unused, PyObject *args, PyObject *keywds)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        __set_exception(rv, "Sanlock resource not released");
+        set_sanlock_error(rv, "Sanlock resource not released");
         goto finally;
     }
 
@@ -1256,7 +1256,7 @@ py_request(PyObject *self __unused, PyObject *args, PyObject *keywds)
         res->flags |= SANLK_RES_LVER;
         res->lver = pyinteger_as_unsigned_long_long_mask(version);
         if (res->lver == (uint64_t)-1) {
-            __set_exception(EINVAL, "Unable to convert the version value");
+            set_sanlock_error(EINVAL, "Unable to convert the version value");
             goto finally;
         }
     }
@@ -1267,7 +1267,7 @@ py_request(PyObject *self __unused, PyObject *args, PyObject *keywds)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        __set_exception(rv, "Sanlock request not submitted");
+        set_sanlock_error(rv, "Sanlock request not submitted");
         goto finally;
     }
 
@@ -1335,7 +1335,7 @@ py_read_resource_owners(PyObject *self __unused, PyObject *args, PyObject *keywd
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-        __set_exception(rv, "Unable to read resource owners");
+        set_sanlock_error(rv, "Unable to read resource owners");
         goto finally;
     }
 
@@ -1373,7 +1373,7 @@ parse_killpath_item(PyObject *item, char *kpargs, size_t *kplen)
 
     /* adding 2 for the space separator ' ' and the '\0' terminator */
     if (*kplen + arg_len + 2 > SANLK_HELPER_ARGS_LEN) {
-        __set_exception(EINVAL, "Killpath arguments are too long");
+        set_sanlock_error(EINVAL, "Killpath arguments are too long");
         goto finally;
     }
 
@@ -1423,7 +1423,7 @@ py_killpath(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     /* checking the path length */
     if (PyBytes_Size(path) + 1 > SANLK_HELPER_PATH_LEN) {
-        __set_exception(EINVAL, "Killpath path argument too long");
+        set_sanlock_error(EINVAL, "Killpath path argument too long");
         goto finally;
     }
 
@@ -1444,7 +1444,7 @@ py_killpath(PyObject *self __unused, PyObject *args, PyObject *keywds)
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
-       __set_exception(rv, "Killpath script not configured");
+       set_sanlock_error(rv, "Killpath script not configured");
        goto finally;
     }
 
@@ -1495,7 +1495,7 @@ py_reg_event(PyObject *self __unused, PyObject *args)
     Py_END_ALLOW_THREADS
 
     if (fd < 0) {
-        __set_exception(fd, "Unable to register event fd");
+        set_sanlock_error(fd, "Unable to register event fd");
        goto finally;
     }
 
@@ -1547,7 +1547,7 @@ py_get_event(PyObject *self __unused, PyObject *args)
             break;
 
         if (rv != 0) {
-            __set_exception(rv, "Unable to get events");
+            set_sanlock_error(rv, "Unable to get events");
             goto exit_fail;
         }
 
@@ -1638,7 +1638,7 @@ py_end_event(PyObject *self __unused, PyObject *args)
     Py_END_ALLOW_THREADS
 
     if (rv < 0) {
-        __set_exception(rv, "Unable to unregister event fd");
+        set_sanlock_error(rv, "Unable to unregister event fd");
         goto finally;
     }
 
@@ -1723,7 +1723,7 @@ py_set_event(PyObject *self __unused, PyObject *args, PyObject *keywds)
     Py_END_ALLOW_THREADS
 
     if (rv < 0) {
-        __set_exception(rv, "Unable to set event");
+        set_sanlock_error(rv, "Unable to set event");
         goto finally;
     }
 
