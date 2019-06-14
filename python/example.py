@@ -10,8 +10,10 @@ HOST_ID = 1
 LOCKSPACE_NAME = "lockspace1"
 RESOURCE_NAME = "resource1"
 
+
 def sigTermHandler():
     print "SIGTERM signal received"
+
 
 def main():
     signal.signal(signal.SIGTERM, sigTermHandler)
@@ -20,7 +22,8 @@ def main():
     fd, disk = tempfile.mkstemp()
     os.close(fd)
 
-    os.chown(disk, pwd.getpwnam("sanlock").pw_uid, grp.getgrnam("sanlock").gr_gid)
+    os.chown(
+        disk, pwd.getpwnam("sanlock").pw_uid, grp.getgrnam("sanlock").gr_gid)
     offset = sanlock.get_alignment(disk)
 
     SNLK_DISKS = [(disk, offset)]
@@ -29,18 +32,20 @@ def main():
     fd = sanlock.register()
 
     print "Initializing '%s'" % (LOCKSPACE_NAME,)
-    sanlock.write_lockspace(LOCKSPACE_NAME, disk, max_hosts=0, iotimeout=0, align=1048576, sector=512)
+    sanlock.write_lockspace(LOCKSPACE_NAME, disk, align=1048576, sector=512)
 
     print "Initializing '%s' on '%s'" % (RESOURCE_NAME, LOCKSPACE_NAME)
-    sanlock.write_resource(LOCKSPACE_NAME, RESOURCE_NAME, SNLK_DISKS, align=1048576, sector=512)
+    sanlock.write_resource(
+        LOCKSPACE_NAME, RESOURCE_NAME, SNLK_DISKS, align=1048576, sector=512)
 
     print "Acquiring the id '%i' on '%s'" % (HOST_ID, LOCKSPACE_NAME)
     sanlock.add_lockspace(LOCKSPACE_NAME, HOST_ID, disk)
 
     try:
         print "Acquiring '%s' on '%s'" % (RESOURCE_NAME, LOCKSPACE_NAME)
-        sanlock.acquire(LOCKSPACE_NAME, RESOURCE_NAME, SNLK_DISKS, slkfd=fd,
-                        version=0)
+        sanlock.acquire(
+            LOCKSPACE_NAME, RESOURCE_NAME, SNLK_DISKS, slkfd=fd, version=0)
+
         while True:
             print "Trying to get lockspace '%s' hosts" % LOCKSPACE_NAME
             try:
@@ -52,9 +57,15 @@ def main():
                 print "Lockspace '%s' hosts: " % LOCKSPACE_NAME, hosts_list
                 break
             time.sleep(5)
-        print "Resource '%s' owners: " % RESOURCE_NAME, \
-            sanlock.read_resource_owners(
-                LOCKSPACE_NAME, RESOURCE_NAME, SNLK_DISKS, align=1048576, sector=512)
+
+        owners = sanlock.read_resource_owners(
+            LOCKSPACE_NAME,
+            RESOURCE_NAME,
+            SNLK_DISKS,
+            align=1048576,
+            sector=512)
+        print "Resource '%s' owners: %s" % (RESOURCE_NAME, owners)
+
         print "Releasing '%s' on '%s'" % (RESOURCE_NAME, LOCKSPACE_NAME)
         sanlock.release(LOCKSPACE_NAME, RESOURCE_NAME, SNLK_DISKS, slkfd=fd)
     except Exception as e:
@@ -65,6 +76,7 @@ def main():
 
     print "Removing the sanlock disk"
     os.remove(disk)
+
 
 if __name__ == '__main__':
     main()

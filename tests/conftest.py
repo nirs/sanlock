@@ -4,12 +4,15 @@ Fixtures for sanlock testing.
 from __future__ import absolute_import
 
 import os
-import stat
 
 import pytest
 
 from . import storage
 from . import util
+
+
+class SanlockIsRunning(Exception):
+    """ Raised if sanlock running when it should not """
 
 
 @pytest.fixture
@@ -50,6 +53,3 @@ def user_4k_path(request):
 def no_sanlock_daemon():
     if util.sanlock_is_running():
         raise SanlockIsRunning
-
-class SanlockIsRunning(Exception):
-    pass
