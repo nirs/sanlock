@@ -37,6 +37,10 @@ To run only tests matching the substring "foo":
 
     $ tox -- -k foo
 
+To run basic lint and style check:
+
+    $ tox -e flake8
+
 
 Testing 4K support
 ==================

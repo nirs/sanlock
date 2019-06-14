@@ -16,7 +16,11 @@ addons:
     - libblkid-dev
     - make
 
+install:
+    - pip install flake8
+
 script:
     - make BUILDARGS="--build-lib=."
     - source tests/env.sh
     - pytest
+    - flake8 --statistics tests python
