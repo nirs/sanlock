@@ -343,14 +343,13 @@ py_get_alignment(PyObject *self __unused, PyObject *args)
 {
     int rv = -1;
     PyObject *path = NULL;
-    struct sanlk_disk disk;
+    struct sanlk_disk disk = {0};
 
     /* parse python tuple */
     if (!PyArg_ParseTuple(args, "O&", pypath_converter, &path)) {
         goto finally;
     }
 
-    memset(&disk, 0, sizeof(struct sanlk_disk));
     strncpy(disk.path, PyBytes_AsString(path), SANLK_PATH_LEN - 1);
 
     /* get device alignment (gil disabled) */
@@ -420,13 +419,10 @@ py_init_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     int rv = -1, max_hosts = 0, num_hosts = 0, use_aio = 1;
     PyObject *lockspace = NULL;
     PyObject *path = NULL;
-    struct sanlk_lockspace ls;
+    struct sanlk_lockspace ls = {0};
 
     static char *kwlist[] = {"lockspace", "path", "offset",
                                 "max_hosts", "num_hosts", "use_aio", NULL};
-
-    /* initialize lockspace structure */
-    memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
     if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&O&|kiii", kwlist,
@@ -527,13 +523,10 @@ py_write_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     uint32_t io_timeout = 0;
     PyObject *lockspace = NULL;
     PyObject *path = NULL;
-    struct sanlk_lockspace ls;
+    struct sanlk_lockspace ls = {0};
 
     static char *kwlist[] = {"lockspace", "path", "offset", "max_hosts",
                                 "iotimeout", "align", "sector", NULL};
-
-    /* initialize lockspace structure */
-    memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
     if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&O&|kiIli", kwlist,
@@ -585,13 +578,10 @@ py_read_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     long align = ALIGNMENT_1M;
     uint32_t io_timeout = 0;
     PyObject *path = NULL;
-    struct sanlk_lockspace ls;
+    struct sanlk_lockspace ls = {0};
     PyObject *ls_info = NULL;
 
     static char *kwlist[] = {"path", "offset", "align", "sector", NULL};
-
-    /* initialize lockspace structure */
-    memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
     if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&|kli", kwlist,
@@ -795,13 +785,10 @@ py_add_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     uint32_t iotimeout = 0;
     PyObject *lockspace = NULL;
     PyObject *path = NULL;
-    struct sanlk_lockspace ls;
+    struct sanlk_lockspace ls = {0};
 
     static char *kwlist[] = {"lockspace", "host_id", "path", "offset",
                                 "iotimeout", "wait", NULL};
-
-    /* initialize lockspace structure */
-    memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
     if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&kO&|kIi", kwlist,
@@ -852,13 +839,10 @@ py_inq_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     int rv = BIND_ERROR, waitrs = 0, flags = 0;
     PyObject *lockspace = NULL;
     PyObject *path = NULL;
-    struct sanlk_lockspace ls;
+    struct sanlk_lockspace ls = {0};
 
     static char *kwlist[] = {"lockspace", "host_id", "path", "offset",
                                 "wait", NULL};
-
-    /* initialize lockspace structure */
-    memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
     if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&kO&|ki", kwlist,
@@ -916,13 +900,10 @@ py_rem_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
     int wait = 1;
     PyObject *lockspace = NULL;
     PyObject *path = NULL;
-    struct sanlk_lockspace ls;
+    struct sanlk_lockspace ls = {0};
 
     static char *kwlist[] = {"lockspace", "host_id", "path", "offset",
                                 "wait", "unused", NULL};
-
-    /* initialize lockspace structure */
-    memset(&ls, 0, sizeof(struct sanlk_lockspace));
 
     /* parse python tuple */
     if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&kO&|kii", kwlist,
@@ -1407,7 +1388,7 @@ py_killpath(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
     int rv = -1, num_args, sanlockfd = -1;
     size_t kplen = 0;
-    char kpargs[SANLK_HELPER_ARGS_LEN];
+    char kpargs[SANLK_HELPER_ARGS_LEN] = "";
     PyObject *path = NULL;
     PyObject *argslist;
 
@@ -1426,7 +1407,6 @@ py_killpath(PyObject *self __unused, PyObject *args, PyObject *keywds)
     }
 
     num_args = PyList_Size(argslist);
-    memset(kpargs, 0, SANLK_HELPER_ARGS_LEN);
 
     /* creating the arguments string from a python list */
     for (int i = 0; i < num_args; i++) {
