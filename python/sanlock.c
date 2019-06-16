@@ -1743,29 +1743,22 @@ sanlock_exception = {
 static PyObject *
 initexception(void)
 {
-    int rv;
-    PyObject *dict, *func, *meth, *excp = NULL;
+    PyObject *func = PyCFunction_New(&sanlock_exception, NULL);
+    if (func == NULL)
+        return NULL;
 
-    if ((dict = PyDict_New()) == NULL)
-        goto exit_fail;
-
-    if ((func = PyCFunction_New(&sanlock_exception, NULL)) == NULL)
-        goto exit_fail;
-
-    meth = PyObject_CallFunction((PyObject *) &PyProperty_Type, "O", func);
-    Py_DECREF(func);
+    PyObject *meth = PyObject_CallFunction((PyObject *) &PyProperty_Type, "O", func);
+    Py_CLEAR(func);
     if (meth == NULL)
-        goto exit_fail;
+        return NULL;
 
-    rv = PyDict_SetItemString(dict, sanlock_exception.ml_name, meth);
-    Py_DECREF(meth);
-    if (rv < 0)
-        goto exit_fail;
+    PyObject *dict = Py_BuildValue("{s:O}", sanlock_exception.ml_name, meth);
+    Py_CLEAR(meth);
+    if (dict == NULL)
+        return NULL;
 
-    excp = PyErr_NewException("sanlock.SanlockException", NULL, dict);
-
-exit_fail:
-    Py_XDECREF(dict);
+    PyObject *excp = PyErr_NewException("sanlock.SanlockException", NULL, dict);
+    Py_CLEAR(dict);
 
     return excp;
 }
