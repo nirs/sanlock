@@ -1563,8 +1563,7 @@ py_get_event(PyObject *self __unused, PyObject *args)
         if (PyList_Append(events, item) != 0)
             goto exit_fail;
 
-        Py_DECREF(item);
-        item = NULL;
+        Py_CLEAR(item);
     }
 
     return events;
