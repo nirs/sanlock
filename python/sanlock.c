@@ -1527,7 +1527,6 @@ py_get_event(PyObject *self __unused, PyObject *args)
     uint64_t from_generation;
     PyObject *events = NULL;
     PyObject *item = NULL;
-    PyObject *value = NULL;
     int rv;
 
     if (!PyArg_ParseTuple(args, "i", &fd))
@@ -1549,55 +1548,16 @@ py_get_event(PyObject *self __unused, PyObject *args)
             goto exit_fail;
         }
 
-        if ((item = PyDict_New()) == NULL)
-            goto exit_fail;
+        item = Py_BuildValue(
+            "{s:K,s:K,s:K,s:K,s:K,s:K}",
+            "from_host_id", from_host_id,
+            "from_generation", from_generation,
+            "host_id", he.host_id,
+            "generation", he.generation,
+            "event", he.event,
+            "data", he.data);
 
-        /* from_host_id */
-        if ((value = PyLong_FromUnsignedLongLong(from_host_id)) == NULL)
-            goto exit_fail;
-        rv = PyDict_SetItemString(item, "from_host_id", value);
-        Py_DECREF(value);
-        if (rv != 0)
-            goto exit_fail;
-
-        /* from_generation */
-        if ((value = PyLong_FromUnsignedLongLong(from_generation)) == NULL)
-            goto exit_fail;
-        rv = PyDict_SetItemString(item, "from_generation", value);
-        Py_DECREF(value);
-        if (rv != 0)
-            goto exit_fail;
-
-        /* host_id */
-        if ((value = PyLong_FromUnsignedLongLong(he.host_id)) == NULL)
-            goto exit_fail;
-        rv = PyDict_SetItemString(item, "host_id", value);
-        Py_DECREF(value);
-        if (rv != 0)
-            goto exit_fail;
-
-        /* generation */
-        if ((value = PyLong_FromUnsignedLongLong(he.generation)) == NULL)
-            goto exit_fail;
-        rv = PyDict_SetItemString(item, "generation", value);
-        Py_DECREF(value);
-        if (rv != 0)
-            goto exit_fail;
-
-        /* event */
-        if ((value = PyLong_FromUnsignedLongLong(he.event)) == NULL)
-            goto exit_fail;
-        rv = PyDict_SetItemString(item, "event", value);
-        Py_DECREF(value);
-        if (rv != 0)
-            goto exit_fail;
-
-        /* data */
-        if ((value = PyLong_FromUnsignedLongLong(he.data)) == NULL)
-            goto exit_fail;
-        rv = PyDict_SetItemString(item, "data", value);
-        Py_DECREF(value);
-        if (rv != 0)
+        if (item == NULL)
             goto exit_fail;
 
         if (PyList_Append(events, item) != 0)
