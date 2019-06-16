@@ -9,9 +9,17 @@ import struct
 
 import pytest
 
-from . constants import *
+from . constants import (
+    DELTA_DISK_MAGIC,
+    PAXOS_DISK_MAGIC,
+    PAXOS_DISK_CLEAR,
+    RINDEX_DISK_MAGIC,
+    RINDEX_ENTRIES_SECTORS,
+    RINDEX_ENTRY_SIZE
+)
+
 from . import util
-from . units import *
+from . units import MiB
 
 
 def test_single_instance(sanlock_daemon):
@@ -126,8 +134,7 @@ def test_create(tmpdir, sanlock_daemon):
         # New entry should be created at the first slot
         # The first rindex sector is used by the rindex header.
         f.seek(MiB + 512)
-        util.check_rindex_entry(f.read(RINDEX_ENTRY_SIZE),
-                                b"res", 3 * MiB, 0)
+        util.check_rindex_entry(f.read(RINDEX_ENTRY_SIZE), b"res", 3 * MiB, 0)
 
         # The rest of the entries should not be modified.
         rest = 512 * RINDEX_ENTRIES_SECTORS - RINDEX_ENTRY_SIZE

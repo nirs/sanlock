@@ -8,7 +8,7 @@ import struct
 
 from . import constants
 from . import util
-from . units import *
+from . units import MiB
 
 
 def test_init_lockspace(tmpdir):

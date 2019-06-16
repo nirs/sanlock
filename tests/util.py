@@ -11,7 +11,7 @@ import struct
 import subprocess
 import time
 
-from . units import *
+from . units import KiB
 
 TESTDIR = os.path.dirname(__file__)
 SANLOCK = os.path.join(TESTDIR, os.pardir, "src", "sanlock")

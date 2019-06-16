@@ -17,7 +17,7 @@ import sanlock
 
 from . import constants
 from . import util
-from . units import *
+from . units import KiB, MiB, GiB, TiB
 
 
 # Largest file size on ext4 is 16TiB, and on xfs 500 TiB. Use 1 TiB as it is
