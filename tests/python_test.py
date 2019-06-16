@@ -601,6 +601,17 @@ def test_write_resource_parse_args(
         sanlock.write_resource(b"ls_name", name, disks)
 
 
+@pytest.mark.xfail(reason="path truncated silently")
+def test_write_resource_path_length(no_sanlock_daemon):
+    path = "x" * constants.SANLK_PATH_LEN
+    with pytest.raises(ValueError):
+        sanlock.write_resource(b"ls_name", b"res_name", [(path, 0)])
+
+    path = "x" * (constants.SANLK_PATH_LEN - 1)
+    with raises_sanlock_errno():
+        sanlock.write_resource(b"ls_name", b"res_name", [(path, 0)])
+
+
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 @pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 def test_release_resource_parse_args(
@@ -614,6 +625,17 @@ def test_release_resource_parse_args(
         sanlock.release(b"ls_name", name, disks)
 
 
+@pytest.mark.xfail(reason="path truncated silently")
+def test_release_resource_path_length(no_sanlock_daemon):
+    path = "x" * constants.SANLK_PATH_LEN
+    with pytest.raises(ValueError):
+        sanlock.release(b"ls_name", b"res_name", [(path, 0)])
+
+    path = "x" * (constants.SANLK_PATH_LEN - 1)
+    with raises_sanlock_errno():
+        sanlock.release(b"ls_name", b"res_name", [(path, 0)])
+
+
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 @pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 def test_read_resource_owners_parse_args(
@@ -625,6 +647,17 @@ def test_read_resource_owners_parse_args(
 
     with raises_sanlock_errno():
         sanlock.read_resource_owners(b"ls_name", name, disks)
+
+
+@pytest.mark.xfail(reason="path truncated silently")
+def test_read_resource_owners_path_length(no_sanlock_daemon):
+    path = "x" * constants.SANLK_PATH_LEN
+    with pytest.raises(ValueError):
+        sanlock.read_resource_owners(b"ls_name", b"res_name", [(path, 0)])
+
+    path = "x" * (constants.SANLK_PATH_LEN - 1)
+    with raises_sanlock_errno():
+        sanlock.read_resource_owners(b"ls_name", b"res_name", [(path, 0)])
 
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
@@ -679,6 +712,18 @@ def test_init_resource_parse_args(no_sanlock_daemon, name, filename, encoding):
         sanlock.init_resource(name, b"res_name", disks)
 
 
+@pytest.mark.xfail(reason="path truncated silently")
+def test_init_resource_path_length(no_sanlock_daemon):
+    path = "x" * constants.SANLK_PATH_LEN
+    with pytest.raises(ValueError):
+        sanlock.init_resource(b"ls_name", b"res_name", [(path, 0)])
+
+    # init_resource access storage directly.
+    path = "x" * (constants.SANLK_PATH_LEN - 1)
+    with raises_sanlock_errno(errno.ENAMETOOLONG):
+        sanlock.init_resource(b"ls_name", b"res_name", [(path, 0)])
+
+
 @pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 def test_get_alignment_parse_args(no_sanlock_daemon, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
@@ -700,6 +745,17 @@ def test_read_resource_parse_args(no_sanlock_daemon, filename, encoding):
         sanlock.read_resource(path)
 
 
+@pytest.mark.xfail(reason="path truncated silently")
+def test_read_resource_path_length(no_sanlock_daemon):
+    path = "x" * constants.SANLK_PATH_LEN
+    with pytest.raises(ValueError):
+        sanlock.read_resource(path)
+
+    path = "x" * (constants.SANLK_PATH_LEN - 1)
+    with raises_sanlock_errno():
+        sanlock.read_resource(path)
+
+
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 @pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 def test_request_parse_args(no_sanlock_daemon, name, filename, encoding):
@@ -713,6 +769,17 @@ def test_request_parse_args(no_sanlock_daemon, name, filename, encoding):
         sanlock.request(name, b"res_name", disks)
 
 
+@pytest.mark.xfail(reason="path truncated silently")
+def test_request_path_length(no_sanlock_daemon):
+    path = "x" * constants.SANLK_PATH_LEN
+    with pytest.raises(ValueError):
+        sanlock.request(b"ls_name", b"res_name", [(path, 0)])
+
+    path = "x" * (constants.SANLK_PATH_LEN - 1)
+    with raises_sanlock_errno():
+        sanlock.request(b"ls_name", b"res_name", [(path, 0)])
+
+
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 @pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 def test_acquire_parse_args(no_sanlock_daemon, name, filename, encoding):
@@ -724,3 +791,14 @@ def test_acquire_parse_args(no_sanlock_daemon, name, filename, encoding):
 
     with raises_sanlock_errno():
         sanlock.acquire(name, b"res_name", disks, pid=os.getpid())
+
+
+@pytest.mark.xfail(reason="path truncated silently")
+def test_acquire_path_length(no_sanlock_daemon):
+    path = "x" * constants.SANLK_PATH_LEN
+    with pytest.raises(ValueError):
+        sanlock.acquire(b"ls_name", b"res_name", [(path, 0)], pid=os.getpid())
+
+    path = "x" * (constants.SANLK_PATH_LEN - 1)
+    with raises_sanlock_errno():
+        sanlock.acquire(b"ls_name", b"res_name", [(path, 0)], pid=os.getpid())

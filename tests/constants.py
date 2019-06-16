@@ -27,3 +27,7 @@ RINDEX_ENTRIES_SECTORS = 2000
 # src/sanlock_rv.h
 
 SANLK_LEADER_MAGIC = -223
+
+# src/sanlock.h
+
+SANLK_PATH_LEN = 1024
