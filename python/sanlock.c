@@ -172,25 +172,34 @@ finally:
     return rv;
 }
 
+static struct sanlk_resource *
+create_resource(int num_disks)
+{
+    size_t size = sizeof(struct sanlk_resource) +
+                  sizeof(struct sanlk_disk) * num_disks;
+
+    struct sanlk_resource *res = calloc(1, size);
+    if (res == NULL) {
+        PyErr_NoMemory();
+        return NULL;
+    }
+
+    res->num_disks = num_disks;
+
+    return res;
+}
+
 static int
 parse_disks(PyObject *obj, struct sanlk_resource **res_ret)
 {
-    int num_disks, res_len;
+    int num_disks;
     struct sanlk_resource *res;
 
     num_disks = PyList_Size(obj);
 
-    res_len = sizeof(struct sanlk_resource) +
-                        (sizeof(struct sanlk_disk) * num_disks);
-    res = malloc(res_len);
-
-    if (res == NULL) {
-        PyErr_NoMemory();
+    res = create_resource(num_disks);
+    if (res == NULL)
         return -1;
-    }
-
-    memset(res, 0, res_len);
-    res->num_disks = num_disks;
 
     for (int i = 0; i < num_disks; i++) {
         PyObject *disk = PyList_GetItem(obj,i);
@@ -639,7 +648,7 @@ Sector can be one of (512, 4096).");
 static PyObject *
 py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv = -1, res_len, sector = SECTOR_SIZE_512;
+    int rv = -1, sector = SECTOR_SIZE_512;
     long align = ALIGNMENT_1M;
     PyObject *path = NULL;
     struct sanlk_resource *res;
@@ -647,18 +656,9 @@ py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     static char *kwlist[] = {"path", "offset", "align", "sector", NULL};
 
-    /* allocate the needed memory for the resource and one disk */
-    res_len = sizeof(struct sanlk_resource) + sizeof(struct sanlk_disk);
-    res = malloc(res_len);
-
-    if (res == NULL) {
-        PyErr_NoMemory();
+    res = create_resource(1 /* num_disks */);
+    if (res == NULL)
         return NULL;
-    }
-
-    /* initialize resource and disk structures */
-    memset(res, 0, res_len);
-    res->num_disks = 1;
 
     /* parse python tuple */
     if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&|kli", kwlist,
