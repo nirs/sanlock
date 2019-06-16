@@ -41,6 +41,15 @@ To run basic lint and style check:
 
     $ tox -e flake8
 
+Sometimes when debugging failing tests verbose mode is useful. You can
+enable it using:
+
+    $ tox -e py36 tests/python_test.py -- -vv
+
+Or using environment variable:
+
+    export PYTEST_ADDOPTS=-vv
+
 
 Testing 4K support
 ==================
