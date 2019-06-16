@@ -11,6 +11,7 @@ from __future__ import absolute_import
 
 import errno
 import io
+import os
 import time
 
 from contextlib import contextmanager
@@ -697,3 +698,29 @@ def test_read_resource_parse_args(no_sanlock_daemon, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno():
         sanlock.read_resource(path)
+
+
+@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+def test_request_parse_args(no_sanlock_daemon, name, filename, encoding):
+    path = util.generate_path("/tmp/", filename, encoding)
+    disks = [(path, 0)]
+
+    with raises_sanlock_errno():
+        sanlock.request(b"ls_name", name, disks)
+
+    with raises_sanlock_errno():
+        sanlock.request(name, b"res_name", disks)
+
+
+@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
+@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
+def test_acquire_parse_args(no_sanlock_daemon, name, filename, encoding):
+    path = util.generate_path("/tmp/", filename, encoding)
+    disks = [(path, 0)]
+
+    with raises_sanlock_errno():
+        sanlock.acquire(b"ls_name", name, disks, pid=os.getpid())
+
+    with raises_sanlock_errno():
+        sanlock.acquire(name, b"res_name", disks, pid=os.getpid())
