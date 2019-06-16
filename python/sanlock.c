@@ -146,6 +146,17 @@ pystring_as_cstring(PyObject *obj)
 }
 
 static int
+validate_path(PyObject *path)
+{
+    if (PyBytes_Size(path) > SANLK_PATH_LEN - 1) {
+        set_error(PyExc_ValueError, "Path is too long: %s", path);
+        return 0;
+    }
+
+    return 1;
+}
+
+static int
 parse_single_disk(PyObject* disk, struct sanlk_disk* res_disk)
 {
     int rv = 0;
@@ -162,6 +173,9 @@ parse_single_disk(PyObject* disk, struct sanlk_disk* res_disk)
         set_error(PyExc_ValueError, "Invalid disk %s", disk);
         goto finally;
     }
+
+    if (!validate_path(path))
+        goto finally;
 
     strncpy(res_disk->path, PyBytes_AsString(path), SANLK_PATH_LEN - 1);
     res_disk->offset = offset;
@@ -655,6 +669,9 @@ py_read_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
         pypath_converter, &path, &(res->disks[0].offset), &align, &sector)) {
         goto finally;
     }
+
+    if (!validate_path(path))
+        goto finally;
 
     /* prepare the resource disk path */
     strncpy(res->disks[0].path, PyBytes_AsString(path), SANLK_PATH_LEN - 1);

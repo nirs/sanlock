@@ -601,7 +601,6 @@ def test_write_resource_parse_args(
         sanlock.write_resource(b"ls_name", name, disks)
 
 
-@pytest.mark.xfail(reason="path truncated silently")
 def test_write_resource_path_length(no_sanlock_daemon):
     path = "x" * constants.SANLK_PATH_LEN
     with pytest.raises(ValueError):
@@ -625,7 +624,6 @@ def test_release_resource_parse_args(
         sanlock.release(b"ls_name", name, disks)
 
 
-@pytest.mark.xfail(reason="path truncated silently")
 def test_release_resource_path_length(no_sanlock_daemon):
     path = "x" * constants.SANLK_PATH_LEN
     with pytest.raises(ValueError):
@@ -649,7 +647,6 @@ def test_read_resource_owners_parse_args(
         sanlock.read_resource_owners(b"ls_name", name, disks)
 
 
-@pytest.mark.xfail(reason="path truncated silently")
 def test_read_resource_owners_path_length(no_sanlock_daemon):
     path = "x" * constants.SANLK_PATH_LEN
     with pytest.raises(ValueError):
@@ -712,7 +709,6 @@ def test_init_resource_parse_args(no_sanlock_daemon, name, filename, encoding):
         sanlock.init_resource(name, b"res_name", disks)
 
 
-@pytest.mark.xfail(reason="path truncated silently")
 def test_init_resource_path_length(no_sanlock_daemon):
     path = "x" * constants.SANLK_PATH_LEN
     with pytest.raises(ValueError):
@@ -745,7 +741,6 @@ def test_read_resource_parse_args(no_sanlock_daemon, filename, encoding):
         sanlock.read_resource(path)
 
 
-@pytest.mark.xfail(reason="path truncated silently")
 def test_read_resource_path_length(no_sanlock_daemon):
     path = "x" * constants.SANLK_PATH_LEN
     with pytest.raises(ValueError):
@@ -769,7 +764,6 @@ def test_request_parse_args(no_sanlock_daemon, name, filename, encoding):
         sanlock.request(name, b"res_name", disks)
 
 
-@pytest.mark.xfail(reason="path truncated silently")
 def test_request_path_length(no_sanlock_daemon):
     path = "x" * constants.SANLK_PATH_LEN
     with pytest.raises(ValueError):
@@ -793,7 +787,6 @@ def test_acquire_parse_args(no_sanlock_daemon, name, filename, encoding):
         sanlock.acquire(name, b"res_name", disks, pid=os.getpid())
 
 
-@pytest.mark.xfail(reason="path truncated silently")
 def test_acquire_path_length(no_sanlock_daemon):
     path = "x" * constants.SANLK_PATH_LEN
     with pytest.raises(ValueError):
