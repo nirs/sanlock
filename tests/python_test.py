@@ -227,6 +227,53 @@ def test_write_resource_4k_invalid_sector_size(sanlock_daemon, user_4k_path):
     assert e.value.errno == errno.EINVAL
 
 
+def test_clear_resource(tmpdir, sanlock_daemon):
+    path = util.generate_path(tmpdir, "clear_test")
+    util.create_file(path, MiB)
+    disks = [(path, 0)]
+
+    sanlock.write_resource(b"ls_name", b"res_name", disks)
+    sanlock.write_resource(b"ls_name", b"res_name", disks, clear=True)
+
+    with pytest.raises(sanlock.SanlockException) as e:
+        sanlock.read_resource(path)
+    assert e.value.errno == constants.SANLK_LEADER_MAGIC
+
+    magic = util.read_magic(path)
+    assert magic == constants.PAXOS_DISK_CLEAR
+
+    util.check_guard(path, MiB)
+
+    # run clear on already cleared resource
+    sanlock.write_resource(b"ls_name", b"res_name", disks, clear=True)
+    magic = util.read_magic(path)
+    assert magic == constants.PAXOS_DISK_CLEAR
+
+
+def test_clear_empty_lockspace_resource(tmpdir, sanlock_daemon):
+    path = util.generate_path(tmpdir, "clear_test")
+    util.create_file(path, MiB)
+    disks = [(path, 0)]
+
+    sanlock.write_resource(b"ls_name", b"res_name", disks)
+
+    # Clear with empty lockspace and resource - should succeed
+    sanlock.write_resource(b"", b"", disks, clear=True)
+    magic = util.read_magic(path)
+    assert magic == constants.PAXOS_DISK_CLEAR
+
+
+def test_clear_empty_storage(tmpdir, sanlock_daemon):
+    path = util.generate_path(tmpdir, "clear_test")
+    util.create_file(path, MiB)
+    disks = [(path, 0)]
+
+    # Clear area without any resource written - should succeed
+    sanlock.write_resource(b"ls_name", b"inval_res_name", disks, clear=True)
+    magic = util.read_magic(path)
+    assert magic == constants.PAXOS_DISK_CLEAR
+
+
 def test_read_resource_4k_invalid_sector_size(sanlock_daemon, user_4k_path):
     disks = [(user_4k_path, 0)]
 
