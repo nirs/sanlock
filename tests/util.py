@@ -177,3 +177,14 @@ def sanlock_is_running():
         if e.errno != errno.ENOENT:
             raise
     return False
+
+
+def read_magic(path, offset=0):
+    """
+    Read and return unsigned int from specified file at given offset.
+    Typical usage is to read sanlock magic number.
+    """
+    with io.open(path, "rb") as f:
+        f.seek(offset)
+        uint, = struct.unpack("< I", f.read(4))
+        return uint

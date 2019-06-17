@@ -86,12 +86,9 @@ def test_write_lockspace(tmpdir, sanlock_daemon, filename, encoding, size, offse
         b"ls_name", 1, path, offset=offset, wait=False)
     assert acquired is False
 
-    with io.open(path, "rb") as f:
-        f.seek(offset)
-        magic, = struct.unpack("< I", f.read(4))
-        assert magic == constants.DELTA_DISK_MAGIC
-
-        # TODO: check more stuff here...
+    magic = util.read_magic(path, offset)
+    assert magic == constants.DELTA_DISK_MAGIC
+    # TODO: check more stuff here...
 
     util.check_guard(path, size)
 
@@ -117,9 +114,8 @@ def test_write_lockspace_4k(user_4k_path, sanlock_daemon, align):
     assert acquired is False
 
     # Verify that lockspace was written.
-    with io.open(user_4k_path, "rb") as f:
-        magic, = struct.unpack("< I", f.read(4))
-        assert magic == constants.DELTA_DISK_MAGIC
+    magic = util.read_magic(user_4k_path)
+    assert magic == constants.DELTA_DISK_MAGIC
 
     # Check that sanlock did not write beyond the lockspace area.
     util.check_guard(user_4k_path, align)
@@ -179,10 +175,8 @@ def test_write_resource(tmpdir, sanlock_daemon, filename, encoding, size, offset
     owners = sanlock.read_resource_owners(b"ls_name", b"res_name", disks)
     assert owners == []
 
-    with io.open(path, "rb") as f:
-        f.seek(offset)
-        magic, = struct.unpack("< I", f.read(4))
-        assert magic == constants.PAXOS_DISK_MAGIC
+    magic = util.read_magic(path, offset)
+    assert magic == constants.PAXOS_DISK_MAGIC
 
         # TODO: check more stuff here...
 
@@ -216,9 +210,8 @@ def test_write_resource_4k(sanlock_daemon, user_4k_path, align):
     assert owners == []
 
     # Verify that resource was written.
-    with io.open(user_4k_path, "rb") as f:
-        magic, = struct.unpack("< I", f.read(4))
-        assert magic == constants.PAXOS_DISK_MAGIC
+    magic = util.read_magic(user_4k_path)
+    assert magic == constants.PAXOS_DISK_MAGIC
 
     # Check that sanlock did not write beyond the lockspace area.
     util.check_guard(user_4k_path, align)
