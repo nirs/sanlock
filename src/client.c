@@ -1909,6 +1909,9 @@ int sanlock_res_to_str(struct sanlk_resource *res, char **str_ret)
 	char *str;
 	int ret, len, pos, d;
 
+	if (!res)
+		return -EINVAL;
+
 	str = malloc(SANLK_MAX_RES_STR + 1);
 	if (!str)
 		return -ENOMEM;

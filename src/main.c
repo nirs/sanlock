@@ -1402,6 +1402,7 @@ static void setup_host_name(void)
 	struct utsname name;
 	char uuid[37];
 	uuid_t uu;
+	int ret;
 
 	memset(rand_state, 0, sizeof(rand_state));
 	initstate(time(NULL), rand_state, sizeof(rand_state));
@@ -1423,8 +1424,10 @@ static void setup_host_name(void)
 	uuid_generate(uu);
 	uuid_unparse_lower(uu, uuid);
 
-	snprintf(our_host_name_global, NAME_ID_SIZE, "%s.%s",
-		 uuid, name.nodename);
+	ret = snprintf(our_host_name_global, NAME_ID_SIZE, "%s.", uuid);
+
+	if (ret < NAME_ID_SIZE)
+		memcpy(our_host_name_global+ret, name.nodename, NAME_ID_SIZE-ret);
 }
 
 static void setup_limits(void)
@@ -3435,7 +3438,7 @@ out:
 static int do_direct_init(void)
 {
 	char *res_str = NULL;
-	int rv;
+	int rv = -EINVAL;
 
 	if (com.lockspace.host_id_disk.path[0]) {
 		if (com.sector_size)
@@ -3452,7 +3455,7 @@ static int do_direct_init(void)
 
 		rv = direct_write_lockspace(&main_task, &com.lockspace,
 					    com.io_timeout_arg);
-	} else {
+	} else if (com.res_args[0]) {
 		if (com.sector_size)
 			com.res_args[0]->flags |= sanlk_res_sector_size_to_flag(com.sector_size);
 		if (com.align_size)
