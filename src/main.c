@@ -1641,6 +1641,7 @@ static void helper_dead(int ci GNUC_UNUSED)
 
 static int do_daemon(void)
 {
+	struct utsname nodename;
 	int fd, rv;
 
 	run_dir = env_get(SANLOCK_RUN_DIR, DEFAULT_RUN_DIR);
@@ -1700,7 +1701,9 @@ static int do_daemon(void)
 
 	setup_uid_gid();
 
-	log_warn("sanlock daemon started %s host %s", VERSION, our_host_name_global);
+	uname(&nodename);
+
+	log_warn("sanlock daemon started %s host %s (%s)", VERSION, our_host_name_global, nodename.nodename);
 
 	setup_priority();
 
