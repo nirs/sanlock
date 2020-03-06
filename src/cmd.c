@@ -3072,7 +3072,24 @@ void call_cmd_daemon(int ci, struct sm_header *h_recv, int client_maxi)
 		break;
 	};
 
+	/*
+	 * Previously just called close(fd) and did not set client[ci].fd = -1.
+	 * This meant that a new client ci could get this fd and use it.
+	 *
+	 * When a poll error occurs because this ci was finished, then
+	 * client_free(ci) would be called for this ci.  client_free would
+	 * see cl->fd was still set and call close() on it, even though that
+	 * fd was now in use by another ci.
+	 *
+	 * We could probably get by with just doing this here:
+	 * client[ci].fd = -1;
+	 * close(fd);
+	 *
+	 * and then handling the full client_free in response to
+	 * the poll error (as done previously), but I see no reason
+	 * to avoid the full client_free here.
+	 */
 	if (auto_close)
-		close(fd);
+		client_free(ci);
 }
 
