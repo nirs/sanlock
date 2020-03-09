@@ -222,6 +222,11 @@ static void _client_free(int ci)
 {
 	struct client *cl = &client[ci];
 
+	if (cl->cmd_active || cl->pid_dead)
+		log_client(ci, cl->fd, "free cmd %d dead %d", cl->cmd_active, cl->pid_dead);
+	else
+		log_client(ci, cl->fd, "free");
+
 	if (!cl->used) {
 		/* should never happen */
 		log_error("client_free ci %d not used", ci);
@@ -240,6 +245,9 @@ static void _client_free(int ci)
 		log_error("client_free ci %d is free", ci);
 		goto out;
 	}
+
+	if (cl->need_free)
+		log_debug("client_free ci %d already need_free", ci);
 
 	if (cl->suspend) {
 		log_debug("client_free ci %d is suspended", ci);
@@ -320,6 +328,8 @@ static int client_suspend(int ci)
 		goto out;
 	}
 
+	log_client(ci, cl->fd, "suspend");
+
 	cl->suspend = 1;
 
 	/* make poll() ignore this connection */
@@ -355,6 +365,8 @@ void client_resume(int ci)
 		log_error("client_resume ci %d not suspended", ci);
 		goto out;
 	}
+
+	log_client(ci, cl->fd, "resume");
 
 	cl->suspend = 0;
 
@@ -394,6 +406,8 @@ static int client_add(int fd, void (*workfn)(int ci), void (*deadfn)(int ci))
 			if (i > client_maxi)
 				client_maxi = i;
 			pthread_mutex_unlock(&cl->mutex);
+
+			log_client(i, fd, "add");
 			return i;
 		}
 		pthread_mutex_unlock(&cl->mutex);
@@ -435,14 +449,16 @@ void client_recv_all(int ci, struct sm_header *h_recv, int pos)
 			break;
 	}
 
-	log_debug("recv_all %d,%d,%d pos %d rv %d error %d retries %d rem %d total %d",
+	log_debug("client recv_all %d,%d,%d pos %d rv %d error %d retries %d rem %d total %d",
 		  ci, client[ci].fd, client[ci].pid, pos, rv, error, retries, rem, total);
 }
 
-void send_result(int fd, struct sm_header *h_recv, int result);
-void send_result(int fd, struct sm_header *h_recv, int result)
+void send_result(int ci, int fd, struct sm_header *h_recv, int result);
+void send_result(int ci, int fd, struct sm_header *h_recv, int result)
 {
 	struct sm_header h;
+
+	log_client(ci, fd, "send %d", result);
 
 	memcpy(&h, h_recv, sizeof(struct sm_header));
 	h.version = SM_PROTO;
@@ -761,6 +777,7 @@ static int main_loop(void)
 			continue;
 		if (rv < 0) {
 			/* not sure */
+			log_client(0, 0, "poll err %d", rv);
 		}
 		for (i = 0; i <= client_maxi + 1; i++) {
 			/*
@@ -771,6 +788,7 @@ static int main_loop(void)
 			 */
 			if (pollfd[i].fd == efd) {
 				if (pollfd[i].revents & POLLIN) {
+					log_client(i, efd, "efd wake"); /* N.B. i is not a ci */
 					eventfd_read(efd, &ebuf);
 				}
 				continue;
@@ -790,6 +808,7 @@ static int main_loop(void)
 					workfn(i);
 			}
 			if (pollfd[i].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+				log_client(i, client[i].fd, "poll dead");
 				deadfn = client[i].deadfn;
 				if (deadfn)
 					deadfn(i);
@@ -1030,6 +1049,8 @@ static void process_cmd_thread_unregistered(int ci_in, struct sm_header *h_recv)
 
 	snprintf(client[ci_in].owner_name, SANLK_NAME_LEN, "cmd%d", h_recv->cmd);
 
+	log_client(ci_in, client[ci_in].fd, "process cmd %u", h_recv->cmd);
+
 	rv = thread_pool_add_work(ca);
 	if (rv < 0)
 		goto fail_free;
@@ -1041,7 +1062,7 @@ static void process_cmd_thread_unregistered(int ci_in, struct sm_header *h_recv)
 	log_error("cmd %d %d:%d process_unreg error %d",
 		  h_recv->cmd, ci_in, client[ci_in].fd, rv);
 	client_recv_all(ci_in, h_recv, 0);
-	send_result(client[ci_in].fd, h_recv, rv);
+	send_result(ci_in, client[ci_in].fd, h_recv, rv);
 	client_resume(ci_in);
 }
 
@@ -1091,8 +1112,13 @@ static void process_cmd_thread_registered(int ci_in, struct sm_header *h_recv)
 			result = -ESRCH;
 			goto fail;
 		}
+
+		log_client(ci_in, client[ci_in].fd, "process reg cmd %u target pid %d ci %d",
+			   h_recv->cmd, h_recv->data2, ci_target);
 	} else {
 		/* lease for this registered client */
+
+		log_client(ci_in, client[ci_in].fd, "process reg cmd %u", h_recv->cmd);
 
 		ci_target = ci_in;
 		cl = &client[ci_target];
@@ -1183,8 +1209,9 @@ static void process_cmd_thread_registered(int ci_in, struct sm_header *h_recv)
 	return;
 
  fail:
+	log_error("process_cmd_thread_reg failed ci %d fd %d cmd %u", ci_in, client[ci_in].fd, h_recv->cmd);
 	client_recv_all(ci_in, h_recv, 0);
-	send_result(client[ci_in].fd, h_recv, result);
+	send_result(ci_in, client[ci_in].fd, h_recv, result);
 	client_resume(ci_in);
 
 	if (ca)
@@ -1202,6 +1229,8 @@ static void process_connection(int ci)
 	rv = recv(client[ci].fd, &h, sizeof(h), MSG_WAITALL);
 	if (!rv)
 		goto dead;
+
+	log_client(ci, client[ci].fd, "recv %d %d", rv, h.cmd);
 
 	if (rv < 0) {
 		log_error("ci %d fd %d pid %d recv errno %d",
@@ -1295,6 +1324,7 @@ static void process_connection(int ci)
 	return;
 
  dead:
+	log_client(ci, client[ci].fd, "recv dead");
 	deadfn = client[ci].deadfn;
 	if (deadfn)
 		deadfn(ci);
@@ -2686,6 +2716,10 @@ static void read_config_file(void)
 				com.debug_io_submit = 1;
 			if (strstr(str, "complete"))
 				com.debug_io_complete = 1;
+
+		} else if (!strcmp(str, "debug_clients")) {
+			get_val_int(line, &val);
+			com.debug_clients = val;
 
 		} else if (!strcmp(str, "max_sectors_kb")) {
 			memset(str, 0, sizeof(str));

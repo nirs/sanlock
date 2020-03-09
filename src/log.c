@@ -127,23 +127,40 @@ void log_level(uint32_t space_id, uint32_t res_id, char *name_in, int level, con
 
 	memset(name, 0, sizeof(name));
 
-	if (space_id && !res_id)
-		snprintf(name, NAME_ID_SIZE, "s%u ", space_id);
-	else if (!space_id && res_id)
-		snprintf(name, NAME_ID_SIZE, "r%u ", res_id);
-	else if (space_id && res_id)
-		snprintf(name, NAME_ID_SIZE, "s%u:r%u ", space_id, res_id);
-	else if (name_in)
-		snprintf(name, NAME_ID_SIZE, "%.8s ", name_in);
+	if (level == LOG_CLIENT) {
+		int log_ci = 0, log_fd = 0;
+
+		if (!com.debug_clients)
+			return;
+
+		level = LOG_DEBUG;
+
+		log_ci = space_id;
+		log_fd = res_id;
+
+		if (!name_in)
+			snprintf(name, NAME_ID_SIZE, "cl %d:%d ", log_ci, log_fd);
+		else
+			snprintf(name, NAME_ID_SIZE, "cl %d:%d %.8s ", log_ci, log_fd, name_in);
+	} else {
+		if (space_id && !res_id)
+			snprintf(name, NAME_ID_SIZE, "s%u ", space_id);
+		else if (!space_id && res_id)
+			snprintf(name, NAME_ID_SIZE, "r%u ", res_id);
+		else if (space_id && res_id)
+			snprintf(name, NAME_ID_SIZE, "s%u:r%u ", space_id, res_id);
+		else if (name_in)
+			snprintf(name, NAME_ID_SIZE, "%.8s ", name_in);
+	}
 
 	pthread_mutex_lock(&log_mutex);
 
 	gettimeofday(&cur_time, NULL);
 
-    if (log_logfile_use_utc)
-	    gmtime_r(&cur_time.tv_sec, &time_info);
-    else
-	    localtime_r(&cur_time.tv_sec, &time_info);
+	if (log_logfile_use_utc)
+		gmtime_r(&cur_time.tv_sec, &time_info);
+	else
+		localtime_r(&cur_time.tv_sec, &time_info);
 
 	ret = strftime(log_str + pos, len - pos,
 		       "%Y-%m-%d %H:%M:%S ", &time_info);

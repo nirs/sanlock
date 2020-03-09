@@ -334,11 +334,14 @@ EXTERN struct client *client;
 #define DEFAULT_MAX_SECTORS_KB_ALIGN  0     /* set it to align size */
 #define DEFAULT_MAX_SECTORS_KB_NUM    1024  /* set it to num KB for all lockspaces */
 
+#define DEBUG_CMD_INQ_LOCKSPACE 1
+
 struct command_line {
 	int type;				/* COM_ */
 	int action;				/* ACT_ */
 	int debug;
 	int debug_renew;
+	int debug_clients;
 	int debug_io_submit;
 	int debug_io_complete;
 	int paxos_debug_all;

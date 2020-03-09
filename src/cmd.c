@@ -53,7 +53,7 @@ void client_resume(int ci);
 void client_free(int ci);
 void client_recv_all(int ci, struct sm_header *h_recv, int pos);
 void client_pid_dead(int ci);
-void send_result(int fd, struct sm_header *h_recv, int result);
+void send_result(int ci, int fd, struct sm_header *h_recv, int result);
 
 static uint32_t token_id_counter = 1;
 
@@ -533,7 +533,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca)
  reply:
 	if (!recv_done)
 		client_recv_all(ca->ci_in, &ca->header, pos);
-	send_result(fd, &ca->header, result);
+	send_result(ca->ci_in, fd, &ca->header, result);
 	client_resume(ca->ci_in);
 }
 
@@ -727,7 +727,7 @@ static void cmd_release(struct task *task, struct cmd_args *ca)
 		client_free(cl_ci);
 	}
 
-	send_result(fd, &ca->header, result);
+	send_result(ca->ci_in, fd, &ca->header, result);
 	client_resume(ca->ci_in);
 }
 
@@ -943,7 +943,7 @@ static void cmd_convert(struct task *task, struct cmd_args *ca)
 		client_free(cl_ci);
 	}
 
-	send_result(fd, &ca->header, result);
+	send_result(ca->ci_in, fd, &ca->header, result);
 	client_resume(ca->ci_in);
 }
 
@@ -1052,7 +1052,7 @@ static void cmd_request(struct task *task, struct cmd_args *ca)
  reply:
 	log_debug("cmd_request %d,%d done %d", ca->ci_in, fd, result);
 
-	send_result(fd, &ca->header, result);
+	send_result(ca->ci_in, fd, &ca->header, result);
 	client_resume(ca->ci_in);
 }
 
@@ -1101,7 +1101,7 @@ static void cmd_examine(struct task *task GNUC_UNUSED, struct cmd_args *ca)
  reply:
 	log_debug("cmd_examine %d,%d done %d", ca->ci_in, fd, count);
 
-	send_result(fd, &ca->header, result);
+	send_result(ca->ci_in, fd, &ca->header, result);
 	client_resume(ca->ci_in);
 }
 
@@ -1153,7 +1153,7 @@ static void cmd_set_lvb(struct task *task GNUC_UNUSED, struct cmd_args *ca)
 	if (lvb)
 		free(lvb);
 
-	send_result(fd, &ca->header, result);
+	send_result(ca->ci_in, fd, &ca->header, result);
 	client_resume(ca->ci_in);
 }
 
@@ -1242,7 +1242,7 @@ static void cmd_shutdown_wait(struct task *task GNUC_UNUSED, struct cmd_args *ca
 	if (!result)
 		return;
 
-	send_result(fd, &ca->header, result);
+	send_result(ca->ci_in, fd, &ca->header, result);
 	client_resume(ca->ci_in);
 }
 
@@ -1303,7 +1303,7 @@ static void cmd_add_lockspace(struct cmd_args *ca)
 	if (async) {
 		result = rv;
 		log_debug("cmd_add_lockspace %d,%d async done %d", ca->ci_in, fd, result);
-		send_result(fd, &ca->header, result);
+		send_result(ca->ci_in, fd, &ca->header, result);
 		client_resume(ca->ci_in);
 		add_lockspace_wait(sp);
 		return;
@@ -1312,7 +1312,7 @@ static void cmd_add_lockspace(struct cmd_args *ca)
 	result = add_lockspace_wait(sp);
  reply:
 	log_debug("cmd_add_lockspace %d,%d done %d", ca->ci_in, fd, result);
-	send_result(fd, &ca->header, result);
+	send_result(ca->ci_in, fd, &ca->header, result);
 	client_resume(ca->ci_in);
 }
 
@@ -1352,7 +1352,7 @@ static void cmd_inq_lockspace(struct cmd_args *ca)
  reply:
 	/* log_debug("cmd_inq_lockspace %d,%d done %d", ca->ci_in, fd, result); */
 
-	send_result(fd, &ca->header, result);
+	send_result(ca->ci_in, fd, &ca->header, result);
 	client_resume(ca->ci_in);
 }
 
@@ -1437,7 +1437,7 @@ static void cmd_rem_lockspace(struct cmd_args *ca)
 	if (async) {
 		result = rv;
 		log_debug("cmd_rem_lockspace %d,%d async done %d", ca->ci_in, fd, result);
-		send_result(fd, &ca->header, result);
+		send_result(ca->ci_in, fd, &ca->header, result);
 		client_resume(ca->ci_in);
 		rem_lockspace_wait(&lockspace, space_id);
 		return;
@@ -1446,7 +1446,7 @@ static void cmd_rem_lockspace(struct cmd_args *ca)
 	result = rem_lockspace_wait(&lockspace, space_id);
  reply:
 	log_debug("cmd_rem_lockspace %d,%d done %d", ca->ci_in, fd, result);
-	send_result(fd, &ca->header, result);
+	send_result(ca->ci_in, fd, &ca->header, result);
 	client_resume(ca->ci_in);
 }
 
@@ -1489,7 +1489,7 @@ static void cmd_align(struct task *task GNUC_UNUSED, struct cmd_args *ca)
  reply:
 	log_debug("cmd_align %d,%d done %d", ca->ci_in, fd, result);
 
-	send_result(fd, &ca->header, result);
+	send_result(ca->ci_in, fd, &ca->header, result);
 	client_resume(ca->ci_in);
 }
 
@@ -1834,7 +1834,7 @@ static void cmd_write_lockspace(struct task *task, struct cmd_args *ca)
  reply:
 	log_debug("cmd_write_lockspace %d,%d done %d", ca->ci_in, fd, result);
 
-	send_result(fd, &ca->header, result);
+	send_result(ca->ci_in, fd, &ca->header, result);
 	client_resume(ca->ci_in);
 }
 
@@ -1930,7 +1930,7 @@ static void cmd_write_resource(struct task *task, struct cmd_args *ca)
 	if (token)
 		free(token);
 
-	send_result(fd, &ca->header, result);
+	send_result(ca->ci_in, fd, &ca->header, result);
 	client_resume(ca->ci_in);
 }
 
@@ -1991,7 +1991,7 @@ static void cmd_killpath(struct task *task, struct cmd_args *ca)
 		return;
 	}
 
-	send_result(cl_fd, &ca->header, result);
+	send_result(ca->ci_in, cl_fd, &ca->header, result);
 	client_resume(ca->ci_in);
 }
 
@@ -2021,7 +2021,7 @@ static void cmd_set_event(struct task *task GNUC_UNUSED, struct cmd_args *ca)
 
 	log_debug("cmd_set_event result %d", result);
 reply:
-	send_result(fd, &ca->header, result);
+	send_result(ca->ci_in, fd, &ca->header, result);
 	client_resume(ca->ci_in);
 }
 
@@ -2049,7 +2049,7 @@ static void cmd_format_rindex(struct task *task, struct cmd_args *ca)
  reply:
 	log_debug("cmd_format_rindex %d,%d done %d", ca->ci_in, fd, result);
 
-	send_result(fd, &ca->header, result);
+	send_result(ca->ci_in, fd, &ca->header, result);
 	client_resume(ca->ci_in);
 }
 
@@ -2077,7 +2077,7 @@ static void cmd_rebuild_rindex(struct task *task, struct cmd_args *ca)
  reply:
 	log_debug("cmd_rebuild_rindex %d,%d done %d", ca->ci_in, fd, result);
 
-	send_result(fd, &ca->header, result);
+	send_result(ca->ci_in, fd, &ca->header, result);
 	client_resume(ca->ci_in);
 }
 
@@ -2256,6 +2256,7 @@ static int print_state_daemon(char *str)
 		 "mlock_level=%d "
 		 "quiet_fail=%d "
 		 "debug_renew=%d "
+		 "debug_clients=%d "
 		 "renewal_history_size=%d "
 		 "gid=%d "
 		 "uid=%d "
@@ -2280,6 +2281,7 @@ static int print_state_daemon(char *str)
 		 com.mlock_level,
 		 com.quiet_fail,
 		 com.debug_renew,
+		 com.debug_clients,
 		 com.renewal_history_size,
 		 com.gid,
 		 com.uid,
@@ -2869,7 +2871,7 @@ static void cmd_restrict(int ci, int fd, struct sm_header *h_recv)
 	client[ci].restricted = h_recv->cmd_flags;
 
 	h_recv->version = SM_PROTO;
-	send_result(fd, h_recv, 0);
+	send_result(ci, fd, h_recv, 0);
 }
 
 static void cmd_version(int ci GNUC_UNUSED, int fd, struct sm_header *h_recv)
