@@ -944,6 +944,7 @@ static int thread_pool_add_work(struct cmd_args *ca)
 		rv = pthread_create(&th, NULL, thread_pool_worker,
 				    (void *)(long)pool.num_workers);
 		if (rv < 0) {
+			log_error("thread_pool_add_work ci %d error %d", ca->ci_in, rv);
 			list_del(&ca->list);
 			pthread_mutex_unlock(&pool.mutex);
 			return rv;
@@ -1023,8 +1024,11 @@ static void process_cmd_thread_unregistered(int ci_in, struct sm_header *h_recv)
  fail_free:
 	free(ca);
  fail:
+	log_error("cmd %d %d:%d process_unreg error %d",
+		  h_recv->cmd, ci_in, client[ci_in].fd, rv);
+	client_recv_all(ci_in, h_recv, 0);
 	send_result(client[ci_in].fd, h_recv, rv);
-	close(client[ci_in].fd);
+	client_resume(ci_in);
 }
 
 /*
@@ -1183,7 +1187,8 @@ static void process_connection(int ci)
 
 	rv = recv(client[ci].fd, &h, sizeof(h), MSG_WAITALL);
 	if (!rv)
-		return;
+		goto dead;
+
 	if (rv < 0) {
 		log_error("ci %d fd %d pid %d recv errno %d",
 			  ci, client[ci].fd, client[ci].pid, errno);
@@ -1253,7 +1258,7 @@ static void process_connection(int ci)
 	case SM_CMD_DELETE_RESOURCE:
 		rv = client_suspend(ci);
 		if (rv < 0)
-			return;
+			goto dead;
 		process_cmd_thread_unregistered(ci, &h);
 		break;
 	case SM_CMD_ACQUIRE:
@@ -1265,11 +1270,12 @@ static void process_connection(int ci)
 		   while the thread is working on it */
 		rv = client_suspend(ci);
 		if (rv < 0)
-			return;
+			goto dead;
 		process_cmd_thread_registered(ci, &h);
 		break;
 	default:
-		log_error("ci %d cmd %d unknown", ci, h.cmd);
+		log_error("process_connection ci %d fd %d cmd %d unknown", ci, client[ci].fd, h.cmd);
+		goto dead;
 	};
 
 	return;
