@@ -763,13 +763,27 @@ static int main_loop(void)
 			/* not sure */
 		}
 		for (i = 0; i <= client_maxi + 1; i++) {
-			if (pollfd[i].fd == efd && pollfd[i].revents & POLLIN) {
-				/* a client_resume completed */
-				eventfd_read(efd, &ebuf);
+			/*
+			 * This index for efd has no client array entry.  Its
+			 * only purpose is to wake up this poll loop in which
+			 * case we just clear any data and continue looking
+			 * for other client entries that need processing.
+			 */
+			if (pollfd[i].fd == efd) {
+				if (pollfd[i].revents & POLLIN) {
+					eventfd_read(efd, &ebuf);
+				}
 				continue;
 			}
+
+			/*
+			 * FIXME? client_maxi is never reduced so over time we
+			 * end up checking and skipping some number of unused
+			 * client entries here which seems inefficient.
+			 */
 			if (client[i].fd < 0)
 				continue;
+
 			if (pollfd[i].revents & POLLIN) {
 				workfn = client[i].workfn;
 				if (workfn)
