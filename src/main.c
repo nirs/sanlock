@@ -283,6 +283,7 @@ static void _client_free(int ci)
 	/* make poll() ignore this connection */
 	pollfd[ci].fd = -1;
 	pollfd[ci].events = 0;
+	pollfd[ci].revents = 0;
  out:
 	return;
 }
