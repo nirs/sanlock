@@ -334,8 +334,6 @@ EXTERN struct client *client;
 #define DEFAULT_MAX_SECTORS_KB_ALIGN  0     /* set it to align size */
 #define DEFAULT_MAX_SECTORS_KB_NUM    1024  /* set it to num KB for all lockspaces */
 
-#define DEBUG_CMD_INQ_LOCKSPACE 1
-
 struct command_line {
 	int type;				/* COM_ */
 	int action;				/* ACT_ */
@@ -345,6 +343,7 @@ struct command_line {
 	int debug_io_submit;
 	int debug_io_complete;
 	int paxos_debug_all;
+	uint64_t debug_cmds;
 	int max_sectors_kb_ignore;
 	int max_sectors_kb_align;
 	int max_sectors_kb_num;
@@ -397,6 +396,12 @@ struct command_line {
 };
 
 EXTERN struct command_line com;
+
+uint32_t cmd_str_to_num(const char *str);
+uint64_t cmd_num_to_debug_flag(uint32_t cmd);
+int is_cmd_debug(uint32_t cmd);
+void set_cmd_debug(uint32_t cmd);
+void clear_cmd_debug(uint32_t cmd);
 
 /* command line types and actions */
 

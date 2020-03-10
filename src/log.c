@@ -113,6 +113,9 @@ static void _log_save_ent(int level, int len)
  * 2. copies log_str into the log_dump circular buffer
  * 3. copies log_str into the log_ents circular array to be written to
  *    logfile and/or syslog (so callers don't block writing messages to files)
+ *
+ * N.B. level as "int" instead of "uint32_t" is needed because
+ * of comparison with int log_stderr_priority which can be -1.
  */
 
 void log_level(uint32_t space_id, uint32_t res_id, char *name_in, int level, const char *fmt, ...)
@@ -142,6 +145,15 @@ void log_level(uint32_t space_id, uint32_t res_id, char *name_in, int level, con
 			snprintf(name, NAME_ID_SIZE, "cl %d:%d ", log_ci, log_fd);
 		else
 			snprintf(name, NAME_ID_SIZE, "cl %d:%d %.8s ", log_ci, log_fd, name_in);
+
+	} else if (level == LOG_CMD) {
+		uint32_t cmd = space_id;
+
+		if (!is_cmd_debug(cmd))
+			return;
+
+		space_id = 0;
+		level = LOG_DEBUG;
 	} else {
 		if (space_id && !res_id)
 			snprintf(name, NAME_ID_SIZE, "s%u ", space_id);

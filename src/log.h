@@ -10,6 +10,7 @@
 #define __LOG_H__
 
 #define LOG_CLIENT LOG_LOCAL0
+#define LOG_CMD    LOG_LOCAL1
 
 /*
  * Log levels are used mainly to indicate where the message
@@ -52,6 +53,8 @@ void copy_log_dump(char *buf, int *len);
 #define log_taskd(task, fmt, args...)         log_level(0, 0, task->name, LOG_DEBUG, fmt, ##args)
 
 #define log_client(ci, fd, fmt, args...)      log_level(ci, fd, NULL, LOG_CLIENT, fmt, ##args)
+
+#define log_cmd(cmd, fmt, args...)            log_level(cmd, 0, NULL, LOG_CMD, fmt, ##args)
 
 /* use log_tool for tool actions (non-daemon), and for daemon until
    logging is set up */

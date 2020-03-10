@@ -1345,6 +1345,23 @@ Set to "align" (no quotes) to set max_sectors_kb for the lockspace disk
 to the align size of the lockspace.
 Set to a number to set a specific number of KB for all lockspace disks.
 
+.IP \[bu] 2
+debug_clients = 0
+.br
+Enable or disable debug logging for all client connections to the sanlock daemon.
+
+.IP \[bu] 2
+debug_cmd = +|-<name>
+.br
+Enable (+name) or disable (-name) debug logging at the command processing
+level for specifically named commands, e.g. "debug_cmd = +acquire", or
+"debug_cmd = -inq_lockspace".  Repeat this line for each command name.
+Use a plus prefix before the name to enable and a minus prefix to disable.
+By default sanlock disables some command level debugging for commands that
+are often repetitive and fill the in memory debug buffer.
+This only affects debug logging, not errors or warnings, and disabling
+command level debugging for a command does not disable lower level debugging
+for that command.
 
 .SH SEE ALSO
 .BR wdmd (8)

@@ -2566,6 +2566,118 @@ static int read_command_line(int argc, char *argv[])
 	return 0;
 }
 
+uint32_t cmd_str_to_num(const char *str)
+{
+	if (!strcmp(str, "inq_lockspace"))
+		return SM_CMD_INQ_LOCKSPACE;
+	if (!strcmp(str, "read_resource_owners"))
+		return SM_CMD_READ_RESOURCE_OWNERS;
+	if (!strcmp(str, "get_lockspaces"))
+		return SM_CMD_GET_LOCKSPACES;
+	if (!strcmp(str, "get_hosts"))
+		return SM_CMD_GET_HOSTS;
+	if (!strcmp(str, "register"))
+		return SM_CMD_REGISTER;
+	if (!strcmp(str, "add_lockspace"))
+		return SM_CMD_ADD_LOCKSPACE;
+	if (!strcmp(str, "rem_lockspace"))
+		return SM_CMD_REM_LOCKSPACE;
+	if (!strcmp(str, "shutdown"))
+		return SM_CMD_SHUTDOWN;
+	if (!strcmp(str, "status"))
+		return SM_CMD_STATUS;
+	if (!strcmp(str, "acquire"))
+		return SM_CMD_ACQUIRE;
+	if (!strcmp(str, "release"))
+		return SM_CMD_RELEASE;
+	if (!strcmp(str, "inquire"))
+		return SM_CMD_INQUIRE;
+	if (!strcmp(str, "restrict"))
+		return SM_CMD_RESTRICT;
+	if (!strcmp(str, "request"))
+		return SM_CMD_REQUEST;
+	if (!strcmp(str, "align"))
+		return SM_CMD_ALIGN;
+	if (!strcmp(str, "examine_lockspace"))
+		return SM_CMD_EXAMINE_LOCKSPACE;
+	if (!strcmp(str, "examine_resource"))
+		return SM_CMD_EXAMINE_RESOURCE;
+	if (!strcmp(str, "host_status"))
+		return SM_CMD_HOST_STATUS;
+	if (!strcmp(str, "killpath"))
+		return SM_CMD_KILLPATH;
+	if (!strcmp(str, "write_lockspace"))
+		return SM_CMD_WRITE_LOCKSPACE;
+	if (!strcmp(str, "write_resource"))
+		return SM_CMD_WRITE_RESOURCE;
+	if (!strcmp(str, "read_lockspace"))
+		return SM_CMD_READ_LOCKSPACE;
+	if (!strcmp(str, "read_resource"))
+		return SM_CMD_READ_RESOURCE;
+	if (!strcmp(str, "set_lvb"))
+		return SM_CMD_SET_LVB;
+	if (!strcmp(str, "get_lvb"))
+		return SM_CMD_GET_LVB;
+	if (!strcmp(str, "convert"))
+		return SM_CMD_CONVERT;
+	if (!strcmp(str, "version"))
+		return SM_CMD_VERSION;
+	if (!strcmp(str, "shutdown_wait"))
+		return SM_CMD_SHUTDOWN_WAIT;
+	if (!strcmp(str, "reg_event"))
+		return SM_CMD_REG_EVENT;
+	if (!strcmp(str, "end_event"))
+		return SM_CMD_END_EVENT;
+	if (!strcmp(str, "set_event"))
+		return SM_CMD_SET_EVENT;
+	if (!strcmp(str, "set_config"))
+		return SM_CMD_SET_CONFIG;
+	if (!strcmp(str, "renewal"))
+		return SM_CMD_RENEWAL;
+	if (!strcmp(str, "format_rindex"))
+		return SM_CMD_FORMAT_RINDEX;
+	if (!strcmp(str, "update_rindex"))
+		return SM_CMD_UPDATE_RINDEX;
+	if (!strcmp(str, "lookup_rindex"))
+		return SM_CMD_LOOKUP_RINDEX;
+	if (!strcmp(str, "create_resource"))
+		return SM_CMD_CREATE_RESOURCE;
+	if (!strcmp(str, "delete_resource"))
+		return SM_CMD_DELETE_RESOURCE;
+	if (!strcmp(str, "rebuild_rindex"))
+		return SM_CMD_REBUILD_RINDEX;
+	if (!strcmp(str, "log_dump"))
+		return SM_CMD_LOG_DUMP;
+
+	log_debug("unknown cmd string %.16s", str);
+	return 0;
+}
+
+uint64_t cmd_num_to_debug_flag(uint32_t cmd)
+{
+	return ((uint64_t)1 << cmd);
+}
+
+int is_cmd_debug(uint32_t cmd)
+{
+	uint64_t flag = cmd_num_to_debug_flag(cmd);
+	if (com.debug_cmds & flag)
+		return 1;
+	return 0;
+}
+
+void set_cmd_debug(uint32_t cmd)
+{
+	uint64_t flag = cmd_num_to_debug_flag(cmd);
+	com.debug_cmds |= flag;
+}
+
+void clear_cmd_debug(uint32_t cmd)
+{
+	uint64_t flag = cmd_num_to_debug_flag(cmd);
+	com.debug_cmds &= ~flag;
+}
+
 #define MAX_CONF_LINE 128
 
 static void get_val_int(char *line, int *val_out)
@@ -2600,6 +2712,7 @@ static void read_config_file(void)
 	struct stat buf;
 	char line[MAX_CONF_LINE];
 	char str[MAX_CONF_LINE];
+	uint32_t cmd;
 	int i, val;
 
 	if (stat(SANLK_CONF_PATH, &buf) < 0) {
@@ -2720,6 +2833,14 @@ static void read_config_file(void)
 		} else if (!strcmp(str, "debug_clients")) {
 			get_val_int(line, &val);
 			com.debug_clients = val;
+
+		} else if (!strcmp(str, "debug_cmd")) {
+			get_val_str(line, str);
+			cmd = cmd_str_to_num(str+1);
+			if (cmd && (str[0] == '+'))
+				set_cmd_debug(cmd);
+			else if (cmd && (str[0] == '-'))
+				clear_cmd_debug(cmd);
 
 		} else if (!strcmp(str, "max_sectors_kb")) {
 			memset(str, 0, sizeof(str));
@@ -3736,6 +3857,16 @@ int main(int argc, char *argv[])
 	com.max_sectors_kb_ignore = DEFAULT_MAX_SECTORS_KB_IGNORE;
 	com.max_sectors_kb_align = DEFAULT_MAX_SECTORS_KB_ALIGN;
 	com.max_sectors_kb_num = DEFAULT_MAX_SECTORS_KB_NUM;
+	com.debug_cmds = ~0LL;
+
+	/* By default disable cmds that often cause too much logging. */
+	clear_cmd_debug(SM_CMD_INQ_LOCKSPACE);
+	clear_cmd_debug(SM_CMD_GET_LOCKSPACES);
+	clear_cmd_debug(SM_CMD_GET_HOSTS);
+	clear_cmd_debug(SM_CMD_READ_LOCKSPACE);
+	clear_cmd_debug(SM_CMD_READ_RESOURCE);
+	clear_cmd_debug(SM_CMD_READ_RESOURCE_OWNERS);
+	clear_cmd_debug(SM_CMD_WRITE_RESOURCE);
 
 	if (getgrnam("sanlock") && getpwnam("sanlock")) {
 		com.uname = (char *)"sanlock";
