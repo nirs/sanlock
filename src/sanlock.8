@@ -1361,7 +1361,9 @@ By default sanlock disables some command level debugging for commands that
 are often repetitive and fill the in memory debug buffer.
 This only affects debug logging, not errors or warnings, and disabling
 command level debugging for a command does not disable lower level debugging
-for that command.
+for that command.  Special values +all and -all can be used to
+enable or disable all commands, and can be used before or after other
+debug_cmd lines.
 
 .SH SEE ALSO
 .BR wdmd (8)

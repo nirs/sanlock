@@ -2837,11 +2837,17 @@ static void read_config_file(void)
 
 		} else if (!strcmp(str, "debug_cmd")) {
 			get_val_str(line, str);
-			cmd = cmd_str_to_num(str+1);
-			if (cmd && (str[0] == '+'))
-				set_cmd_debug(cmd);
-			else if (cmd && (str[0] == '-'))
-				clear_cmd_debug(cmd);
+			if (!strcmp(str, "+all"))
+				com.debug_cmds = ~0LL;
+			else if (!strcmp(str, "-all"))
+				com.debug_cmds = 0LL;
+			else {
+				cmd = cmd_str_to_num(str+1);
+				if (cmd && (str[0] == '+'))
+					set_cmd_debug(cmd);
+				else if (cmd && (str[0] == '-'))
+					clear_cmd_debug(cmd);
+			}
 
 		} else if (!strcmp(str, "max_sectors_kb")) {
 			memset(str, 0, sizeof(str));
