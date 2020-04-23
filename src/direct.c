@@ -34,6 +34,10 @@
 #include "timeouts.h"
 #include "rindex.h"
 
+/*
+ * the caller sets sd.offset to the location from the start of disk (in bytes) where
+ * a data struct should be read and checked for sector/align sizes.
+ */
 static int direct_read_leader_sizes(struct task *task, struct sync_disk *sd,
 				    int *sector_size, int *align_size)
 {
@@ -549,7 +553,7 @@ int test_id_bit(int host_id, char *bitmap);
 int direct_dump(struct task *task, char *dump_path, int force_mode)
 {
 	char *data, *bitmap;
-	char *colon, *off_str;
+	char *colon1, *colon2, *off_str = NULL, *size_str = NULL, *m;
 	uint32_t magic;
 	struct rindex_header *rh_end;
 	struct rindex_header *rh;
@@ -567,8 +571,9 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 	char sname[NAME_ID_SIZE+1];
 	char rname[NAME_ID_SIZE+1];
 	uint64_t sector_nr;
+	uint64_t start_offset = 0;
 	uint64_t dump_size = 0;
-	uint64_t end_sector_nr;
+	uint64_t end_sector_nr = 0;
 	int sector_size = 0;
 	int align_size = 0;
 	int sector_count, datalen, max_hosts;
@@ -577,16 +582,36 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 	memset(&sd, 0, sizeof(struct sync_disk));
 
 	/* /path[:<offset>[:<size>]] */
-	colon = strstr(dump_path, ":");
-	if (colon) {
-		off_str = colon + 1;
-		*colon = '\0';
-		sd.offset = atoll(off_str);
+	colon1 = strchr(dump_path, ':');
+	colon2 = strchr(colon1+1, ':');
+	if (colon1) {
+		off_str = colon1 + 1;
+		if (colon2)
+			size_str = colon2 + 1;
 
-		colon = strstr(off_str, ":");
-		if (colon)
-			dump_size = atoll(colon + 1);
+		*colon1 = '\0';
+		if (colon2)
+			*colon2 = '\0';
+
+		if ((m = strchr(off_str, 'M'))) {
+			*m = '\0';
+			start_offset = atoll(off_str) * 1024 * 1024;
+		} else {
+                        start_offset = atoll(off_str);
+		}
+
+		if (size_str) {
+			if ((m = strchr(size_str, 'M'))) {
+				*m = '\0';
+				dump_size = atoll(size_str) * 1024 * 1024;
+			} else {
+				dump_size = atoll(size_str);
+			}
+		}
 	}
+
+	if (start_offset % 1048576)
+		printf("WARNING: dump offset should be a multiple of 1048576 bytes.\n");
 
 	strncpy(sd.path, dump_path, SANLK_PATH_LEN);
 	sd.fd = -1;
@@ -601,9 +626,25 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
                 align_size = com.align_size;
 
 	if (!sector_size || !align_size) {
-		rv = direct_read_leader_sizes(task, &sd, &sector_size, &align_size);
-		if (rv < 0)
-			return rv;
+		sd.offset = start_offset;
+		for (i = 0; i < 1024; i++) {
+			rv = direct_read_leader_sizes(task, &sd, &sector_size, &align_size);
+			if (sector_size && align_size)
+				break;
+
+			/*
+			 * search for a data structure that contains sector_size/align_size
+			 * every 1MB, up to 1GB or dump_size.
+			 */
+			sd.offset += 1048576;
+
+			if (dump_size && (sd.offset >= (start_offset + dump_size)))
+				break;
+		}
+		if (!sector_size || !align_size) {
+			printf("Cannot find sector_size and align_size, set with -A and -Z.\n");
+			goto out_close;
+		}
 	}
 
 	max_hosts = size_to_max_hosts(sector_size, align_size);
@@ -632,8 +673,10 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 
 	printf("\n");
 
+	sd.offset = start_offset;
 	sector_nr = 0;
-	end_sector_nr = dump_size / sector_size;
+	if (dump_size)
+		end_sector_nr = dump_size / sector_size;
 
 	while (end_sector_nr == 0 || sector_nr < end_sector_nr) {
 		memset(sname, 0, sizeof(rname));
@@ -667,7 +710,7 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 				strncpy(rname, lr->resource_name, NAME_ID_SIZE);
 
 				printf("%08llu %36s %48s %010llu %04llu %04llu",
-					(unsigned long long)((sector_nr + i) * sector_size),
+					(unsigned long long)(start_offset + ((sector_nr + i) * sector_size)),
 					sname, rname,
 					(unsigned long long)lr->timestamp,
 					(unsigned long long)lr->owner_id,
@@ -691,7 +734,7 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 			strncpy(rname, lr->resource_name, NAME_ID_SIZE);
 
 			printf("%08llu %36s %48s %010llu %04llu %04llu %llu",
-			       (unsigned long long)(sector_nr * sector_size),
+			       (unsigned long long)(start_offset + (sector_nr * sector_size)),
 			       sname, rname,
 			       (unsigned long long)lr->timestamp,
 			       (unsigned long long)lr->owner_id,
@@ -699,7 +742,7 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 			       (unsigned long long)lr->lver);
 
 			if (force_mode) {
-				struct request_record *rr_end = (struct request_record *)(data + sd.sector_size);
+				struct request_record *rr_end = (struct request_record *)(data + sector_size);
 				request_record_in(rr_end, &rr);
 				printf("/%llu/%u",
 				       (unsigned long long)rr.lver, rr.force_mode);
@@ -742,7 +785,7 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 			strncpy(sname, rh->lockspace_name, NAME_ID_SIZE);
 
 			printf("%08llu %36s rindex_header 0x%x %d %u %llu\n",
-			       (unsigned long long)(sector_nr * sector_size),
+			       (unsigned long long)(start_offset + (sector_nr * sector_size)),
 			       sname,
 			       rh->flags, rh->sector_size, rh->max_resources,
 			       (unsigned long long)rh->rx_offset);
@@ -765,7 +808,7 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 						continue;
 
 					printf("%08llu %36s rentry %s %llu\n",
-			       			(unsigned long long)((sector_nr * sector_size) + (i * sector_size) + (j * entry_size)),
+			       			(unsigned long long)(start_offset + ((sector_nr * sector_size) + (i * sector_size) + (j * entry_size))),
 			       			sname,
 						re->name, (unsigned long long)re->res_offset);
 				}
