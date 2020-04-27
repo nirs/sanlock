@@ -553,7 +553,7 @@ int test_id_bit(int host_id, char *bitmap);
 int direct_dump(struct task *task, char *dump_path, int force_mode)
 {
 	char *data, *bitmap;
-	char *colon1, *colon2, *off_str = NULL, *size_str = NULL, *m;
+	char *colon1 = NULL, *colon2 = NULL, *off_str = NULL, *size_str = NULL, *m;
 	uint32_t magic;
 	struct rindex_header *rh_end;
 	struct rindex_header *rh;
@@ -581,17 +581,36 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 
 	memset(&sd, 0, sizeof(struct sync_disk));
 
-	/* /path[:<offset>[:<size>]] */
-	colon1 = strchr(dump_path, ':');
-	colon2 = strchr(colon1+1, ':');
-	if (colon1) {
-		off_str = colon1 + 1;
-		if (colon2)
-			size_str = colon2 + 1;
+	/*
+	 * /path[:<offset>[:<size>]]
+	 *
+	 * If path contains a colon, the user would escape it with \\, e.g.
+	 * device named /dev/foo:32 using offset 0 and lenth 1M would be
+	 * /dev/foo\\:32:0:1M
+	 */
 
+	for (i = 0; i < strlen(dump_path); i++) {
+		if (dump_path[i] == '\\') {
+			i++;
+			continue;
+		}
+
+		if (dump_path[i] == ':') {
+			if (!colon1)
+				colon1 = &dump_path[i];
+			else if (!colon2)
+				colon2 = &dump_path[i];
+		}
+	}
+
+	if (colon1) {
 		*colon1 = '\0';
-		if (colon2)
+		off_str = colon1 + 1;
+
+		if (colon2) {
 			*colon2 = '\0';
+			size_str = colon2 + 1;
+		}
 
 		if ((m = strchr(off_str, 'M'))) {
 			*m = '\0';
@@ -613,12 +632,15 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 	if (start_offset % 1048576)
 		printf("WARNING: dump offset should be a multiple of 1048576 bytes.\n");
 
-	strncpy(sd.path, dump_path, SANLK_PATH_LEN);
+	sanlock_path_import(sd.path, dump_path, sizeof(sd.path));
+
 	sd.fd = -1;
 
 	rv = open_disk(&sd);
-	if (rv < 0)
+	if (rv < 0) {
+		printf("Device %s not found.\n", sd.path);
 		return -ENODEV;
+	}
 
 	if (com.sector_size)
 		sector_size = com.sector_size;
