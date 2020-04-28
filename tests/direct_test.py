@@ -34,7 +34,27 @@ def test_init_lockspace(tmpdir):
     util.check_guard(str(path), size)
 
 
-def test_init_resource(tmpdir, sanlock_daemon):
+def test_dump_lockspace_empty(tmpdir):
+    path = tmpdir.join("lockspace")
+    size = MiB
+    util.create_file(str(path), size)
+
+    lockspace = "name:1:%s:0" % path
+    util.sanlock("direct", "init", "-s", lockspace)
+
+    dump = "%s:0:1M" % path
+    out = util.sanlock("direct", "dump", dump)
+
+    lines = out.decode("utf-8").splitlines()
+    spaces = [line.split() for line in lines]
+
+    # Empty lockspace has no hosts.
+    assert spaces == [
+        ['offset', 'lockspace', 'resource', 'timestamp', 'own', 'gen', 'lver']
+    ]
+
+
+def test_init_resource(tmpdir):
     path = tmpdir.join("resources")
     size = MiB
     util.create_file(str(path), size)
@@ -49,3 +69,47 @@ def test_init_resource(tmpdir, sanlock_daemon):
         # TODO: check more stuff here...
 
     util.check_guard(str(path), size)
+
+
+def test_dump_resources(tmpdir):
+    path = tmpdir.join("resources")
+    size = 8 * MiB
+    util.create_file(str(path), size)
+
+    # Write 2 resources with a hole between them.
+    for i in [0, 2]:
+        res = "ls_name:res_%d:%s:%dM" % (i, path, i)
+        util.sanlock("direct", "init", "-r", res)
+
+    dump = "%s:0:8M" % path
+    out = util.sanlock("direct", "dump", dump)
+
+    lines = out.decode("utf-8").splitlines()
+    resources = [line.split() for line in lines]
+    assert resources == [
+        ['offset', 'lockspace', 'resource', 'timestamp', 'own', 'gen', 'lver'],
+        ['00000000', 'ls_name', 'res_0', '0000000000', '0000', '0000', '0'],
+        ['02097152', 'ls_name', 'res_2', '0000000000', '0000', '0000', '0'],
+    ]
+
+
+def test_dump_resources_start_before(tmpdir):
+    path = tmpdir.join("resources")
+    size = 8 * MiB
+    util.create_file(str(path), size)
+
+    # Write 2 resources at middle.
+    for i in [4, 5]:
+        res = "ls_name:res_%d:%s:%dM" % (i, path, i)
+        util.sanlock("direct", "init", "-r", res)
+
+    dump = "%s:2M:8M" % path
+    out = util.sanlock("direct", "dump", dump)
+
+    lines = out.decode("utf-8").splitlines()
+    resources = [line.split() for line in lines]
+    assert resources == [
+        ['offset', 'lockspace', 'resource', 'timestamp', 'own', 'gen', 'lver'],
+        ['04194304', 'ls_name', 'res_4', '0000000000', '0000', '0000', '0'],
+        ['05242880', 'ls_name', 'res_5', '0000000000', '0000', '0000', '0'],
+    ]
