@@ -10,6 +10,7 @@ Test sanlock direct options.
 from __future__ import absolute_import
 
 import io
+import os
 import struct
 
 from . import constants
@@ -112,4 +113,27 @@ def test_dump_resources_start_before(tmpdir):
         ['offset', 'lockspace', 'resource', 'timestamp', 'own', 'gen', 'lver'],
         ['04194304', 'ls_name', 'res_4', '0000000000', '0000', '0000', '0'],
         ['05242880', 'ls_name', 'res_5', '0000000000', '0000', '0000', '0'],
+    ]
+
+
+def test_path_with_colon(tmpdir):
+    path = str(tmpdir.mkdir("with:colon").join("resources"))
+    size = 8 * MiB
+    util.create_file(path, size)
+
+    # sanlock direct init does not support escaped colons in path.
+    dirname, filename = os.path.split(path)
+    res = "ls_name:res_0:%s:0M" % filename
+    util.sanlock("direct", "init", "-r", res, cwd=dirname)
+
+    # sanlock direct dump supports escaped colons in path.
+    escaped_path = path.replace(":", "\\:")
+    dump = "%s:0:8M" % escaped_path
+    out = util.sanlock("direct", "dump", dump)
+
+    lines = out.decode("utf-8").splitlines()
+    resources = [line.split() for line in lines]
+    assert resources == [
+        ['offset', 'lockspace', 'resource', 'timestamp', 'own', 'gen', 'lver'],
+        ['00000000', 'ls_name', 'res_0', '0000000000', '0000', '0000', '0'],
     ]

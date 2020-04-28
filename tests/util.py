@@ -82,14 +82,15 @@ def wait_for_daemon(timeout):
         s.close()
 
 
-def sanlock(*args):
+def sanlock(*args, cwd=None):
     """
     Run sanlock returning the process stdout, or raising
     util.CommandError on failures.
     """
     cmd = [SANLOCK]
     cmd.extend(args)
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    p = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd)
     out, err = p.communicate()
     if p.returncode:
         raise CommandError(cmd, p.returncode, out, err)
