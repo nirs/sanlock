@@ -420,60 +420,6 @@ convert_to_pybytes(PyObject* arg, void *addr)
     return 0;
 }
 
-/* init_resource */
-PyDoc_STRVAR(pydoc_init_resource, "\
-init_resource(lockspace, resource, disks, max_hosts=0, num_hosts=0, \
-use_aio=True)\n\
-*DEPRECATED* use write_resource instead.\n\
-Initialize a device to be used as sanlock resource.\n\
-The disks must be in the format: [(path, offset), ... ]");
-
-static PyObject *
-py_init_resource(PyObject *self __unused, PyObject *args, PyObject *keywds)
-{
-    int rv = -1, max_hosts = 0, num_hosts = 0, use_aio = 1;
-    PyObject *lockspace = NULL, *resource = NULL;
-    struct sanlk_resource *res = NULL;
-    PyObject *disks;
-
-    static char *kwlist[] = {"lockspace", "resource", "disks", "max_hosts",
-                                "num_hosts", "use_aio", NULL};
-
-    /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&O&O!|iii",
-        kwlist, convert_to_pybytes, &lockspace, convert_to_pybytes, &resource,
-        &PyList_Type, &disks, &max_hosts, &num_hosts, &use_aio)) {
-        goto finally;
-    }
-
-    /* parse and check sanlock resource */
-    if (parse_disks(disks, &res) < 0) {
-        goto finally;
-    }
-
-    /* prepare sanlock names */
-    strncpy(res->lockspace_name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
-    strncpy(res->name, PyBytes_AsString(resource), SANLK_NAME_LEN);
-
-    /* init sanlock resource (gil disabled) */
-    Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_direct_init(NULL, res, max_hosts, num_hosts, use_aio);
-    Py_END_ALLOW_THREADS
-
-    if (rv != 0) {
-        set_sanlock_error(rv, "Sanlock resource init failure");
-        goto finally;
-    }
-
-finally:
-    Py_XDECREF(lockspace);
-    Py_XDECREF(resource);
-    free(res);
-    if (rv != 0)
-        return NULL;
-    Py_RETURN_NONE;
-}
-
 /* write_lockspace */
 PyDoc_STRVAR(pydoc_write_lockspace, "\
 write_lockspace(lockspace, path, offset=0, max_hosts=0, iotimeout=0, \
@@ -1645,8 +1591,6 @@ static PyMethodDef
 sanlock_methods[] = {
     {"register", py_register, METH_NOARGS, pydoc_register},
     {"get_alignment", py_get_alignment, METH_VARARGS, pydoc_get_alignment},
-    {"init_resource", (PyCFunction) py_init_resource,
-                        METH_VARARGS|METH_KEYWORDS, pydoc_init_resource},
     {"write_lockspace", (PyCFunction) py_write_lockspace,
                         METH_VARARGS|METH_KEYWORDS, pydoc_write_lockspace},
     {"write_resource", (PyCFunction) py_write_resource,

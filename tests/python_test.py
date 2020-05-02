@@ -689,28 +689,6 @@ def test_set_event_parse_args(no_sanlock_daemon, name):
         sanlock.set_event(name, 1, 1, 1)
 
 
-@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
-def test_init_resource_parse_args(no_sanlock_daemon, name, filename, encoding):
-    path = util.generate_path("/tmp/", filename, encoding)
-    disks = [(path, 0)]
-    with raises_sanlock_errno(errno.ENOENT):
-        sanlock.init_resource(b"ls_name", name, disks)
-    with raises_sanlock_errno(errno.ENOENT):
-        sanlock.init_resource(name, b"res_name", disks)
-
-
-def test_init_resource_path_length(no_sanlock_daemon):
-    path = "x" * constants.SANLK_PATH_LEN
-    with pytest.raises(ValueError):
-        sanlock.init_resource(b"ls_name", b"res_name", [(path, 0)])
-
-    # init_resource access storage directly.
-    path = "x" * (constants.SANLK_PATH_LEN - 1)
-    with raises_sanlock_errno(errno.ENAMETOOLONG):
-        sanlock.init_resource(b"ls_name", b"res_name", [(path, 0)])
-
-
 @pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 def test_get_alignment_parse_args(no_sanlock_daemon, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
