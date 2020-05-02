@@ -420,53 +420,6 @@ convert_to_pybytes(PyObject* arg, void *addr)
     return 0;
 }
 
-/* init_lockspace */
-PyDoc_STRVAR(pydoc_init_lockspace, "\
-init_lockspace(lockspace, path, offset=0, max_hosts=0, num_hosts=0, \
-use_aio=True)\n\
-*DEPRECATED* use write_lockspace instead.\n\
-Initialize a device to be used as sanlock lockspace.");
-
-static PyObject *
-py_init_lockspace(PyObject *self __unused, PyObject *args, PyObject *keywds)
-{
-    int rv = -1, max_hosts = 0, num_hosts = 0, use_aio = 1;
-    PyObject *lockspace = NULL;
-    PyObject *path = NULL;
-    struct sanlk_lockspace ls = {0};
-
-    static char *kwlist[] = {"lockspace", "path", "offset",
-                                "max_hosts", "num_hosts", "use_aio", NULL};
-
-    /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&O&|kiii", kwlist,
-        convert_to_pybytes, &lockspace, pypath_converter, &path, &ls.host_id_disk.offset,
-        &max_hosts, &num_hosts, &use_aio)) {
-        goto finally;
-    }
-
-    /* prepare sanlock names */
-    strncpy(ls.name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
-    strncpy(ls.host_id_disk.path, PyBytes_AsString(path), SANLK_PATH_LEN - 1);
-
-    /* init sanlock lockspace (gil disabled) */
-    Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_direct_init(&ls, NULL, max_hosts, num_hosts, use_aio);
-    Py_END_ALLOW_THREADS
-
-    if (rv != 0) {
-        set_sanlock_error(rv, "Sanlock lockspace init failure");
-        goto finally;
-    }
-
-finally:
-    Py_XDECREF(lockspace);
-    Py_XDECREF(path);
-    if (rv != 0)
-        return NULL;
-    Py_RETURN_NONE;
-}
-
 /* init_resource */
 PyDoc_STRVAR(pydoc_init_resource, "\
 init_resource(lockspace, resource, disks, max_hosts=0, num_hosts=0, \
@@ -1692,8 +1645,6 @@ static PyMethodDef
 sanlock_methods[] = {
     {"register", py_register, METH_NOARGS, pydoc_register},
     {"get_alignment", py_get_alignment, METH_VARARGS, pydoc_get_alignment},
-    {"init_lockspace", (PyCFunction) py_init_lockspace,
-                        METH_VARARGS|METH_KEYWORDS, pydoc_init_lockspace},
     {"init_resource", (PyCFunction) py_init_resource,
                         METH_VARARGS|METH_KEYWORDS, pydoc_init_resource},
     {"write_lockspace", (PyCFunction) py_write_lockspace,
