@@ -99,7 +99,7 @@ getent passwd sanlock > /dev/null || /usr/sbin/useradd \
 %systemd_preun wdmd.service sanlock.service
 
 %postun
-%systemd_postun
+%systemd_postun wdmd.service sanlock.service
 
 %files
 /usr/lib/systemd/systemd-wdmd
