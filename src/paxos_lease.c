@@ -2422,6 +2422,7 @@ int paxos_lease_init(struct task *task,
 	int align_size = 0;
 	int max_hosts = 0;
 	int aio_timeout = 0;
+	int write_io_timeout = 0;
 	int rv, d;
 
 	rv = sizes_from_flags(token->r.flags, &sector_size, &align_size, &max_hosts, "RES");
@@ -2488,9 +2489,19 @@ int paxos_lease_init(struct task *task,
 	memcpy(iobuf, &leader_end, sizeof(struct leader_record));
 	memcpy(iobuf + sector_size, &rr_end, sizeof(struct request_record));
 
+	/*
+	 * The process of initializing the lease on disk can use a
+	 * longer timeout than the algorithm uses.
+	 */
+	if (com.write_init_io_timeout)
+		write_io_timeout = com.write_init_io_timeout;
+
 	for (d = 0; d < token->r.num_disks; d++) {
+		if (!write_io_timeout)
+			write_io_timeout = token->io_timeout;
+
 		rv = write_iobuf(token->disks[d].fd, token->disks[d].offset,
-				 iobuf, iobuf_len, task, token->io_timeout, NULL);
+				 iobuf, iobuf_len, task, write_io_timeout, NULL);
 
 		if (rv == SANLK_AIO_TIMEOUT)
 			aio_timeout = 1;

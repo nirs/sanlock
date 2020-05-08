@@ -2815,6 +2815,11 @@ static void read_config_file(void)
 			com.renewal_read_extend_sec_set = 1;
 			com.renewal_read_extend_sec = val;
 
+		} else if (!strcmp(str, "write_init_io_timeout")) {
+			get_val_int(line, &val);
+			if (val > 0)
+				com.write_init_io_timeout = val;
+
 		} else if (!strcmp(str, "renewal_history_size")) {
 			get_val_int(line, &val);
 			com.renewal_history_size = val;
@@ -3857,6 +3862,7 @@ int main(int argc, char *argv[])
 	com.names_log_priority = LOG_WARNING;
 	com.max_worker_threads = DEFAULT_MAX_WORKER_THREADS;
 	com.io_timeout_arg = DEFAULT_IO_TIMEOUT;
+	com.write_init_io_timeout = DEFAULT_WRITE_INIT_IO_TIMEOUT;
 	com.aio_arg = DEFAULT_USE_AIO;
 	com.pid = -1;
 	com.sh_retries = DEFAULT_SH_RETRIES;

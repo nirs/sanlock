@@ -329,6 +329,7 @@ EXTERN struct client *client;
 #define DEFAULT_SH_RETRIES 8
 #define DEFAULT_QUIET_FAIL 1
 #define DEFAULT_RENEWAL_HISTORY_SIZE 180 /* about 1 hour with 20 sec renewal interval */
+#define DEFAULT_WRITE_INIT_IO_TIMEOUT 60
 
 #define DEFAULT_MAX_SECTORS_KB_IGNORE 0     /* don't change it */
 #define DEFAULT_MAX_SECTORS_KB_ALIGN  0     /* set it to align size */
@@ -357,6 +358,7 @@ struct command_line {
 	int max_worker_threads;
 	int aio_arg;
 	int io_timeout_arg;
+	int write_init_io_timeout;
 	int set_bitmap_seconds;
 	int persistent;
 	int orphan_set;

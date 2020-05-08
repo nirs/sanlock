@@ -844,6 +844,7 @@ int delta_lease_init(struct task *task,
 	int sector_size = 0;
 	int align_size = 0;
 	int max_hosts = 0;
+	int write_io_timeout;
 	int i, rv;
 	uint32_t checksum;
 
@@ -903,8 +904,19 @@ int delta_lease_init(struct task *task,
 
 		memcpy(iobuf + (i * sector_size), &leader_end, sizeof(struct leader_record));
 	}
+	
+	/*
+	 * The io_timeout arg is a part of the lockspace logic, and
+	 * determines how the lockspace times out.  The process of
+	 * initializing the lease on disk can to use a longer timeout
+	 * than the algorithm uses.
+	 */
+	if (com.write_init_io_timeout)
+		write_io_timeout = com.write_init_io_timeout;
+	else
+		write_io_timeout = io_timeout;
 
-	rv = write_iobuf(disk->fd, disk->offset, iobuf, iobuf_len, task, io_timeout, NULL);
+	rv = write_iobuf(disk->fd, disk->offset, iobuf, iobuf_len, task, write_io_timeout, NULL);
 	if (rv < 0)
 		goto out;
 
@@ -924,7 +936,7 @@ int delta_lease_init(struct task *task,
 
 	memcpy(iobuf, &leader_end, sizeof(struct leader_record));
 
-	rv = write_iobuf(disk->fd, disk->offset, iobuf, sector_size, task, io_timeout, NULL);
+	rv = write_iobuf(disk->fd, disk->offset, iobuf, sector_size, task, write_io_timeout, NULL);
  out:
 	if (rv != SANLK_AIO_TIMEOUT)
 		free(iobuf);

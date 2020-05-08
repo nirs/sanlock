@@ -1365,6 +1365,13 @@ for that command.  Special values +all and -all can be used to
 enable or disable all commands, and can be used before or after other
 debug_cmd lines.
 
+.IP \[bu] 2
+write_init_io_timeout = <seconds>
+.br
+The io timeout to use when initializing ondisk lease structures
+for a lockspace or resource.  This timeout is not used as a part
+of either lease algorithm (as the standard io_timeout is.)
+
 .SH SEE ALSO
 .BR wdmd (8)
 

@@ -377,6 +377,7 @@ int rindex_format(struct task *task, struct sanlk_rindex *ri)
 	char **p_iobuf;
 	uint32_t max_resources;
 	uint32_t max_resources_limit;
+	int write_io_timeout;
 	int sector_size = 0;
 	int align_size = 0;
 	int max_hosts = 0;
@@ -443,7 +444,12 @@ int rindex_format(struct task *task, struct sanlk_rindex *ri)
 
 	memcpy(iobuf, &rh_end, sizeof(struct rindex_header));
 
-	rv = write_iobuf(rx.disk->fd, rx.disk->offset, iobuf, iobuf_len, task, DEFAULT_IO_TIMEOUT, NULL);
+	if (com.write_init_io_timeout)
+		write_io_timeout = com.write_init_io_timeout;
+	else
+		write_io_timeout = DEFAULT_IO_TIMEOUT;
+
+	rv = write_iobuf(rx.disk->fd, rx.disk->offset, iobuf, iobuf_len, task, write_io_timeout, NULL);
 	if (rv < 0) {
 		log_error("rindex_format write failed %d %s", rv, rx.disk->path);
 		goto out_iobuf;
