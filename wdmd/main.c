@@ -44,7 +44,7 @@
 #define DEFAULT_TEST_INTERVAL 10
 #define RECOVER_TEST_INTERVAL 1
 #define DEFAULT_FIRE_TIMEOUT 60
-#define DEFAULT_HIGH_PRIORITY 1
+#define DEFAULT_HIGH_PRIORITY 0
 
 /*
  * If the group name specified here, or specified on the
