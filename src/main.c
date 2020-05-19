@@ -3672,8 +3672,12 @@ static int do_direct(void)
 	uint32_t cmd_flags = 0;
 	int rv;
 
-	/* we want a record of any out-of-band changes to disk */
-	openlog("sanlock-direct", LOG_CONS | LOG_PID, LOG_DAEMON);
+	/*
+	 * We want a record of any out-of-band changes to disk in the system
+	 * log. If /dev/log is missing, drop the message so it would not be
+	 * logged to stderr.
+	 */
+	openlog("sanlock-direct", LOG_PID, LOG_DAEMON);
 
 	setup_task_aio(&main_task, com.aio_arg, DIRECT_AIO_CB_SIZE);
 	sprintf(main_task.name, "%s", "main_direct");
