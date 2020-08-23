@@ -691,15 +691,6 @@ def test_set_event_parse_args(no_sanlock_daemon, name):
 
 @pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 @pytest.mark.parametrize("filename,encoding", FILE_NAMES)
-def test_init_lockspace_parse_args(
-        no_sanlock_daemon, name, filename, encoding):
-    path = util.generate_path("/tmp/", filename, encoding)
-    with raises_sanlock_errno(errno.ENODEV):
-        sanlock.init_lockspace(name, path)
-
-
-@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-@pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 def test_init_resource_parse_args(no_sanlock_daemon, name, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     disks = [(path, 0)]
