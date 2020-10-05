@@ -1594,6 +1594,61 @@ finally:
     Py_RETURN_NONE;
 }
 
+/* set_lvb */
+PyDoc_STRVAR(pydoc_set_lvb, "\
+set_lvb(lockspace, resource, disks, data)\n\
+Set Lock Value Block for a given resource\n\
+\n\
+Arguments\n\
+  lockspace         lockspace name (str)\n\
+  resource          resource name (int)\n\
+  disks             path and offset (tuple)\n\
+  data              data to write (bytes)\n\
+\n\
+Notes\n\
+\n\
+The resource must be acquired with the SANLK_ACQUIRE_LVB flag\n");
+static PyObject *
+py_set_lvb(PyObject *self __unused, PyObject *args, PyObject *keywds)
+{
+    uint32_t flags = 0;
+    int rv = -1;
+    struct sanlk_resource *res = NULL;
+    PyObject *lockspace = NULL, *resource = NULL, *data = NULL;
+    PyObject *disks;
+
+    static char *kwlist[] = {"lockspace", "resource", "disks", "data", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&O&O!O&", kwlist,
+        convert_to_pybytes, &lockspace, convert_to_pybytes, &resource,
+        &PyList_Type, &disks, convert_to_pybytes, &data)) {
+        goto finally;
+    }
+
+    if (parse_disks(disks, &res) < 0) {
+        goto finally;
+    }
+
+    strncpy(res->lockspace_name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
+    strncpy(res->name, PyBytes_AsString(resource), SANLK_NAME_LEN);
+
+    Py_BEGIN_ALLOW_THREADS
+    rv = sanlock_set_lvb(flags, res, PyBytes_AS_STRING(data), PyBytes_GET_SIZE(data));
+    Py_END_ALLOW_THREADS
+
+    if (rv < 0) {
+        set_sanlock_error(rv, "Unable to set lvb");
+        goto finally;
+    }
+
+finally:
+    Py_XDECREF(lockspace);
+    Py_XDECREF(resource);
+    free(res);
+    if (rv < 0)
+        return NULL;
+    Py_RETURN_NONE;
+}
+
 static PyMethodDef
 sanlock_methods[] = {
     {"register", py_register, METH_NOARGS, pydoc_register},
@@ -1631,6 +1686,9 @@ sanlock_methods[] = {
     {"end_event", (PyCFunction) py_end_event, METH_VARARGS, pydoc_end_event},
     {"set_event", (PyCFunction) py_set_event,
                 METH_VARARGS|METH_KEYWORDS, pydoc_set_event},
+    {"set_lvb", (PyCFunction) py_set_lvb,
+         METH_VARARGS|METH_KEYWORDS, pydoc_set_lvb},
+
     {NULL, NULL, 0, NULL}
 };
 
