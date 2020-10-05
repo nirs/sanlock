@@ -1649,6 +1649,63 @@ finally:
     Py_RETURN_NONE;
 }
 
+PyDoc_STRVAR(pydoc_get_lvb, "\
+get_lvb(lockspace, resource, disks) -> bytes\n\
+Read Lock Value Block for a given resource\n\
+\n\
+Arguments\n\
+  lockspace         lockspace name (str)\n\
+  resource          resource name (int)\n\
+  disks             path and offset (tuple)\n\
+\n\
+Returns\n\
+  data              data written with set_lvb\n\
+Notes\n\
+\n\
+The resource must be acquired with the SANLK_ACQUIRE_LVB flag\n");
+static PyObject *
+py_get_lvb(PyObject *self __unused, PyObject *args, PyObject *keywds)
+{
+    uint32_t flags = 0;
+    int rv = -1;
+    struct sanlk_resource *res = NULL;
+    PyObject *lockspace = NULL, *resource = NULL;
+    PyObject *disks;
+    char data[512];
+
+    static char *kwlist[] = {"lockspace", "resource", "disks", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&O&O!", kwlist,
+        convert_to_pybytes, &lockspace, convert_to_pybytes, &resource,
+        &PyList_Type, &disks)) {
+        goto finally;
+    }
+
+    if (parse_disks(disks, &res) < 0) {
+        goto finally;
+    }
+
+    strncpy(res->lockspace_name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
+    strncpy(res->name, PyBytes_AsString(resource), SANLK_NAME_LEN);
+
+    Py_BEGIN_ALLOW_THREADS
+    rv = sanlock_get_lvb(flags, res, data, sizeof(data));
+    Py_END_ALLOW_THREADS
+
+    if (rv < 0) {
+        set_sanlock_error(rv, "Unable to get lvb");
+        goto finally;
+    }
+
+finally:
+    Py_XDECREF(lockspace);
+    Py_XDECREF(resource);
+    free(res);
+    if (rv < 0)
+        return NULL;
+
+    return Py_BuildValue("y", data);
+}
+
 static PyMethodDef
 sanlock_methods[] = {
     {"register", py_register, METH_NOARGS, pydoc_register},
@@ -1688,6 +1745,8 @@ sanlock_methods[] = {
                 METH_VARARGS|METH_KEYWORDS, pydoc_set_event},
     {"set_lvb", (PyCFunction) py_set_lvb,
          METH_VARARGS|METH_KEYWORDS, pydoc_set_lvb},
+    {"get_lvb", (PyCFunction) py_get_lvb,
+         METH_VARARGS|METH_KEYWORDS, pydoc_get_lvb},
 
     {NULL, NULL, 0, NULL}
 };
