@@ -981,28 +981,31 @@ finally:
 /* acquire */
 PyDoc_STRVAR(pydoc_acquire, "\
 acquire(lockspace, resource, disks \
-[, slkfd=fd, pid=owner, shared=False, version=None])\n\
+[, slkfd=fd, pid=owner, shared=False, version=None, lvb=False])\n\
 Acquire a resource lease for the current process (using the slkfd argument\n\
 to specify the sanlock file descriptor) or for another process (using the\n\
 pid argument). If shared is True the resource will be acquired in the shared\n\
 mode. The version is the version of the lease that must be acquired or fail.\n\
-The disks must be in the format: [(path, offset), ... ]\n");
+The disks must be in the format: [(path, offset), ... ]\n\
+If lvb is True the resource will be acquired with the LVB flag enabled\n\
+to allow access to LVB data.\n");
 
 static PyObject *
 py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
-    int rv = -1, sanlockfd = -1, pid = -1, shared = 0;
+    int rv = -1, sanlockfd = -1, pid = -1, shared = 0, lvb = 0;
+    uint32_t flags = 0;
     PyObject *lockspace = NULL, *resource = NULL;
     struct sanlk_resource *res = NULL;
     PyObject *disks, *version = Py_None;
 
     static char *kwlist[] = {"lockspace", "resource", "disks", "slkfd",
-                                "pid", "shared", "version", NULL};
+                                "pid", "shared", "lvb", "version", NULL};
 
     /* parse python tuple */
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&O&O!|iiiO", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&O&O!|iiiiO", kwlist,
         convert_to_pybytes, &lockspace, convert_to_pybytes, &resource,
-        &PyList_Type, &disks, &sanlockfd, &pid, &shared, &version)) {
+        &PyList_Type, &disks, &sanlockfd, &pid, &shared, &lvb, &version)) {
         goto finally;
     }
 
@@ -1026,6 +1029,10 @@ py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
         res->flags |= SANLK_RES_SHARED;
     }
 
+    if (lvb) {
+        flags |= SANLK_ACQUIRE_LVB;
+    }
+
     /* prepare the resource version */
     if (version != Py_None) {
         res->flags |= SANLK_RES_LVER;
@@ -1038,7 +1045,7 @@ py_acquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
 
     /* acquire sanlock resource (gil disabled) */
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_acquire(sanlockfd, pid, 0, 1, &res, 0);
+    rv = sanlock_acquire(sanlockfd, pid, flags, 1, &res, 0);
     Py_END_ALLOW_THREADS
 
     if (rv != 0) {
