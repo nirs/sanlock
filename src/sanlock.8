@@ -611,9 +611,9 @@ seconds a host id bit will remain set in delta lease bitmap
 .BI -e " str"
 local host name used in delta leases
 
-./" non-aio is untested and may not work
-./" .BR \-a " 0|1"
-./" use async i/o
+.\" non-aio is untested and may not work
+.\" .BR \-a " 0|1"
+.\" use async i/o
 
 .SS Client Command
 
@@ -817,9 +817,9 @@ Rebuild the rindex entries by scanning the disk for resource leases.
 .I action
 [options]
 
-./" non-aio is untested and may not work
-./" .BR \-a " 0|1"
-./" use async i/o
+.\" non-aio is untested and may not work
+.\" .BR \-a " 0|1"
+.\" use async i/o
 
 .BI -o " sec"
 io timeout in seconds
@@ -846,26 +846,26 @@ resource lease on disk so it cannot be used until reinitialized normally.
 
 Read a leader record from disk and print the fields.  The leader record is
 the single sector of a delta lease, or the first sector of a paxos lease.
-./" .P
-./" .BR "sanlock direct acquire_id -s" " LOCKSPACE"
-./" .br
-./" .BR "sanlock direct renew_id -s" " LOCKSPACE"
-./" .br
-./" .BR "sanlock direct release_id -s" " LOCKSPACE"
-./"
-./" Acquire, renew, or release a host_id directly to disk, independent from
-./" the sanlock daemon.  Not for general use.  This should only be used for
-./" testing or for manual recovery in an emergency.
-./"
-./" .P
-./" .BR "sanlock direct acquire -r" " RESOURCE " \
-./" \fB-i\fP " " \fInum\fP " " \fB-g\fP " " \fInum\fP
-./" .br
-./" .BR "sanlock direct release -r" " RESOURCE " \
-./" \fB-i\fP " " \fInum\fP " " \fB-g\fP " " \fInum\fP
-./"
-./" Not supported.  Not for general use.
-./"
+.\" .P
+.\" .BR "sanlock direct acquire_id -s" " LOCKSPACE"
+.\" .br
+.\" .BR "sanlock direct renew_id -s" " LOCKSPACE"
+.\" .br
+.\" .BR "sanlock direct release_id -s" " LOCKSPACE"
+.\"
+.\" Acquire, renew, or release a host_id directly to disk, independent from
+.\" the sanlock daemon.  Not for general use.  This should only be used for
+.\" testing or for manual recovery in an emergency.
+.\"
+.\" .P
+.\" .BR "sanlock direct acquire -r" " RESOURCE " \
+.\" \fB-i\fP " " \fInum\fP " " \fB-g\fP " " \fInum\fP
+.\" .br
+.\" .BR "sanlock direct release -r" " RESOURCE " \
+.\" \fB-i\fP " " \fInum\fP " " \fB-g\fP " " \fInum\fP
+.\"
+.\" Not supported.  Not for general use.
+.\"
 
 .BI "sanlock direct dump" " path" \
 \fR[\fP\fB:\fP\fIoffset\fP\fR[\fP\fB:\fP\fIsize\fP\fR]]\fP
