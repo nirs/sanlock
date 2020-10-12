@@ -689,7 +689,7 @@ finally:
 PyDoc_STRVAR(pydoc_add_lockspace, "\
 add_lockspace(lockspace, host_id, path, offset=0, iotimeout=0, wait=True)\n\
 Add a lockspace, acquiring a host_id in it. If wait is False the function\n\
-will return immediatly and the status can be checked using inq_lockspace.\n\
+will return immediately and the status can be checked using inq_lockspace.\n\
 The iotimeout option configures the io timeout for the specific lockspace,\n\
 overriding the default value (see the sanlock daemon parameter -o).");
 
@@ -983,7 +983,7 @@ PyDoc_STRVAR(pydoc_acquire, "\
 acquire(lockspace, resource, disks \
 [, slkfd=fd, pid=owner, shared=False, version=None])\n\
 Acquire a resource lease for the current process (using the slkfd argument\n\
-to specify the sanlock file descriptor) or for an other process (using the\n\
+to specify the sanlock file descriptor) or for another process (using the\n\
 pid argument). If shared is True the resource will be acquired in the shared\n\
 mode. The version is the version of the lease that must be acquired or fail.\n\
 The disks must be in the format: [(path, offset), ... ]\n");

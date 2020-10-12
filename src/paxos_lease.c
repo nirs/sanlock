@@ -2024,8 +2024,8 @@ int paxos_lease_acquire(struct task *task,
 
 	if (tmp_leader.lver == next_lver) {
 		/*
-		 * another host has commited a leader_record for next_lver,
-		 * check which inp (owner_id) they commited (possibly us).
+		 * another host has committed a leader_record for next_lver,
+		 * check which inp (owner_id) they committed (possibly us).
 		 */
 
 		if (tmp_leader.owner_id == token->host_id &&
@@ -2033,7 +2033,7 @@ int paxos_lease_acquire(struct task *task,
 			/* not a problem, but interesting to see */
 
 			log_warnt(token, "paxos_acquire %llu owner is our inp "
-				  "%llu %llu %llu commited by %llu",
+				  "%llu %llu %llu committed by %llu",
 				  (unsigned long long)next_lver,
 				  (unsigned long long)tmp_leader.owner_id,
 				  (unsigned long long)tmp_leader.owner_generation,
