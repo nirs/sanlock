@@ -2877,6 +2877,13 @@ static void read_config_file(void)
 			} else {
 				log_error("ignore unknown max_sectors_kb %s", str);
 			}
+
+		} else if (!strcmp(str, "max_worker_threads")) {
+			get_val_int(line, &val);
+			if (val < DEFAULT_MIN_WORKER_THREADS)
+				val = DEFAULT_MIN_WORKER_THREADS;
+			com.max_worker_threads = val;
+
 		}
 	}
 
