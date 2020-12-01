@@ -932,6 +932,9 @@ static void *thread_pool_worker(void *data)
 
 	while (1) {
 		while (!pool.quit && list_empty(&pool.work_data)) {
+			if (pool.free_workers >= DEFAULT_MIN_WORKER_THREADS)
+				goto out;
+
 			pool.free_workers++;
 			pthread_cond_wait(&pool.cond, &pool.mutex);
 			pool.free_workers--;
@@ -952,6 +955,7 @@ static void *thread_pool_worker(void *data)
 			break;
 	}
 
+out:
 	pool.num_workers--;
 	if (!pool.num_workers)
 		pthread_cond_signal(&pool.quit_wait);
