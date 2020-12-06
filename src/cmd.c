@@ -2265,6 +2265,7 @@ static int print_state_daemon(char *str)
 		 "max_sectors_kb_ignore=%d "
 		 "max_sectors_kb_align=%d "
 		 "max_sectors_kb_num=%d "
+		 "max_worker_threads=%d "
 		 "write_init_io_timeout=%u "
 		 "use_aio=%d "
 		 "kill_grace_seconds=%d "
@@ -2292,6 +2293,7 @@ static int print_state_daemon(char *str)
 		 com.max_sectors_kb_ignore,
 		 com.max_sectors_kb_align,
 		 com.max_sectors_kb_num,
+		 com.max_worker_threads,
 		 com.write_init_io_timeout,
 		 main_task.use_aio,
 		 kill_grace_seconds,
