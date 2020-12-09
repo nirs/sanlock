@@ -1653,35 +1653,43 @@ finally:
 }
 
 PyDoc_STRVAR(pydoc_get_lvb, "\
-get_lvb(lockspace, resource, disks) -> bytes\n\
+get_lvb(lockspace, resource, disks, size) -> bytes\n\
 Read Lock Value Block for a given resource\n\
 \n\
 Arguments\n\
   lockspace         lockspace name (str)\n\
   resource          resource name (int)\n\
   disks             path and offset (tuple)\n\
+  size              amount of data to read (int)\n\
 \n\
 Returns\n\
   data              data written with set_lvb\n\
 \n\
 Notes\n\
   The resource must be acquired with lvb=True.\n\
+  size has to be in range 0 < n <= 4096.\n\
 ");
 
 static PyObject *
 py_get_lvb(PyObject *self __unused, PyObject *args, PyObject *keywds)
 {
     uint32_t flags = 0;
+    uint32_t lvb_len = 0;
     int rv = -1;
     struct sanlk_resource *res = NULL;
     PyObject *lockspace = NULL, *resource = NULL;
-    PyObject *disks;
-    char data[512];
+    PyObject *disks = NULL;
+    PyObject *result = NULL;
 
-    static char *kwlist[] = {"lockspace", "resource", "disks", NULL};
-    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&O&O!", kwlist,
+    static char *kwlist[] = {"lockspace", "resource", "disks", "size", NULL};
+    if (!PyArg_ParseTupleAndKeywords(args, keywds, "O&O&O!I", kwlist,
         convert_to_pybytes, &lockspace, convert_to_pybytes, &resource,
-        &PyList_Type, &disks)) {
+        &PyList_Type, &disks, &lvb_len)) {
+        goto finally;
+    }
+
+    if (lvb_len < 1 || lvb_len > 4096) {
+        PyErr_Format(PyExc_ValueError, "Invalid size %d, must be in range: 0 < size <= 4096", lvb_len);
         goto finally;
     }
 
@@ -1692,8 +1700,15 @@ py_get_lvb(PyObject *self __unused, PyObject *args, PyObject *keywds)
     strncpy(res->lockspace_name, PyBytes_AsString(lockspace), SANLK_NAME_LEN);
     strncpy(res->name, PyBytes_AsString(resource), SANLK_NAME_LEN);
 
+    result = PyBytes_FromStringAndSize(NULL, lvb_len);
+    if (result == NULL) {
+        goto finally;
+    }
+
+    memset(PyBytes_AS_STRING(result), 0, lvb_len);
+
     Py_BEGIN_ALLOW_THREADS
-    rv = sanlock_get_lvb(flags, res, data, sizeof(data));
+    rv = sanlock_get_lvb(flags, res, PyBytes_AS_STRING(result), lvb_len);
     Py_END_ALLOW_THREADS
 
     if (rv < 0) {
@@ -1706,9 +1721,9 @@ finally:
     Py_XDECREF(resource);
     free(res);
     if (rv < 0)
-        return NULL;
+        Py_CLEAR(result);
 
-    return Py_BuildValue("y", data);
+    return result;
 }
 
 static PyMethodDef
