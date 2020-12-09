@@ -769,70 +769,50 @@ def test_acquire_path_length(no_sanlock_daemon):
 def test_lvb(tmpdir, sanlock_daemon):
     ls_path = str(tmpdir.join("ls_name"))
     util.create_file(ls_path, MiB)
-
     res_path = str(tmpdir.join("res_name"))
     util.create_file(res_path, MiB)
-
     sanlock.write_lockspace(b"ls_name", ls_path, offset=0, iotimeout=1)
     sanlock.add_lockspace(b"ls_name", 1, ls_path, offset=0, iotimeout=1)
-
     disks = [(res_path, 0)]
     sanlock.write_resource(b"ls_name", b"res_name", disks)
 
     fd = sanlock.register()
+
+    lvb_data = b"first\0second"
+    lvb_sector = lvb_data.ljust(512, b"\0")
 
     sanlock.acquire(b"ls_name", b"res_name", disks, slkfd=fd, lvb=True)
-    sanlock.set_lvb(b"ls_name", b"res_name", disks, b"{gen:0}")
-
-    result = sanlock.get_lvb(b"ls_name", b"res_name", disks)
+    sanlock.set_lvb(b"ls_name", b"res_name", disks, lvb_sector)
     sanlock.release(b"ls_name", b"res_name", disks, slkfd=fd)
 
-    assert result == b"{gen:0}"
+    # Test reading complete sector (typical usage).
 
+    sanlock.acquire(b"ls_name", b"res_name", disks, slkfd=fd, lvb=True)
+    result = sanlock.get_lvb(b"ls_name", b"res_name", disks, len(lvb_sector))
+    sanlock.release(b"ls_name", b"res_name", disks, slkfd=fd)
 
-def test_lvb_value_too_long(tmpdir, sanlock_daemon):
-    ls_path = str(tmpdir.join("ls_name"))
-    util.create_file(ls_path, MiB)
+    assert result == lvb_sector
 
-    res_path = str(tmpdir.join("res_name"))
-    util.create_file(res_path, MiB)
+    # Test reading less than sector size.
 
-    sanlock.write_lockspace(b"ls_name", ls_path, offset=0, iotimeout=1)
-    sanlock.add_lockspace(b"ls_name", 1, ls_path, offset=0, iotimeout=1)
+    sanlock.acquire(b"ls_name", b"res_name", disks, slkfd=fd, lvb=True)
+    result = sanlock.get_lvb(b"ls_name", b"res_name", disks, len(lvb_data))
+    sanlock.release(b"ls_name", b"res_name", disks, slkfd=fd)
 
-    disks = [(res_path, 0)]
-    sanlock.write_resource(b"ls_name", b"res_name", disks)
+    assert result == lvb_data
 
-    fd = sanlock.register()
+    # Test failure to write more then sector size.
 
-    long_val = b"a" * 513
     sanlock.acquire(b"ls_name", b"res_name", disks, slkfd=fd, lvb=True)
     with raises_sanlock_errno(errno.E2BIG):
-        sanlock.set_lvb(b"ls_name", b"res_name", disks, long_val)
-
-    sanlock.release(b"ls_name", b"res_name", disks, slkfd=fd)
+        sanlock.set_lvb(b"ls_name", b"res_name", disks, lvb_sector + b"x")
 
 
-def test_lvb_null_bytes(tmpdir, sanlock_daemon):
-    ls_path = str(tmpdir.join("ls_name"))
-    util.create_file(ls_path, MiB)
+def test_lvb_invalid_value():
+    disks = [("/no/such/path", 0)]
 
-    res_path = str(tmpdir.join("res_name"))
-    util.create_file(res_path, MiB)
+    with pytest.raises(ValueError):
+        sanlock.get_lvb(b"ls_name", b"res_name", disks, 0)
 
-    sanlock.write_lockspace(b"ls_name", ls_path, offset=0, iotimeout=1)
-    sanlock.add_lockspace(b"ls_name", 1, ls_path, offset=0, iotimeout=1)
-
-    disks = [(res_path, 0)]
-    sanlock.write_resource(b"ls_name", b"res_name", disks)
-
-    fd = sanlock.register()
-
-    sanlock.acquire(b"ls_name", b"res_name", disks, slkfd=fd, lvb=True)
-    sanlock.set_lvb(b"ls_name", b"res_name", disks, b"{ge\x00:0}")
-
-    result = sanlock.get_lvb(b"ls_name", b"res_name", disks)
-    sanlock.release(b"ls_name", b"res_name", disks, slkfd=fd)
-
-    # Check that the string we passed is terminated by the null-byte
-    assert result == b"{ge"
+    with pytest.raises(ValueError):
+        sanlock.get_lvb(b"ls_name", b"res_name", disks, 4097)
