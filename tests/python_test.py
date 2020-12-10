@@ -17,7 +17,6 @@ import time
 from contextlib import contextmanager
 
 import pytest
-import six
 
 import sanlock
 
@@ -49,22 +48,7 @@ FILE_NAMES = [
     (u"\u05d0", "utf-8"),
 ]
 
-LOCKSPACE_OR_RESOURCE_NAMES = [
-    # Bytes are supported with python 2 and 3.
-    pytest.param(b"\xd7\x90"),
-    # Python 2 also supports str.
-    pytest.param(
-        "\xd7\x90",
-        marks=pytest.mark.skipif(
-            six.PY3,
-            reason="python 3 supports only bytes")),
-    # Python 2 also supports unicode with ascii content.
-    pytest.param(
-        u"ascii",
-        marks=pytest.mark.skipif(
-            six.PY3,
-            reason="python 3 supports only bytes")),
-]
+NAME = b"\xd7\x90"  # Unicode Hebrew Alef using utf-8 encoding.
 
 
 @pytest.mark.parametrize("filename, encoding", FILE_NAMES)
@@ -563,42 +547,36 @@ def raises_sanlock_errno(expected_errno=errno.ECONNREFUSED):
     assert e.value.errno == expected_errno
 
 
-@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 @pytest.mark.parametrize("filename,encoding", FILE_NAMES)
-def test_rem_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding):
+def test_rem_lockspace_parse_args(no_sanlock_daemon, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno():
-        sanlock.rem_lockspace(name, 1, path, 0, wait=False)
+        sanlock.rem_lockspace(NAME, 1, path, 0, wait=False)
 
 
-@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 @pytest.mark.parametrize("filename,encoding", FILE_NAMES)
-def test_add_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding):
+def test_add_lockspace_parse_args(no_sanlock_daemon, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno():
-        sanlock.add_lockspace(name, 1, path, 0, wait=False)
+        sanlock.add_lockspace(NAME, 1, path, 0, wait=False)
 
 
-@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 @pytest.mark.parametrize("filename,encoding", FILE_NAMES)
-def test_write_lockspace_parse_args(
-        no_sanlock_daemon, name, filename, encoding):
+def test_write_lockspace_parse_args(no_sanlock_daemon, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno():
-        sanlock.write_lockspace(name, path)
+        sanlock.write_lockspace(NAME, path)
 
 
-@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 @pytest.mark.parametrize("filename,encoding", FILE_NAMES)
-def test_write_resource_parse_args(
-        no_sanlock_daemon, name, filename, encoding):
+def test_write_resource_parse_args(no_sanlock_daemon, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     disks = [(path, 0)]
     with raises_sanlock_errno():
-        sanlock.write_resource(name, b"res_name", disks)
+        sanlock.write_resource(NAME, b"res_name", disks)
 
     with raises_sanlock_errno():
-        sanlock.write_resource(b"ls_name", name, disks)
+        sanlock.write_resource(b"ls_name", NAME, disks)
 
 
 def test_write_resource_path_length(no_sanlock_daemon):
@@ -611,17 +589,15 @@ def test_write_resource_path_length(no_sanlock_daemon):
         sanlock.write_resource(b"ls_name", b"res_name", [(path, 0)])
 
 
-@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 @pytest.mark.parametrize("filename,encoding", FILE_NAMES)
-def test_release_resource_parse_args(
-        no_sanlock_daemon, name, filename, encoding):
+def test_release_resource_parse_args(no_sanlock_daemon, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     disks = [(path, 0)]
     with raises_sanlock_errno():
-        sanlock.release(name, b"res_name", disks)
+        sanlock.release(NAME, b"res_name", disks)
 
     with raises_sanlock_errno():
-        sanlock.release(b"ls_name", name, disks)
+        sanlock.release(b"ls_name", NAME, disks)
 
 
 def test_release_resource_path_length(no_sanlock_daemon):
@@ -634,17 +610,16 @@ def test_release_resource_path_length(no_sanlock_daemon):
         sanlock.release(b"ls_name", b"res_name", [(path, 0)])
 
 
-@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 @pytest.mark.parametrize("filename,encoding", FILE_NAMES)
 def test_read_resource_owners_parse_args(
-        no_sanlock_daemon, name, filename, encoding):
+        no_sanlock_daemon, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     disks = [(path, 0)]
     with raises_sanlock_errno():
-        sanlock.read_resource_owners(name, b"res_name", disks)
+        sanlock.read_resource_owners(NAME, b"res_name", disks)
 
     with raises_sanlock_errno():
-        sanlock.read_resource_owners(b"ls_name", name, disks)
+        sanlock.read_resource_owners(b"ls_name", NAME, disks)
 
 
 def test_read_resource_owners_path_length(no_sanlock_daemon):
@@ -657,36 +632,31 @@ def test_read_resource_owners_path_length(no_sanlock_daemon):
         sanlock.read_resource_owners(b"ls_name", b"res_name", [(path, 0)])
 
 
-@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-def test_get_hosts_parse_args(no_sanlock_daemon, name):
+def test_get_hosts_parse_args(no_sanlock_daemon):
     with raises_sanlock_errno():
-        sanlock.get_hosts(name, 1)
+        sanlock.get_hosts(NAME, 1)
 
 
-@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 @pytest.mark.parametrize("filename,encoding", FILE_NAMES)
-def test_inq_lockspace_parse_args(no_sanlock_daemon, name, filename, encoding):
+def test_inq_lockspace_parse_args(no_sanlock_daemon, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     with raises_sanlock_errno():
-        sanlock.inq_lockspace(name, 1, path, wait=False)
+        sanlock.inq_lockspace(NAME, 1, path, wait=False)
 
 
-@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-def test_reg_event_parse_args(no_sanlock_daemon, name):
+def test_reg_event_parse_args(no_sanlock_daemon):
     with raises_sanlock_errno():
-        sanlock.reg_event(name)
+        sanlock.reg_event(NAME)
 
 
-@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-def test_end_event_parse_args(no_sanlock_daemon, name):
+def test_end_event_parse_args(no_sanlock_daemon):
     with raises_sanlock_errno(errno.EALREADY):
-        sanlock.end_event(-1, name)
+        sanlock.end_event(-1, NAME)
 
 
-@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
-def test_set_event_parse_args(no_sanlock_daemon, name):
+def test_set_event_parse_args(no_sanlock_daemon):
     with raises_sanlock_errno():
-        sanlock.set_event(name, 1, 1, 1)
+        sanlock.set_event(NAME, 1, 1, 1)
 
 
 @pytest.mark.parametrize("filename,encoding", FILE_NAMES)
@@ -720,17 +690,16 @@ def test_read_resource_path_length(no_sanlock_daemon):
         sanlock.read_resource(path)
 
 
-@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 @pytest.mark.parametrize("filename,encoding", FILE_NAMES)
-def test_request_parse_args(no_sanlock_daemon, name, filename, encoding):
+def test_request_parse_args(no_sanlock_daemon, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     disks = [(path, 0)]
 
     with raises_sanlock_errno():
-        sanlock.request(b"ls_name", name, disks)
+        sanlock.request(b"ls_name", NAME, disks)
 
     with raises_sanlock_errno():
-        sanlock.request(name, b"res_name", disks)
+        sanlock.request(NAME, b"res_name", disks)
 
 
 def test_request_path_length(no_sanlock_daemon):
@@ -743,17 +712,16 @@ def test_request_path_length(no_sanlock_daemon):
         sanlock.request(b"ls_name", b"res_name", [(path, 0)])
 
 
-@pytest.mark.parametrize("name", LOCKSPACE_OR_RESOURCE_NAMES)
 @pytest.mark.parametrize("filename,encoding", FILE_NAMES)
-def test_acquire_parse_args(no_sanlock_daemon, name, filename, encoding):
+def test_acquire_parse_args(no_sanlock_daemon, filename, encoding):
     path = util.generate_path("/tmp/", filename, encoding)
     disks = [(path, 0)]
 
     with raises_sanlock_errno():
-        sanlock.acquire(b"ls_name", name, disks, pid=os.getpid())
+        sanlock.acquire(b"ls_name", NAME, disks, pid=os.getpid())
 
     with raises_sanlock_errno():
-        sanlock.acquire(name, b"res_name", disks, pid=os.getpid())
+        sanlock.acquire(NAME, b"res_name", disks, pid=os.getpid())
 
 
 def test_acquire_path_length(no_sanlock_daemon):
