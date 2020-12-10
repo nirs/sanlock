@@ -46,7 +46,7 @@ The sanlock daemon manages leases for applications on hosts using shared storage
 # upstream does not support _smp_mflags
 CFLAGS=$RPM_OPT_FLAGS make -C wdmd
 CFLAGS=$RPM_OPT_FLAGS make -C src
-CFLAGS=$RPM_OPT_FLAGS make -C python PY_VERSION=3
+CFLAGS=$RPM_OPT_FLAGS make -C python
 CFLAGS=$RPM_OPT_FLAGS make -C reset
 
 %install
@@ -59,8 +59,7 @@ make -C wdmd \
         DESTDIR=$RPM_BUILD_ROOT
 make -C python \
         install LIBDIR=%{_libdir} \
-        DESTDIR=$RPM_BUILD_ROOT \
-        PY_VERSION=3
+        DESTDIR=$RPM_BUILD_ROOT
 make -C reset \
         install LIBDIR=%{_libdir} \
         DESTDIR=$RPM_BUILD_ROOT

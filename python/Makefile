@@ -4,7 +4,7 @@
 # modify, copy, or redistribute it subject to the terms and conditions
 # of the GNU General Public License v.2.
 
-PYTHON := python$(PY_VERSION)
+PYTHON := python3
 
 all:
 	$(PYTHON) setup.py build $(BUILDARGS)
