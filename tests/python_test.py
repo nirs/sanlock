@@ -746,6 +746,14 @@ def test_lvb(tmpdir, sanlock_daemon):
 
     fd = sanlock.register()
 
+    # Test reading unset lvb.
+
+    sanlock.acquire(b"ls_name", b"res_name", disks, slkfd=fd, lvb=True)
+    result = sanlock.get_lvb(b"ls_name", b"res_name", disks, 512)
+    sanlock.release(b"ls_name", b"res_name", disks, slkfd=fd)
+
+    assert result == b"\0" * 512
+
     lvb_data = b"first\0second"
     lvb_sector = lvb_data.ljust(512, b"\0")
 
