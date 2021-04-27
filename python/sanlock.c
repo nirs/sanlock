@@ -323,6 +323,88 @@ exit_fail:
     return NULL;
 }
 
+/* Convert disks array to list of tuples. */
+static PyObject *
+disks_to_list(struct sanlk_disk *disks, uint32_t disks_count)
+{
+    PyObject *result = NULL;
+    PyObject *disk = NULL;
+
+    result = PyList_New(disks_count);
+    if (result == NULL)
+        return NULL;
+
+    for (uint32_t i = 0; i < disks_count; i++) {
+        disk = Py_BuildValue(
+            "(s,K)",
+            disks[i].path,
+            disks[i].offset);
+        if (disk == NULL)
+            goto exit_fail;
+
+        /* Steals reference to disk. */
+        if (PyList_SetItem(result, i, disk) != 0)
+            goto exit_fail;
+
+        disk = NULL;
+    }
+
+    return result;
+
+exit_fail:
+    Py_XDECREF(result);
+    Py_XDECREF(disk);
+
+    return NULL;
+}
+
+/* Convert resources array returned from sanlock_inquire() to list of resource
+ * dicts. */
+static PyObject *
+resources_to_list(struct sanlk_resource **res, int res_count)
+{
+    PyObject *result = NULL;
+    PyObject *info = NULL;
+    PyObject *disks = NULL;
+
+    if ((result = PyList_New(res_count)) == NULL)
+        return NULL;
+
+    for (int i = 0; i < res_count; i++) {
+        disks = disks_to_list(res[i]->disks, res[i]->num_disks);
+        if (disks == NULL)
+            goto exit_fail;
+
+        /* Steals reference to disks. */
+        info = Py_BuildValue(
+            "{s:y,s:y,s:k,s:K,s:N}",
+            "lockspace", res[i]->lockspace_name,
+            "resource", res[i]->name,
+            "flags", res[i]->flags,
+            "version", res[i]->lver,
+            "disks", disks);
+        if (info  == NULL)
+            goto exit_fail;
+
+        disks = NULL;
+
+        /* Steals reference to info. */
+        if (PyList_SetItem(result, i, info) != 0)
+            goto exit_fail;
+
+        info = NULL;
+    }
+
+    return result;
+
+exit_fail:
+    Py_XDECREF(result);
+    Py_XDECREF(info);
+    Py_XDECREF(disks);
+
+    return NULL;
+}
+
 /* register */
 PyDoc_STRVAR(pydoc_register, "\
 register() -> int\n\
@@ -1062,6 +1144,89 @@ finally:
     Py_RETURN_NONE;
 }
 
+/* inquire */
+PyDoc_STRVAR(pydoc_inquire, "\
+inquire(slkfd=-1, pid=-1)\n\
+Return list of resources held by current process (using the slkfd \n\
+argument to specify the sanlock file descriptor) or for another \n\
+process (using the pid argument).\n\
+\n\
+Does not access storage. To learn about resource state on storage,\n\
+use sanlock.read_resource() and sanlock.read_resource_owners().\n\
+\n\
+Arguments\n\
+  slkfd (int):  The file descriptor returned from sanlock.register().\n\
+  pid (int):    The program pid to query.\n\
+\n\
+Returns\n\
+    List of resource dicts with the following keys:\n\
+      lockspace (bytes):    lockspace name\n\
+      resource (bytes):     resource name\n\
+      flags (int):          resource flags (sanlock.RES_*)\n\
+      version (int):        resource version\n\
+      disks (list):         list of disk tuples (path, offset)\n\
+");
+
+static PyObject *
+py_inquire(PyObject *self __unused, PyObject *args, PyObject *keywds)
+{
+    int sanlockfd = -1;
+    int pid = -1;
+    char *kwlist[] = {"slkfd", "pid", NULL};
+    int rv = -1;
+
+    /* sanlock_inquire() return values. */
+    int res_count = 0;
+    char *res_state = NULL;
+
+    /* Array of resoruces parsed from res_state. */
+    struct sanlk_resource **res_arr = NULL;
+
+    /* List of resource dicts. */
+    PyObject *result = NULL;
+
+    if (!PyArg_ParseTupleAndKeywords(
+            args, keywds, "|ii", kwlist, &sanlockfd, &pid)) {
+        return NULL;
+    }
+
+    /* Check if any of the slkfd or pid parameters was given. */
+    if (sanlockfd == -1 && pid == -1) {
+        set_sanlock_error(-EINVAL, "Invalid slkfd and pid values");
+        return NULL;
+    }
+
+    /* Inquire sanlock (gil disabled) */
+    Py_BEGIN_ALLOW_THREADS
+    rv = sanlock_inquire(sanlockfd, pid, 0, &res_count, &res_state);
+    Py_END_ALLOW_THREADS
+
+    if (rv != 0) {
+        set_sanlock_error(rv, "Inquire error");
+        return NULL;
+    }
+
+    if (res_count > 0) {
+        rv = sanlock_state_to_args(res_state, &res_count, &res_arr);
+        if (rv != 0) {
+            /* TODO: Include res_state in the error. */
+            set_sanlock_error(rv, "Error parsing inquire state string");
+            goto finally;
+        }
+    }
+
+    result = resources_to_list(res_arr, res_count);
+
+finally:
+    free(res_state);
+
+    for (int i = 0; i < res_count; i++)
+        free(res_arr[i]);
+    free(res_arr);
+
+    return result;
+}
+
 /* release */
 PyDoc_STRVAR(pydoc_release, "\
 release(lockspace, resource, disks [, slkfd=fd, pid=owner])\n\
@@ -1752,6 +1917,8 @@ sanlock_methods[] = {
                 METH_VARARGS|METH_KEYWORDS, pydoc_read_resource_owners},
     {"acquire", (PyCFunction) py_acquire,
                 METH_VARARGS|METH_KEYWORDS, pydoc_acquire},
+    {"inquire", (PyCFunction) py_inquire,
+                METH_VARARGS|METH_KEYWORDS, pydoc_inquire},
     {"release", (PyCFunction) py_release,
                 METH_VARARGS|METH_KEYWORDS, pydoc_release},
     {"request", (PyCFunction) py_request,
@@ -1848,6 +2015,12 @@ module_init(PyObject* m)
     if (PyModule_AddIntConstant(m, "SETEV_REPLACE_EVENT", SANLK_SETEV_REPLACE_EVENT))
         return -1;
     if (PyModule_AddIntConstant(m, "SETEV_ALL_HOSTS", SANLK_SETEV_ALL_HOSTS))
+        return -1;
+
+    /* sanlock_inquire() result resource flags */
+    if (PyModule_AddIntConstant(m, "RES_LVER", SANLK_RES_LVER))
+        return -1;
+    if (PyModule_AddIntConstant(m, "RES_SHARED", SANLK_RES_SHARED))
         return -1;
 
     /* Tuples with supported sector size and alignment values */
