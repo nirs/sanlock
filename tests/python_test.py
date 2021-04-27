@@ -479,6 +479,90 @@ def test_acquire_release_resource(tmpdir, sanlock_daemon, size, offset):
     assert owners == []
 
 
+@pytest.mark.parametrize("res_name", [
+    "ascii",
+    "\u05d0",  # Hebrew Alef
+])
+def test_inquire(tmpdir, sanlock_daemon, res_name):
+    ls_path = str(tmpdir.join("ls_name"))
+    util.create_file(ls_path, MiB)
+
+    res_path = str(tmpdir.join(res_name))
+    util.create_file(res_path, 10 * MiB)
+
+    fd = sanlock.register()
+
+    # No lockspace yet.
+    assert sanlock.inquire(slkfd=fd) == []
+
+    sanlock.write_lockspace(b"ls_name", ls_path, offset=0, iotimeout=1)
+    sanlock.add_lockspace(b"ls_name", 1, ls_path, offset=0, iotimeout=1)
+
+    # No resources created yet.
+    assert sanlock.inquire(slkfd=fd) == []
+
+    resources = [
+        # name, offset, acquire
+        (b"res-0", 0 * MiB, True),
+        (b"res-1", 1 * MiB, False),
+        (b"res-2", 2 * MiB, True),
+        (b"res-8", 8 * MiB, False),
+        (b"res-9", 9 * MiB, True),
+    ]
+
+    for res_name, res_offset, acquire in resources:
+        sanlock.write_resource(b"ls_name", res_name, [(res_path, res_offset)])
+
+    # No resource acquired yet.
+    assert sanlock.inquire(slkfd=fd) == []
+
+    # Acquire resources.
+    for res_name, res_offset, acquire in resources:
+        if acquire:
+            sanlock.acquire(
+                b"ls_name", res_name, [(res_path, res_offset)], slkfd=fd)
+
+    time.sleep(1)
+
+    expected = [
+        {
+            "lockspace": b"ls_name",
+            "resource": b"res-0",
+            "flags": sanlock.RES_LVER,
+            "version": 1,
+            "disks": [(res_path, 0 * MiB)],
+        },
+        {
+            "lockspace": b"ls_name",
+            "resource": b"res-2",
+            "flags": sanlock.RES_LVER,
+            "version": 1,
+            "disks": [(res_path, 2 * MiB)],
+        },
+        {
+            "lockspace": b"ls_name",
+            "resource": b"res-9",
+            "flags": sanlock.RES_LVER,
+            "version": 1,
+            "disks": [(res_path, 9 * MiB)],
+        },
+    ]
+
+    # Check acquired resources using snlkfd.
+    assert sanlock.inquire(slkfd=fd) == expected
+
+    # Check acquired resources using pid.
+    assert sanlock.inquire(pid=os.getpid()) == expected
+
+    for res_name, res_offset, acquire in resources:
+        if acquire:
+            sanlock.release(
+                b"ls_name", res_name, [(res_path, res_offset)], slkfd=fd)
+
+    # All resource released.
+    assert sanlock.inquire(slkfd=fd) == []
+
+
 @pytest.mark.parametrize("align, sector", [
     # Invalid alignment
     (KiB, sanlock.SECTOR_SIZE[0]),
