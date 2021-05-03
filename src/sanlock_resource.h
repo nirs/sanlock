@@ -15,6 +15,9 @@
  * process creates registered connection and acquires/releases leases on
  * that connection for itself
  *
+ * A threaded sanlock client must serialize libsanlock calls that are
+ * made using a registered socket connection.
+ *
  * sock == -1, pid is used:
  * process asks daemon to acquire/release leases for another separately
  * registered pid

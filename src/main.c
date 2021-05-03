@@ -1235,33 +1235,33 @@ static void process_connection(int ci)
 	if (!rv)
 		goto dead;
 
-	log_client(ci, client[ci].fd, "recv %d %d", rv, h.cmd);
+	log_client(ci, client[ci].fd, "recv %d %u", rv, h.cmd);
 
 	if (rv < 0) {
-		log_error("ci %d fd %d pid %d recv errno %d",
-			  ci, client[ci].fd, client[ci].pid, errno);
-		goto dead;
+		log_error("client connection %d %d %d recv msg header rv %d errno %d",
+			  ci, client[ci].fd, client[ci].pid, rv, errno);
+		goto bad;
 	}
 	if (rv != sizeof(h)) {
-		log_error("ci %d fd %d pid %d recv size %d",
-			  ci, client[ci].fd, client[ci].pid, rv);
-		goto dead;
+		log_error("client connection %d %d %d recv msg header rv %d cmd %u len %u",
+			  ci, client[ci].fd, client[ci].pid, rv, h.cmd, h.length);
+		goto bad;
 	}
 	if (h.magic != SM_MAGIC) {
-		log_error("ci %d recv %d magic %x vs %x",
-			  ci, rv, h.magic, SM_MAGIC);
-		goto dead;
+		log_error("client connection %d %d %d recv msg header rv %d cmd %u len %u magic %x vs %x",
+			  ci, client[ci].fd, client[ci].pid, rv, h.cmd, h.length, h.magic, SM_MAGIC);
+		goto bad;
 	}
 	if (client[ci].restricted & SANLK_RESTRICT_ALL) {
-		log_error("ci %d fd %d pid %d cmd %d restrict all",
-			  ci, client[ci].fd, client[ci].pid, h.cmd);
-		goto dead;
+		log_error("client connection %d %d %d recv msg header rv %d cmd %u len %u restrict all",
+			  ci, client[ci].fd, client[ci].pid, rv, h.cmd, h.length);
+		goto bad;
 	}
 	if (h.version && (h.cmd != SM_CMD_VERSION) &&
 	    (h.version & 0xFFFF0000) > (SM_PROTO & 0xFFFF0000)) {
-		log_error("ci %d recv %d proto %x vs %x",
-			  ci, rv, h.version , SM_PROTO);
-		goto dead;
+		log_error("client connection %d %d %d recv msg header rv %d cmd %u len %u version %x",
+			  ci, client[ci].fd, client[ci].pid, rv, h.cmd, h.length, h.version);
+		goto bad;
 	}
 
 	client[ci].cmd_last = h.cmd;
@@ -1306,7 +1306,7 @@ static void process_connection(int ci)
 	case SM_CMD_DELETE_RESOURCE:
 		rv = client_suspend(ci);
 		if (rv < 0)
-			goto dead;
+			goto bad;
 		process_cmd_thread_unregistered(ci, &h);
 		break;
 	case SM_CMD_ACQUIRE:
@@ -1318,14 +1318,18 @@ static void process_connection(int ci)
 		   while the thread is working on it */
 		rv = client_suspend(ci);
 		if (rv < 0)
-			goto dead;
+			goto bad;
 		process_cmd_thread_registered(ci, &h);
 		break;
 	default:
-		log_error("process_connection ci %d fd %d cmd %d unknown", ci, client[ci].fd, h.cmd);
-		goto dead;
+		log_error("client connection ci %d fd %d pid %d cmd %d unknown",
+			  ci, client[ci].fd, client[ci].pid, h.cmd);
+		goto bad;
 	};
 
+	return;
+
+ bad:
 	return;
 
  dead:
