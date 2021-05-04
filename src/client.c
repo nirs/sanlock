@@ -74,7 +74,9 @@ static int send_header(int sock, int cmd, uint32_t cmd_flags, int datalen,
 		       uint32_t data, uint32_t data2)
 {
 	struct sm_header header;
-	int rv;
+	size_t rem = sizeof(header);
+	size_t off = 0;
+	ssize_t rv;
 
 	memset(&header, 0, sizeof(header));
 	header.magic = SM_MAGIC;
@@ -86,24 +88,36 @@ static int send_header(int sock, int cmd, uint32_t cmd_flags, int datalen,
 	header.data2 = data2;
 
 retry:
-	rv = send(sock, (void *) &header, sizeof(header), 0);
+	rv = send(sock, (char *)&header + off, rem, 0);
 	if (rv == -1 && errno == EINTR)
 		goto retry;
-
 	if (rv < 0)
 		return -errno;
-
+	if (rv < rem) {
+		rem -= rv;
+		off += rv;
+		goto retry;
+	}
 	return 0;
 }
 
 static ssize_t send_data(int sockfd, const void *buf, size_t len, int flags)
 {
+	size_t rem = len;
+	size_t off = 0;
 	ssize_t rv;
 retry:
-	rv = send(sockfd, buf, len, flags);
+	rv = send(sockfd, (char *)buf + off, rem, flags);
 	if (rv == -1 && errno == EINTR)
 		goto retry;
-	return rv;
+	if (rv < 0)
+		return -errno;
+	if (rv < rem) {
+		rem -= rv;
+		off += rv;
+		goto retry;
+	}
+	return 0;
 }
 
 static ssize_t recv_data(int sockfd, void *buf, size_t len, int flags)
@@ -138,7 +152,7 @@ int send_command(int cmd, uint32_t data)
 static int recv_result(int fd)
 {
 	struct sm_header h;
-	int rv;
+	ssize_t rv;
 
 	memset(&h, 0, sizeof(h));
 retry:

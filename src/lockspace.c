@@ -1813,8 +1813,10 @@ int send_event_callbacks(uint32_t space_id,
 			continue;
 
 		fd = sp->event_fds[i];
-
+retry:
 		rv = send(fd, &cb, sizeof(cb), MSG_NOSIGNAL | MSG_DONTWAIT);
+		if (rv == -1 && errno == EINTR)
+			goto retry;
 		if (rv < 0) {
 			log_erros(sp, "send_event_callbacks error %d %d close fd %d", rv, errno, fd);
 			close(fd);

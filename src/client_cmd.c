@@ -56,6 +56,26 @@ static void print_debug(char *str, int len)
 		printf("    %s\n", p);
 }
 
+static ssize_t send_all(int sockfd, const void *buf, size_t len, int flags)
+{
+	size_t rem = len;
+	size_t off = 0;
+	ssize_t rv;
+
+retry:
+	rv = send(sockfd, (char *)buf + off, rem, flags);
+	if (rv == -1 && errno == EINTR)
+		goto retry;
+	if (rv < 0)
+		return -errno;
+	if (rv < rem) {
+		rem -= rv;
+		off += rv;
+		goto retry;
+	}
+	return 0;
+}
+
 static void status_daemon(struct sanlk_state *st, char *str, int debug)
 {
 	printf("daemon %.48s\n", st->name);
@@ -474,7 +494,7 @@ static int lockspace_host_status(int debug, char *lockspace_name)
 	memset(&lockspace, 0, sizeof(lockspace));
 	snprintf(lockspace.name, SANLK_NAME_LEN, "%s", lockspace_name);
 
-	rv = send(fd, &lockspace, sizeof(lockspace), 0);
+	rv = send_all(fd, &lockspace, sizeof(lockspace), 0);
 	if (rv < 0)
 		goto out;
 
@@ -603,7 +623,7 @@ int sanlock_renewal(char *lockspace_name)
 	memset(&lockspace, 0, sizeof(lockspace));
 	snprintf(lockspace.name, SANLK_NAME_LEN, "%s", lockspace_name);
 
-	rv = send(fd, &lockspace, sizeof(lockspace), 0);
+	rv = send_all(fd, &lockspace, sizeof(lockspace), 0);
 	if (rv < 0)
 		goto out;
 

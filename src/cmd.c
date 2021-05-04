@@ -57,6 +57,38 @@ void send_result(int ci, int fd, struct sm_header *h_recv, int result);
 
 static uint32_t token_id_counter = 1;
 
+static ssize_t recv_loop(int sockfd, void *buf, size_t len, int flags)
+{
+	ssize_t rv;
+
+	for (;;) {
+		rv = recv(sockfd, buf, len, flags);
+		if (rv == -1 && errno == EINTR)
+			continue;
+		return rv;
+	}
+}
+
+static ssize_t send_all(int sockfd, const void *buf, size_t len, int flags)
+{
+	size_t rem = len;
+	size_t off = 0;
+	ssize_t rv;
+
+retry:
+	rv = send(sockfd, (char *)buf + off, rem, flags);
+	if (rv == -1 && errno == EINTR)
+		goto retry;
+	if (rv < 0)
+		return -errno;
+	if (rv < rem) {
+		rem -= rv;
+		off += rv;
+		goto retry;
+	}
+	return 0;
+}
+
 static void release_cl_tokens(struct task *task, struct client *cl)
 {
 	struct token *token;
@@ -251,7 +283,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca, uint32_t cmd)
 		 * receive sanlk_resource, create token for it
 		 */
 
-		rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
+		rv = recv_loop(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
 		if (rv > 0)
 			pos += rv;
 		if (rv != sizeof(struct sanlk_resource)) {
@@ -295,7 +327,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca, uint32_t cmd)
 		 * in sanlk_disk (TODO: let these differ?)
 		 */
 
-		rv = recv(fd, token->disks, disks_len, MSG_WAITALL);
+		rv = recv_loop(fd, token->disks, disks_len, MSG_WAITALL);
 		if (rv > 0)
 			pos += rv;
 		if (rv != disks_len) {
@@ -317,7 +349,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca, uint32_t cmd)
 		alloc_count++;
 	}
 
-	rv = recv(fd, &opt, sizeof(struct sanlk_options), MSG_WAITALL);
+	rv = recv_loop(fd, &opt, sizeof(struct sanlk_options), MSG_WAITALL);
 	if (rv > 0)
 		pos += rv;
 	if (rv != sizeof(struct sanlk_options)) {
@@ -336,7 +368,7 @@ static void cmd_acquire(struct task *task, struct cmd_args *ca, uint32_t cmd)
 			goto done;
 		}
 
-		rv = recv(fd, opt_str, opt.len, MSG_WAITALL);
+		rv = recv_loop(fd, opt_str, opt.len, MSG_WAITALL);
 		if (rv > 0)
 			pos += rv;
 		if (rv != opt.len) {
@@ -575,7 +607,7 @@ static void cmd_release(struct task *task, struct cmd_args *ca, uint32_t cmd)
 	}
 
 	if (ca->header.cmd_flags & SANLK_REL_ORPHAN) {
-		rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
+		rv = recv_loop(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
 		if (rv != sizeof(struct sanlk_resource)) {
 			log_error("cmd_release %d,%d,%d recv res %d %d",
 				  cl_ci, cl_fd, cl_pid, rv, errno);
@@ -588,7 +620,7 @@ static void cmd_release(struct task *task, struct cmd_args *ca, uint32_t cmd)
 	}
 
 	if (ca->header.cmd_flags & SANLK_REL_RENAME) {
-		rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
+		rv = recv_loop(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
 		if (rv != sizeof(struct sanlk_resource)) {
 			log_error("cmd_release %d,%d,%d recv res %d %d",
 				  cl_ci, cl_fd, cl_pid, rv, errno);
@@ -597,7 +629,7 @@ static void cmd_release(struct task *task, struct cmd_args *ca, uint32_t cmd)
 		}
 
 		/* second res struct has new name for first res */
-		rv = recv(fd, &new, sizeof(struct sanlk_resource), MSG_WAITALL);
+		rv = recv_loop(fd, &new, sizeof(struct sanlk_resource), MSG_WAITALL);
 		if (rv != sizeof(struct sanlk_resource)) {
 			log_error("cmd_release %d,%d,%d recv new %d %d",
 				  cl_ci, cl_fd, cl_pid, rv, errno);
@@ -638,7 +670,7 @@ static void cmd_release(struct task *task, struct cmd_args *ca, uint32_t cmd)
 	/* caller is specifying specific resources to release */
 
 	for (i = 0; i < ca->header.data; i++) {
-		rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
+		rv = recv_loop(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
 		if (rv != sizeof(struct sanlk_resource)) {
 			log_error("cmd_release %d,%d,%d recv res %d %d",
 				  cl_ci, cl_fd, cl_pid, rv, errno);
@@ -851,12 +883,12 @@ static void cmd_inquire(struct task *task, struct cmd_args *ca, uint32_t cmd)
 
 	if (state) {
 		h.length = sizeof(h) + state_strlen + 1;
-		send(fd, &h, sizeof(h), MSG_NOSIGNAL);
-		send(fd, state, state_strlen + 1, MSG_NOSIGNAL);
+		send_all(fd, &h, sizeof(h), MSG_NOSIGNAL);
+		send_all(fd, state, state_strlen + 1, MSG_NOSIGNAL);
 		free(state);
 	} else {
 		h.length = sizeof(h);
-		send(fd, &h, sizeof(h), MSG_NOSIGNAL);
+		send_all(fd, &h, sizeof(h), MSG_NOSIGNAL);
 	}
 
 	client_resume(ca->ci_in);
@@ -899,7 +931,7 @@ static void cmd_convert(struct task *task, struct cmd_args *ca, uint32_t cmd)
 	log_cmd(cmd, "cmd_convert %d,%d,%d ci_in %d fd %d",
 		  cl_ci, cl_fd, cl_pid, ca->ci_in, fd);
 
-	rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
+	rv = recv_loop(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_resource)) {
 		result = -ENOTCONN;
 		goto reply;
@@ -963,7 +995,7 @@ static void cmd_request(struct task *task, struct cmd_args *ca, uint32_t cmd)
 
 	/* receiving and setting up token copied from cmd_acquire */
 
-	rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
+	rv = recv_loop(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_resource)) {
 		log_error("cmd_request %d,%d recv %d %d",
 			   ca->ci_in, fd, rv, errno);
@@ -1004,7 +1036,7 @@ static void cmd_request(struct task *task, struct cmd_args *ca, uint32_t cmd)
 	 * in sanlk_disk (TODO: let these differ?)
 	 */
 
-	rv = recv(fd, token->disks, disks_len, MSG_WAITALL);
+	rv = recv_loop(fd, token->disks, disks_len, MSG_WAITALL);
 	if (rv != disks_len) {
 		result = -ENOTCONN;
 		goto reply_free;
@@ -1078,7 +1110,7 @@ static void cmd_examine(struct task *task GNUC_UNUSED, struct cmd_args *ca, uint
 		ls = &buf.s;
 	}
 
-	rv = recv(fd, &buf, datalen, MSG_WAITALL);
+	rv = recv_loop(fd, &buf, datalen, MSG_WAITALL);
 	if (rv != datalen) {
 		log_error("cmd_examine %d,%d recv %d %d",
 			  ca->ci_in, fd, rv, errno);
@@ -1113,7 +1145,7 @@ static void cmd_set_lvb(struct task *task GNUC_UNUSED, struct cmd_args *ca, uint
 
 	fd = client[ca->ci_in].fd;
 
-	rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
+	rv = recv_loop(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_resource)) {
 		log_error("cmd_set_lvb %d,%d recv %d %d", ca->ci_in, fd, rv, errno);
 		result = -ENOTCONN;
@@ -1137,7 +1169,7 @@ static void cmd_set_lvb(struct task *task GNUC_UNUSED, struct cmd_args *ca, uint
 		goto reply;
 	}
 
-	rv = recv(fd, lvb, lvblen, MSG_WAITALL);
+	rv = recv_loop(fd, lvb, lvblen, MSG_WAITALL);
 	if (rv != lvblen) {
 		log_error("cmd_set_lvb %d,%d recv lvblen %d lvb %d %d",
 			  ca->ci_in, fd, lvblen, rv, errno);
@@ -1166,7 +1198,7 @@ static void cmd_get_lvb(struct task *task GNUC_UNUSED, struct cmd_args *ca, uint
 
 	fd = client[ca->ci_in].fd;
 
-	rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
+	rv = recv_loop(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_resource)) {
 		log_error("cmd_get_lvb %d,%d recv %d %d", ca->ci_in, fd, rv, errno);
 		result = -ENOTCONN;
@@ -1187,10 +1219,10 @@ static void cmd_get_lvb(struct task *task GNUC_UNUSED, struct cmd_args *ca, uint
 	h.data2 = 0;
 	h.length = sizeof(h) + lvblen;
 
-	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
+	send_all(fd, &h, sizeof(h), MSG_NOSIGNAL);
 
 	if (lvb) {
-		send(fd, lvb, lvblen, MSG_NOSIGNAL);
+		send_all(fd, lvb, lvblen, MSG_NOSIGNAL);
 		free(lvb);
 	}
 
@@ -1259,7 +1291,7 @@ void daemon_shutdown_reply(void)
 	h.version = SM_PROTO;
 	h.length = sizeof(h);
 
-	send(shutdown_reply_fd, &h, sizeof(h), MSG_NOSIGNAL);
+	send_all(shutdown_reply_fd, &h, sizeof(h), MSG_NOSIGNAL);
 	close(shutdown_reply_fd);
 
 	client_resume(shutdown_reply_ci);
@@ -1275,7 +1307,7 @@ static void cmd_add_lockspace(struct cmd_args *ca, uint32_t cmd)
 
 	fd = client[ca->ci_in].fd;
 
-	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+	rv = recv_loop(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_lockspace)) {
 		log_error("cmd_add_lockspace %d,%d recv %d %d",
 			   ca->ci_in, fd, rv, errno);
@@ -1324,7 +1356,7 @@ static void cmd_inq_lockspace(struct cmd_args *ca, uint32_t cmd)
 
 	fd = client[ca->ci_in].fd;
 
-	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+	rv = recv_loop(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_lockspace)) {
 		log_error("cmd_inq_lockspace %d,%d recv %d %d",
 			   ca->ci_in, fd, rv, errno);
@@ -1408,7 +1440,7 @@ static void cmd_rem_lockspace(struct cmd_args *ca, uint32_t cmd)
 
 	fd = client[ca->ci_in].fd;
 
-	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+	rv = recv_loop(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_lockspace)) {
 		log_error("cmd_rem_lockspace %d,%d recv %d %d",
 			  ca->ci_in, fd, rv, errno);
@@ -1456,7 +1488,7 @@ static void cmd_align(struct task *task GNUC_UNUSED, struct cmd_args *ca, uint32
 
 	fd = client[ca->ci_in].fd;
 
-	rv = recv(fd, &disk, sizeof(struct sanlk_disk), MSG_WAITALL);
+	rv = recv_loop(fd, &disk, sizeof(struct sanlk_disk), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_disk)) {
 		log_error("cmd_align %d,%d recv %d %d",
 			   ca->ci_in, fd, rv, errno);
@@ -1504,7 +1536,7 @@ static void cmd_read_lockspace(struct task *task, struct cmd_args *ca, uint32_t 
 
 	fd = client[ca->ci_in].fd;
 
-	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+	rv = recv_loop(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_lockspace)) {
 		log_error("cmd_read_lockspace %d,%d recv %d %d",
 			   ca->ci_in, fd, rv, errno);
@@ -1568,8 +1600,8 @@ static void cmd_read_lockspace(struct task *task, struct cmd_args *ca, uint32_t 
 	h.data = result;
 	h.data2 = io_timeout;
 	h.length = sizeof(h) + sizeof(lockspace);
-	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
-	send(fd, &lockspace, sizeof(lockspace), MSG_NOSIGNAL);
+	send_all(fd, &h, sizeof(h), MSG_NOSIGNAL);
+	send_all(fd, &lockspace, sizeof(lockspace), MSG_NOSIGNAL);
 	client_resume(ca->ci_in);
 }
 
@@ -1585,7 +1617,7 @@ static void cmd_read_resource(struct task *task, struct cmd_args *ca, uint32_t c
 
 	/* receiving and setting up token copied from cmd_acquire */
 
-	rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
+	rv = recv_loop(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_resource)) {
 		log_error("cmd_read_resource %d,%d recv %d %d",
 			   ca->ci_in, fd, rv, errno);
@@ -1620,7 +1652,7 @@ static void cmd_read_resource(struct task *task, struct cmd_args *ca, uint32_t c
 	 * in sanlk_disk (TODO: let these differ?)
 	 */
 
-	rv = recv(fd, token->disks, disks_len, MSG_WAITALL);
+	rv = recv_loop(fd, token->disks, disks_len, MSG_WAITALL);
 	if (rv != disks_len) {
 		result = -ENOTCONN;
 		goto reply;
@@ -1668,8 +1700,8 @@ static void cmd_read_resource(struct task *task, struct cmd_args *ca, uint32_t c
 	h.data = result;
 	h.data2 = 0;
 	h.length = sizeof(h) + sizeof(res);
-	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
-	send(fd, &res, sizeof(res), MSG_NOSIGNAL);
+	send_all(fd, &h, sizeof(h), MSG_NOSIGNAL);
+	send_all(fd, &res, sizeof(res), MSG_NOSIGNAL);
 	client_resume(ca->ci_in);
 }
 
@@ -1686,7 +1718,7 @@ static void cmd_read_resource_owners(struct task *task, struct cmd_args *ca, uin
 
 	/* receiving and setting up token copied from cmd_acquire */
 
-	rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
+	rv = recv_loop(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_resource)) {
 		log_error("cmd_read_resource_owners %d,%d recv %d %d",
 			   ca->ci_in, fd, rv, errno);
@@ -1721,7 +1753,7 @@ static void cmd_read_resource_owners(struct task *task, struct cmd_args *ca, uin
 	 * in sanlk_disk (TODO: let these differ?)
 	 */
 
-	rv = recv(fd, token->disks, disks_len, MSG_WAITALL);
+	rv = recv_loop(fd, token->disks, disks_len, MSG_WAITALL);
 	if (rv != disks_len) {
 		result = -ENOTCONN;
 		goto reply;
@@ -1771,10 +1803,10 @@ static void cmd_read_resource_owners(struct task *task, struct cmd_args *ca, uin
 	h.data = result;
 	h.data2 = count;
 	h.length = sizeof(h) + sizeof(res) + send_len;
-	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
-	send(fd, &res, sizeof(res), MSG_NOSIGNAL);
+	send_all(fd, &h, sizeof(h), MSG_NOSIGNAL);
+	send_all(fd, &res, sizeof(res), MSG_NOSIGNAL);
 	if (send_len && send_buf) {
-		send(fd, send_buf, send_len, MSG_NOSIGNAL);
+		send_all(fd, send_buf, send_len, MSG_NOSIGNAL);
 		free(send_buf);
 	}
 
@@ -1790,7 +1822,7 @@ static void cmd_write_lockspace(struct task *task, struct cmd_args *ca, uint32_t
 
 	fd = client[ca->ci_in].fd;
 
-	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+	rv = recv_loop(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_lockspace)) {
 		log_error("cmd_write_lockspace %d,%d recv %d %d",
 			   ca->ci_in, fd, rv, errno);
@@ -1849,7 +1881,7 @@ static void cmd_write_resource(struct task *task, struct cmd_args *ca, uint32_t 
 
 	/* receiving and setting up token copied from cmd_acquire */
 
-	rv = recv(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
+	rv = recv_loop(fd, &res, sizeof(struct sanlk_resource), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_resource)) {
 		log_error("cmd_write_resource %d,%d recv %d %d",
 			   ca->ci_in, fd, rv, errno);
@@ -1885,7 +1917,7 @@ static void cmd_write_resource(struct task *task, struct cmd_args *ca, uint32_t 
 	 * in sanlk_disk (TODO: let these differ?)
 	 */
 
-	rv = recv(fd, token->disks, disks_len, MSG_WAITALL);
+	rv = recv_loop(fd, token->disks, disks_len, MSG_WAITALL);
 	if (rv != disks_len) {
 		result = -ENOTCONN;
 		goto reply;
@@ -1948,7 +1980,7 @@ static void cmd_killpath(struct task *task, struct cmd_args *ca, uint32_t cmd)
 	log_cmd(cmd, "cmd_killpath %d,%d,%d flags %x",
 		  cl_ci, cl_fd, cl_pid, ca->header.cmd_flags);
 
-	rv = recv(cl_fd, cl->killpath, SANLK_HELPER_PATH_LEN, MSG_WAITALL);
+	rv = recv_loop(cl_fd, cl->killpath, SANLK_HELPER_PATH_LEN, MSG_WAITALL);
 	if (rv != SANLK_HELPER_PATH_LEN) {
 		log_error("cmd_killpath %d,%d,%d recv path %d %d",
 			  cl_ci, cl_fd, cl_pid, rv, errno);
@@ -1958,7 +1990,7 @@ static void cmd_killpath(struct task *task, struct cmd_args *ca, uint32_t cmd)
 		goto done;
 	}
 
-	rv = recv(cl_fd, cl->killargs, SANLK_HELPER_ARGS_LEN, MSG_WAITALL);
+	rv = recv_loop(cl_fd, cl->killargs, SANLK_HELPER_ARGS_LEN, MSG_WAITALL);
 	if (rv != SANLK_HELPER_ARGS_LEN) {
 		log_error("cmd_killpath %d,%d,%d recv args %d %d",
 			  cl_ci, cl_fd, cl_pid, rv, errno);
@@ -2001,13 +2033,13 @@ static void cmd_set_event(struct task *task GNUC_UNUSED, struct cmd_args *ca, ui
 
 	fd = client[ca->ci_in].fd;
 
-	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+	rv = recv_loop(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_lockspace)) {
 	        result = -ENOTCONN;
 	        goto reply;
 	}
 
-	rv = recv(fd, &he, sizeof(struct sanlk_host_event), MSG_WAITALL);
+	rv = recv_loop(fd, &he, sizeof(struct sanlk_host_event), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_host_event)) {
 	        result = -ENOTCONN;
 	        goto reply;
@@ -2030,7 +2062,7 @@ static void cmd_format_rindex(struct task *task, struct cmd_args *ca, uint32_t c
 
 	fd = client[ca->ci_in].fd;
 
-	rv = recv(fd, &ri, sizeof(struct sanlk_rindex), MSG_WAITALL);
+	rv = recv_loop(fd, &ri, sizeof(struct sanlk_rindex), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_rindex)) {
 		log_error("cmd_format_rindex %d,%d recv %d %d",
 			   ca->ci_in, fd, rv, errno);
@@ -2058,7 +2090,7 @@ static void cmd_rebuild_rindex(struct task *task, struct cmd_args *ca, uint32_t 
 
 	fd = client[ca->ci_in].fd;
 
-	rv = recv(fd, &ri, sizeof(struct sanlk_rindex), MSG_WAITALL);
+	rv = recv_loop(fd, &ri, sizeof(struct sanlk_rindex), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_rindex)) {
 		log_error("cmd_rebuild_rindex %d,%d recv %d %d",
 			   ca->ci_in, fd, rv, errno);
@@ -2091,14 +2123,14 @@ static void rindex_op(struct task *task, struct cmd_args *ca, const char *ri_cmd
 
 	fd = client[ca->ci_in].fd;
 
-	rv = recv(fd, &ri, sizeof(struct sanlk_rindex), MSG_WAITALL);
+	rv = recv_loop(fd, &ri, sizeof(struct sanlk_rindex), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_rindex)) {
 		log_error("%s %d,%d recv %d %d", ri_cmd_str, ca->ci_in, fd, rv, errno);
 		result = -ENOTCONN;
 		goto reply;
 	}
 
-	rv = recv(fd, &re, sizeof(struct sanlk_rentry), MSG_WAITALL);
+	rv = recv_loop(fd, &re, sizeof(struct sanlk_rentry), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_rentry)) {
 		log_error("%s %d,%d recv %d %d", ri_cmd_str, ca->ci_in, fd, rv, errno);
 		result = -ENOTCONN;
@@ -2129,8 +2161,8 @@ static void rindex_op(struct task *task, struct cmd_args *ca, const char *ri_cmd
 	h.data = result;
 	h.data2 = 0;
 	h.length = sizeof(h) + sizeof(re_ret);
-	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
-	send(fd, &re_ret, sizeof(re), MSG_NOSIGNAL);
+	send_all(fd, &h, sizeof(h), MSG_NOSIGNAL);
+	send_all(fd, &re_ret, sizeof(re), MSG_NOSIGNAL);
 
 	client_resume(ca->ci_in);
 }
@@ -2479,9 +2511,9 @@ static void send_state_daemon(int fd)
 
 	st.str_len = str_len;
 
-	send(fd, &st, sizeof(st), MSG_NOSIGNAL);
+	send_all(fd, &st, sizeof(st), MSG_NOSIGNAL);
 	if (str_len)
-		send(fd, str, str_len, MSG_NOSIGNAL);
+		send_all(fd, str, str_len, MSG_NOSIGNAL);
 }
 
 static void send_state_client(int fd, struct client *cl, int ci)
@@ -2500,9 +2532,9 @@ static void send_state_client(int fd, struct client *cl, int ci)
 
 	st.str_len = str_len;
 
-	send(fd, &st, sizeof(st), MSG_NOSIGNAL);
+	send_all(fd, &st, sizeof(st), MSG_NOSIGNAL);
 	if (str_len)
-		send(fd, str, str_len, MSG_NOSIGNAL);
+		send_all(fd, str, str_len, MSG_NOSIGNAL);
 }
 
 static void send_state_lockspace(int fd, struct space *sp, const char *list_name)
@@ -2522,16 +2554,16 @@ static void send_state_lockspace(int fd, struct space *sp, const char *list_name
 
 	st.str_len = str_len;
 
-	send(fd, &st, sizeof(st), MSG_NOSIGNAL);
+	send_all(fd, &st, sizeof(st), MSG_NOSIGNAL);
 	if (str_len)
-		send(fd, str, str_len, MSG_NOSIGNAL);
+		send_all(fd, str, str_len, MSG_NOSIGNAL);
 
 	memset(&lockspace, 0, sizeof(struct sanlk_lockspace));
 	strncpy(lockspace.name, sp->space_name, NAME_ID_SIZE);
 	lockspace.host_id = sp->host_id;
 	memcpy(&lockspace.host_id_disk, &sp->host_id_disk, sizeof(struct sanlk_disk));
 
-	send(fd, &lockspace, sizeof(lockspace), MSG_NOSIGNAL);
+	send_all(fd, &lockspace, sizeof(lockspace), MSG_NOSIGNAL);
 }
 
 void send_state_resource(int fd, struct resource *r, const char *list_name,
@@ -2556,14 +2588,14 @@ void send_state_resource(int fd, struct resource *r, const char *list_name,
 
 	st.str_len = str_len;
 
-	send(fd, &st, sizeof(st), MSG_NOSIGNAL);
+	send_all(fd, &st, sizeof(st), MSG_NOSIGNAL);
 	if (str_len)
-		send(fd, str, str_len, MSG_NOSIGNAL);
+		send_all(fd, str, str_len, MSG_NOSIGNAL);
 
-	send(fd, &r->r, sizeof(struct sanlk_resource), MSG_NOSIGNAL);
+	send_all(fd, &r->r, sizeof(struct sanlk_resource), MSG_NOSIGNAL);
 
 	for (i = 0; i < r->r.num_disks; i++) {
-		send(fd, &r->r.disks[i], sizeof(struct sanlk_disk), MSG_NOSIGNAL);
+		send_all(fd, &r->r.disks[i], sizeof(struct sanlk_disk), MSG_NOSIGNAL);
 	}
 }
 
@@ -2583,9 +2615,9 @@ static void send_state_host(int fd, struct host_status *hs, int host_id)
 
 	st.str_len = str_len;
 
-	send(fd, &st, sizeof(st), MSG_NOSIGNAL);
+	send_all(fd, &st, sizeof(st), MSG_NOSIGNAL);
 	if (str_len)
-		send(fd, str, str_len, MSG_NOSIGNAL);
+		send_all(fd, str, str_len, MSG_NOSIGNAL);
 }
 
 static void send_state_renewal(int fd, struct renewal_history *hi)
@@ -2603,9 +2635,9 @@ static void send_state_renewal(int fd, struct renewal_history *hi)
 
 	st.str_len = str_len;
 
-	send(fd, &st, sizeof(st), MSG_NOSIGNAL);
+	send_all(fd, &st, sizeof(st), MSG_NOSIGNAL);
 	if (str_len)
-		send(fd, str, str_len, MSG_NOSIGNAL);
+		send_all(fd, str, str_len, MSG_NOSIGNAL);
 }
 
 static void cmd_status(int ci, int fd, struct sm_header *h_recv, int client_maxi, uint32_t cmd)
@@ -2623,7 +2655,7 @@ static void cmd_status(int ci, int fd, struct sm_header *h_recv, int client_maxi
 	h.length = sizeof(h);
 	h.data = 0;
 
-	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
+	send_all(fd, &h, sizeof(h), MSG_NOSIGNAL);
 
 	send_state_daemon(fd);
 
@@ -2687,7 +2719,7 @@ static void cmd_host_status(int ci, int fd, struct sm_header *h_recv, uint32_t c
 		goto fail;
 	}
 
-	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+	rv = recv_loop(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_lockspace)) {
 		h.data = -ENOTCONN;
 		goto fail;
@@ -2704,7 +2736,7 @@ static void cmd_host_status(int ci, int fd, struct sm_header *h_recv, uint32_t c
 		goto fail;
 	}
 
-	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
+	send_all(fd, &h, sizeof(h), MSG_NOSIGNAL);
 
 	for (i = 0; i < DEFAULT_MAX_HOSTS; i++) {
 		hs = &status[i];
@@ -2717,7 +2749,7 @@ static void cmd_host_status(int ci, int fd, struct sm_header *h_recv, uint32_t c
 		free(status);
 	return;
  fail:
-	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
+	send_all(fd, &h, sizeof(h), MSG_NOSIGNAL);
 
 	if (status)
 		free(status);
@@ -2751,7 +2783,7 @@ static void cmd_renewal(int fd, struct sm_header *h_recv)
 		goto fail;
 	}
 
-	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+	rv = recv_loop(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_lockspace)) {
 		h.data = -ENOTCONN;
 		goto fail;
@@ -2786,7 +2818,7 @@ static void cmd_renewal(int fd, struct sm_header *h_recv)
 
 	h.data2 = io_timeout;
 
-	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
+	send_all(fd, &h, sizeof(h), MSG_NOSIGNAL);
 
 	/* If next slot is non-zero, then we've wrapped and
 	   should begin sending history from next to end
@@ -2808,7 +2840,7 @@ static void cmd_renewal(int fd, struct sm_header *h_recv)
 		free(history);
 	return;
  fail:
-	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
+	send_all(fd, &h, sizeof(h), MSG_NOSIGNAL);
 
 	if (history)
 		free(history);
@@ -2825,8 +2857,8 @@ static void cmd_log_dump(int fd, struct sm_header *h_recv)
 	h_recv->version = SM_PROTO;
 	h_recv->data = len;
 
-	send(fd, h_recv, sizeof(struct sm_header), MSG_NOSIGNAL);
-	send(fd, send_data_buf, len, MSG_NOSIGNAL);
+	send_all(fd, h_recv, sizeof(struct sm_header), MSG_NOSIGNAL);
+	send_all(fd, send_data_buf, len, MSG_NOSIGNAL);
 }
 
 static void cmd_get_lockspaces(int ci, int fd, struct sm_header *h_recv, uint32_t cmd)
@@ -2842,8 +2874,8 @@ static void cmd_get_lockspaces(int ci, int fd, struct sm_header *h_recv, uint32_
 	h_recv->data = rv;
 	h_recv->data2 = count;
 
-	send(fd, h_recv, sizeof(struct sm_header), MSG_NOSIGNAL);
-	send(fd, send_data_buf, len, MSG_NOSIGNAL);
+	send_all(fd, h_recv, sizeof(struct sm_header), MSG_NOSIGNAL);
+	send_all(fd, send_data_buf, len, MSG_NOSIGNAL);
 }
 
 static void cmd_get_hosts(int ci, int fd, struct sm_header *h_recv, uint32_t cmd)
@@ -2860,7 +2892,7 @@ static void cmd_get_hosts(int ci, int fd, struct sm_header *h_recv, uint32_t cmd
 	h.length = sizeof(h);
 	h.data = 0;
 
-	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+	rv = recv_loop(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_lockspace)) {
 		h.data = -ENOTCONN;
 		goto out;
@@ -2872,9 +2904,9 @@ static void cmd_get_hosts(int ci, int fd, struct sm_header *h_recv, uint32_t cmd
 	h.data = rv;
 	h.data2 = count;
 out:
-	send(fd, &h, sizeof(struct sm_header), MSG_NOSIGNAL);
+	send_all(fd, &h, sizeof(struct sm_header), MSG_NOSIGNAL);
 	if (len)
-		send(fd, send_data_buf, len, MSG_NOSIGNAL);
+		send_all(fd, send_data_buf, len, MSG_NOSIGNAL);
 }
 
 static void cmd_restrict(int ci, int fd, struct sm_header *h_recv, uint32_t cmd)
@@ -2899,7 +2931,7 @@ static void cmd_version(int ci GNUC_UNUSED, int fd, struct sm_header *h_recv)
 	h_recv->data = 0;
 	h_recv->data2 = sanlock_version_combined;
 
-	send(fd, h_recv, sizeof(struct sm_header), MSG_NOSIGNAL);
+	send_all(fd, h_recv, sizeof(struct sm_header), MSG_NOSIGNAL);
 }
 
 static void cmd_reg_event(int fd, struct sm_header *h_recv, uint32_t cmd)
@@ -2913,14 +2945,14 @@ static void cmd_reg_event(int fd, struct sm_header *h_recv, uint32_t cmd)
 	h.version = SM_PROTO;
 	h.length = sizeof(struct sm_header);
 
-	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+	rv = recv_loop(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_lockspace)) {
 		h.data = -ENOTCONN;
 		goto out;
 	}
 
 	/* currently unused */
-	rv = recv(fd, &he, sizeof(he), MSG_WAITALL);
+	rv = recv_loop(fd, &he, sizeof(he), MSG_WAITALL);
 	if (rv != sizeof(he)) {
 		h.data = -ENOTCONN;
 		goto out;
@@ -2931,7 +2963,7 @@ static void cmd_reg_event(int fd, struct sm_header *h_recv, uint32_t cmd)
 	h.data = rv;
 out:
 	log_cmd(cmd, "cmd_reg_event fd %d rv %d", fd, rv);
-	send(fd, &h, sizeof(struct sm_header), MSG_NOSIGNAL);
+	send_all(fd, &h, sizeof(struct sm_header), MSG_NOSIGNAL);
 }
 
 static void cmd_end_event(int fd, struct sm_header *h_recv, uint32_t cmd)
@@ -2944,7 +2976,7 @@ static void cmd_end_event(int fd, struct sm_header *h_recv, uint32_t cmd)
 	h.version = SM_PROTO;
 	h.length = sizeof(struct sm_header);
 
-	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+	rv = recv_loop(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_lockspace)) {
 		h.data = -ENOTCONN;
 		goto out;
@@ -2955,7 +2987,7 @@ static void cmd_end_event(int fd, struct sm_header *h_recv, uint32_t cmd)
 	h.data = rv;
 out:
 	log_cmd(cmd, "cmd_end_event fd %d rv %d", fd, rv);
-	send(fd, &h, sizeof(struct sm_header), MSG_NOSIGNAL);
+	send_all(fd, &h, sizeof(struct sm_header), MSG_NOSIGNAL);
 }
 
 static void cmd_set_config(int fd, struct sm_header *h_recv, uint32_t cmd)
@@ -2968,7 +3000,7 @@ static void cmd_set_config(int fd, struct sm_header *h_recv, uint32_t cmd)
 	h.version = SM_PROTO;
 	h.length = sizeof(struct sm_header);
 
-	rv = recv(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
+	rv = recv_loop(fd, &lockspace, sizeof(struct sanlk_lockspace), MSG_WAITALL);
 	if (rv != sizeof(struct sanlk_lockspace)) {
 		h.data = -ENOTCONN;
 		goto out;
@@ -2979,7 +3011,7 @@ static void cmd_set_config(int fd, struct sm_header *h_recv, uint32_t cmd)
 	h.data = rv;
 out:
 	log_cmd(cmd, "cmd_set_config fd %d rv %d", fd, rv);
-	send(fd, &h, sizeof(struct sm_header), MSG_NOSIGNAL);
+	send_all(fd, &h, sizeof(struct sm_header), MSG_NOSIGNAL);
 }
 
 static int get_peer_pid(int fd, int *pid)

@@ -458,6 +458,9 @@ void send_result(int ci, int fd, struct sm_header *h_recv, int result);
 void send_result(int ci, int fd, struct sm_header *h_recv, int result)
 {
 	struct sm_header h;
+	size_t rem = sizeof(h);
+	size_t off = 0;
+	ssize_t rv;
 
 	log_client(ci, fd, "send %d", result);
 
@@ -466,7 +469,18 @@ void send_result(int ci, int fd, struct sm_header *h_recv, int result)
 	h.length = sizeof(h);
 	h.data = result;
 	h.data2 = 0;
-	send(fd, &h, sizeof(h), MSG_NOSIGNAL);
+
+retry:
+	rv = send(fd, (char *)&h + off, rem, MSG_NOSIGNAL);
+	if (rv == -1 && errno == EINTR)
+		goto retry;
+	if (rv < 0)
+		return;
+	if (rv < rem) {
+		rem -= rv;
+		off += rv;
+		goto retry;
+	}
 }
 
 void client_pid_dead(int ci);
@@ -1231,7 +1245,10 @@ static void process_connection(int ci)
 
 	memset(&h, 0, sizeof(h));
 
+ retry:
 	rv = recv(client[ci].fd, &h, sizeof(h), MSG_WAITALL);
+	if (rv == -1 && errno == EINTR)
+		goto retry;
 	if (!rv)
 		goto dead;
 
