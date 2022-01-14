@@ -4,7 +4,7 @@
 # modify, copy, or redistribute it subject to the terms and conditions
 # of the GNU General Public License v.2.
 
-from distutils.core import setup, Extension
+from setuptools import setup, Extension
 
 sanlocklib = ['sanlock']
 sanlock = Extension(name='sanlock',
