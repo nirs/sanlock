@@ -939,6 +939,8 @@ static void free_sp(struct space *sp)
 {
 	if (sp->lease_status.renewal_read_buf)
 		free(sp->lease_status.renewal_read_buf);
+	if (sp->renewal_history)
+		free(sp->renewal_history);
 	free(sp);
 }
 
