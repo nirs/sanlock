@@ -995,7 +995,7 @@ static int thread_pool_add_work(struct cmd_args *ca)
 	if (!pool.free_workers && pool.num_workers < pool.max_workers) {
 		rv = pthread_create(&th, NULL, thread_pool_worker,
 				    (void *)(long)pool.num_workers);
-		if (rv < 0) {
+		if (rv) {
 			log_error("thread_pool_add_work ci %d error %d", ca->ci_in, rv);
 			list_del(&ca->list);
 			pthread_mutex_unlock(&pool.mutex);
@@ -1035,7 +1035,7 @@ static int thread_pool_create(int min_workers, int max_workers)
 	for (i = 0; i < min_workers; i++) {
 		rv = pthread_create(&th, NULL, thread_pool_worker,
 				    (void *)(long)i);
-		if (rv < 0)
+		if (rv)
 			break;
 		pool.num_workers++;
 	}

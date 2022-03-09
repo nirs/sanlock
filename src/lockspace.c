@@ -1070,8 +1070,8 @@ int add_lockspace_start(struct sanlk_lockspace *ls, uint32_t io_timeout, struct 
 		  (unsigned long long)sp->host_id_disk.offset);
 
 	rv = pthread_create(&sp->thread, NULL, lockspace_thread, sp);
-	if (rv < 0) {
-		log_erros(sp, "add_lockspace create thread failed");
+	if (rv) {
+		log_erros(sp, "add_lockspace create thread failed %d", rv);
 		goto fail_del;
 	}
 
