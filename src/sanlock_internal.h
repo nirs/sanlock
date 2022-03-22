@@ -209,6 +209,7 @@ struct space {
 	uint32_t used_retries;
 	uint32_t renewal_read_extend_sec; /* defaults to io_timeout */
 	uint32_t rindex_op;
+	unsigned int set_max_sectors_kb;
 	int sector_size;
 	int align_size;
 	int max_hosts;
@@ -455,6 +456,7 @@ EXTERN char our_host_name_global[SANLK_NAME_LEN+1];
 
 EXTERN int kill_count_max;
 EXTERN int kill_grace_seconds;
+EXTERN int is_helper;
 EXTERN int helper_ci;
 EXTERN int helper_pid;
 EXTERN int helper_kill_fd;

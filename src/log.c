@@ -128,6 +128,9 @@ void log_level(uint32_t space_id, uint32_t res_id, char *name_in, int level, con
 	struct tm time_info;
 	pid_t tid;
 
+	if (is_helper)
+		return;
+
 	memset(name, 0, sizeof(name));
 
 	if (level == LOG_CLIENT) {

@@ -1649,6 +1649,7 @@ static int setup_helper(void)
 	} else {
 		close(pr_fd);
 		close(pw_fd);
+		is_helper = 1;
 		run_helper(cr_fd, cw_fd, (log_stderr_priority == LOG_DEBUG));
 		exit(0);
 	}

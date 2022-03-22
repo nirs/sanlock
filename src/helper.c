@@ -31,6 +31,11 @@
 #include "monotime.h"
 #include "helper.h"
 
+/* only need sysfs functions */
+struct sync_disk;
+struct task;
+#include "diskio.h"
+
 #define MAX_AV_COUNT 8
 
 static void run_path(struct helper_msg *hm)
@@ -139,7 +144,7 @@ static int send_status(int fd)
 #define log_debug(fmt, args...) \
 do { \
 	if (log_stderr) \
-		fprintf(stderr, "%ld " fmt "\n", time(NULL), ##args); \
+		fprintf(stderr, "helper %ld " fmt "\n", time(NULL), ##args); \
 } while (0)
 
 #define STANDARD_TIMEOUT_MS (HELPER_STATUS_INTERVAL*1000)
@@ -147,6 +152,7 @@ do { \
 
 int run_helper(int in_fd, int out_fd, int log_stderr)
 {
+	unsigned int sysfs_val;
 	char name[16];
 	struct pollfd pollfd;
 	struct helper_msg hm;
@@ -215,6 +221,11 @@ int run_helper(int in_fd, int out_fd, int log_stderr)
 				*/
 			} else if (hm.type == HELPER_MSG_KILLPID) {
 				kill(hm.pid, hm.sig);
+
+			} else if (hm.type == HELPER_MSG_WRITE_SYSFS) {
+				sysfs_val = atoi(hm.args);
+				rv = write_sysfs_uint(hm.path, sysfs_val);
+				log_debug("write_sysfs %s %u rv %d", hm.path, sysfs_val, rv);
 			}
 		}
 

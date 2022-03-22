@@ -2397,6 +2397,7 @@ static int print_state_lockspace(struct space *sp, char *str, const char *list_n
 		 "external_used=%d "
 		 "used_by_orphans=%d "
 		 "renewal_read_extend_sec=%u "
+		 "set_max_sectors_kb=%u "
 		 "corrupt_result=%d "
 		 "acquire_last_result=%d "
 		 "renewal_last_result=%d "
@@ -2417,6 +2418,7 @@ static int print_state_lockspace(struct space *sp, char *str, const char *list_n
 		 (sp->flags & SP_EXTERNAL_USED) ? 1 : 0,
 		 (sp->flags & SP_USED_BY_ORPHANS) ? 1 : 0,
 		 sp->renewal_read_extend_sec,
+		 sp->set_max_sectors_kb,
 		 sp->lease_status.corrupt_result,
 		 sp->lease_status.acquire_last_result,
 		 sp->lease_status.renewal_last_result,

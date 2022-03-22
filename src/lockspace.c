@@ -24,6 +24,7 @@
 #include <sys/time.h>
 #include <sys/un.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 
 #include "sanlock_internal.h"
 #include "sanlock_admin.h"
@@ -38,8 +39,84 @@
 #include "task.h"
 #include "timeouts.h"
 #include "direct.h"
+#include "helper.h"
 
 static uint32_t space_id_counter = 1;
+
+/*
+ * When the sanlock daemon is not root, set_max_sectors_kb() needs to use the
+ * root helper process to write to sysfs.
+ */
+
+static int helper_set_max_sectors_kb(struct sync_disk *disk, uint32_t set_kb)
+{
+	char sysfs_path[SANLK_HELPER_PATH_LEN] = { 0 };
+	struct helper_msg hm;
+	struct stat st;
+	int ma, mi;
+	unsigned int max_kb = 0;
+	int rv;
+
+	rv = stat(disk->path, &st);
+	if (rv < 0) {
+		log_debug("helper_set_max_sectors_kb stat error %d %s", errno, disk->path);
+		return -1;
+	}
+	ma = (int)major(st.st_rdev);
+	mi = (int)minor(st.st_rdev);
+
+	snprintf(sysfs_path, sizeof(sysfs_path), "/sys/dev/block/%d:%d/queue/max_sectors_kb", ma, mi);
+	sysfs_path[SANLK_HELPER_PATH_LEN-1] = '\0';
+
+	rv = read_sysfs_uint(sysfs_path, &max_kb);
+	if (rv < 0) {
+		/* max_sectors_kb setting may not exist */
+		return -1;
+	}
+
+	if (max_kb == set_kb)
+		return 0;
+
+	if (helper_kill_fd == -1)
+		return -1;
+
+	memset(&hm, 0, sizeof(hm));
+	hm.type = HELPER_MSG_WRITE_SYSFS;
+	memcpy(hm.path, sysfs_path, SANLK_HELPER_PATH_LEN);
+	snprintf(hm.args, sizeof(hm.args), "%u", set_kb);
+
+ retry:
+	rv = write(helper_kill_fd, &hm, sizeof(hm));
+	if (rv == -1 && errno == EINTR)
+		goto retry;
+
+	/* pipe is full, we'll try again in a second */
+	if (rv == -1 && errno == EAGAIN) {
+		log_error("helper_set_max_sectors_kb send EAGAIN");
+		return -1;
+	}
+
+	/* helper exited or closed fd, quit using helper */
+	if (rv == -1 && errno == EPIPE) {
+		log_error("helper_set_max_sectors_kb send EPIPE");
+		return -1;
+	}
+
+	if (rv == -1) {
+		log_error("helper_set_max_sectors_kb send errno %d", errno);
+		return rv;
+	}
+
+	/* We don't try to wait for the helper process to do the write,
+	   although we could probably do something with the status msg.
+	   It shouldn't matter when the sysfs field is written wrt
+	   reading/writing the device. Add a slight delay here which
+	   should usually let the sysfs update happen first. */
+
+	usleep(2000);
+
+	return 0;
+}
 
 static struct space *_search_space(const char *name,
 				   struct sync_disk *disk,
@@ -634,7 +711,10 @@ static void set_lockspace_max_sectors_kb(struct space *sp, int sector_size, int 
 
 		log_space(sp, "set_lockspace_max_sectors_kb small hw_kb %u using 1024", hw_kb);
 
-		rv = set_max_sectors_kb(&sp->host_id_disk, set_kb);
+		if (!com.uid)
+			rv = set_max_sectors_kb(&sp->host_id_disk, set_kb);
+		else
+			rv = helper_set_max_sectors_kb(&sp->host_id_disk, set_kb);
 		if (rv < 0) {
 			log_space(sp, "set_lockspace_max_sectors_kb small hw_kb %u set 1024 error %d", hw_kb, rv);
 			return;
@@ -646,12 +726,16 @@ static void set_lockspace_max_sectors_kb(struct space *sp, int sector_size, int 
 
 		log_space(sp, "set_lockspace_max_sectors_kb hw_kb %u setting %u", hw_kb, set_kb);
 
-		rv = set_max_sectors_kb(&sp->host_id_disk, set_kb);
+		if (!com.uid)
+			rv = set_max_sectors_kb(&sp->host_id_disk, set_kb);
+		else
+			rv = helper_set_max_sectors_kb(&sp->host_id_disk, set_kb);
 		if (rv < 0) {
 			log_space(sp, "set_lockspace_max_sectors_kb hw_kb %u set %u error %d", hw_kb, set_kb, rv);
 			return;
 		}
 	}
+	sp->set_max_sectors_kb = set_kb;
 }
 
 /*

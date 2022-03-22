@@ -32,24 +32,12 @@
 #include "direct.h"
 #include "log.h"
 
-int read_sysfs_size(const char *disk_path, const char *name, unsigned int *val)
+int read_sysfs_uint(char *path, unsigned int *val)
 {
-	char path[PATH_MAX];
-	char buf[32];
-	struct stat st;
-	int major, minor;
-	size_t len;
+	char buf[32] = { 0 };
+	int len;
 	int fd;
 	int rv = -1;
-
-	rv = stat(disk_path, &st);
-	if (rv < 0)
-		return -1;
-
-	major = (int)major(st.st_rdev);
-	minor = (int)minor(st.st_rdev);
-
-	snprintf(path, sizeof(path), "/sys/dev/block/%d:%d/queue/%s", major, minor, name);
 
 	fd = open(path, O_RDONLY, 0);
 	if (fd < 0)
@@ -73,13 +61,58 @@ int read_sysfs_size(const char *disk_path, const char *name, unsigned int *val)
 	return rv;
 }
 
+int write_sysfs_uint(char *path, unsigned int val)
+{
+	char buf[32] = { 0 };
+	int fd;
+	int rv;
+
+	fd = open(path, O_RDWR, 0);
+	if (fd < 0) {
+		log_debug("write_sysfs_uint open error %d %s", errno, path);
+		return -1;
+	}
+
+	snprintf(buf, sizeof(buf), "%u", val);
+
+	rv = write(fd, buf, strlen(buf));
+	if (rv < 0) {
+		log_debug("write_sysfs_uint write %s error %d %s", buf, errno, path);
+		close(fd);
+		return -1;
+	}
+
+	close(fd);
+	return 0;
+}
+
+int read_sysfs_size(const char *disk_path, const char *name, unsigned int *val)
+{
+	char sysfs_path[PATH_MAX] = { 0 };
+	struct stat st;
+	int ma, mi;
+	int rv;
+
+	rv = stat(disk_path, &st);
+	if (rv < 0)
+		return -1;
+
+	ma = (int)major(st.st_rdev);
+	mi = (int)minor(st.st_rdev);
+
+	snprintf(sysfs_path, sizeof(sysfs_path), "/sys/dev/block/%d:%d/queue/%s", ma, mi, name);
+	sysfs_path[PATH_MAX-1] = '\0';
+
+	rv = read_sysfs_uint(sysfs_path, val);
+
+	return rv;
+}
+
 static int write_sysfs_size(const char *disk_path, const char *name, unsigned int val)
 {
-	char path[PATH_MAX];
-	char buf[32];
+	char sysfs_path[PATH_MAX] = { 0 };
 	struct stat st;
 	int major, minor;
-	int fd;
 	int rv;
 
 	rv = stat(disk_path, &st);
@@ -91,26 +124,12 @@ static int write_sysfs_size(const char *disk_path, const char *name, unsigned in
 	major = (int)major(st.st_rdev);
 	minor = (int)minor(st.st_rdev);
 
-	snprintf(path, sizeof(path), "/sys/dev/block/%d:%d/queue/%s", major, minor, name);
+	snprintf(sysfs_path, sizeof(sysfs_path), "/sys/dev/block/%d:%d/queue/%s", major, minor, name);
+	sysfs_path[PATH_MAX-1] = '\0';
 
-	memset(buf, 0, sizeof(buf));
-	snprintf(buf, sizeof(buf), "%u", val);
+	rv = write_sysfs_uint(sysfs_path, val);
 
-	fd = open(path, O_RDWR, 0);
-	if (fd < 0) {
-		log_debug("write_sysfs_size open error %d %s", errno, path);
-		return -1;
-	}
-
-	rv = write(fd, buf, strlen(buf));
-	if (rv < 0) {
-		log_debug("write_sysfs_size write %s error %d %s", buf, errno, path);
-		close(fd);
-		return -1;
-	}
-
-	close(fd);
-	return 0;
+	return rv;
 }
 
 /*

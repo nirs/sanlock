@@ -19,6 +19,7 @@
 
 #define HELPER_MSG_RUNPATH 1
 #define HELPER_MSG_KILLPID 2
+#define HELPER_MSG_WRITE_SYSFS 3
 
 struct helper_msg {
 	uint8_t type;
