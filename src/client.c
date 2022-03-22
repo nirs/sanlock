@@ -1140,7 +1140,8 @@ int sanlock_acquire(int sock, int pid, uint32_t flags, int res_count,
 	datalen += sizeof(struct sanlk_options);
 	if (opt_in) {
 		memcpy(&opt, opt_in, sizeof(struct sanlk_options));
-		datalen += opt_in->len;
+		/* data beyond opt is not used */
+		/* datalen += opt_in->len; */
 	} else {
 		memset(&opt, 0, sizeof(opt));
 	}
@@ -1187,6 +1188,7 @@ int sanlock_acquire(int sock, int pid, uint32_t flags, int res_count,
 		goto out;
 	}
 
+	/*
 	if (opt.len) {
 		rv = send_data(fd, opt_in->str, opt.len, 0);
 		if (rv < 0) {
@@ -1194,6 +1196,7 @@ int sanlock_acquire(int sock, int pid, uint32_t flags, int res_count,
 			goto out;
 		}
 	}
+	*/
 
 	rv = recv_result(fd);
  out:

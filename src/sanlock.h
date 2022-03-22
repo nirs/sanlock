@@ -137,8 +137,8 @@ struct sanlk_rentry {
 struct sanlk_options {
 	char owner_name[SANLK_NAME_LEN]; /* optional user friendly name */
 	uint32_t flags;
-	uint32_t len;
-	/* followed by len bytes (migration input will use this) */
+	uint32_t len; /* unused and ignored */
+	/* followed by len bytes (unused and ignored) */
 	char str[0];
 };
 
