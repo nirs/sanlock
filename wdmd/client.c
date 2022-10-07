@@ -77,6 +77,29 @@ static int send_header(int con, int cmd)
 	return 0;
 }
 
+int wdmd_open_watchdog(int con, int fire_timeout)
+{
+	struct wdmd_header h;
+	int rv;
+
+	memset(&h, 0, sizeof(h));
+	h.cmd = CMD_OPEN_WATCHDOG;
+	h.fire_timeout = fire_timeout;
+
+	rv = send(con, (void *)&h, sizeof(struct wdmd_header), 0);
+	if (rv < 0)
+		return -errno;
+
+	memset(&h, 0, sizeof(h));
+	rv = recv(con, &h, sizeof(h), MSG_WAITALL);
+	if (rv < 0)
+		return -errno;
+
+	if (h.fire_timeout != fire_timeout)
+		return -1;
+	return 0;
+}
+
 int wdmd_refcount_set(int con)
 {
 	return send_header(con, CMD_REFCOUNT_SET);

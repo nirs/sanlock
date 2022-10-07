@@ -599,6 +599,9 @@ seconds for graceful recovery
 .BR -w " 0|1"
 use watchdog through wdmd
 
+.BI -o " sec"
+io timeout
+
 .BR -h " 0|1"
 use high priority (RR) scheduling
 
@@ -1071,6 +1074,34 @@ the full history of renewals saved by sanlock, which by default
 is 180 records, about 1 hour of history when using a 20 second
 renewal interval for a 10 second io timeout.
 
+.P
+
+.SS Configurable watchdog timeout
+
+Watchdog devices usually have a 60 second timeout, but some devices
+have a configurable timeout.  To use a different watchdog timeout, set
+sanlock.conf watchdog_fire_timeout (in seconds) to a value supported by
+the device.  The same watchdog_fire_timeout must be configured on all
+hosts (so all hosts must have watchdog devices that support the same
+timeout).  Unmatching values will invalidate the lease protection provided
+by the watchdog.
+
+watchdog_fire_timeout and io_timeout should usually be configured
+together.  By default, sanlock uses watchdog_fire_timeout=60 with
+io_timeout=10.  Other combinations to consider are:
+.br
+watchdog_fire_timeout=30 with io_timeout=5
+.br
+watchdog_fire_timeout=10 with io_timeout=2
+
+Smaller values make it more likely that a host will be reset by the
+watchdog while waiting for slow io to complete or for temporary io
+failures to be resolved.  Spurious watchdog resets will also become
+more likely due to independent, overlapping lockspace outages, each
+of which would be inconsequential by itself.
+
+.P
+
 .SH INTERNALS
 
 .SS Disk Format
@@ -1376,6 +1407,23 @@ of either lease algorithm (as the standard io_timeout is.)
 max_worker_threads = <num>
 .br
 See -t
+
+.IP \[bu] 2
+io_timeout = <seconds>
+.br
+The io timeout for disk operations, most notably delta lease renewals.
+This value is basis for calculating most other timeout values.  (Some
+special cases may use a different io timeout.)  Tune this value with
+caution, it can substantially alter the overall sanlock behavior.
+
+.IP \[bu] 2
+watchdog_fire_timeout = <seconds>
+.br
+The watchdog device timeout.  The watchdog device must support the
+specified value.  It is critical that all hosts use the same value.
+Not doing so will invalidate the lease protection provided by sanlock.
+The io_timeout should usually be tuned along with this value, e.g.
+watchdog_fire_timeout = 30 with io_timeout = 5.
 
 .SH SEE ALSO
 .BR wdmd (8)

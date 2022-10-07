@@ -1326,7 +1326,7 @@ static void cmd_add_lockspace(struct cmd_args *ca, uint32_t cmd)
 
 	io_timeout = ca->header.data;
 	if (!io_timeout)
-		io_timeout = DEFAULT_IO_TIMEOUT;
+		io_timeout = com.io_timeout;
 
 	rv = add_lockspace_start(&lockspace, io_timeout, &sp);
 	if (rv < 0) {
@@ -1577,7 +1577,7 @@ static void cmd_read_lockspace(struct task *task, struct cmd_args *ca, uint32_t 
 
 	if (!sector_size) {
 		/* reads the first leader record to get sector size */
-		result = delta_read_lockspace_sizes(task, &sd, DEFAULT_IO_TIMEOUT, &sector_size, &align_size);
+		result = delta_read_lockspace_sizes(task, &sd, com.io_timeout, &sector_size, &align_size);
 		if (result < 0)
 			goto out_close;
 		if ((sector_size != 512) && (sector_size != 4096)) {
@@ -1588,7 +1588,7 @@ static void cmd_read_lockspace(struct task *task, struct cmd_args *ca, uint32_t 
 
 	/* sets ls->name and io_timeout */
 	result = delta_read_lockspace(task, &sd, sector_size, align_size, host_id, &lockspace,
-				      DEFAULT_IO_TIMEOUT, &io_timeout);
+				      com.io_timeout, &io_timeout);
 	if (result == SANLK_OK)
 		result = 0;
 
@@ -1677,7 +1677,7 @@ static void cmd_read_resource(struct task *task, struct cmd_args *ca, uint32_t c
 		goto reply;
 	}
 
-	token->io_timeout = DEFAULT_IO_TIMEOUT;
+	token->io_timeout = com.io_timeout;
 
 	/*
 	 * These may be zero, in which case paxos_read_resource reads a 4K sector
@@ -1778,7 +1778,7 @@ static void cmd_read_resource_owners(struct task *task, struct cmd_args *ca, uin
 		goto reply;
 	}
 
-	token->io_timeout = DEFAULT_IO_TIMEOUT;
+	token->io_timeout = com.io_timeout;
 
 	/*
 	 * These may be zero, in which case paxos_read_resource reads a 4K sector
@@ -1820,7 +1820,7 @@ static void cmd_write_lockspace(struct task *task, struct cmd_args *ca, uint32_t
 	struct sanlk_lockspace lockspace;
 	struct sync_disk sd;
 	int fd, rv, result;
-	int io_timeout = DEFAULT_IO_TIMEOUT;
+	int io_timeout = com.io_timeout;
 
 	fd = client[ca->ci_in].fd;
 
@@ -1953,7 +1953,7 @@ static void cmd_write_resource(struct task *task, struct cmd_args *ca, uint32_t 
 		goto reply;
 	}
 
-	token->io_timeout = DEFAULT_IO_TIMEOUT;
+	token->io_timeout = com.io_timeout;
 
 	result = paxos_lease_init(task, token, num_hosts, write_clear);
 
@@ -2302,6 +2302,8 @@ static int print_state_daemon(char *str)
 		 "max_worker_threads=%d "
 		 "write_init_io_timeout=%u "
 		 "use_aio=%d "
+		 "io_timeout=%d "
+		 "watchdog_fire_timeout=%d "
 		 "kill_grace_seconds=%d "
 		 "helper_pid=%d "
 		 "helper_kill_fd=%d "
@@ -2330,7 +2332,9 @@ static int print_state_daemon(char *str)
 		 com.max_worker_threads,
 		 com.write_init_io_timeout,
 		 main_task.use_aio,
-		 kill_grace_seconds,
+		 com.io_timeout,
+		 com.watchdog_fire_timeout,
+		 com.kill_grace_seconds,
 		 helper_pid,
 		 helper_kill_fd,
 		 helper_full_count,

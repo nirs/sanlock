@@ -39,6 +39,24 @@
 
 #include "../wdmd/wdmd.h"
 
+/* tell wdmd to open the watchdog device, set the fire timeout and begin keepalives */
+int open_watchdog(int con, int fire_timeout)
+{
+	int rv;
+
+	if (!com.use_watchdog)
+		return 0;
+
+	rv = wdmd_open_watchdog(con, fire_timeout);
+	if (rv < 0) {
+		log_error("wdmd_open_watchdog fire_timeout %d error", fire_timeout);
+		return -1;
+	}
+
+	return 0;
+}
+
+/* tell wdmd that this connection is still good and watchdog pings can continue for it */
 void update_watchdog(struct space *sp, uint64_t timestamp,
 		     int id_renewal_fail_seconds)
 {
@@ -53,6 +71,7 @@ void update_watchdog(struct space *sp, uint64_t timestamp,
 			  (unsigned long long)timestamp, rv);
 }
 
+/* connects to the wdmd daemon */
 int connect_watchdog(struct space *sp)
 {
 	int con;
@@ -69,6 +88,7 @@ int connect_watchdog(struct space *sp)
 	return con;
 }
 
+/* associate wdmd keepalives to the continued liveness of this lockspace */
 int activate_watchdog(struct space *sp, uint64_t timestamp,
 		      int id_renewal_fail_seconds, int con)
 {
@@ -105,9 +125,9 @@ int activate_watchdog(struct space *sp, uint64_t timestamp,
 		goto fail_clear;
 	}
 
-	if (fire_timeout != WATCHDOG_FIRE_TIMEOUT) {
+	if (fire_timeout != com.watchdog_fire_timeout) {
 		log_erros(sp, "wdmd invalid fire_timeout %d vs %d",
-			  fire_timeout, WATCHDOG_FIRE_TIMEOUT);
+			  fire_timeout, com.watchdog_fire_timeout);
 		goto fail_clear;
 	}
 
@@ -153,7 +173,7 @@ void deactivate_watchdog(struct space *sp)
 	wdmd_refcount_clear(sp->wd_fd);
 }
 
-void close_watchdog(struct space *sp)
+void disconnect_watchdog(struct space *sp)
 {
 	if (!com.use_watchdog)
 		return;

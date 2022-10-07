@@ -849,7 +849,7 @@ int delta_lease_init(struct task *task,
 	uint32_t checksum;
 
 	if (!io_timeout)
-		io_timeout = DEFAULT_IO_TIMEOUT;
+		io_timeout = com.io_timeout;
 
 	rv = sizes_from_flags(ls->flags, &sector_size, &align_size, &max_hosts, "LSF");
 	if (rv)

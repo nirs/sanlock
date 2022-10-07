@@ -10,9 +10,9 @@ wdmd \- watchdog multiplexing daemon
 .SH DESCRIPTION
 
 This daemon opens /dev/watchdog and allows multiple independent sources to
-detmermine whether each KEEPALIVE is done.  Every test interval (10
+detmermine whether each KEEPALIVE is done.  Every test interval (default 10
 seconds), the daemon tests each source.  If any test fails, the KEEPALIVE
-is not done.  In a standard configuration, the watchdog timer will reset
+is not done.  In the default configuration, the watchdog timer will reset
 the system if no KEEPALIVE is done for 60 seconds ("fire timeout").  This
 means that if a single test fails 5-6 times in row, the watchdog will fire
 and reset the system.  With multiple test sources, fewer separate failures
@@ -40,8 +40,8 @@ T60: watchdog fires, system resets
 T60, and the tests at T60 would not be run.)
 
 A crucial aspect to the design and function of wdmd is that if any single
-source does not pass tests for the fire timeout, the watchdog is
-guaranteed to fire, regardless of whether other sources on the system have
+source does not pass the test for the length of the fire timeout, the watchdog
+is guaranteed to fire, regardless of whether other sources on the system have
 passed or failed.  A spurious reset due to the combined effects of
 multiple failing tests as shown above, is an accepted side effect.
 
@@ -112,5 +112,14 @@ it is considered a failure.
 .TP
 .BI \-w " path"
   The path to the watchdog device to try first.
+
+.TP
+.BI "\-\-trytimeout, \-t" " seconds"
+  Set the timeout for the watchdog device.  Use this to check for supported
+  timeout values.
+
+.TP
+.B \-\-forcefire, \-F
+  Force the watchdog to fire and reset the machine.  Use with -t.
 
 

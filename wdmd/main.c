@@ -56,16 +56,20 @@
 
 #define WDPATH_SIZE 64
 
-static int test_interval = DEFAULT_TEST_INTERVAL;
+static int standard_test_interval = DEFAULT_TEST_INTERVAL;
+static int test_interval= DEFAULT_TEST_INTERVAL;
 static int fire_timeout = DEFAULT_FIRE_TIMEOUT;
 static int high_priority = DEFAULT_HIGH_PRIORITY;
 static int daemon_quit;
 static int daemon_debug;
+static int try_timeout;
+static int forcefire;
 static int socket_gid;
 static char *socket_gname = (char *)SOCKET_GNAME;
 static time_t last_keepalive;
 static time_t last_closeunclean;
 static char lockfile_path[PATH_MAX];
+static int test_loop_enable;
 static int dev_fd = -1;
 static int shm_fd;
 
@@ -334,6 +338,155 @@ static void dump_debug(int fd)
 	send(fd, debug_buf, debug_len, MSG_NOSIGNAL);
 }
 
+static void _init_test_interval(void)
+{
+	if (fire_timeout >= 60) {
+		standard_test_interval = 10;
+		test_interval = 10;
+	} else if (fire_timeout >= 30 && fire_timeout < 60) {
+		standard_test_interval = 5;
+		test_interval = 5;
+	} else if (fire_timeout >= 10 && fire_timeout < 30) {
+		standard_test_interval = 2;
+		test_interval = 2;
+	} else {
+		standard_test_interval = 1;
+		test_interval = 1;
+	}
+}
+
+static int open_dev(void)
+{
+	int fd;
+
+	if (dev_fd != -1) {
+		log_error("watchdog already open fd %d", dev_fd);
+		return -1;
+	}
+
+	fd = open(watchdog_path, O_WRONLY | O_CLOEXEC);
+	if (fd < 0) {
+		log_error("open %s error %d", watchdog_path, errno);
+		return fd;
+	}
+
+	dev_fd = fd;
+	return 0;
+}
+
+static void close_watchdog(void)
+{
+	int rv;
+
+	if (dev_fd == -1) {
+		log_debug("close_watchdog already closed");
+		return;
+	}
+
+	rv = write(dev_fd, "V", 1);
+	if (rv < 0)
+		log_error("%s disarm write error %d", watchdog_path, errno);
+	else
+		log_error("%s disarmed", watchdog_path);
+
+	close(dev_fd);
+	dev_fd = -1;
+}
+
+static void close_watchdog_unclean(void)
+{
+	if (dev_fd == -1)
+		return;
+
+	log_error("%s closed unclean", watchdog_path);
+	close(dev_fd);
+	dev_fd = -1;
+
+	last_closeunclean = monotime();
+}
+
+static void pet_watchdog(void)
+{
+	int rv, unused;
+
+	rv = ioctl(dev_fd, WDIOC_KEEPALIVE, &unused);
+
+	last_keepalive = monotime();
+	log_debug("keepalive %d", rv);
+}
+
+static int _open_watchdog(struct wdmd_header *h)
+{
+	int get_timeout, set_timeout;
+	int rv;
+
+	/* Don't check dev_fd for -1 because dev_fd will be closed
+	   and set to -1 prior to timeout in close_watchdog_unclean().  */
+
+	if (test_loop_enable)
+		return 0;
+
+	if (!h->fire_timeout)
+		return -1;
+
+	rv = open_dev();
+	if (rv < 0)
+		return -1;
+
+	get_timeout = 0;
+
+	rv = ioctl(dev_fd, WDIOC_GETTIMEOUT, &get_timeout);
+	if (rv < 0) {
+		log_error("open_watchdog gettimeout error %d", errno);
+		close_watchdog();
+		return -1;
+	}
+
+	if (get_timeout == h->fire_timeout) {
+		/* success, requested value matches the default value */
+		fire_timeout = get_timeout;
+		_init_test_interval();
+		log_error("%s open with timeout %d", watchdog_path, get_timeout);
+		pet_watchdog();
+		test_loop_enable = 1;
+		return 0;
+	}
+
+	set_timeout = h->fire_timeout;
+
+	rv = ioctl(dev_fd, WDIOC_SETTIMEOUT, &set_timeout);
+	if (rv < 0) {
+		log_error("open_watchdog settimeout %d error %d", set_timeout, errno);
+		close_watchdog();
+		return -1;
+	}
+
+	get_timeout = 0;
+
+	rv = ioctl(dev_fd, WDIOC_GETTIMEOUT, &get_timeout);
+	if (rv < 0) {
+		log_error("open_watchdog gettimeout check error %d", errno);
+		close_watchdog();
+		return -1;
+	}
+
+	if (get_timeout == set_timeout) {
+		/* success setting a custom timeout */
+		fire_timeout = get_timeout;
+		_init_test_interval();
+		log_error("%s open with timeout %d", watchdog_path, get_timeout);
+		pet_watchdog();
+		test_loop_enable = 1;
+		return 0;
+	}
+	
+	/* failed to set a custom timeout */
+	log_error("open_watchdog gettimeout value %d set %d",
+		  get_timeout, set_timeout);
+	close_watchdog();
+	return -1;
+}
+
 static void process_connection(int ci)
 {
 	struct wdmd_header h;
@@ -376,6 +529,17 @@ static void process_connection(int ci)
 
 	case CMD_REFCOUNT_CLEAR:
 		client[ci].refcount = 0;
+		break;
+
+	case CMD_OPEN_WATCHDOG:
+		memcpy(&h_ret, &h, sizeof(h));
+		rv = _open_watchdog(&h);
+		if (rv < 0)
+			h_ret.fire_timeout = 0;
+		else
+			h_ret.fire_timeout = fire_timeout;
+		log_debug("open_watchdog fire_timeout %u result %u", h.fire_timeout, fire_timeout);
+		send(client[ci].fd, &h_ret, sizeof(h_ret), MSG_NOSIGNAL);
 		break;
 
 	case CMD_TEST_LIVE:
@@ -509,7 +673,7 @@ static int test_clients(void)
 
 		if (t >= client[i].expire) {
 			log_error("test failed rem %d now %llu ping %llu close %llu renewal %llu expire %llu client %d %s",
-				  DEFAULT_FIRE_TIMEOUT - (int)(t - last_ping),
+				  fire_timeout - (int)(t - last_ping),
 				  (unsigned long long)t,
 				  (unsigned long long)last_keepalive,
 				  (unsigned long long)last_closeunclean,
@@ -540,7 +704,7 @@ static int test_clients(void)
 		 * expiration time.
 		 */
 
-		if (t >= client[i].expire - DEFAULT_TEST_INTERVAL) {
+		if (t >= client[i].expire - standard_test_interval) {
 			log_error("test warning now %llu ping %llu close %llu renewal %llu expire %llu client %d %s",
 				  (unsigned long long)t,
 				  (unsigned long long)last_keepalive,
@@ -791,7 +955,7 @@ static int test_scripts(void)
 		 */
 
 		if (!scripts[i].last_result &&
-		    ((begin - scripts[i].start) < (DEFAULT_TEST_INTERVAL - 1)))
+		    ((begin - scripts[i].start) < (standard_test_interval - 1)))
 			continue;
 
 		pid = run_script(i);
@@ -806,7 +970,7 @@ static int test_scripts(void)
 		}
 	}
 
-	/* wait up to DEFAULT_TEST_INTERVAL-1 for the pids to finish */
+	/* wait up to standard_test_interval-1 for the pids to finish */
 
 	while (1) {
 		running = 0;
@@ -893,7 +1057,7 @@ static int test_scripts(void)
 		if (!running)
 			break;
 
-		if (monotime() - begin >= DEFAULT_TEST_INTERVAL - 1)
+		if (monotime() - begin >= standard_test_interval - 1)
 			break;
 
 		sleep(1);
@@ -927,58 +1091,6 @@ static int test_scripts(void)
 	return fail_count;
 }
 
-static int open_dev(void)
-{
-	int fd;
-
-	if (dev_fd != -1) {
-		log_error("watchdog already open fd %d", dev_fd);
-		return -1;
-	}
-
-	fd = open(watchdog_path, O_WRONLY | O_CLOEXEC);
-	if (fd < 0) {
-		log_error("open %s error %d", watchdog_path, errno);
-		return fd;
-	}
-
-	dev_fd = fd;
-	return 0;
-}
-
-static void close_watchdog_unclean(void)
-{
-	if (dev_fd == -1) {
-		log_debug("close_watchdog_unclean already closed");
-		return;
-	}
-
-	log_error("%s closed unclean", watchdog_path);
-	close(dev_fd);
-	dev_fd = -1;
-
-	last_closeunclean = monotime();
-}
-
-static void close_watchdog(void)
-{
-	int rv;
-
-	if (dev_fd == -1) {
-		log_error("close_watchdog already closed");
-		return;
-	}
-
-	rv = write(dev_fd, "V", 1);
-	if (rv < 0)
-		log_error("%s disarm write error %d", watchdog_path, errno);
-	else
-		log_error("%s disarmed", watchdog_path);
-
-	close(dev_fd);
-	dev_fd = -1;
-}
-
 static int _setup_watchdog(char *path)
 {
 	struct stat buf;
@@ -1004,25 +1116,9 @@ static int _setup_watchdog(char *path)
 		return -1;
 	}
 
-	if (timeout == fire_timeout)
-		goto out;
+	log_debug("%s gettimeout reported %u", watchdog_path, timeout);
 
-	timeout = fire_timeout;
-
-	rv = ioctl(dev_fd, WDIOC_SETTIMEOUT, &timeout);
-	if (rv < 0) {
-		log_error("%s failed to set timeout", watchdog_path);
-		close_watchdog();
-		return -1;
-	}
-
-	if (timeout != fire_timeout) {
-		log_error("%s failed to set new timeout", watchdog_path);
-		close_watchdog();
-		return -1;
-	}
- out:
-	log_error("%s armed with fire_timeout %d", watchdog_path, fire_timeout);
+	close_watchdog();
 
 	/* TODO: save watchdog_path in /run/wdmd/saved_path,
 	 * and in startup read that file, copying it to saved_path */
@@ -1091,7 +1187,103 @@ static int setup_watchdog(void)
 
 }
 
-static int probe_dev(const char *path)
+static int _try_timeout(const char *path)
+{
+	struct stat buf;
+	int get_timeout, set_timeout;
+	int unused, fd, err, rv;
+
+	rv = stat(path, &buf);
+	if (rv < 0) {
+		fprintf(stderr, "%s stat error %d\n", path, errno);
+		return -1;
+	}
+
+	fd = open(path, O_WRONLY | O_CLOEXEC);
+	if (fd < 0) {
+		fprintf(stderr, "%s open error %d\n", path, errno);
+		return fd;
+	}
+
+	get_timeout = 0;
+
+	rv = ioctl(fd, WDIOC_GETTIMEOUT, &get_timeout);
+	if (rv < 0) {
+		fprintf(stderr, "%s gettimeout error %d\n", path, errno);
+		rv = -1;
+		goto out;
+	}
+
+	printf("%s gettimeout %d\n", path, get_timeout);
+
+	set_timeout = try_timeout;
+
+	rv = ioctl(fd, WDIOC_SETTIMEOUT, &set_timeout);
+	if (rv < 0) {
+		fprintf(stderr, "%s settimeout %d error %d\n", path, set_timeout, errno);
+		rv = -1;
+		goto out;
+	}
+
+	printf("%s settimeout %d result %d\n", path, try_timeout, set_timeout);
+
+	if (set_timeout != try_timeout) {
+		fprintf(stderr, "%s settimeout %d failed\n", path, try_timeout);
+		rv = -1;
+		goto out;
+	}
+
+	get_timeout = 0;
+
+	rv = ioctl(fd, WDIOC_GETTIMEOUT, &get_timeout);
+	if (rv < 0) {
+		fprintf(stderr, "%s gettimeout error %d\n", path, errno);
+		rv = -1;
+		goto out;
+	}
+
+	printf("%s gettimeout %d\n", path, get_timeout);
+
+	rv = ioctl(fd, WDIOC_KEEPALIVE, &unused);
+	if (rv < 0) {
+		fprintf(stderr, "%s keepalive error %d\n", path, errno);
+		rv = -1;
+		goto out;
+	}
+
+	if (forcefire) {
+		int sleep_sec = 0;
+		int i;
+		setbuf(stdout, NULL);
+		printf("waiting for watchdog to reset machine:\n");
+		for (i = 1; i < get_timeout + 5; i++) {
+			sleep(1);
+			sleep_sec++;
+			if (sleep_sec == get_timeout+1) {
+				printf("\n");
+				printf("%d %s failed to fire after timeout %d seconds\n", i, path, get_timeout);
+			} else if (sleep_sec > get_timeout+1) {
+				printf("%d %s failed to fire after timeout %d seconds\n", i, path, get_timeout);
+			} else {
+				printf("%d ", i);
+			}
+		}
+	}
+
+	rv = 0;
+ out:
+	err = write(fd, "V", 1);
+	if (err < 0) {
+		fprintf(stderr, "trytimeout failed to disarm %s error %d %d\n", path, err, errno);
+		openlog("wdmd", LOG_CONS | LOG_PID, LOG_DAEMON);
+		syslog(LOG_ERR, "trytimeout failed to disarm %s error %d %d\n", path, err, errno);
+	}
+
+	close(fd);
+	return rv;
+}
+
+static int _probe_dev(const char *path)
 {
 	struct stat buf;
 	int fd, err, rv, timeout;
@@ -1153,6 +1345,14 @@ static int probe_dev(const char *path)
 	return rv;
 }
 
+static int probe_dev(const char *path)
+{
+	if (try_timeout)
+		return _try_timeout(path);
+	else
+		return _probe_dev(path);
+}
+
 static int probe_watchdog(void)
 {
 	int rv;
@@ -1203,16 +1403,6 @@ static int probe_watchdog(void)
 	fprintf(stderr, "no watchdog device, load a watchdog driver\n");
 	return -1;
 
-}
-
-static void pet_watchdog(void)
-{
-	int rv, unused;
-
-	rv = ioctl(dev_fd, WDIOC_KEEPALIVE, &unused);
-
-	last_keepalive = monotime();
-	log_debug("keepalive %d", rv);
 }
 
 static void process_signals(int ci)
@@ -1305,8 +1495,6 @@ static int test_loop(void)
 	int fail_count;
 	int rv, i;
 
-	pet_watchdog();
-
 	test_time = 0;
 	poll_timeout = test_interval * 1000;
 
@@ -1335,6 +1523,12 @@ static int test_loop(void)
 		if (daemon_quit && !active_clients())
 			break;
 
+		/*
+		 * No client has called open_watchdog() so the wd device is not open yet.
+		 */
+		if (!test_loop_enable)
+			continue;
+
 		if (monotime() - test_time >= test_interval) {
 			test_time = monotime();
 			log_debug("test_time %llu",
@@ -1354,7 +1548,7 @@ static int test_loop(void)
 					pet_watchdog();
 				}
 
-				test_interval = DEFAULT_TEST_INTERVAL;
+				test_interval = standard_test_interval;
 			} else {
 				/* If we can patch the kernel so that close
 				   does not generate a ping, then we can skip
@@ -1513,19 +1707,21 @@ static void print_usage_and_exit(int status)
 {
 	printf("Usage:\n");
 	printf("wdmd [options]\n\n");
-	printf("--version, -V         print version\n");
-	printf("--help, -h            print usage\n");
-	printf("--dump, -d            print debug from daemon\n");
-	printf("--probe, -p           print path of functional watchdog device\n");
-	printf("-D                    debug: no fork and print all logging to stderr\n");
-	printf("-H 0|1                use high priority features (1 yes, 0 no, default %d)\n",
-				      DEFAULT_HIGH_PRIORITY);
-	printf("-G <name>             group ownership for the socket\n");
-	printf("-S 0|1                allow script tests (default %d)\n", allow_scripts);
-	printf("-s <path>             path to scripts dir (default %s)\n", scripts_dir);
-	printf("-k <num>              kill unfinished scripts after num seconds (default %d)\n",
-				      kill_script_sec);
-	printf("-w /dev/watchdog      path to the watchdog device to try first\n");
+	printf("--version, -V          print version\n");
+	printf("--help, -h             print usage\n");
+	printf("--dump, -d             print debug from daemon\n");
+	printf("--probe, -p            print path of functional watchdog device\n");
+	printf("--trytimeout, -t <sec> set the timeout value for watchdog device\n");
+	printf("--forcefire, -F        force watchdog to fire and reset machine, use with -t\n");
+	printf("-D                     debug: no fork and print all logging to stderr\n");
+	printf("-H 0|1                 use high priority features (1 yes, 0 no, default %d)\n",
+				       DEFAULT_HIGH_PRIORITY);
+	printf("-G <name>              group ownership for the socket\n");
+	printf("-S 0|1                 allow script tests (default %d)\n", allow_scripts);
+	printf("-s <path>              path to scripts dir (default %s)\n", scripts_dir);
+	printf("-k <num>               kill unfinished scripts after num seconds (default %d)\n",
+				       kill_script_sec);
+	printf("-w <path>              path to the watchdog device to try first\n");
 	exit(status);
 }
 
@@ -1553,14 +1749,16 @@ int main(int argc, char *argv[])
 	    int option_index = 0;
 
 	    static struct option long_options[] = {
-	        {"help",    no_argument, 0,  'h' },
-	        {"probe",   no_argument, 0,  'p' },
-	        {"dump",    no_argument, 0,  'd' },
-	        {"version", no_argument, 0,  'V' },
-	        {0,         0,           0,  0 }
+	        {"help",       no_argument,       0,  'h' },
+	        {"probe",      no_argument,       0,  'p' },
+	        {"dump",       no_argument,       0,  'd' },
+	        {"trytimeout", required_argument, 0,  't' },
+	        {"forcefire",  no_argument,       0,  'F' },
+	        {"version",    no_argument,       0,  'V' },
+	        {0,            0,                 0,  0 }
 	    };
 
-	    c = getopt_long(argc, argv, "hpdVDH:G:S:s:k:w:",
+	    c = getopt_long(argc, argv, "hpdVDH:G:S:s:k:w:t:F",
 	                    long_options, &option_index);
 	    if (c == -1)
 	         break;
@@ -1571,6 +1769,13 @@ int main(int argc, char *argv[])
 	            break;
 		case 'p':
 		    do_probe = 1;
+		    break;
+		case 't':
+		    do_probe = 1;
+		    try_timeout = atoi(optarg);
+		    break;
+		case 'F':
+		    forcefire = 1;
 		    break;
 		case 'd':
 		    print_debug_and_exit();

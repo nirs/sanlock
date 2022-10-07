@@ -13,6 +13,7 @@
 #define WDMD_NAME_SIZE 128
 
 int wdmd_connect(void);
+int wdmd_open_watchdog(int con, int fire_timeout);
 int wdmd_register(int con, char *name);
 int wdmd_refcount_set(int con);
 int wdmd_refcount_clear(int con);

@@ -315,7 +315,7 @@ struct client {
 
 EXTERN struct client *client;
 
-#define WATCHDOG_FIRE_TIMEOUT 60
+#define DEFAULT_WATCHDOG_FIRE_TIMEOUT 60
 #define DEFAULT_USE_AIO 1
 #define DEFAULT_IO_TIMEOUT 10
 #define DEFAULT_GRACE_SEC 40
@@ -352,13 +352,16 @@ struct command_line {
 	int quiet_fail;
 	int wait;
 	int use_watchdog;
+	int watchdog_fire_timeout;
+	int io_timeout;			/* DEFAULT_IO_TIMEOUT or sanlock.conf io_timeout */
+	int kill_grace_seconds;		/* -g */
+	int kill_grace_set;
 	int high_priority;		/* -h */
 	int get_hosts;			/* -h */
 	int names_log_priority;
 	int mlock_level;
 	int max_worker_threads;
 	int aio_arg;
-	int io_timeout_arg;
 	int write_init_io_timeout;
 	int set_bitmap_seconds;
 	int persistent;
@@ -455,7 +458,6 @@ EXTERN int external_shutdown;
 EXTERN char our_host_name_global[SANLK_NAME_LEN+1];
 
 EXTERN int kill_count_max;
-EXTERN int kill_grace_seconds;
 EXTERN int is_helper;
 EXTERN int helper_ci;
 EXTERN int helper_pid;

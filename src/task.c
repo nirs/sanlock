@@ -76,7 +76,7 @@ void close_task_aio(struct task *task)
 		goto skip_aio;
 
 	memset(&ts, 0, sizeof(struct timespec));
-	ts.tv_sec = DEFAULT_IO_TIMEOUT;
+	ts.tv_sec = com.io_timeout;
 
 	last_warn = time(NULL);
 	begin = last_warn;
@@ -87,7 +87,7 @@ void close_task_aio(struct task *task)
 	while (1) {
 		now = time(NULL);
 
-		if (now - last_warn >= (DEFAULT_IO_TIMEOUT * 6)) {
+		if (now - last_warn >= (com.io_timeout * 6)) {
 			last_warn = now;
 			lvl = LOG_ERR;
 		} else {

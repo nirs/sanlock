@@ -64,7 +64,7 @@ static struct token *setup_rindex_token(struct rindex_info *rx,
 	strcpy(token->r.name, "rindex_lease");
 	token->sector_size = sector_size;
 	token->align_size = align_size;
-	token->io_timeout = spi ? spi->io_timeout : DEFAULT_IO_TIMEOUT;
+	token->io_timeout = spi ? spi->io_timeout : com.io_timeout;
 	token->r.num_disks = 1;
 	token->r.flags |= sanlk_res_sector_size_to_flag(sector_size);
 	token->r.flags |= sanlk_res_align_size_to_flag(align_size);
@@ -105,7 +105,7 @@ static struct token *setup_resource_token(struct rindex_info *rx,
 	memcpy(token->r.name, res_name, SANLK_NAME_LEN);
 	token->sector_size = sector_size;
 	token->align_size = align_size;
-	token->io_timeout = spi ? spi->io_timeout : DEFAULT_IO_TIMEOUT;
+	token->io_timeout = spi ? spi->io_timeout : com.io_timeout;
 	token->r.num_disks = 1;
 	token->r.flags |= sanlk_res_sector_size_to_flag(sector_size);
 	token->r.flags |= sanlk_res_align_size_to_flag(align_size);
@@ -291,7 +291,7 @@ static int read_rindex_header(struct task *task,
 	if (!sector_size)
 		sector_size = 4096;
 	if (!io_timeout) {
-		io_timeout = DEFAULT_IO_TIMEOUT;
+		io_timeout = com.io_timeout;
 		spi->io_timeout = io_timeout;
 	}
 
@@ -447,7 +447,7 @@ int rindex_format(struct task *task, struct sanlk_rindex *ri)
 	if (com.write_init_io_timeout)
 		write_io_timeout = com.write_init_io_timeout;
 	else
-		write_io_timeout = DEFAULT_IO_TIMEOUT;
+		write_io_timeout = com.io_timeout;
 
 	rv = write_iobuf(rx.disk->fd, rx.disk->offset, iobuf, iobuf_len, task, write_io_timeout, NULL);
 	if (rv < 0) {

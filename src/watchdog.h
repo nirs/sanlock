@@ -9,12 +9,20 @@
 #ifndef __WATCHDOG_H__
 #define __WATCHDOG_H__
 
-void update_watchdog(struct space *sp, uint64_t timestamp,
-		     int id_renewal_fail_seconds);
+/* open/close socket connection to wdmd daemon */
 int connect_watchdog(struct space *sp);
+void disconnect_watchdog(struct space *sp);
+
+/* tell wdmd to open the watchdog device which arms it
+   and wdmd begins keepalive loop, but the watchdog
+   keepalive is not yet influenced by lockspace renewals. */
+int open_watchdog(int con, int fire_timeout);
+
+/* associate per-lockspace renewals in sanlock with
+   watchdog petting in wdmd */
 int activate_watchdog(struct space *sp, uint64_t timestamp,
 		      int id_renewal_fail_seconds, int con);
 void deactivate_watchdog(struct space *sp);
-void close_watchdog(struct space *sp);
-
+void update_watchdog(struct space *sp, uint64_t timestamp,
+		     int id_renewal_fail_seconds);
 #endif

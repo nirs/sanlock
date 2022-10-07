@@ -20,6 +20,7 @@ enum {
 	CMD_TEST_LIVE,
 	CMD_STATUS,
 	CMD_DUMP_DEBUG,
+	CMD_OPEN_WATCHDOG,
 };
 
 struct wdmd_header {

@@ -658,11 +658,11 @@ static void kill_pids(struct space *sp)
 		 * kill_grace_seconds
 		 */
 
-		in_grace = now < (last_success + id_renewal_fail_seconds + kill_grace_seconds);
+		in_grace = now < (last_success + id_renewal_fail_seconds + com.kill_grace_seconds);
 
 		if (sp->external_remove || (external_shutdown > 1)) {
 			sig = SIGKILL;
-		} else if ((kill_grace_seconds > 0) && in_grace && cl->killpath[0]) {
+		} else if ((com.kill_grace_seconds > 0) && in_grace && cl->killpath[0]) {
 			sig = SIGRUNPATH;
 		} else if (in_grace) {
 			sig = SIGTERM;
@@ -1736,6 +1736,7 @@ static int do_daemon(void)
 	}
 
 	setup_limits();
+	setup_timeouts();
 	setup_helper();
 
 	/* main task never does disk io, so we don't really need to set
@@ -1780,7 +1781,12 @@ static int do_daemon(void)
 
 	uname(&nodename);
 
-	log_warn("sanlock daemon started %s host %s (%s)", VERSION, our_host_name_global, nodename.nodename);
+	if (com.io_timeout != DEFAULT_IO_TIMEOUT || com.watchdog_fire_timeout != DEFAULT_WATCHDOG_FIRE_TIMEOUT)
+		log_warn("sanlock daemon started %s host %s (%s) io_timeout %u watchdog_fire_timeout %u",
+			 VERSION, our_host_name_global, nodename.nodename, com.io_timeout, com.watchdog_fire_timeout);
+	else
+		log_warn("sanlock daemon started %s host %s (%s)",
+			 VERSION, our_host_name_global, nodename.nodename);
 
 	setup_priority();
 
@@ -2110,6 +2116,7 @@ static void print_usage(void)
 	printf("  -G <gid>      group id\n");
 	printf("  -t <num>      max worker threads (%d)\n", DEFAULT_MAX_WORKER_THREADS);
 	printf("  -g <sec>      seconds for graceful recovery (%d)\n", DEFAULT_GRACE_SEC);
+	printf("  -o <sec>      io timeout (%d)\n", DEFAULT_IO_TIMEOUT);
 	printf("  -w 0|1        use watchdog through wdmd (%d)\n", DEFAULT_USE_WATCHDOG);
 	printf("  -h 0|1        use high priority (RR) scheduling (%d)\n", DEFAULT_HIGH_PRIORITY);
 	printf("  -l <num>      use mlockall (0 none, 1 current, 2 current and future) (%d)\n", DEFAULT_MLOCK_LEVEL);
@@ -2189,7 +2196,7 @@ static int read_command_line(int argc, char *argv[])
 	char *p;
 	char *arg1 = argv[1];
 	char *act;
-	int i, j, len, sec, begin_command = 0;
+	int i, j, len, sec, val, begin_command = 0;
 
 	if (argc < 2 || !strcmp(arg1, "help") || !strcmp(arg1, "--help") ||
 	    !strcmp(arg1, "-h")) {
@@ -2432,9 +2439,9 @@ static int read_command_line(int argc, char *argv[])
 			if (com.action == ACT_STATUS) {
 				com.sort_arg = *optionarg;
 			} else {
-				com.io_timeout_arg = atoi(optionarg);
-				if (!com.io_timeout_arg)
-					com.io_timeout_arg = DEFAULT_IO_TIMEOUT;
+				val = atoi(optionarg);
+				if (val > 0)
+					com.io_timeout = val;
 			}
 			break;
 		case 'b':
@@ -2466,8 +2473,10 @@ static int read_command_line(int argc, char *argv[])
 		case 'g':
 			if (com.type == COM_DAEMON) {
 				sec = atoi(optionarg);
-				if (sec <= 60 && sec >= 0)
-					kill_grace_seconds = sec;
+				if (sec <= 60 && sec >= 0) {
+					com.kill_grace_seconds = sec;
+					com.kill_grace_set = 1;
+				}
 			} else {
 				com.host_generation = strtoull(optionarg, NULL, 0);
 			}
@@ -2805,6 +2814,23 @@ static void read_config_file(void)
 		} else if (!strcmp(str, "use_watchdog")) {
 			get_val_int(line, &val);
 			com.use_watchdog = val;
+
+		} else if (!strcmp(str, "io_timeout")) {
+			get_val_int(line, &val);
+			if (val > 0)
+				com.io_timeout = val;
+
+		} else if (!strcmp(str, "watchdog_fire_timeout")) {
+			get_val_int(line, &val);
+			if (val > 0)
+				com.watchdog_fire_timeout = val;
+
+		} else if (!strcmp(str, "kill_grace_seconds")) {
+			get_val_int(line, &val);
+			if (val <= 60 && val >= 0) {
+				com.kill_grace_seconds = val;
+				com.kill_grace_set = 1;
+			}
 
 		} else if (!strcmp(str, "high_priority")) {
 			get_val_int(line, &val);
@@ -3215,10 +3241,10 @@ static int do_client(void)
 		break;
 
 	case ACT_ADD_LOCKSPACE:
-		if (com.io_timeout_arg != DEFAULT_IO_TIMEOUT) {
-			log_tool("add_lockspace_timeout %d", com.io_timeout_arg);
+		if (com.io_timeout != DEFAULT_IO_TIMEOUT) {
+			log_tool("add_lockspace_timeout %d", com.io_timeout);
 			rv = sanlock_add_lockspace_timeout(&com.lockspace, 0,
-							   com.io_timeout_arg);
+							   com.io_timeout);
 			log_tool("add_lockspace_timeout done %d", rv);
 		} else {
 			log_tool("add_lockspace");
@@ -3343,7 +3369,7 @@ static int do_client(void)
 
 			rv = sanlock_write_lockspace(&com.lockspace,
 						     com.max_hosts, 0,
-						     com.io_timeout_arg);
+						     com.io_timeout);
 		} else {
 			if (com.sector_size)
 				com.res_args[0]->flags |= sanlk_res_sector_size_to_flag(com.sector_size);
@@ -3595,7 +3621,7 @@ static int do_direct_read_leader(void)
 	struct leader_record leader;
 	int rv;
 
-	rv = direct_read_leader(&main_task, com.io_timeout_arg,
+	rv = direct_read_leader(&main_task, com.io_timeout,
 				&com.lockspace, com.res_args[0],
 				&leader);
 
@@ -3620,7 +3646,7 @@ static int do_direct_write_leader(void)
 
 	memset(&leader, 0, sizeof(leader));
 
-	direct_read_leader(&main_task, com.io_timeout_arg,
+	direct_read_leader(&main_task, com.io_timeout,
 			   &com.lockspace, com.res_args[0],
 			   &leader);
 
@@ -3643,7 +3669,7 @@ static int do_direct_write_leader(void)
 		syslog(LOG_WARNING, "write_leader resource %s", res_str);
 	}
 
-	rv = direct_write_leader(&main_task, com.io_timeout_arg,
+	rv = direct_write_leader(&main_task, com.io_timeout,
 				 &com.lockspace, com.res_args[0],
 				 &leader);
 out:
@@ -3676,8 +3702,7 @@ static int do_direct_init(void)
 		       (unsigned long long)com.lockspace.host_id_disk.offset,
 		       com.lockspace.flags);
 
-		rv = direct_write_lockspace(&main_task, &com.lockspace,
-					    com.io_timeout_arg);
+		rv = direct_write_lockspace(&main_task, &com.lockspace, com.io_timeout);
 	} else if (com.res_args[0]) {
 		if (com.sector_size)
 			com.res_args[0]->flags |= sanlk_res_sector_size_to_flag(com.sector_size);
@@ -3783,7 +3808,7 @@ static int do_direct(void)
 
 	case ACT_ACQUIRE:
 		syslog(LOG_WARNING, "acquire");
-		rv = direct_acquire(&main_task, com.io_timeout_arg,
+		rv = direct_acquire(&main_task, com.io_timeout,
 				    com.res_args[0], com.num_hosts,
 				    com.host_id, com.host_generation,
 				    &leader);
@@ -3792,7 +3817,7 @@ static int do_direct(void)
 
 	case ACT_RELEASE:
 		syslog(LOG_WARNING, "release");
-		rv = direct_release(&main_task, com.io_timeout_arg,
+		rv = direct_release(&main_task, com.io_timeout,
 				    com.res_args[0], &leader);
 		log_tool("release done %d", rv);
 		break;
@@ -3801,20 +3826,20 @@ static int do_direct(void)
 		syslog(LOG_WARNING, "acquire_id");
 		setup_host_name();
 
-		rv = direct_acquire_id(&main_task, com.io_timeout_arg,
+		rv = direct_acquire_id(&main_task, com.io_timeout,
 				       &com.lockspace, our_host_name_global);
 		log_tool("acquire_id done %d", rv);
 		break;
 
 	case ACT_RELEASE_ID:
 		syslog(LOG_WARNING, "release_id");
-		rv = direct_release_id(&main_task, com.io_timeout_arg, &com.lockspace);
+		rv = direct_release_id(&main_task, com.io_timeout, &com.lockspace);
 		log_tool("release_id done %d", rv);
 		break;
 
 	case ACT_RENEW_ID:
 		syslog(LOG_WARNING, "renew_id");
-		rv = direct_renew_id(&main_task, com.io_timeout_arg, &com.lockspace);
+		rv = direct_renew_id(&main_task, com.io_timeout, &com.lockspace);
 		log_tool("rewew_id done %d", rv);
 		break;
 
@@ -3877,7 +3902,6 @@ int main(int argc, char *argv[])
 	set_sanlock_version();
 
 	kill_count_max = 100;
-	kill_grace_seconds = DEFAULT_GRACE_SEC;
 	helper_ci = -1;
 	helper_pid = -1;
 	helper_kill_fd = -1;
@@ -3890,11 +3914,13 @@ int main(int argc, char *argv[])
 
 	memset(&com, 0, sizeof(com));
 	com.use_watchdog = DEFAULT_USE_WATCHDOG;
+	com.watchdog_fire_timeout = DEFAULT_WATCHDOG_FIRE_TIMEOUT;
+	com.kill_grace_seconds = DEFAULT_GRACE_SEC;
 	com.high_priority = DEFAULT_HIGH_PRIORITY;
 	com.mlock_level = DEFAULT_MLOCK_LEVEL;
 	com.names_log_priority = LOG_WARNING;
 	com.max_worker_threads = DEFAULT_MAX_WORKER_THREADS;
-	com.io_timeout_arg = DEFAULT_IO_TIMEOUT;
+	com.io_timeout = DEFAULT_IO_TIMEOUT;
 	com.write_init_io_timeout = DEFAULT_WRITE_INIT_IO_TIMEOUT;
 	com.aio_arg = DEFAULT_USE_AIO;
 	com.pid = -1;

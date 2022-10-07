@@ -842,6 +842,27 @@ static void *lockspace_thread(void *arg_in)
 	}
 
 	/*
+	 * Tell wdmd to open the watchdog device, set the fire timeout and
+	 * begin the keepalive loop that regularly pets the watchdog.  This
+	 * only happens for the first client/lockspace.  This fails if the
+	 * watchdog device cannot be opened by wdmd or does not support the
+	 * requested fire timeout.
+	 *
+	 * For later clients/lockspaces, when wdmd already has the watchdog
+	 * open, this does nothing (just verifies that fire timeout matches
+	 * what's in use.)
+	 */
+	rv = open_watchdog(wd_con, com.watchdog_fire_timeout);
+	if (rv < 0) {
+		log_erros(sp, "open_watchdog with fire_timeout %d failed %d",
+			  com.watchdog_fire_timeout, wd_con);
+		acquire_result = SANLK_WD_ERROR;
+		delta_result = -1;
+		disconnect_watchdog(sp);
+		goto set_status;
+	}
+
+	/*
 	 * acquire the delta lease
 	 */
 
@@ -989,7 +1010,7 @@ static void *lockspace_thread(void *arg_in)
 	/* watchdog unlink was done in main_loop when thread_stop was set, to
 	   get it done as quickly as possible in case the wd is about to fire. */
 
-	close_watchdog(sp);
+	disconnect_watchdog(sp);
  out:
 	if (delta_result == SANLK_OK)
 		delta_lease_release(&task, sp, &sp->host_id_disk,

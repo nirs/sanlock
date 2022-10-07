@@ -55,7 +55,7 @@ static int direct_read_leader_sizes(struct task *task, struct sync_disk *sd,
 
 	memset(data, 0, datalen);
 
-	rv = read_sectors(sd, 4096, 0, 1, data, datalen, task, DEFAULT_IO_TIMEOUT, "read_sector_size");
+	rv = read_sectors(sd, 4096, 0, 1, data, datalen, task, com.io_timeout, "read_sector_size");
 	if (rv < 0) {
 		free(data);
 		return rv;
@@ -134,7 +134,7 @@ static int do_paxos_action(int action, struct task *task, int io_timeout, struct
 	int j, rv = 0;
 
 	if (!io_timeout)
-		io_timeout = DEFAULT_IO_TIMEOUT;
+		io_timeout = com.io_timeout;
 
 	rv = sizes_from_flags(res->flags, &sector_size, &align_size, &max_hosts, "RES");
 	if (rv)
@@ -309,7 +309,7 @@ static int do_delta_action(int action,
 	memset(bitmap, 0, sizeof(bitmap));
 
 	if (!io_timeout)
-		io_timeout = DEFAULT_IO_TIMEOUT;
+		io_timeout = com.io_timeout;
 
 	rv = sizes_from_flags(ls->flags, &sector_size, &align_size, &max_hosts, "LSF");
 	if (rv)
@@ -706,7 +706,7 @@ int direct_dump(struct task *task, char *dump_path, int force_mode)
 		memset(data, 0, sector_size);
 
 		rv = read_sectors(&sd, sector_size, sector_nr, sector_count, data, datalen,
-				  task, DEFAULT_IO_TIMEOUT, "dump");
+				  task, com.io_timeout, "dump");
 
 		magic_in(data, &magic);
 
@@ -906,7 +906,7 @@ int direct_next_free(struct task *task, char *path)
 		memset(data, 0, sector_size);
 
 		rv = read_sectors(&sd, sector_size, sector_nr, 1, data, datalen,
-				  task, DEFAULT_IO_TIMEOUT, "next_free");
+				  task, com.io_timeout, "next_free");
 
 		lr_end = (struct leader_record *)data;
 
