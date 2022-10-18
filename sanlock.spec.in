@@ -20,6 +20,7 @@ BuildRequires:  libuuid-devel
 BuildRequires:  make
 BuildRequires:  python3
 BuildRequires:  python3-devel
+BuildRequires:  python3-setuptools
 BuildRequires:  systemd-units
 Requires:       %{name}-lib = %{version}-%{release}
 Requires(pre):  /usr/sbin/groupadd
