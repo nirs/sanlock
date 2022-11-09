@@ -9,12 +9,16 @@ Fixtures for sanlock testing.
 """
 from __future__ import absolute_import
 
-import os
-
 import pytest
+import userstorage
 
-from . import storage
 from . import util
+
+# Mark tests with skip if userstorage is missing
+userstorage.missing_handler = pytest.skip
+
+# Requires relative path from tox basedir
+BACKENDS = userstorage.load_config("./tests/storage.py").BACKENDS
 
 
 class SanlockIsRunning(Exception):
@@ -38,8 +42,8 @@ def sanlock_daemon():
 
 
 @pytest.fixture(params=[
-    pytest.param(storage.BLOCK, id="block"),
-    pytest.param(storage.FILE, id="file"),
+    BACKENDS["block"],
+    BACKENDS["file"],
 ])
 def user_4k_path(request):
     """
@@ -48,11 +52,9 @@ def user_4k_path(request):
 
     If storage is not available, skip the tests.
     """
-    if not os.path.exists(request.param):
-        pytest.skip(
-            "user storage available - run 'python tests/strorage.py setup' "
-            "to enable 4k storage tests")
-    return request.param
+    backend = request.param
+    with backend:
+        yield backend.path
 
 
 @pytest.fixture

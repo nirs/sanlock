@@ -1,0 +1,2 @@
+tox
+userstorage>=0.5.1
