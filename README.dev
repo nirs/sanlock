@@ -54,9 +54,29 @@ Or using environment variable:
 Testing 4K support
 ==================
 
-To enable the 4k tests, you need to setup 4k stroage for the tests:
+To enable the 4k tests, you need to have userstorage installed.
+First, you need to create a virtual environment
+(https://docs.python.org/3/library/venv.html), and then install
+the userstorage library from the requirements.txt.
+This only needs to be done once:
 
-    $ python tests/storage.py setup
+    $ python3 -m venv ~/.venv/sanlock
+    $ source ~/.venv/sanlock/bin/activate
+    $ pip install --upgrade pip
+    $ pip install -r requirements.txt
+    $ deactivate
+
+Before running the tests, you need to enter the virtual environment:
+
+    $ source ~/.venv/sanlock/bin/activate
+
+The shell prompt will change to show the virtual environment name:
+
+    (sanlock) [user@hostname sanlock]$
+
+Then, you just need to setup 4k storage for the tests:
+
+    $ userstorage create tests/storage.py
 
 This creates two loop devices with 4k sector size; one for testing sanlock with
 4k block device, and the other for testing with a filesystem backed by a 4k
@@ -64,10 +84,14 @@ block device.
 
 To teardown the storage:
 
-    $ python tests/storage.py teardown
+    $ userstorage delete tests/storage.py
 
 The script unmounts the filesystem and detaches the loop devices.
 
 The storage helper script uses sudo to perform privileged operations. The best
 way to use it is to setup the environment once at the start of the session, and
 teardown when you finish.
+
+To deactivate the virtual environment:
+
+    $ deactivate
