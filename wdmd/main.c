@@ -101,6 +101,7 @@ struct client {
 	int pid;
 	int pid_dead;
 	int refcount;
+	int internal;
 	uint64_t renewal;
 	uint64_t expire;
 	void *workfn;
@@ -281,12 +282,12 @@ static void dump_debug(int fd)
 	now = monotime();
 
 	memset(line, 0, sizeof(line));
-	snprintf(line, 255, "wdmd %d socket_gid %d high_priority %d now %llu last_keepalive %llu last_closeunclean %llu allow_scripts %d kill_script_sec %d\n",
+	snprintf(line, 255, "wdmd %d socket_gid %d high_priority %d now %llu last_keepalive %llu last_closeunclean %llu allow_scripts %d kill_script_sec %d fire_timeout %d\n",
 		 getpid(), socket_gid, high_priority,
 		 (unsigned long long)now,
 		 (unsigned long long)last_keepalive,
 		 (unsigned long long)last_closeunclean,
-		 allow_scripts, kill_script_sec);
+		 allow_scripts, kill_script_sec, fire_timeout);
 
 	line_len = strlen(line);
 	strncat(debug_buf, line, LINE_SIZE);
@@ -648,6 +649,7 @@ static int setup_clients(void)
 
 	ci = client_add(fd, process_listener, client_pid_dead);
 	strncpy(client[ci].name, "listen", WDMD_NAME_SIZE);
+	client[ci].internal = 1;
 	return 0;
 }
 
@@ -729,6 +731,25 @@ static int active_clients(void)
 			return 1;
 	}
 	return 0;
+}
+
+static void count_clients(int *active, int *external)
+{
+	int act = 0, ext = 0;
+	int i;
+
+	for (i = 0; i < client_size; i++) {
+		if (!client[i].used)
+			continue;
+		if (client[i].refcount)
+			act++;
+		if (!client[i].internal)
+			ext++;
+	}
+	if (active)
+		*active = act;
+	if (external)
+		*external = ext;
 }
 
 
@@ -1447,6 +1468,7 @@ static int setup_signals(void)
 
 	ci = client_add(fd, process_signals, client_pid_dead);
 	strncpy(client[ci].name, "signal", WDMD_NAME_SIZE);
+	client[ci].internal = 1;
 	return 0;
 }
 
@@ -1490,6 +1512,8 @@ static int test_loop(void)
 	void (*workfn) (int ci);
 	void (*deadfn) (int ci);
 	uint64_t test_time;
+	int resetting = 0;
+	int active_usage, external_usage;
 	int poll_timeout;
 	int sleep_seconds;
 	int fail_count;
@@ -1520,7 +1544,9 @@ static int test_loop(void)
 			}
 		}
 
-		if (daemon_quit && !active_clients())
+		count_clients(&active_usage, &external_usage);
+
+		if (daemon_quit && !active_usage)
 			break;
 
 		/*
@@ -1528,6 +1554,31 @@ static int test_loop(void)
 		 */
 		if (!test_loop_enable)
 			continue;
+
+		/*
+		 * active_usage are client connections with a refcount.
+		 * external_usage are any clients other than internal.
+		 * (open_watchdog happens with external but not active
+		 * connections.)
+		 *
+		 * checking resetting here is critical to avoiding
+		 * unnecessary resets: while in recovery mode we
+		 * have done close_watchdog_unclean, then all clients
+		 * are cleared, and we need the loop below to see
+		 * no further failures and reopen and pet the watchdog
+		 * again to avoid a reset.  After it's been reopened,
+		 * and no longer used due to all clients being cleared,
+		 * then it's ok to get here and close cleanly.
+		 */
+		if (!active_usage && !external_usage && !resetting) {
+			log_debug("close watchdog unused");
+			close_watchdog();
+			test_loop_enable = 0;
+			test_interval = standard_test_interval;
+			poll_timeout = test_interval * 1000;
+			test_time = 0;
+			continue;
+		}
 
 		if (monotime() - test_time >= test_interval) {
 			test_time = monotime();
@@ -1549,6 +1600,7 @@ static int test_loop(void)
 				}
 
 				test_interval = standard_test_interval;
+				resetting = 0;
 			} else {
 				/* If we can patch the kernel so that close
 				   does not generate a ping, then we can skip
@@ -1557,6 +1609,7 @@ static int test_loop(void)
 				close_watchdog_unclean();
 
 				test_interval = RECOVER_TEST_INTERVAL;
+				resetting = 1;
 			}
 		}
 
