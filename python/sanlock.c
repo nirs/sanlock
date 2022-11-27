@@ -164,13 +164,13 @@ parse_single_disk(PyObject* disk, struct sanlk_disk* res_disk)
     uint64_t offset;
 
     if (!PyTuple_Check(disk)) {
-         set_error(PyExc_ValueError, "Invalid disk %s", disk);
+         set_error(PyExc_ValueError, "Disk is not a tuple: %s", disk);
          goto finally;
     }
 
     if (!PyArg_ParseTuple(disk, "O&K", pypath_converter, &path, &offset)) {
         /* Override the error since it confusing in this context. */
-        set_error(PyExc_ValueError, "Invalid disk %s", disk);
+        set_error(PyExc_ValueError, "Cannot parse disk: %s", disk);
         goto finally;
     }
 
