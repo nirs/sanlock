@@ -47,11 +47,13 @@ int lockfile(const char *dir, const char *name, int uid, int gid)
 	}
 	umask(old_umask);
 
-	rv = chown(dir, uid, gid);
-	if (rv < 0) {
-		log_error("lockfile chown error %s: %s",
-			  dir, strerror(errno));
-		return rv;
+	if (geteuid() == 0) {
+		rv = chown(dir, uid, gid);
+		if (rv < 0) {
+			log_error("lockfile chown error %s: %s",
+				  dir, strerror(errno));
+			return rv;
+		}
 	}
 
 	snprintf(path, PATH_MAX, "%s/%s", dir, name);
