@@ -1762,7 +1762,8 @@ static int do_daemon(void)
 		log_warn("Using non-standard run directory '%s'", run_dir);
 
 	if (!privileged)
-		log_warn("Running in unprivileged mode");
+		log_warn("Running in unprivileged mode uid=%d gid=%d",
+			 com.uid, com.gid);
 
 	/* If we run as root, make run_dir owned by root, so we can create the
 	 * lockfile when selinux disables DAC_OVERRIDE.
