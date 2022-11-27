@@ -1392,13 +1392,6 @@ static int setup_listener(void)
 	if (rv < 0)
 		goto exit_fail;
 
-	rv = chown(addr.sun_path, com.uid, com.gid);
-	if (rv < 0) {
-		log_error("could not set socket %s permissions: %s",
-			addr.sun_path, strerror(errno));
-		goto exit_fail;
-	}
-
 	rv = listen(fd, 5);
 	if (rv < 0)
 		goto exit_fail;
