@@ -283,7 +283,7 @@ add_align_flag(long align, uint32_t *flags)
 static void
 set_error(PyObject* exception, const char* format, PyObject* obj)
 {
-    const char* str_rep = "";
+    const char* str_rep = "(PyObject_Repr failed)";
     PyObject* rep = PyObject_Repr(obj);
     if (rep)
         str_rep = pystring_as_cstring(rep);
