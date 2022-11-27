@@ -168,6 +168,11 @@ parse_single_disk(PyObject* disk, struct sanlk_disk* res_disk)
          goto finally;
     }
 
+    if (PyTuple_Size(disk) != 2) {
+        set_error(PyExc_ValueError, "Disk length != 2: %s", disk);
+        goto finally;
+    }
+
     if (!PyArg_ParseTuple(disk, "O&K", pypath_converter, &path, &offset)) {
         /* Override the error since it confusing in this context. */
         set_error(PyExc_ValueError, "Cannot parse disk: %s", disk);
